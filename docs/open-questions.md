@@ -131,6 +131,28 @@ Either answer preserves the core decision: because the hint may go stale, compac
 
 ---
 
+## Q12 — XChaCha20-Poly1305 has no second implementation to check against
+
+**Owner:** engineering, with security review · **Blocks:** format v1 freeze · **ADR:** [0019](adr/0019-third-party-dependency-policy.md) · **Specification:** [03 §6.2](../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from)
+
+The format admits two AEAD profiles. `aes-256-gcm-v1` uses a platform primitive. `xchacha20-poly1305-v1` cannot: .NET provides `ChaCha20Poly1305` (RFC 8439, 12-byte nonce) and **not** the 24-byte extended-nonce variant, so that profile requires a third-party implementation.
+
+Argon2id is in the same position and is handled: it is cross-verified against a second independent implementation on every CI run, which is how the empty-passphrase gap in [03 §2.1](../specifications/repository-format/03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) was found. **XChaCha20-Poly1305 has no such check**, because no second implementation was available to check against.
+
+An unverified AEAD is worse than an unverified KDF. A KDF defect makes keys weaker; an AEAD defect can make ciphertext forgeable or, with a nonce-handling bug, make plaintext recoverable — and by the time anyone notices, it is in the user's stored bytes.
+
+| Option | Trade |
+|--------|-------|
+| **Find a second implementation and cross-verify** | Matches the Argon2id posture. Depends on one existing and being maintained. |
+| **Drop the profile before freeze** | `aes-256-gcm-v1` alone is sufficient and 03 §6.2 already lets an implementer omit the extended-nonce profile. Costs the non-AES-hardware performance case. |
+| **Ship it unverified, flagged** | Cheapest now, and the option that ages worst — an unverified primitive is hardest to remove after repositories exist that use it. |
+
+**Recommendation:** decide at the freeze gate, and prefer dropping the profile over shipping it unverified. It costs nothing while unused, but a format version cannot un-admit a profile once written repositories depend on it.
+
+**Not decided.**
+
+---
+
 ## Closed
 
 | Question | Resolution |

@@ -141,8 +141,9 @@ Four rules that apply to every item, each closing a failure already documented i
 | Item | Blocked on | Effect |
 |------|-----------|--------|
 | B6 `cdc-v1` | Rabin polynomial and table not pinned | Cannot generate boundary vectors; blocks the [freeze-gate](roadmap.md#format-v1-freeze-gate) benchmark |
-| AEAD conformance vectors | No independent generator available | Framing is covered by NIST KATs plus the independent reader — see [conformance README](../specifications/repository-format/conformance/README.md) |
+| AEAD conformance vectors | No independent generator available | Framing is covered by `records.json` plus the independent reader. The single AES-GCM known-answer test is correctness-verified but its NIST provenance is **not** — see [conformance README](../specifications/repository-format/conformance/README.md) |
 | Ed25519 signature vectors | Not yet included | Snapshot signature verification untested against external vectors |
+| XChaCha20-Poly1305 cross-verification | No second implementation available | An unaudited AEAD ships unchecked unless the profile is dropped — [Q12](open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against) |
 | — | [ADR-0001](adr/0001-licence-and-contribution-model.md) licence | Blocks external contributions and the freeze gate. **Does not block any item above.** |
 
 ## What Phase 0 deliberately excludes

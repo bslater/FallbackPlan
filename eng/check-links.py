@@ -3,7 +3,13 @@ import os, pathlib, re, sys, unicodedata
 ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
 md_files = []
 for dp, dn, fn in os.walk(ROOT):
-    if ".git" in dp or "/bin" in dp or "/obj" in dp: continue
+    # Normalised so the exclusions below hold on Windows too, where os.walk
+    # yields backslashes and a '/'-only test would silently stop excluding.
+    norm = dp.replace(os.sep, "/") + "/"
+    # Vendored submodules are excluded: they carry their own documentation
+    # conventions (DocFX ~/ and xref: links here) and their integrity is their
+    # own repository's concern, not this gate's.
+    if ".git" in norm or "/bin/" in norm or "/obj/" in norm or "/external/" in norm: continue
     for f in fn:
         if f.endswith(".md"): md_files.append(os.path.join(dp, f))
 

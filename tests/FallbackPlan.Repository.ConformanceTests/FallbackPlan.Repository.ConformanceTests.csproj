@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FsCheck.Xunit" />
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -20,13 +21,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\..\external\bodu\Bodu.Security.Cryptography\src\Bodu.Security.Cryptography.csproj"
+                      AdditionalProperties="RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false" />
   </ItemGroup>
 
   <!-- The committed conformance vectors are the fixtures for this project. -->
   <ItemGroup>
-    <Content Include="$(MSBuildThisFileDirectory)../../specifications/repository-format/conformance/vectors/*.json"
-             Link="vectors/%(Filename)%(Extension)"
-             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)../../specifications/repository-format/conformance/vectors/*.json" Link="vectors/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

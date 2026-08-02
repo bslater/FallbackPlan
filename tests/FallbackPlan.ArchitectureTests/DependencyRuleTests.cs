@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using NetArchTest.Rules;
 using Xunit;
 
@@ -153,5 +154,89 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Cli")
                 .GetResult(),
             "Repository.Crypto must not depend on higher layers.");
+    }
+
+    /// <summary>
+    /// FallbackPlan needs exactly two cryptographic primitives .NET does not
+    /// provide — Argon2id and XChaCha20-Poly1305 — so both come from a third
+    /// party and neither inherits the platform's audit posture
+    /// (specification 03 section 6.2, ADR-0019).
+    ///
+    /// That exposure is bounded by keeping it in one project. Repository.Crypto
+    /// is the only assembly permitted to reference Bodu.Security.Cryptography;
+    /// everywhere else, a call reaching an unaudited primitive would be a
+    /// dependency nobody chose and nobody reviewed.
+    ///
+    /// Note especially that Repository.Format is on this list. It is what the
+    /// standalone recovery tool links, and its dependency closure has to stay
+    /// small enough to build and run on a clean machine when everything else
+    /// has already failed (NFR-PORT-001).
+    /// </summary>
+    [Fact]
+    public void Only_Repository_Crypto_may_reference_third_party_cryptography()
+    {
+        foreach (var assembly in new[] { Domain, Format, StorageAbstractions, ImportAbstractions })
+        {
+            AssertPasses(
+                Types.InAssembly(assembly)
+                    .ShouldNot()
+                    .HaveDependencyOn("Bodu.Security.Cryptography")
+                    .GetResult(),
+                $"{assembly.GetName().Name} must not reference third-party cryptography. " +
+                "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto (ADR-0019).");
+        }
+    }
+
+    /// <summary>
+    /// The containment rule above is only meaningful if the reference it
+    /// contains actually exists. A prohibition that passes because nothing
+    /// anywhere uses the library is a test that will keep passing after
+    /// somebody removes the containment it claims to enforce.
+    ///
+    /// This asserts the other half: Repository.Crypto is where the third-party
+    /// cryptography lives. If Argon2id moves — to the platform, or to another
+    /// project — this fails, and whoever moved it has to decide deliberately
+    /// whether the rule above still says what they want.
+    ///
+    /// It reads the project file rather than the compiled assembly's reference
+    /// list on purpose. Repository.Crypto currently contains only an assembly
+    /// marker, so the compiler emits no reference to a library no code has
+    /// called yet — an assembly-level assertion would fail today for a reason
+    /// that has nothing to do with the rule. The project reference is the
+    /// containment that exists right now, so it is the thing to pin.
+    /// </summary>
+    [Fact]
+    public void Repository_Crypto_is_where_third_party_cryptography_actually_lives()
+    {
+        var project = Path.Combine(
+            RepositoryRoot(),
+            "src",
+            "FallbackPlan.Repository.Crypto",
+            "FallbackPlan.Repository.Crypto.csproj");
+
+        Assert.True(File.Exists(project), $"Expected project file at {project}.");
+
+        Assert.Contains(
+            "Bodu.Security.Cryptography.csproj",
+            File.ReadAllText(project),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Walks up from this source file to the repository root. Anchored to the
+    /// source path rather than the test host's working directory, which varies
+    /// between `dotnet test`, an IDE runner, and CI.
+    /// </summary>
+    private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FallbackPlan.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+        return directory.FullName;
     }
 }

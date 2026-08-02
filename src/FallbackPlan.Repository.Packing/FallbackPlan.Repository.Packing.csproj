@@ -5,6 +5,10 @@
     <ProjectReference Include="..\FallbackPlan.Repository.Format\FallbackPlan.Repository.Format.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <!-- Vendored via submodule. Its analyzers and style rules are its own
+         concern; suppressed here so they do not appear in our build. -->
+    <ProjectReference Include="..\..\external\bodu\Bodu.Core\src\Bodu.Core.csproj"
+                      AdditionalProperties="RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false;NoWarn=$(NoWarn)" />
   </ItemGroup>
 
   <PropertyGroup>

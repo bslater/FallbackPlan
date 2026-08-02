@@ -32,6 +32,17 @@ Start with [`docs/README.md`](docs/README.md). The [worked example](docs/archite
 
 ## Building
 
+The build depends on a vendored submodule, so clone recursively:
+
+```bash
+git clone --recursive https://github.com/bslater/fallbackplan.git
+
+# Already cloned without it, or the pinned commit moved:
+git submodule update --init --recursive
+```
+
+`external/bodu` supplies Argon2id — one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)). Without it the solution does not restore, and the error you get is a missing project reference rather than anything that names the submodule.
+
 ```bash
 dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
@@ -40,6 +51,8 @@ dotnet test  FallbackPlan.slnx -c Release
 Requires the .NET SDK pinned in [`global.json`](global.json).
 
 **Warnings are errors.** This is a backup engine; a warning we habitually ignore is a defect we ship.
+
+That gate covers `src/` and `tests/` and deliberately **excludes `external/`**. Vendored code is held to its own repository's standards; a submodule bump must not be able to fail this build on a style rule. If you see warnings from `external/`, they are not yours to fix here.
 
 ## Checks that run in CI
 

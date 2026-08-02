@@ -20,13 +20,28 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
       - name: Restore
         run: dotnet restore FallbackPlan.slnx
+      # Vendored code under external/ is built as a dependency and carries its own
+      # analyzer configuration. Its warnings are not ours to fix and must not mask
+      # ours, so the gate is scoped to FallbackPlan's own code.
       - name: Build
-        run: dotnet build FallbackPlan.slnx -c Release --no-restore
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build FallbackPlan.slnx -c Release --no-restore 2>&1 | tee build.log
+          # The path separator differs by runner, so both forms are excluded —
+          # matching only '/external/' would let this gate fail on Windows for
+          # vendored warnings it is meant to ignore.
+          if grep -E ': (warning|error) ' build.log | grep -vE '[/\\]external[/\\]'; then
+            echo "::error::FallbackPlan code produced warnings or errors"
+            exit 1
+          fi
       - name: Test
         run: dotnet test FallbackPlan.slnx -c Release --no-build
 

@@ -77,6 +77,17 @@ Passing these vectors is necessary and not sufficient. A reader claiming conform
 7. **Index precedence.** Given two entries for one object identifier, it honours the higher generation, and treats a supersession as ordered rather than commutative ([07 §3](../07-index.md#3-precedence)).
 8. **Whole-file verification.** It verifies the reassembled file against `whole_file_hash`, and reports failure rather than emitting a partial file.
 
+## Cross-implementation verification
+
+Two of the primitives this format needs have no platform implementation, so they come from a third party and do not inherit the platform's audit posture ([03 §6.2](../03-keys.md#62-where-each-primitive-comes-from)). Where a second independent implementation exists, CI checks them against each other:
+
+| Primitive | Second implementation | Result |
+|-----------|----------------------|--------|
+| **Argon2id** | Konscious (test-only dependency, never shipped) | Bit-identical across the parameter range, including the mandated minimums. The two differ only in refusing versus accepting an empty password — an API-boundary policy difference, not an algorithmic one, and the reason [03 §2.1](../03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) now exists. |
+| **XChaCha20-Poly1305** | None available | **Unverified.** Recorded rather than glossed over — and open as [Q12](../../../docs/open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against), which asks whether an unverifiable profile should ship at all. |
+
+Cross-verification is not an audit. It establishes that two people did not make the same mistake; it does not establish that either is correct. The external cryptographic review required before the first beta must cover both primitives specifically.
+
 ## Fixtures
 
 The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content, exercising round trips, format upgrades, and injected corruption — are a Phase 0 deliverable and will live in `fixtures/`.
@@ -91,6 +102,7 @@ Recorded so they are visible rather than discovered:
 |-----|-----------|
 | AEAD record ciphertext vectors | See above — deliberate |
 | Additional AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
+| **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
 | `cdc-v1` boundary vectors | Rabin polynomial and per-byte table not yet pinned ([09 §3.1](../09-segmentation.md#31-definition)) |
 | Ed25519 signature vectors | Signing key derivation is specified; the signature scheme's test vectors are not yet included |
 | Fixture repositories | Phase 0 |

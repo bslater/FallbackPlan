@@ -53,6 +53,8 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.InterruptionTests/
 │   ├── FallbackPlan.PerformanceTests/
 │   └── FallbackPlan.EndToEndTests/
+├── external/
+│   └── bodu/                      vendored submodule — see §5.1
 ├── specifications/                repository-format, peer-protocol, discovery-protocol,
 │                                  recovery-kit, conformance-vectors
 ├── docs/                          this set
@@ -75,6 +77,7 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 - `Import.CrashPlan` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
 - Platform-specific filesystem projects implement shared contracts from `Filesystem`.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
+- **Third-party cryptography lives only in `Repository.Crypto`.** The two primitives .NET does not supply — Argon2id and XChaCha20-Poly1305 — do not inherit the platform's audit posture, so the exposure is confined to one project rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md)).
 
 `FallbackPlan.ArchitectureTests` enforces these as tests. A rule that is only written down is a rule that erodes.
 
@@ -121,6 +124,16 @@ The neutral model exists so that the same import pipeline serves restic, Kopia, 
 | Streaming | `System.IO.Pipelines` | |
 | Pipeline stages | Bounded `Channel<T>` | Bounded, so memory is a function of configuration not workload |
 | Recovery tool | Native AOT under evaluation | After compatibility is established |
+| SHA-256, HMAC, HKDF, AES-256-GCM | Platform (`System.Security.Cryptography`) | In-box and audited |
+| Argon2id | `Bodu.Security.Cryptography` | **No platform implementation exists** — [ADR-0019](../adr/0019-third-party-dependency-policy.md) |
+| XChaCha20-Poly1305 | Third-party, not yet selected | **No platform implementation exists.** .NET's `ChaCha20Poly1305` is the 12-byte-nonce RFC 8439 variant and is not a substitute — [spec 03 §6.2](../../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from) |
+| General utilities | `Bodu.Core` | Referenced from `Repository.Packing` |
+
+### 5.1 Vendored dependencies
+
+`external/bodu` is a **git submodule** pinned to a commit, referenced by project reference rather than by package, because it is not published to nuget.org. Contributors clone with `--recursive`; CI checks out with `submodules: recursive`.
+
+Two gates are scoped to exclude `external/`: the warnings-as-errors build check and `eng/check-links.py`. Vendored code is held to its own repository's standards. Our code stays at zero warnings, and a submodule bump cannot fail our build on someone else's style rule — the alternative trains people to ignore the gate, which costs more than it saves. → [ADR-0019](../adr/0019-third-party-dependency-policy.md)
 
 ## 6. Public API shapes
 
