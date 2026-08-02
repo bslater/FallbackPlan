@@ -144,7 +144,13 @@ For providers where reading the tail is expensive or unreliable, the profile may
 
 Blobs are assembled in a durable local spool. A blob becomes visible only after it is sealed, validated, uploaded under its final immutable identifier, and acknowledged.
 
-Interrupted construction either **resumes** from a verified spool checkpoint — replaying the same records under the same derived key, producing byte-identical output — or is **abandoned**, in which case the partial spool is discarded and never uploaded. Resumption is byte-identical rather than merely equivalent, which is what makes it safe under the encryption construction; see [`03-crypto.md` §3.3](03-crypto.md#33-why-resumption-is-safe).
+**Blob identifiers are writer-allocated and opaque** — random, or derived from `(writer_id, sequence)`. They are **not** content-derived. This is a deliberate asymmetry with record identifiers, which *are* content-derived and then keyed ([`03-crypto.md` §4](03-crypto.md#4-object-identifiers)), and independent implementers should note it: a blob is a container, not a content-addressed object, and it is the records inside it that deduplication and verification address.
+
+The asymmetry is required rather than incidental. A writer must name the blobs it is about to create in its write-intent record *before* creating them ([`04-concurrency-and-publication.md` §4](04-concurrency-and-publication.md#4-write-intent)), which is impossible for an identifier derived from content that does not yet exist. Writers therefore pre-allocate identifiers, declare them, and then fill them. See [ADR-0016](../adr/0016-blob-identifier-formation.md).
+
+Interrupted construction either **resumes** from a verified spool checkpoint or is **abandoned**, in which case the partial spool is discarded and never uploaded.
+
+Resume re-emits the **sealed record bytes held in the checkpoint**. It does not recompute them from plaintext: recompression is not guaranteed reproducible across codec versions, and recomputing would risk encrypting different bytes under an already-used `(key, ordinal)` pair. The checkpoint therefore stores the sealed bytes plus every parameter that could vary — blob salt, writer ID and blob counter, segmentation profile, compression codec **and version**, encryption profile — and any mismatch on resume forces a restart instead. Full reasoning in [`03-crypto.md` §3.3](03-crypto.md#33-why-resumption-is-safe).
 
 On providers without atomic rename, publication relies on creating a unique final object, followed by index-delta and snapshot publication in the order given in [`04-concurrency-and-publication.md` §5](04-concurrency-and-publication.md#5-publication-order).
 
@@ -173,6 +179,13 @@ With the physical layer behind an indirection, compaction republishes index entr
 
 The cost is one index lookup per segment on the restore path. That is bounded, local, indexed, and measured against NFR-PERF-004 — a good trade for making the maintenance story correct.
 
+That accounting holds while the index is healthy. When it is not, the cost is larger and should be stated plainly: before this change, a manifest plus a blob was enough to recover a file, because the manifest said where the bytes were. Now recovering a single file with no index means scanning blob recovery footers until its segments are located. A user who has lost their machine, holds the recovery kit, and wants one 4 MiB document could wait through a scale-**M** footer scan — hours — before that document can be produced, which is not what FR-MAN-010 promises ([PT-10](../review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
+
+Two mitigations, neither of which reverses the decision:
+
+- **Prioritised footer scanning.** Forensic rebuild accepts a target snapshot or path and orders its scan by the target's segment identifiers, so single-file recovery does not wait for a whole-repository rebuild (§8.2).
+- **An optional physical hint** on the segment reference — a non-authoritative `last_known_blob` that a reader may try first and must validate against the record's authenticated object identifier, falling back to the index on mismatch. This restores O(1) first-byte latency in the index-lost case. It is **not** currently part of the format: it partially re-couples manifests to physical layout, and the decision is the maintainer's ([Q11](../open-questions.md#q11--physical-hints-in-segment-references), [ADR-0007](../adr/0007-logical-object-identifiers-in-manifests.md)).
+
 ### 6.3 Sharding and encoding
 
 Manifests shard naturally through the tree and file-version graph. **No manifest's size grows with the repository or with total snapshot history** — the failure mode CrashPlan documents for its own large manifests, and principle 6 in [`00-overview.md`](00-overview.md#3-core-principles). Small metadata objects are packed into metadata blobs but remain independently addressed and authenticated.
@@ -197,13 +210,27 @@ Read path: catalogue → checkpoint + deltas → blob recovery footer. Fast in t
 
 The original design required checkpoint compaction to know the complete set of prior deltas, whose only discovery mechanism was listing — while simultaneously forbidding correctness dependence on listing freshness ([C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)). On an eventually consistent store, a compactor could silently omit a recent delta and every reader trusting the resulting checkpoint would lose the index entries for a set of blobs.
 
-Three rules close it:
+Five rules close it:
 
 **1 — Deltas form per-writer chains.** Each delta carries `(writer_id, sequence, predecessor_delta_id)`, with `sequence` strictly increasing per writer and no gaps. A reader holding any delta from a writer can walk backwards, and — critically — can *detect* that it is missing a sequence number rather than silently assuming it has seen everything.
 
-**2 — Checkpoints enumerate what they subsume.** A checkpoint lists the exact delta IDs it covers and the per-writer high-water sequence. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not a listing revealed it. A delta is retired only once a checkpoint explicitly naming it has been durable for the safety window.
+**2 — Gaps are closed explicitly, never by silence.** A writer that skips a sequence — it prepared delta *N*, crashed, and resumed at *N+1* — publishes a signed **void delta** at *N* declaring it intentionally empty. A reader treats a gap as unresolved until either the delta or its void record appears; after a bounded number of generations with neither, it surfaces the gap as a damage finding rather than blocking on it indefinitely. Silence is never read as "empty", so a crashed writer cannot render its own index contributions permanently unusable.
 
-**3 — Conflicting checkpoints are merged, not elected.** Two writers may publish a checkpoint at the same generation. Both are retained and both applied. This is safe because index deltas are immutable, idempotent, and commutative: the union of two overlapping checkpoints yields the same catalogue state as either alone plus the difference. No election, no lock, no tie-break.
+**3 — Checkpoints enumerate what they subsume.** A checkpoint lists the exact delta IDs it covers and the per-writer high-water sequence. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not a listing revealed it.
+
+**4 — Retirement requires uncontested coverage.** A delta may be retired only when it is named by a checkpoint that no live checkpoint at or above its generation contradicts — in practice, when every retained checkpoint at that generation names it, or a later checkpoint supersedes them all. Retirement is a deletion and takes the same tombstone-and-grace treatment as any other. Retiring a delta on one checkpoint's authority while another live checkpoint omits it would strand its entries for any reader holding only the second.
+
+**5 — Conflicting checkpoints are merged under an explicit precedence rule.** Two writers may publish a checkpoint at the same generation. Both are retained and both applied.
+
+Merging is **not** justified by commutativity. Index entries are not commutative: blob compaction republishes an object identifier at a new physical location ([§6.2](#62-manifests-hold-logical-facts-only), [`07-retention-and-gc.md` §3](07-retention-and-gc.md#3-garbage-collection)), so the same identifier legitimately appears in two deltas with different locations — and applying them in the wrong order resolves to a blob that has since been tombstoned and deleted. An earlier draft of this section claimed commutativity; it was false as soon as compaction existed ([PT-2](../review/2026-08-fix-pressure-test.md#pt-2--c6s-commutativity-claim-is-false-once-c1-is-in-place)).
+
+Precedence is therefore explicit rather than emergent:
+
+- every index entry carries the **generation** at which it was published;
+- for a given object identifier, the entry with the **highest generation wins**, with a documented deterministic tie-break below that;
+- relocation entries are **typed as supersessions**, so a reader can distinguish "two writers independently recorded the same new object" — genuinely order-independent — from "this object moved", which is not.
+
+With precedence stated, merging is safe for the reason that actually holds: entries applied in any order converge on the same state, because the winner is a property of the entries themselves rather than of arrival sequence. See [ADR-0017](../adr/0017-index-entry-supersession.md).
 
 Listing remains a useful accelerator for finding a recent checkpoint quickly. It is no longer load-bearing for correctness.
 
@@ -231,6 +258,7 @@ For this to be practical:
 - checkpoints must list their complete shard set and hashes;
 - scanning must be parallel, bounded, resumable, and locally checkpointed;
 - restore of a selected snapshot must become possible as soon as *its* dependency graph is known, without waiting for the full repository (FR-MAN-010);
+- scanning must accept a **target** — a snapshot, a path, or a set of object identifiers — and order blobs so the target's segments are located first. Without this, recovering one document from a damaged repository costs a whole-repository scan, which is the regression PT-10 identifies;
 - conflicts and duplicate mappings are retained as forensic findings, never silently resolved.
 
 ### 8.3 Rebuild never repairs

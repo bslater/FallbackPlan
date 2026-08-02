@@ -24,7 +24,8 @@ The status vocabulary is normative, because collapsing any two of these is how a
 
 | State | Meaning |
 |-------|---------|
-| `captured` | Snapshot committed to the local repository |
+| `captured` | Snapshot committed to a replica, but only within the source's own failure domain — real, and **not** a defence against losing the machine |
+| `protected` | Durable at a replica **outside** the source's failure domain ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain)) |
 | `replicated` | Durable at a named destination |
 | `verified` | Independently confirmed at that destination, with coverage and age |
 | `policy-compliant` | The backup set's durability policy is satisfied |
@@ -32,6 +33,8 @@ The status vocabulary is normative, because collapsing any two of these is how a
 | `unrecoverable` | Required objects are missing or damaged with no replica able to heal them |
 
 `degraded` and `unrecoverable` are materially different and are never merged into a single "problem" indicator. The first means act soon; the second means data is already gone.
+
+`captured` and `protected` are likewise never merged. A repository sitting on the same disk as the source is a real safeguard against deleting a file by mistake and no safeguard at all against the disk failing — and the most common consumer configuration produces exactly that state. Reporting it as `protected` would be the false-confidence failure this project names as a major risk ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)).
 
 ### 1.2 Honest degradation
 

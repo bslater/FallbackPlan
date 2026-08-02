@@ -46,6 +46,9 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | FR-MAN-007 | [02 §5.2](../architecture/02-repository-format.md#52-layout) | — | `Repository.Tests/RecoveryFooterTests` | 0 |
 | FR-MAN-008 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/IndexDeltaChainTests` | 0 |
 | FR-MAN-013 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/CheckpointMergeTests` | 0 |
+| FR-MAN-015 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0017](../adr/0017-index-entry-supersession.md) | `Repository.Tests/SupersessionPrecedenceTests` | 0 |
+| FR-MAN-016 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/VoidDeltaTests` | 0 |
+| FR-MAN-017 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/DeltaRetirementTests` | 0 |
 | FR-MAN-009 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/ForensicRebuildTests` | 0 |
 | FR-MAN-010 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `IntegrationTests/PartialRebuildRestoreTests` | 1 |
 | FR-MAN-011 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `Repository.FuzzTests/RebuildValidationTests` | 0 |
@@ -68,7 +71,10 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | FR-SNP-001 | [04 §6](../architecture/04-concurrency-and-publication.md#6-commit-versus-replication) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `IntegrationTests/CommitSemanticsTests` | 1 |
 | FR-SNP-002 | [01 §5](../architecture/01-domain-model.md#5-replication-not-synchronisation) | — | `IntegrationTests/DeletionHistoryTests` | 1 |
 | FR-SNP-003 | [04 §6.1](../architecture/04-concurrency-and-publication.md#61-the-distinction) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Repository.Tests/ReplicationStateTests` | 2 |
+| FR-SNP-007 | [04 §6.4](../architecture/04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) | [0018](../adr/0018-replica-failure-domains.md) | `IntegrationTests/FailureDomainTests` | 2 |
 | FR-SNP-004 | [04 §4](../architecture/04-concurrency-and-publication.md#4-write-intent) | [0009](../adr/0009-garbage-collection-safety.md) | `InterruptionTests/WriteIntentTests` | 0 |
+| FR-SNP-005 | [04 §4.2.1](../architecture/04-concurrency-and-publication.md#421-expiry-needs-two-conditions-not-one) | [0009](../adr/0009-garbage-collection-safety.md) | `IntegrationTests/IntentExpiryTests` | 4 |
+| FR-SNP-006 | [02 §5.3](../architecture/02-repository-format.md#53-spooling-and-sealing) | [0016](../adr/0016-blob-identifier-formation.md) | `Repository.Tests/BlobIdentifierTests` | 0 |
 
 ### Restore and recovery kit
 
@@ -99,12 +105,13 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | FR-GC-001 | [07 §1](../architecture/07-retention-and-gc.md#1-retention-selects-collection-deletes) | — | `Retention.Tests/RetentionSelectionTests` | 1 |
 | FR-GC-002 | [07 §3](../architecture/07-retention-and-gc.md#3-garbage-collection) | [0009](../adr/0009-garbage-collection-safety.md) | `Retention.Tests/GenerationCutoffTests` | 4 |
 | FR-GC-003 | [07 §3.1](../architecture/07-retention-and-gc.md#31-step-4-is-the-one-that-matters) | [0009](../adr/0009-garbage-collection-safety.md) | `InterruptionTests/GcDuringBackupTests` | 4 |
-| FR-GC-004 | [07 §3.2](../architecture/07-retention-and-gc.md#32-step-6-is-only-possible-because-of-c1) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Retention.Tests/CompactionImmutabilityTests` | 4 |
+| FR-GC-004 | [07 §3.2](../architecture/07-retention-and-gc.md#32-step-7-is-only-possible-because-of-c1) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Retention.Tests/CompactionImmutabilityTests` | 4 |
 | FR-GC-005 | [07 §3](../architecture/07-retention-and-gc.md#3-garbage-collection) | — | `Retention.Tests/DryRunTests` | 4 |
 | FR-GC-006 | [07 §3](../architecture/07-retention-and-gc.md#3-garbage-collection) | [0009](../adr/0009-garbage-collection-safety.md) | `InterruptionTests/GcStepInterruptionTests` | 4 |
 | FR-GC-007 | [07 §5](../architecture/07-retention-and-gc.md#5-destructive-change-safeguards) | — | `IntegrationTests/RetentionFloorTests` | 4 |
 | FR-GC-008 | [07 §5](../architecture/07-retention-and-gc.md#5-destructive-change-safeguards) | — | `IntegrationTests/DestructiveAuditTests` | 4 |
 | FR-QUOTA-001..002 | [09 §6](../architecture/09-replication-and-peers.md#6-quotas-and-exhaustion) | [0012](../adr/0012-storage-provider-contract.md) | `Storage.ContractTests/QuotaExhaustionTests` | 2 |
+| FR-GC-009 | [07 §2.1](../architecture/07-retention-and-gc.md#21-retention-must-not-outrun-replication) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Retention.Tests/RetentionVersusReplicationTests` | 4 |
 
 ### Governance and import
 
@@ -124,7 +131,8 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | NFR-PERF-005 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | — | `PerformanceTests/MetadataGrowthTests` | 1 |
 | NFR-PERF-006, 008, 009 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | `Storage.ContractTests/RequestCountTests` | 3 |
 | NFR-PERF-007 | [02 §3](../architecture/02-repository-format.md#3-segmentation) | [0002](../adr/0002-segmentation-strategy.md) | `PerformanceTests/ThroughputBenchmarks` | 0 |
-| NFR-PERF-012 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `PerformanceTests/RebuildBenchmarks` | 0 |
+| NFR-PERF-012, 015 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `PerformanceTests/RebuildBenchmarks`, `PerformanceTests/TargetedRecoveryBenchmarks` | 0 |
+| NFR-PERF-014 | [02 §7.1](../architecture/02-repository-format.md#71-structure) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `PerformanceTests/IndexSizeBenchmarks` | 0 |
 | NFR-PERF-013 | [10 §2](../architecture/10-observability.md#2-technical-metrics) | — | `PerformanceTests/ResourceLimitTests` | 1 |
 | NFR-REL-001, 005 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | `InterruptionTests/*` | 0 |
 | NFR-REL-002, 007 | [11 §3](../architecture/11-solution-structure.md#3-local-state-separation) | [0010](../adr/0010-local-store-separation.md) | `IntegrationTests/LocalStateSeparationTests` | 1 |
@@ -137,6 +145,7 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | NFR-SEC-005 | [03 §6](../architecture/03-crypto.md#6-authentication-of-repository-state) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.FuzzTests/RollbackDetectionTests` | 1 |
 | NFR-SEC-006 | [10 §4](../architecture/10-observability.md#4-diagnostics) | — | `IntegrationTests/SecretRedactionTests` | 1 |
 | NFR-SEC-007 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/VerifyOnReuseTests` | 2 |
+| NFR-SEC-008 | [03 §3.1](../architecture/03-crypto.md#31-the-construction) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `Repository.Tests/KeyDerivationSeparationTests` | 0 |
 | NFR-PRIV-001..003 | [10 §4](../architecture/10-observability.md#4-diagnostics), [§5](../architecture/10-observability.md#5-telemetry) | — | `IntegrationTests/TelemetryPrivacyTests` | 1 |
 | NFR-TIME-001, 002 | [04 §7](../architecture/04-concurrency-and-publication.md#7-time-and-clock-skew) | [0009](../adr/0009-garbage-collection-safety.md) | `IntegrationTests/ClockSkewTests` | 4 |
 | NFR-COMP-001..003 | [02 §2](../architecture/02-repository-format.md#2-object-classes) | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.ConformanceTests/FeatureNegotiationTests` | 0 |

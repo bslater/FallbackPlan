@@ -1,6 +1,6 @@
 # ADR-0011 — Commit versus replication semantics
 
-**Status:** Proposed
+**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md))
 **Date:** 2026-08
 **Requirements:** FR-SNP-001, FR-SNP-003, FR-REP-001, NFR-OPS-002
 **Review finding:** [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
@@ -33,7 +33,19 @@ Separate the two.
 | `verified` | Independently confirmed by challenge |
 | `degraded` | Previously durable, now failing verification or partially missing |
 
-**Policy is evaluated over replication state**, producing `protected` / `policy-compliant` / `healthy` rather than a single boolean.
+**Policy is evaluated over replication state**, producing `captured` / `protected` / `policy-compliant` / `healthy` rather than a single boolean.
+
+### Amendment 1 — `protected` requires an independent failure domain
+
+The original policy made `protected` mean "the local repository holds it". That is unsafe as the primary reassuring state, because the most common consumer setup puts the local repository on the same disk as the source data. A user who accepts the default and never brings their offsite peer online would see `protected` right up until the disk failed — the "consumer UI hides degraded state → false confidence" risk the original proposal named, reintroduced by this very fix ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)).
+
+Replicas now declare a **failure domain** (`same-volume`, `same-machine`, `same-site`, `independent`), and `protected` requires at least one replica whose domain is disjoint from the source's. A snapshot held only on the source volume is `captured` — accurate, and not reassuring. See [ADR-0018](0018-replica-failure-domains.md).
+
+### Amendment 2 — retention must not outrun replication
+
+Commit is per-replica and retention is per-replica, and nothing connected them. A set keeping 7 days locally, replicating to a peer offline for a fortnight, expires days 1–7 locally on day 8; the peer returns on day 14 and never receives them. That history exists nowhere, and nothing reported a loss because each side applied its configured policy exactly ([PT-9](../review/2026-08-fix-pressure-test.md#pt-9--local-retention-can-silently-erase-history-a-destination-never-received)).
+
+Retention shall not expire a snapshot that has not reached the destinations its policy requires, unless a configured deferral bound is exceeded — at which point the gap is raised as a warning requiring action rather than applied silently. Holding extra snapshots costs disk; expiring them costs history.
 
 ## Consequences
 
@@ -66,3 +78,4 @@ Separate the two.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
+| 2026-08 | Accepted (amended) | Commit/replication split unchanged. `protected` now requires a replica outside the source's failure domain (PT-8); retention may not outrun replication (PT-9). |

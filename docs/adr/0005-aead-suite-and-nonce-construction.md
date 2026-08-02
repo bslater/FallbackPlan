@@ -1,6 +1,6 @@
 # ADR-0005 — AEAD suite and nonce construction
 
-**Status:** Proposed
+**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md))
 **Date:** 2026-08
 **Requirements:** NFR-SEC-002, NFR-SEC-003, FR-ARCH-008, FR-ARCH-009, FR-ARCH-011
 **Review finding:** [C2](../review/2026-08-architecture-review.md#c2--nonce-uniqueness-is-asserted-but-never-constructed)
@@ -32,7 +32,7 @@ blob_salt  ← 256 bits from a CSPRNG, drawn once per blob,
 
 blob_key   ← HKDF-Expand(
                  PRK  = data_key[generation]   (or metadata_key[generation]),
-                 info = "fbp/blob/v1" ‖ blob_salt,
+                 info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ blob_counter,
                  L    = 32)
 
 nonce(i)   ← 96-bit big-endian ordinal of record i within the blob (0, 1, 2, …)
@@ -42,13 +42,27 @@ AAD(i)     ← repository_id ‖ format_version ‖ object_type ‖ object_id �
 
 Every blob has its own key. Nonce uniqueness therefore only has to hold **within a single blob**, where exactly one writer owns a strictly increasing ordinal.
 
+### Amendment 1 — writer identity is bound into the derivation
+
+`writer_id` and `blob_counter` were added after the pressure test. The original construction rested key separation entirely on CSPRNG quality, and a cloned VM or early-boot embedded device can replay RNG state and draw the same salt twice. Binding writer identity and a monotonic per-writer blob counter means a collision would additionally require the same writer at the same counter value; the counter comes from the journal sequence, which is gapless, monotonic, and protected against cloning by [T-18](../threat-model.md#t-18-writer-identity-cloning). It costs nothing and removes a dependency on hardware we do not control ([PT-13](../review/2026-08-fix-pressure-test.md#pt-13--blob-salt-uniqueness-rests-entirely-on-csprng-quality-and-vm-cloning-defeats-that)).
+
+### Amendment 2 — the spool checkpoint stores sealed bytes, not a plaintext offset
+
+**This amendment is load-bearing. Without it the ADR ships the failure it was written to prevent.**
+
+The original text argued that a resumed spool "replays the same plaintext at the same ordinal under the same key" and therefore produces byte-identical output. The input to the AEAD is not the segment's plaintext, however — it is the plaintext *after compression*, and recompression is not guaranteed reproducible. Zstandard is deterministic for a given library version and parameter set and offers no guarantee across versions.
+
+An agent that crashed, was upgraded, and resumed would therefore recompress into different bytes and encrypt them under the same `(blob_key, ordinal)` — nonce reuse, with XOR leakage and GHASH subkey recovery, requiring nothing more exotic than a crash and an unattended update ([PT-1](../review/2026-08-fix-pressure-test.md#pt-1--c2s-resume-guarantee-silently-assumes-bit-reproducible-compression)).
+
+The checkpoint therefore persists **the sealed record bytes**, and resume re-emits them rather than recomputing. Byte-identity becomes a property of the checkpoint rather than an assumption about a third-party codec. Everything else that could vary between crash and resume — blob salt, writer ID and counter, segmentation profile and parameters, compression codec **and version**, encryption profile — is pinned in the checkpoint, and any mismatch forces a **restart** instead of a resume.
+
 ## Why this works
 
-**Concurrent writers cannot collide** — they hold different keys. Two writers draw independent 256-bit salts, so key collision is negligible and no coordination is needed because there is nothing to coordinate.
+**Concurrent writers cannot collide** — they hold different keys. Two writers draw independent 256-bit salts and are additionally separated by writer ID and counter, so no coordination is needed because there is nothing to coordinate.
 
-**Resumption is idempotent, not catastrophic.** The salt lives in the durable spool checkpoint. A *resumed* blob replays the same `(blob_salt, ordinal)` pairs under the same key, producing byte-identical output — bit-for-bit what the interrupted blob would have been. A *restarted* blob draws a fresh salt and is therefore a different key, so ordinals beginning again at zero reuse nothing.
+**Resumption is idempotent, not catastrophic.** A *resumed* blob re-emits the sealed bytes recorded in the checkpoint — bit-for-bit what the interrupted blob would have been. A *restarted* blob draws a fresh salt and is therefore a different key, so ordinals beginning again at zero reuse nothing.
 
-That single distinction — resume reads the salt, restart draws one — is what converts the most dangerous path in the system into a safe one.
+That single distinction — resume replays stored bytes, restart draws a new salt — is what converts the most dangerous path in the system into a safe one. **Restart is always the safe failure, and the engine prefers it whenever anything is in doubt.**
 
 **Relocation fails authentication.** Binding repository, format version, object type, object identifier, and ordinal as AAD means a record cannot be moved between blobs, positions, object types, or repositories.
 
@@ -72,8 +86,10 @@ These are requirements on the suite, not aspirations:
 
 - property test: no `(key, nonce)` pair repeats across any generated write sequence;
 - interruption test: resume-after-kill at every record boundary produces byte-identical blobs;
+- interruption test: **resume with a changed compression codec version re-emits checkpointed bytes or refuses to resume** — it never recompresses under an already-used ordinal;
 - interruption test: restart-after-kill always yields a different blob salt;
 - concurrency test: *N* writers produce pairwise-distinct blob salts;
+- concurrency test: two writers seeded with an **identical CSPRNG stream** still derive distinct blob keys;
 - negative test: a record moved between blobs, ordinals, or repositories fails authentication.
 
 ## Alternatives considered
@@ -89,3 +105,4 @@ These are requirements on the suite, not aspirations:
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Requires external cryptographic review before format v1 freeze |
+| 2026-08 | Accepted (amended) | Construction unchanged. Amendment 1 binds writer identity into derivation (PT-13); Amendment 2 makes the spool checkpoint store sealed bytes (PT-1, critical). External cryptographic review still required before freeze, and must cover AES-GCM key commitment (PT-15). |

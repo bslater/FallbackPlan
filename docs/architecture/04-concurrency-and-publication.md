@@ -45,6 +45,7 @@ write-intent {
   writer_id, sequence, issued_at,
   backup_set_id,
   intended_blob_ids  [extended by further intent records as the job grows],
+  declared_max_duration,
   expiry_generation
 }
 ```
@@ -53,9 +54,19 @@ The rules are then simple:
 
 - The collector treats every blob covered by an **unretired** intent record as reachable. No exceptions, no heuristics.
 - The writer **retires** the intent when its snapshot is published.
-- An abandoned job's intent expires only after a grace period exceeding the longest permitted job duration. Its blobs are then genuinely unreferenced and collectable.
+- An abandoned job's intent expires only when **both** conditions below are met.
 
 Because a job's blob set is not known up front, intents are extended incrementally: a writer publishes an additional intent record naming further blobs before uploading them. The ordering obligation is only that the intent covering a blob is durable **before** that blob is uploaded.
+
+Naming blobs in advance is only possible because **blob identifiers are writer-allocated rather than content-derived** ([`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing), [ADR-0016](../adr/0016-blob-identifier-formation.md)). A content-derived identifier cannot be known before the content exists, and this mechanism would be unimplementable.
+
+### 4.2.1 Expiry needs two conditions, not one
+
+An intent expires only when the repository has advanced past `expiry_generation` **and** `declared_max_duration` has elapsed with a configured skew margin.
+
+Either condition alone fails. Generation alone couples one writer's liveness to other writers' activity: generations advance when *others* publish, so a laptop running a three-week initial backup over a domestic uplink can be expired in two days by three siblings backing up hourly, and have its blobs collected mid-job. Wall-clock alone reintroduces the clock dependency §4.3 exists to remove.
+
+`declared_max_duration` is declared by the writer rather than fixed globally, because "the longest permitted job duration" is not a constant — a 4 TB first backup and a 20 MB incremental differ by orders of magnitude, and any single value is either unsafe for the first or wasteful for the second. A writer extends its declaration by publishing an extension. An administrative force-expire exists for genuinely abandoned jobs and is audited ([PT-5](../review/2026-08-fix-pressure-test.md#pt-5--intent-expiry-mixes-generation-and-wall-clock-and-couples-slow-writers-to-busy-repositories)).
 
 ### 4.3 Why leases are not enough
 
@@ -128,8 +139,11 @@ Under the split, a snapshot commits locally and is immediately protective. It be
 A backup set declares its durability policy over replication state:
 
 ```text
+Snapshot captured when:
+  - any replica: durable
+
 Snapshot protected when:
-  - local repository: durable
+  - at least one replica outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
   - local repository:  durable, and
@@ -142,6 +156,23 @@ Snapshot healthy when:
 ```
 
 This gives the status model in [`10-observability.md`](10-observability.md) something truthful to say. "Protected locally, waiting on the offsite copy" is a real state that the original design could not express — it would have shown no recent backup at all.
+
+### 6.4 `protected` requires an independent failure domain
+
+Decoupling commit from replication was necessary, but it must not make the reassuring word mean less than a user assumes. A local repository on the same disk as the source data is not a backup — the disk fails and both copies go with it.
+
+Replicas therefore declare a **failure domain**, and `protected` requires at least one replica whose domain is disjoint from the source's:
+
+| Domain | Example | Independent of source? |
+|--------|---------|------------------------|
+| `same-volume` | Repository directory on the source volume | No |
+| `same-machine` | Second internal disk | Partially — survives disk failure, not theft, fire, or ransomware |
+| `same-site` | NAS or peer on the same LAN | Survives machine loss, not site loss |
+| `independent` | Offsite peer, cloud store | Yes |
+
+A snapshot committed only to a same-volume replica is `captured`, never `protected`, and the first-run flow warns when the only configured destination shares a failure domain with the source.
+
+Without this, the most common consumer setup — accept the default local repository, never bring the offsite peer online — reads as `protected` right up until the disk dies. That is the "consumer UI hides degraded state → false confidence" risk the original proposal named as a major risk, and it would have been reintroduced by the fix for it ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain), [ADR-0018](../adr/0018-replica-failure-domains.md)).
 
 ## 7. Time and clock skew
 

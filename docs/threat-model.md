@@ -63,7 +63,7 @@ A destination claims to hold data it has discarded.
 
 ### T-10 Malicious repository member poisons deduplication
 A device holding repository keys publishes a segment record whose claimed content identifier does not match its plaintext. Other devices deduplicate against it and silently back up corrupt data, discovered only at restore — after the source is gone.
-**Mitigation:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). Default `device` reuses only self-written segments. `repository` requires verify-on-reuse. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
+**Mitigation:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). The default `repository` verifies on reuse — it fetches, decrypts, and confirms the content identifier before referencing another writer's segment — so a mismatched record is never referenced and the mismatch is reported. `device` avoids cross-writer reuse entirely. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
 
 ### T-11 Metadata side channels
 An honest-but-curious store learns from what it is legitimately given:
@@ -81,8 +81,8 @@ Compressing before encrypting is correct for efficiency and is what creates the 
 
 ### T-12 Dedup confirmation by a repository member
 In any trust domain other than `device`, a member can determine whether another member has backed up a *known* file by observing whether deduplication hits.
-**Mitigation:** `device` is the default and closes this entirely.
-**Residual:** inherent to cross-device deduplication. Anyone for whom it matters should stay on `device`.
+**Mitigation:** `device` mode closes this entirely, and is available as an opt-in.
+**Residual:** the default is `repository` ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)), so this channel is open by default in multi-device repositories — a deliberate trade for cross-device deduplication, which is the product's headline use case. It must be stated in the UI where the trust domain is chosen. Anyone for whom it matters should select `device`.
 
 ### T-13 Relay traffic analysis
 A relay cannot decrypt, but it learns which device identities communicate, when, and how much.

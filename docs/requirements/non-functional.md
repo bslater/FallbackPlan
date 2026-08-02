@@ -43,6 +43,8 @@ Unless a requirement says otherwise, targets are measured on:
 | NFR-PERF-011 **[new]** | Catalogue size per file version. | ≤ 400 bytes/file version at scale **M**, so scale **L** stays under ~40 GB — a number that must fit on a consumer laptop. |
 | NFR-PERF-012 **[new]** | Forensic rebuild rate from blob recovery footers. | ≥ 500 blobs/s from local NVMe; scale **M** rebuilds in ≤ 2 hours. |
 | NFR-PERF-013 **[new]** | Background activity shall observe configured CPU, disk, network, and time-window limits. | With a 25% CPU cap, measured agent CPU stays ≤ 30% over any 60 s window. |
+| NFR-PERF-014 **[new]** | **Repository-side** index size per distinct segment object. Physical location moved from manifests into the index, so this is the structure that grew and nothing previously bounded it. | ≤ 80 bytes per distinct segment object after checkpoint compaction. A reader resolving one file fetches only the shards covering its segments, never the whole index. |
+| NFR-PERF-015 **[new]** | Targeted forensic recovery: time to first restored file when all index objects are lost, with prioritised footer scanning. | ≤ 10 minutes at scale **M** for a single named file, against the ≥ 2 hours a full rebuild takes. |
 
 ## Reliability and recoverability
 
@@ -67,7 +69,8 @@ Unless a requirement says otherwise, targets are measured on:
 | NFR-SEC-004 | A compromised store or relay shall not decrypt content, enumerate plaintext paths, or confirm possession of a known plaintext through raw identifiers. | All stored identifiers are keyed. |
 | NFR-SEC-005 | Repository metadata and writer publications shall be authenticated so rollback, substitution, truncation, and identity conflicts are detectable. | Each attack class is detected by the corruption suite. |
 | NFR-SEC-006 **[changed]** | Secrets shall not reach logs, telemetry, crash dumps, manifests, or configuration exports. Redaction shall be **by declared type**, not string pattern. | A newly added secret-bearing field is redacted without any filter-list change. |
-| NFR-SEC-007 **[new]** | Cross-device deduplication shall not permit one writer to corrupt another's backups without detection. | `device` default; `repository` verifies on reuse (FR-DED-003). |
+| NFR-SEC-007 **[amended]** | Cross-device deduplication shall not permit one writer to corrupt another's backups without detection. | The default (`repository`) verifies on reuse before referencing another writer's segment (FR-DED-003); `device` avoids cross-writer reuse entirely. |
+| NFR-SEC-008 **[new]** | Key separation shall not depend on CSPRNG quality alone. Writer identity and a monotonic per-writer counter shall be bound into per-blob key derivation. | Two writers seeded with an identical CSPRNG stream still derive distinct blob keys. |
 | NFR-PRIV-001 **[new]** | No telemetry shall leave the device without explicit opt-in. | Default build transmits nothing; verified by network capture. |
 | NFR-PRIV-002 **[new]** | Enabled telemetry shall exclude paths, filenames, repository identifiers, destination endpoints, and anything derived from file content. | Payload schema review plus automated assertion. |
 | NFR-PRIV-003 **[new]** | Diagnostic bundles shall exclude credentials, keys, plaintext paths, and correlatable repository identifiers by default. | Bundle inspection test. |
@@ -91,7 +94,7 @@ Unless a requirement says otherwise, targets are measured on:
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
 | NFR-OPS-001 | The engine shall expose pipeline throughput, queue depth, deduplication and compression ratios, blob utilisation, catalogue state, verification state, and destination durability. | All NFR-PERF targets are observable in production, not only in benchmarks. |
-| NFR-OPS-002 | Status shall distinguish `captured`, `replicated`, `verified`, `policy-compliant`, `degraded`, and `unrecoverable`. | No UI surface merges `degraded` with `unrecoverable`. |
+| NFR-OPS-002 **[amended]** | Status shall distinguish `captured`, `protected`, `replicated`, `verified`, `policy-compliant`, `degraded`, and `unrecoverable`. | No UI surface merges `degraded` with `unrecoverable`, or `captured` with `protected`. |
 | NFR-OPS-003 | Configuration shall be schema-versioned, validated before use, and exportable without secrets. Effective values shall be preserved per snapshot. | An invalid config is rejected with a named field before any job starts. |
 | NFR-OPS-004 | Defaults shall be safe on consumer hardware while permitting advanced overrides. | Defaults meet NFR-PERF-013 on a 4-core laptop. |
 | NFR-OPS-005 | Recovery shall be possible from a clean machine using only the repository, the recovery software, and the recovery kit. | End-to-end test on a machine with no prior state. |

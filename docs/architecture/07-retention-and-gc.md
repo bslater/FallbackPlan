@@ -29,6 +29,16 @@ Composable rules, evaluated against snapshot capture times:
 
 The last rule is a floor that the others cannot override. It exists so that a misconfigured schedule, a clock problem, or a long offline period cannot leave a backup set with nothing.
 
+### 2.1 Retention must not outrun replication
+
+Retention operates per-replica, and so does commit. Left uncoordinated, the two combine to erase history that no replica ever held.
+
+Consider a set keeping hourly snapshots for 7 days locally, replicating to a peer that is offline for a fortnight. On day 8 local retention expires the day-1 snapshots. The peer returns on day 14 and receives whatever remains. Days 1–7 now exist nowhere and never will — and nothing reported a loss, because from each side's local view the configured policy was applied exactly as written ([PT-9](../review/2026-08-fix-pressure-test.md#pt-9--local-retention-can-silently-erase-history-a-destination-never-received)).
+
+The rule is therefore: **retention shall not expire a snapshot that has not reached the destinations its own policy requires**, unless a configured bound on that deferral is exceeded — at which point the resulting history gap is raised as a warning requiring action, never applied silently.
+
+The local repository is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default.
+
 Deleted-file history is separately configured because it answers a different question. "How far back can I go?" is about snapshot age; "can I still get the file I deleted last spring?" is about how long tombstoned content survives, and users reason about the two independently.
 
 ## 3. Garbage collection
@@ -40,16 +50,26 @@ Generation-based mark and sweep:
 3. Mark reachable metadata and data objects by walking snapshot → tree → file-version → segment object identifiers, resolving through the index.
 4. **Add every blob covered by an unretired [write intent](04-concurrency-and-publication.md#4-write-intent) to the reachable set.**
 5. Produce a deletion and compaction plan.
-6. Write replacement blobs for compaction, and publish index entries mapping the moved object identifiers to their new locations. **No manifest is touched.**
-7. Publish a new index checkpoint.
-8. Tombstone superseded blobs.
-9. Wait out the configured grace period.
-10. Revalidate: confirm no protected snapshot references tombstoned content.
-11. Delete eligible objects in bounded batches.
+6. **Publish a write intent naming the replacement blobs this pass will create.**
+7. Write those replacement blobs, and publish index entries mapping the moved object identifiers to their new locations as **supersessions** ([`02-repository-format.md` §7.2](02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing)). **No manifest is touched.**
+8. Publish a new index checkpoint.
+9. **Retire the write intent from step 6.**
+10. Tombstone superseded blobs.
+11. Wait out the configured grace period.
+12. Revalidate: confirm no protected snapshot references tombstoned content.
+13. Delete eligible objects in bounded batches.
 
 A **dry-run report is mandatory** before any destructive pass, and it states what would be deleted, what would be compacted, how much space would be reclaimed, and which snapshots were treated as protected.
 
-Interruption at any step leaves every published snapshot recoverable. Steps 6–11 are individually resumable and idempotent; re-running a partially completed pass converges rather than compounding.
+Interruption at any step leaves every published snapshot recoverable. Steps 6–13 are individually resumable and idempotent; re-running a partially completed pass converges rather than compounding.
+
+### 3.0 The collector is a writer
+
+Steps 6 and 9 exist because the collector creates blobs, and **any component that creates a blob publishes an intent first — with no exception for maintenance.**
+
+Without them, a replacement blob is unreferenced between its creation and the publication of its index entries, which is precisely the window step 4 protects writers from. A second collector — permitted, since [`04-concurrency-and-publication.md` §8](04-concurrency-and-publication.md#8-concurrent-maintenance) requires no global exclusive lock — would not mark it and could delete it. The first collector then publishes index entries pointing into a deleted blob and tombstones the originals, destroying both copies of every record in the batch.
+
+That is permanent loss of live data reachable from protected snapshots: the exact failure the write-intent mechanism was introduced to prevent, in the one code path that had not absorbed the lesson ([PT-3](../review/2026-08-fix-pressure-test.md#pt-3--compaction-output-blobs-are-unprotected-between-creation-and-index-publication)).
 
 ### 3.1 Step 4 is the one that matters
 
@@ -57,11 +77,11 @@ Step 4 is the [C4](../review/2026-08-architecture-review.md#c4--garbage-collecti
 
 Intent coverage is a *durable, self-describing* statement of what is in flight. It is not a heartbeat, it does not expire because a laptop was closed, and it names the specific blobs it protects.
 
-### 3.2 Step 6 is only possible because of C1
+### 3.2 Step 7 is only possible because of C1
 
 Compaction moves records between blobs, which changes their physical location. It is safe to do that without rewriting history *only* because manifests reference segments by object identifier and never by blob and offset ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 
-Had physical location stayed in the manifest as originally specified, step 6 would have required rewriting immutable objects — which is to say, it would not have been possible at all.
+Had physical location stayed in the manifest as originally specified, step 7 would have required rewriting immutable objects — which is to say, it would not have been possible at all.
 
 ## 4. Why leases are not load-bearing
 

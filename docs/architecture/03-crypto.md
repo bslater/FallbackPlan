@@ -57,7 +57,7 @@ blob_salt   ← 256 bits from a CSPRNG, drawn once per blob,
 
 blob_key    ← HKDF-Expand(
                   PRK  = data_key[generation],       (or metadata_key[generation])
-                  info = "fbp/blob/v1" ‖ blob_salt,
+                  info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ blob_counter,
                   L    = 32 bytes)
 
 nonce(i)    ← 96-bit big-endian ordinal of record i within that blob (0, 1, 2, …)
@@ -66,6 +66,8 @@ AAD(i)      ← repository_id ‖ format_version ‖ object_type ‖ object_id �
 ```
 
 Every blob has its own key. Nonce uniqueness therefore only has to hold **within a single blob**, where exactly one writer owns a strictly increasing record ordinal.
+
+`writer_id` and `blob_counter` are bound into the derivation alongside the random salt so that key separation does not rest on CSPRNG quality alone. A cloned VM or an early-boot embedded device can replay RNG state and draw the same salt twice; binding writer identity and a monotonic per-writer blob counter means collision would additionally require the same writer and the same counter value. The counter comes from the writer's journal sequence, which is gapless, monotonic, and protected against cloning by the identity-conflict alert in [`../threat-model.md` T-18](../threat-model.md#t-18-writer-identity-cloning). This costs nothing and removes a dependency on an assumption we cannot enforce on the user's hardware.
 
 ### 3.2 Why this removes the coordination problem
 
@@ -77,11 +79,25 @@ The original requirement (NFR-SEC-003) demanded uniqueness "by construction … 
 
 ### 3.3 Why resumption is safe
 
-A resumed spool replays the same `(blob_salt, ordinal)` pairs under the same derived key. Encrypting the same plaintext at the same ordinal under the same key yields **byte-identical output**. Replay is therefore idempotent, not catastrophic: the resumed blob is bit-for-bit what the interrupted one would have been.
+A resumed spool re-emits **the sealed record bytes it already produced**, read from the durable spool checkpoint. It does not recompute them. The resumed blob is therefore bit-for-bit what the interrupted one would have been, and replay is idempotent rather than catastrophic.
 
 A *restarted* blob is a different matter and is handled by construction too — it draws a fresh `blob_salt`, so it is a different key, and no nonce is reused even though the ordinals begin again at zero.
 
-The distinction that makes this work is that the salt lives in the durable spool checkpoint. Resume reads it; restart draws a new one. Everything else follows.
+#### Why the checkpoint stores bytes, not offsets
+
+This is the detail the whole construction depends on, and getting it wrong reintroduces exactly the failure §3 exists to prevent.
+
+The obvious design is to checkpoint a plaintext offset and recompute from there — "the same plaintext at the same ordinal under the same key yields the same output". That reasoning is wrong, because the input to the AEAD is not the segment's plaintext. It is the segment's plaintext **after compression** (§[`02-repository-format.md` §4](02-repository-format.md#4-compression)), and recompression is not guaranteed to be reproducible. Zstandard is deterministic for a given library version and parameter set; it offers no guarantee across versions, and compressors change their output when internal heuristics are tuned.
+
+So an agent that crashes, is upgraded, and resumes would recompress the same segment into *different bytes* and encrypt those under the *same* `(blob_key, ordinal)`. Two different plaintexts under one key and nonce leaks their XOR and — far worse — permits recovery of the GHASH authentication subkey, after which an attacker can forge arbitrary authenticated records in that blob. No attacker and no unusual configuration is required: a crash, an unattended update, and a resume.
+
+Storing the sealed bytes makes byte-identity a property of the checkpoint rather than an assumption about a third-party codec. See [PT-1](../review/2026-08-fix-pressure-test.md#pt-1--c2s-resume-guarantee-silently-assumes-bit-reproducible-compression).
+
+#### Everything that varies must be pinned
+
+The same reasoning applies to any input that could differ between crash and resume. The spool checkpoint records the blob salt, the writer ID and blob counter, the segmentation profile and its parameters, the compression codec **and its exact version**, and the encryption profile. On resume, any mismatch between the checkpoint and the running agent forces a **restart** — which draws a fresh salt and is safe — rather than a resume.
+
+Restart is the safe failure. The engine always prefers it when there is any doubt.
 
 ### 3.4 Associated data
 
@@ -93,8 +109,10 @@ The construction is only as good as its enforcement, so these are requirements o
 
 - property test: no `(key, nonce)` pair repeats across any generated write sequence;
 - interruption test: resume-after-kill at every record boundary produces byte-identical blobs;
+- interruption test: **resume with a changed compression codec version re-emits the checkpointed bytes, or refuses to resume** — it never recompresses under an already-used ordinal;
 - interruption test: restart-after-kill produces a *different* blob salt in every case;
 - concurrency test: *N* writers against one repository produce pairwise-distinct blob salts;
+- concurrency test: two writers seeded with an *identical* CSPRNG stream still derive distinct blob keys, via `writer_id` and `blob_counter`;
 - negative test: a record moved between blobs, ordinals, or repositories fails authentication.
 
 ## 4. Object identifiers
@@ -124,13 +142,24 @@ Restore-time verification (FR-RST-002) catches this at the moment the user needs
 
 | Domain | Behaviour | Cost | Default |
 |--------|-----------|------|---------|
-| `device` | Reuse only segments this device wrote. | Storage duplication across devices; **none** for a single-device repository | ✅ |
-| `repository` | Reuse any member's segments, after **verify-on-reuse**: fetch, decrypt, confirm the content identifier before referencing. | One read per first reuse; still avoids re-upload and re-storage | Opt-in |
+| `device` | Reuse only segments this device wrote. | Storage duplication across devices; **none** for a single-device repository | Opt-in (hardened) |
+| `repository` | Reuse any member's segments, after **verify-on-reuse**: fetch, decrypt, confirm the content identifier before referencing. | One read per first reuse; still avoids re-upload and re-storage | ✅ |
 | `repository-unverified` | Reuse without verification. | None | Opt-in, requires explicit acknowledgement |
 
-`device` is the default because it costs nothing at all in the overwhelmingly common single-device case, and because the failure it prevents is silent and permanent. `repository` keeps most of the bandwidth saving while restoring the integrity guarantee, and is the right setting for a household backing up four laptops that share an OS and a music library.
+`repository` is the default. In a single-writer repository it **degenerates exactly to `device` behaviour at zero cost**, because there are no other writers' segments to verify — it is free precisely where `device` is free. Where the two differ is the multi-device household backing up four laptops that share an operating system and a music library, and there `device` stores four copies of everything they have in common. That is CrashPlan's classic use case and this project's stated reason for existing, so the default should serve it.
+
+An earlier draft made `device` the default on the grounds that it "costs nothing in the single-device case". True — and it does not distinguish the two options, because `repository` costs nothing there either. The argument selected between them on a criterion where they are identical ([PT-11](../review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)).
+
+`device` remains available as the hardened setting, and is the right choice for anyone who wants to close the confirmation side channel in §5.3 entirely, or who does not want their device reading another member's data even to verify it.
 
 `repository-unverified` exists because there are legitimate deployments — a single administrator, uniform managed devices — where every writer really is equally trusted. It is never a default and never silent.
+
+#### Both domains need state that outlives the catalogue
+
+`device` must know which segments *this device* wrote; `repository` must remember which shared segments it has already verified, or it pays the cost repeatedly. Both are catalogue state, and the catalogue is disposable ([ADR-0010](../adr/0010-local-store-separation.md)).
+
+- **Writer attribution is recoverable.** Index deltas carry `writer_id`, so a rebuild reconstructs which segments this device authored. The dedup lookup key includes writer attribution for exactly this reason (FR-MAN-006).
+- **Verification outcomes are recorded durably**, so that deleting the catalogue — a documented, supported recovery action — does not silently re-impose full re-verification and turn the next incremental into hours of egress ([PT-12](../review/2026-08-fix-pressure-test.md#pt-12--device-attribution-and-verify-on-reuse-state-live-only-in-a-disposable-cache)).
 
 ### 5.3 The residual leak
 
@@ -151,6 +180,8 @@ Stated here so it is never implied elsewhere:
 - ransomware holding source credentials *and* unlocked keys can act with the user's authority (mitigations, not solutions, in [`07-retention-and-gc.md` §5](07-retention-and-gc.md#5-destructive-change-safeguards));
 - loss of all recovery material makes the repository permanently unreadable — by design, and the reason the recovery-kit workflow is mandatory;
 - stored record lengths leak compressed sizes ([`../threat-model.md`](../threat-model.md#t-11-metadata-side-channels)).
+
+One property to note for the external cryptographic review: **AES-GCM is not key-committing**. A ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the repository master key and an attacker without it cannot choose them — but `repository-unverified` deduplication accepts records from other writers without checking them, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. The AAD binding in §3.4 should be assessed against this. Not a v1 blocker ([PT-15](../review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)).
 
 ---
 

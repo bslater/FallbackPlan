@@ -48,8 +48,11 @@ That last pair of properties is what makes "back up to a friend's computer" a re
 A backup set declares its policy over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)):
 
 ```text
+Snapshot captured when:
+  - any replica: durable
+
 Snapshot protected when:
-  - local repository: durable
+  - at least one replica outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
   - local repository:  durable, and
@@ -61,7 +64,9 @@ Snapshot healthy when:
   - cloud replica:     durable within 24 hours
 ```
 
-Because commit is per-replica, a destination that is offline delays *policy compliance* without blocking *protection*. The status display can then say "protected locally, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+Because commit is per-replica, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured locally, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+
+`protected` deliberately requires a replica outside the source's failure domain, so that a local repository sharing a disk with the source data never reads as safe. Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
 
 ## 5. Destination verification
 

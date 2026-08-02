@@ -108,15 +108,41 @@ Repository-server mode is described as an ownership model but its administrative
 
 ---
 
+## Q11 — Physical hints in segment references
+
+**Owner:** project maintainer · **Blocks:** format v1 freeze · **ADR:** [0007](adr/0007-logical-object-identifiers-in-manifests.md) · **Finding:** [PT-10](review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)
+
+Manifests carry logical object identifiers only, and that decision is confirmed. What is open is whether a segment reference should *also* carry a non-authoritative `last_known_blob` hint.
+
+**Why it matters.** With no index, recovering a single file means scanning blob footers — hours at scale **M** for one document, against roughly one fetch if a hint were present. That is the emergency-recovery path, so it is the worst place to be slow.
+
+**Why the original rejection does not hold.** ADR-0007 dismissed hints as "a correctness question dressed up as an optimisation". Record headers are independently authenticated and carry the object identifier, so a reader following a stale hint **detects** it and falls back to the index. Detectably stale is not silently wrong.
+
+**What still argues against it.** It partially re-couples manifests to physical layout, and invites implementations that trust the hint without validating. The mitigation is a mandatory stale-hint conformance fixture.
+
+Either answer preserves the core decision: because the hint may go stale, compaction still touches no manifest.
+
+| Option | Trade |
+|--------|-------|
+| **Add the hint** | O(1) first-byte recovery with no index; a few bytes per segment reference; a stale-hint fixture becomes mandatory |
+| **No hint** | Manifests stay purely logical; emergency single-file recovery relies on prioritised footer scanning (NFR-PERF-015) |
+
+**Recommendation:** add it, with mandatory validation and a conformance fixture. The cost is small and bounded; the benefit lands exactly when the user is in the worst position.
+
+---
+
 ## Closed
 
 | Question | Resolution |
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
-| Is cross-device dedup safe by default? | No — `device` is the default; cross-device is opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |
+| Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |
 | How does GC avoid deleting in-flight blobs? | Write-intent journal records; leases are advisory ([ADR-0009](adr/0009-garbage-collection-safety.md)) |
 | Does an offline destination block snapshots? | No — commit is per-replica ([ADR-0011](adr/0011-commit-versus-replication-semantics.md)) |
-| How is a checkpoint conflict resolved? | Both retained, both applied ([ADR-0008](adr/0008-index-generations-and-checkpoints.md)) |
+| How is a checkpoint conflict resolved? | Both retained, both applied, under explicit generation precedence ([ADR-0008](adr/0008-index-generations-and-checkpoints.md), [ADR-0017](adr/0017-index-entry-supersession.md)) |
 | What is in the recovery kit? | Specified ([ADR-0013](adr/0013-recovery-kit.md)) |
+| How are blob identifiers formed? | Writer-allocated and opaque, not content-derived ([ADR-0016](adr/0016-blob-identifier-formation.md)) |
+| What happens when two index entries map one object? | Highest generation wins; relocations typed as supersessions ([ADR-0017](adr/0017-index-entry-supersession.md)) |
+| Does `protected` require an offsite copy? | Yes — a replica outside the source's failure domain ([ADR-0018](adr/0018-replica-failure-domains.md)) |
 | Is the local database disposable? | The catalogue is; device identity and pairings are not ([ADR-0010](adr/0010-local-store-separation.md)) |

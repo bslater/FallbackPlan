@@ -82,6 +82,8 @@ record nonce     ← 96-bit big-endian record ordinal within that blob (0, 1, 2,
 
 Every blob has its own key, so nonce uniqueness only has to hold *within one blob*, where a single writer owns a strictly increasing ordinal. Concurrent writers cannot collide because they hold different keys. A resumed spool cannot collide because resumption replays the same `(blob_salt, ordinal)` pairs under the same derived key, producing byte-identical records — idempotent rather than catastrophic. A *restarted* spool draws a fresh salt and is therefore a different key.
 
+> ⚠️ **Superseded in part.** The key schedule stands. The claim that replay produces byte-identical records does **not** hold if the resumed spool *recomputes* them: the AEAD input is the plaintext after compression, and recompression is not reproducible across codec versions. The spool checkpoint must store the sealed bytes. See [PT-1](2026-08-fix-pressure-test.md#pt-1--c2s-resume-guarantee-silently-assumes-bit-reproducible-compression).
+
 Associated data binds each record to its context so records cannot be moved between blobs, repositories, or object types:
 
 ```
@@ -119,6 +121,8 @@ Note that this is *not* the classic convergent-encryption confirmation-of-file a
 | `device` | A device reuses only segments it wrote itself. No cross-device dedup. | All repositories, including single-user ones |
 | `repository` | Any member's segments may be reused, after **verify-on-reuse**: fetch, decrypt, and confirm the plaintext hash before referencing. | Opt-in, single trust domain only |
 | `repository-unverified` | Reuse without verification. Fastest, and only sound when every writer is equally trusted. | Opt-in, requires explicit acknowledgement |
+
+> ⚠️ **Default superseded.** `repository` is now the default. `device` was chosen here on the grounds that it costs nothing in the single-device case — true, but so does `repository`, which degenerates to identical behaviour when there is only one writer. See [PT-11](2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository).
 
 `device` as the default costs some storage in the multi-device case and costs nothing in the single-device case, which is the overwhelmingly common one. `repository` keeps most of the bandwidth saving — verify-on-reuse downloads the segment but avoids re-uploading and re-storing it — while restoring the integrity guarantee.
 
@@ -201,6 +205,8 @@ The document is also silent on the concurrent case. §8.1 permits multiple direc
 - Each checkpoint enumerates the **exact delta IDs it subsumes** and the per-writer high-water sequence it covers. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not the listing showed it.
 - A delta is only retired once a checkpoint that explicitly names it has been durable for the safety window in §7.9.
 - Two checkpoints at the same generation are **both retained and both applied**. This is safe precisely because index deltas are immutable, idempotent, and commutative: applying the union of two overlapping checkpoints yields the same catalogue state as either alone plus the difference. No election, no lock, no tie-break.
+
+> ⚠️ **Superseded.** The commutativity justification is false once C1's fix exists, because compaction relocates an object identifier that already has a mapping. Retaining and applying both checkpoints is still correct, but for a different reason — explicit generation precedence. See [PT-2](2026-08-fix-pressure-test.md#pt-2--c6s-commutativity-claim-is-false-once-c1-is-in-place) and [ADR-0017](../adr/0017-index-entry-supersession.md).
 
 Listing remains a useful accelerator for finding a recent checkpoint quickly. It is no longer load-bearing for correctness, which is what §7.9 asked for in the first place.
 

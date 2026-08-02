@@ -1,6 +1,6 @@
 # ADR-0009 — Garbage collection safety
 
-**Status:** Proposed
+**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md))
 **Date:** 2026-08
 **Requirements:** FR-SNP-004, FR-GC-002, FR-GC-003, FR-GC-006, NFR-TIME-001
 **Review finding:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot)
@@ -31,15 +31,32 @@ write_intent {
   writer_id, sequence, issued_at
   backup_set_id
   intended_blob_ids[]      // extended by further intent records as the job grows
+  declared_max_duration
   expiry_generation
 }
 ```
 
 - The collector treats every blob covered by an **unretired** intent as reachable. No exceptions, no heuristics.
 - The writer retires the intent when its snapshot is published.
-- An abandoned job's intent expires only after a grace period exceeding the longest permitted job duration.
+- An abandoned job's intent expires only when **both** the generation and duration conditions below are met.
 
 The only ordering obligation is that the intent covering a blob is durable **before** that blob is uploaded.
+
+### Amendment 1 — the collector is a writer
+
+The original algorithm applied intent protection to backup writers and not to the collector, which also creates blobs during compaction. Between writing a replacement blob and publishing its index entries, that blob is unreferenced — precisely the window intents exist to cover — so a second concurrent collector could sweep it, after which the first publishes index entries into a deleted blob and tombstones the originals. Both copies of every record in the batch are lost ([PT-3](../review/2026-08-fix-pressure-test.md#pt-3--compaction-output-blobs-are-unprotected-between-creation-and-index-publication)).
+
+The rule is therefore stated generally: **any component that creates a blob publishes an intent first, with no exception for maintenance.** The GC algorithm gains explicit publish and retire steps around compaction.
+
+### Amendment 2 — blob identifiers must be writer-allocated
+
+An intent names blobs before they exist, which is impossible for a content-derived identifier. The format never said how blob identifiers are formed, leaving this mechanism unimplementable ([PT-4](../review/2026-08-fix-pressure-test.md#pt-4--blob-identifier-formation-is-unspecified-and-c4-cannot-be-implemented-without-it)). Resolved in [ADR-0016](0016-blob-identifier-formation.md): blob identifiers are writer-allocated and opaque, unlike record identifiers, which remain content-derived and keyed.
+
+### Amendment 3 — expiry needs two conditions
+
+An intent expires only when the repository has advanced past `expiry_generation` **and** the writer's `declared_max_duration` has elapsed with a configured skew margin.
+
+Generation alone couples one writer's liveness to other writers' activity — generations advance when *others* publish, so a laptop running a three-week initial backup can be expired in two days by siblings backing up hourly, and have its blobs collected mid-job. Wall-clock alone reintroduces the clock dependency this ADR exists to remove. The duration is declared by the writer rather than fixed globally, because a 4 TB first backup and a 20 MB incremental have no single safe constant between them ([PT-5](../review/2026-08-fix-pressure-test.md#pt-5--intent-expiry-mixes-generation-and-wall-clock-and-couples-slow-writers-to-busy-repositories)). An audited administrative force-expire covers genuinely abandoned jobs.
 
 ### Safety rests on four mechanisms, none of them a clock
 
@@ -87,3 +104,4 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
+| 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |

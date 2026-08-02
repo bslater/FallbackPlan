@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: design.** No implementation exists yet. This set is the reviewed architecture that development will be built from, and every decision in it is `Proposed` rather than settled.
+> **Status: design.** No implementation exists yet. This set is the reviewed architecture that development will be built from. It has been through two passes: a review of the original proposal, and a pressure test of that review's own fixes.
 
 ---
 
@@ -12,7 +12,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 |-----------------|------|
 | Understand what this is | [Overview](architecture/00-overview.md) |
 | Know what a word means | [Domain model](architecture/01-domain-model.md) — normative glossary |
-| See what changed and why | [Architecture review](review/2026-08-architecture-review.md) |
+| See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
 
@@ -41,7 +41,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-All `Proposed`. None binding until accepted.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); the rest remain `Proposed`.
 
 | ADR | Decision |
 |-----|----------|
@@ -60,6 +60,9 @@ All `Proposed`. None binding until accepted.
 | [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 stability |
 | [0015](adr/0015-crashplan-importer-isolation.md) | CrashPlan importer isolation and licensing gate |
+| [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated, not content-derived |
+| [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence |
+| [0018](adr/0018-replica-failure-domains.md) | Replica failure domains |
 
 Template: [0000](adr/0000-template.md)
 
@@ -70,6 +73,7 @@ Template: [0000](adr/0000-template.md)
 ## Review
 
 - [Architecture review, August 2026](review/2026-08-architecture-review.md) — 6 critical, 7 high, 8 medium findings against the original proposal
+- [Pressure test, August 2026](review/2026-08-fix-pressure-test.md) — the six fixes read back as an implementation contract: 3 critical, 7 high, 5 medium. No fix reversed; two were unsound as written
 - [Original proposal](review/2026-08-original-proposal.md) — preserved verbatim, superseded
 
 ---
@@ -82,16 +86,28 @@ The review found six places where the original proposal contradicted itself. Eac
 |---|---------|-----|
 | **C1** | Immutable manifests embedded physical blob locations that compaction changes | Manifests carry logical object identifiers only; the index owns location |
 | **C2** | Nonce uniqueness was required but never constructed | Per-blob key derivation; record ordinal as nonce |
-| **C3** | Cross-device deduplication had no integrity guard | Dedup trust domains, `device` by default |
+| **C3** | Cross-device deduplication had no integrity guard | Dedup trust domains with verify-on-reuse (default changed to `repository` by [PT-11](review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)) |
 | **C4** | GC could delete blobs belonging to an in-flight snapshot | Write-intent journal records; leases demoted to advisory |
 | **C5** | One offline destination stalled all protection | Commit is per-replica; replication is separate state |
 | **C6** | Checkpoint compaction needed a listing the design forbade relying on | Per-writer delta chains; checkpoints enumerate what they subsume |
 
 Full analysis, including the original wording of everything that changed, is in the [review](review/2026-08-architecture-review.md).
 
+## Then the fixes were pressure-tested
+
+Those six fixes were written quickly, by one author, and three of them touch the same objects during maintenance — so they were read back with the same scepticism. All six held directionally and **none was reversed**, but two were unsound as written:
+
+| | Finding | Fix |
+|---|---------|-----|
+| **PT-1** | C2's resume guarantee assumed recompression is bit-reproducible; a crash, an upgrade, and a resume would reuse a nonce with different plaintext — the exact catastrophe C2 prevents | Spool checkpoint stores sealed record bytes, not a plaintext offset |
+| **PT-2** | C6's merge rule rested on commutativity, which C1 made false: compaction remaps an object identifier, and order then decides | Explicit generation precedence; relocations typed as supersessions |
+| **PT-3** | The garbage collector creates blobs during compaction and published no intent for them, so a second collector could delete them | The collector is a writer — any component creating a blob publishes an intent first |
+
+Plus seven high and five medium findings, and one decision reopened for the maintainer ([Q11](open-questions.md#q11--physical-hints-in-segment-references)). Full analysis in the [pressure test](review/2026-08-fix-pressure-test.md).
+
 ## Conventions
 
 - **Normative terminology** is defined in [01 — Domain model](architecture/01-domain-model.md). The nouns are *segment* and *blob* — never *chunk*, *block*, or *pack*. *Packing* remains fine as a verb, and prior-art sections describe other products in their own vocabulary.
 - **Requirement IDs** are stable. Changed and new requirements are marked, and original wording is quoted in the review.
-- **ADR status** is `Proposed` until explicitly accepted.
+- **ADR status** is `Proposed` until explicitly accepted. "Accepted (amended)" means the decision stands and the amendment is already applied — not that it is pending.
 - Documents cross-reference by relative link; every link resolves.
