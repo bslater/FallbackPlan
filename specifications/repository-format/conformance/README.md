@@ -29,7 +29,7 @@ The generator depends on nothing but the Python standard library. That is delibe
 | [`records.json`](vectors/records.json) | ✅ Yes | Your nonce and AAD construction match |
 | [`segmentation.json`](vectors/segmentation.json) | ✅ Yes | Your `fixed-v1` boundaries match |
 | [`compression.json`](vectors/compression.json) | ✅ Yes | Your threshold decisions match |
-| [`nist-gcm.json`](vectors/nist-gcm.json) | ✅ Yes — NIST CAVP | You use AES-256-GCM correctly |
+| [`aes-gcm.json`](vectors/aes-gcm.json) | ⚠️ Correctness verified, **provenance not** | You use AES-256-GCM correctly — see the note below |
 | **AEAD record ciphertexts** | ❌ **Not present** | — |
 
 "Independently derived" means computed here from published algorithms using standard-library primitives, with no input from the reference implementation. You can reproduce them in any language.
@@ -46,11 +46,23 @@ Producing them requires an AES-GCM implementation, which the standard library do
 
 Option 3 was chosen. What covers the gap instead:
 
-- **`nist-gcm.json`** proves the primitive is used correctly. Those vectors are genuinely independent.
+- **`aes-gcm.json`** proves the primitive is used correctly, with the caveat in the next section.
 - **`records.json`** pins the nonce and AAD construction exactly. Given a correct AES-GCM and the right nonce and AAD, the ciphertext follows.
 - **The freeze-gate independent reader** is what actually validates the framing. A reader written from the specification alone, by an author who did not write the format, in a different language, is the only thing that proves the specification is unambiguous. Self-generated vectors catch regressions; they cannot catch a specification that is wrong in the same way the implementation is.
 
 Option 1 remains available later as a *regression* suite, clearly labelled as such. It must never be presented as conformance evidence.
+
+### A correction worth recording
+
+An earlier revision of `nist-gcm.json` carried two cases and claimed both were NIST CAVP vectors. The second was written from memory rather than obtained, and it was wrong — `CryptographicPrimitiveTests` caught it the first time it ran against a real AES-GCM implementation.
+
+It has been **removed rather than replaced with another remembered value**, and the file renamed to `aes-gcm.json` because the NIST claim could not be substantiated here.
+
+The surviving case verifies against the platform implementation, so its correctness as an AES-256-GCM triple is established. Its provenance as a CAVP vector is asserted from memory and could not be re-fetched — `csrc.nist.gov` and `raw.githubusercontent.com` are both unreachable from the environment these vectors were generated in. The file marks this with `provenance_reverified: false`.
+
+**To expand this set properly:** fetch `gcmEncryptExtIV256` from the NIST CAVP archive and add cases from it. Do not add remembered values — that is what produced the defect.
+
+This is recorded rather than quietly fixed because a conformance suite's value is entirely in whether its claims can be trusted, and a suite that has silently corrected a fabricated vector is indistinguishable from one that has not.
 
 ## What a conforming reader must demonstrate
 
@@ -78,6 +90,7 @@ Recorded so they are visible rather than discovered:
 | Gap | Blocked on |
 |-----|-----------|
 | AEAD record ciphertext vectors | See above — deliberate |
+| Additional AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
 | `cdc-v1` boundary vectors | Rabin polynomial and per-byte table not yet pinned ([09 §3.1](../09-segmentation.md#31-definition)) |
 | Ed25519 signature vectors | Signing key derivation is specified; the signature scheme's test vectors are not yet included |
 | Fixture repositories | Phase 0 |

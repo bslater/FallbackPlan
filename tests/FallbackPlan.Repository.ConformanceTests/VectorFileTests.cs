@@ -24,7 +24,7 @@ public sealed class VectorFileTests
         "records.json",
         "segmentation.json",
         "compression.json",
-        "nist-gcm.json",
+        "aes-gcm.json",
     ];
 
     private static string VectorDirectory =>

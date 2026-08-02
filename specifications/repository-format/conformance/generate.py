@@ -375,20 +375,36 @@ def compression_vectors() -> dict:
     }
 
 
-def nist_gcm_vectors() -> dict:
+def aes_gcm_vectors() -> dict:
     """
-    AES-256-GCM known-answer tests from NIST CAVP (gcmEncryptExtIV256).
+    AES-256-GCM known-answer test.
 
-    These are the only AEAD vectors in this suite that are independent of the
-    reference implementation. They prove an implementation uses AES-GCM
-    correctly; they say nothing about our record framing, which is checked by
-    self-generated vectors and, ultimately, by the freeze-gate independent
-    reader.
+    ONE case, deliberately. An earlier revision of this file carried a second
+    case whose ciphertext was written from memory rather than obtained, and it
+    was wrong -- CryptographicPrimitiveTests caught it on first run. It has been
+    removed rather than replaced with another remembered value.
+
+    The surviving case verifies against the platform AES-GCM implementation, so
+    its correctness as an AES-256-GCM triple is established. Its provenance as a
+    NIST CAVP vector is asserted from memory and could NOT be re-fetched in the
+    environment this file was generated in (csrc.nist.gov and raw.githubusercontent.com
+    are both unreachable), so that claim is marked unverified rather than stated.
+
+    To expand this set properly: fetch gcmEncryptExtIV256 from the NIST CAVP
+    archive, and add cases from it. Do not add remembered values.
     """
     return {
-        "description": "NIST CAVP AES-256-GCM known-answer tests.",
+        "description": "AES-256-GCM known-answer test.",
         "independently_derived": True,
-        "source": "NIST CAVP gcmEncryptExtIV256, 96-bit IV, 128-bit tag",
+        "provenance": "believed NIST CAVP gcmEncryptExtIV256, 96-bit IV, 128-bit tag",
+        "provenance_reverified": False,
+        "comment": (
+            "Correctness is verified by CryptographicPrimitiveTests against the "
+            "platform implementation. Provenance could not be re-fetched here -- see "
+            "the docstring in generate.py. The set is minimal because vectors were "
+            "only included where their correctness could be established, not where "
+            "they could be recalled."
+        ),
         "cases": [
             {
                 "name": "empty_plaintext_empty_aad",
@@ -398,15 +414,6 @@ def nist_gcm_vectors() -> dict:
                 "aad": "",
                 "ciphertext": "",
                 "tag": "bdc1ac884d332457a1d2664f168c76f0",
-            },
-            {
-                "name": "single_block",
-                "key": "78dc4e0aaf52d935c3c01eea57428f00ca1fd475f5da86a49c8dd73d68c8e223",
-                "iv": "d79cf22d504cc793c3fb6c8a",
-                "plaintext": "b96baa8c1c75a671bfb2d08d06be5f36",
-                "aad": "",
-                "ciphertext": "3e5d486aa2e30b22e040b85723a06e76",
-                "tag": "d5ca3854ce834f2c73b8bb9b8b5d4d78",
             },
         ],
     }
@@ -422,7 +429,7 @@ GROUPS = {
     "records.json": aad_vectors,
     "segmentation.json": segmentation_vectors,
     "compression.json": compression_vectors,
-    "nist-gcm.json": nist_gcm_vectors,
+    "aes-gcm.json": aes_gcm_vectors,
 }
 
 

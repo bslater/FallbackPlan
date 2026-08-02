@@ -117,7 +117,9 @@ This costs some blob-size variance and buys a great deal: recovery scanning neve
 
 Record framing vectors, including header layouts and AAD construction, are in [`conformance/vectors/records.json`](conformance/vectors/records.json).
 
-**AEAD ciphertext vectors are generated from the reference implementation**, not independently — see [`conformance/README.md`](conformance/README.md) for what that does and does not establish. NIST GCM known-answer tests are included separately to demonstrate the primitive is used correctly; those *are* independent.
+**There are no AEAD ciphertext vectors.** Producing them independently requires an AES-GCM implementation the vector generator deliberately does not depend on, and generating them from the reference implementation would prove only that a future build matches today's build. The gap is stated rather than filled with self-certifying values — see [`conformance/README.md`](conformance/README.md).
+
+A single AES-256-GCM known-answer test in [`conformance/vectors/aes-gcm.json`](conformance/vectors/aes-gcm.json) demonstrates the primitive is used correctly. Its correctness is verified against the platform implementation; its provenance as a NIST CAVP vector is recorded as **unverified**, because the CAVP archive was unreachable when these vectors were produced. What ultimately validates the framing is the freeze-gate independent reader, not this file.
 
 ---
 
