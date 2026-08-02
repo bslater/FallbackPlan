@@ -55,3 +55,12 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Editors and tooling
+.vs/
+.vscode/
+.idea/
+*.user
+
+# BenchmarkDotNet
+BenchmarkDotNet.Artifacts/

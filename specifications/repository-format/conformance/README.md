@@ -1,0 +1,88 @@
+# Conformance suite
+
+Test vectors for the [FallbackPlan repository format](../README.md).
+
+---
+
+## Running
+
+```bash
+# Regenerate the vectors
+python3 generate.py
+
+# Verify committed vectors match freshly computed ones (CI)
+python3 generate.py --check
+```
+
+The generator depends on nothing but the Python standard library. That is deliberate: an implementer must be able to reproduce these values without installing anything and without trusting the reference implementation.
+
+`generate.py` validates its own HKDF implementation against [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) test case 1 on every run. If that check fails the script exits non-zero and writes nothing, because every derived vector in the suite would be wrong.
+
+## What this suite does and does not establish
+
+**Read this before treating a passing run as evidence of anything.** A conformance suite that overstates its own authority is worse than a small one, because it stops people looking for the gaps.
+
+| Vector group | Independently derived? | What a pass means |
+|---|---|---|
+| [`keys.json`](vectors/keys.json) | ✅ Yes | Your HKDF derivation and domain separation match the specification |
+| [`identifiers.json`](vectors/identifiers.json) | ✅ Yes | Your content and object identifiers match |
+| [`records.json`](vectors/records.json) | ✅ Yes | Your nonce and AAD construction match |
+| [`segmentation.json`](vectors/segmentation.json) | ✅ Yes | Your `fixed-v1` boundaries match |
+| [`compression.json`](vectors/compression.json) | ✅ Yes | Your threshold decisions match |
+| [`nist-gcm.json`](vectors/nist-gcm.json) | ✅ Yes — NIST CAVP | You use AES-256-GCM correctly |
+| **AEAD record ciphertexts** | ❌ **Not present** | — |
+
+"Independently derived" means computed here from published algorithms using standard-library primitives, with no input from the reference implementation. You can reproduce them in any language.
+
+### The gap: AEAD record ciphertexts
+
+There are no vectors asserting the exact ciphertext of an encrypted record. This is a real gap and it is stated rather than papered over.
+
+Producing them requires an AES-GCM implementation, which the standard library does not provide. The options were:
+
+1. **Generate them from the reference .NET implementation.** They would then be self-certifying — they would prove a future build matches today's build, and nothing about whether either matches the specification. A second implementer reproducing them would be reproducing our behaviour, not verifying our correctness.
+2. **Add a third-party dependency to the generator.** That would make the vectors non-reproducible for anyone who cannot install it, undermining the reason the generator has no dependencies.
+3. **Omit them and say so.**
+
+Option 3 was chosen. What covers the gap instead:
+
+- **`nist-gcm.json`** proves the primitive is used correctly. Those vectors are genuinely independent.
+- **`records.json`** pins the nonce and AAD construction exactly. Given a correct AES-GCM and the right nonce and AAD, the ciphertext follows.
+- **The freeze-gate independent reader** is what actually validates the framing. A reader written from the specification alone, by an author who did not write the format, in a different language, is the only thing that proves the specification is unambiguous. Self-generated vectors catch regressions; they cannot catch a specification that is wrong in the same way the implementation is.
+
+Option 1 remains available later as a *regression* suite, clearly labelled as such. It must never be presented as conformance evidence.
+
+## What a conforming reader must demonstrate
+
+Passing these vectors is necessary and not sufficient. A reader claiming conformance should also demonstrate:
+
+1. **Refusal, not guessing.** Given a repository whose `required_features` contains an unknown identifier, it refuses and names the identifier. Given an unknown profile in an object it must interpret, it refuses.
+2. **Deterministic CBOR enforcement.** It rejects non-canonical CBOR — indefinite lengths, non-shortest integers, unsorted or duplicate map keys — rather than accepting it leniently.
+3. **Content verification after decryption.** It verifies that the decrypted plaintext hashes to the content identifier implied by the object identifier, not merely that the AEAD tag validates. A record can be perfectly authentic and still carry a false identifier ([04 §6](../04-record.md#6-reading-a-record)).
+4. **Localised corruption.** A record with a bad tag affects only that record; every other record in the same blob remains readable.
+5. **Bounds enforcement before allocation.** It validates lengths against [00 §8](../00-conventions.md#8-lengths-and-limits) before allocating.
+6. **Footer-only recovery.** It can locate, decrypt and verify every record in a blob given the blob and the repository keys alone, with no index.
+7. **Index precedence.** Given two entries for one object identifier, it honours the higher generation, and treats a supersession as ordered rather than commutative ([07 §3](../07-index.md#3-precedence)).
+8. **Whole-file verification.** It verifies the reassembled file against `whole_file_hash`, and reports failure rather than emitting a partial file.
+
+## Fixtures
+
+The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content, exercising round trips, format upgrades, and injected corruption — are a Phase 0 deliverable and will live in `fixtures/`.
+
+Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.
+
+## Known gaps
+
+Recorded so they are visible rather than discovered:
+
+| Gap | Blocked on |
+|-----|-----------|
+| AEAD record ciphertext vectors | See above — deliberate |
+| `cdc-v1` boundary vectors | Rabin polynomial and per-byte table not yet pinned ([09 §3.1](../09-segmentation.md#31-definition)) |
+| Ed25519 signature vectors | Signing key derivation is specified; the signature scheme's test vectors are not yet included |
+| Fixture repositories | Phase 0 |
+| Format upgrade fixtures | No second format version exists yet |
+
+## Reporting a defect
+
+If you cannot implement something from the specification, or these vectors disagree with a plain reading of it, that is a defect in the specification rather than in your reading. The specification is required to be implementable by someone who has never seen the reference implementation — please report it.

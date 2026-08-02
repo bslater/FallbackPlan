@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FsCheck.Xunit" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Format\FallbackPlan.Repository.Format.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Segmentation\FallbackPlan.Repository.Segmentation.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Import.Abstractions\FallbackPlan.Import.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+<Project>
+
+  <!-- Inherit the repository-wide settings, then relax the rules that exist for
+       library API surface and do not apply to test code. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- CA1707  underscores in member names: Given_When_Then is the convention
+                 here and is far more readable than the alternative.
+         CA1515  types could be internal: test classes are discovered by
+                 reflection and must remain public.
+         CA1861  constant arrays as arguments: inline test data is clearer than
+                 hoisting every array to a static field. -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1861</NoWarn>
+  </PropertyGroup>
+
+</Project>

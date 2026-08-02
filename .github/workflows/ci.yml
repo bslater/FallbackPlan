@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  CI: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore FallbackPlan.slnx
+      - name: Build
+        run: dotnet build FallbackPlan.slnx -c Release --no-restore
+      - name: Test
+        run: dotnet test FallbackPlan.slnx -c Release --no-build
+
+  conformance-vectors:
+    name: Conformance vectors are reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Vectors are committed. If regenerating produces different bytes, either
+      # the generator changed without the vectors being refreshed, or the
+      # generator is not deterministic. Both are defects.
+      - name: Verify committed vectors match freshly computed ones
+        run: python3 specifications/repository-format/conformance/generate.py --check
+
+  documentation:
+    name: Documentation integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Links and anchors resolve
+        run: python3 eng/check-links.py
+      - name: Requirement IDs unique and fully traced
+        run: python3 eng/check-requirements.py

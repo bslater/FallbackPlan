@@ -1,0 +1,164 @@
+using System.Text.Json;
+using Xunit;
+
+namespace FallbackPlan.Repository.ConformanceTests;
+
+/// <summary>
+/// Checks that the committed conformance vectors are present, parse, and carry
+/// the fields an implementation will consume.
+///
+/// These run before any engine code exists, and are useful precisely then: a
+/// vector file that is malformed, truncated, or missing a field is a defect that
+/// would otherwise surface as a confusing test failure much later, when it would
+/// be blamed on the implementation rather than on the fixture.
+///
+/// As the engine is built, assertions comparing computed values against these
+/// vectors join this project. See specifications/repository-format/conformance/.
+/// </summary>
+public sealed class VectorFileTests
+{
+    private static readonly string[] ExpectedFiles =
+    [
+        "keys.json",
+        "identifiers.json",
+        "records.json",
+        "segmentation.json",
+        "compression.json",
+        "nist-gcm.json",
+    ];
+
+    private static string VectorDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "vectors");
+
+    private static JsonDocument Load(string name)
+    {
+        var path = Path.Combine(VectorDirectory, name);
+        Assert.True(File.Exists(path), $"Vector file not found: {path}");
+        return JsonDocument.Parse(File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Every_expected_vector_file_is_present_and_parses()
+    {
+        foreach (var name in ExpectedFiles)
+        {
+            using var document = Load(name);
+            Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+            Assert.True(
+                document.RootElement.TryGetProperty("description", out _),
+                $"{name} has no description");
+        }
+    }
+
+    /// <summary>
+    /// Every group must declare whether it was derived independently of the
+    /// reference implementation. A suite that quietly mixes self-certifying
+    /// vectors with independent ones overstates its own authority, which is
+    /// worse than having fewer vectors.
+    /// </summary>
+    [Fact]
+    public void Every_vector_group_declares_its_provenance()
+    {
+        foreach (var name in ExpectedFiles)
+        {
+            using var document = Load(name);
+            Assert.True(
+                document.RootElement.TryGetProperty("independently_derived", out var derived),
+                $"{name} does not declare independently_derived");
+            Assert.Equal(JsonValueKind.True, derived.ValueKind);
+        }
+    }
+
+    [Fact]
+    public void Key_derivation_vectors_prove_writer_separation()
+    {
+        using var document = Load("keys.json");
+        var derived = document.RootElement.GetProperty("derived");
+        var checks = document.RootElement.GetProperty("separation_checks");
+
+        var blobKey = derived.GetProperty("blob_key").GetString();
+        var otherWriter = checks.GetProperty("blob_key_other_writer").GetString();
+        var otherCounter = checks.GetProperty("blob_key_other_counter").GetString();
+
+        Assert.Equal(64, blobKey!.Length);
+
+        // The same blob_salt with a different writer or counter must produce a
+        // different key. This is what makes key separation survive a cloned VM
+        // replaying CSPRNG state, and a vector file that failed to demonstrate
+        // it would be silently useless.
+        Assert.NotEqual(blobKey, otherWriter);
+        Assert.NotEqual(blobKey, otherCounter);
+        Assert.NotEqual(otherWriter, otherCounter);
+    }
+
+    [Fact]
+    public void Associated_data_is_fifty_five_bytes_in_every_case()
+    {
+        using var document = Load("records.json");
+        foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            Assert.Equal(55, testCase.GetProperty("aad_length").GetInt32());
+            Assert.Equal(110, testCase.GetProperty("aad").GetString()!.Length);
+        }
+    }
+
+    [Fact]
+    public void Object_identifiers_differ_by_object_type()
+    {
+        using var document = Load("identifiers.json");
+        var ids = document.RootElement
+            .GetProperty("object_type_separation")
+            .GetProperty("object_ids");
+
+        var values = ids.EnumerateObject().Select(p => p.Value.GetString()).ToList();
+        Assert.Equal(values.Count, values.Distinct().Count());
+    }
+
+    [Fact]
+    public void Fixed_segmentation_cases_are_contiguous_and_complete()
+    {
+        using var document = Load("segmentation.json");
+        foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var fileLength = testCase.GetProperty("file_length").GetInt64();
+            var segmentSize = testCase.GetProperty("segment_size").GetInt64();
+            var segments = testCase.GetProperty("segments").EnumerateArray().ToList();
+
+            long covered = 0;
+            long expectedOffset = 0;
+            for (var i = 0; i < segments.Count; i++)
+            {
+                var offset = segments[i].GetProperty("offset").GetInt64();
+                var length = segments[i].GetProperty("length").GetInt64();
+
+                Assert.Equal(expectedOffset, offset);
+                if (i < segments.Count - 1)
+                {
+                    Assert.Equal(segmentSize, length);   // only the last may be short
+                }
+
+                covered += length;
+                expectedOffset += length;
+            }
+
+            Assert.Equal(fileLength, covered);
+        }
+    }
+
+    [Fact]
+    public void Compression_threshold_decisions_are_self_consistent()
+    {
+        using var document = Load("compression.json");
+        var threshold = document.RootElement.GetProperty("threshold_permille").GetInt32();
+
+        foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var logical = testCase.GetProperty("logical_length").GetInt64();
+            var compressed = testCase.GetProperty("compressed_length").GetInt64();
+            var expected = testCase.GetProperty("expected_profile").GetString();
+
+            var shouldCompress = compressed * 1000 <= logical * (1000 - threshold);
+            Assert.Equal(shouldCompress ? "zstd-v1" : "none", expected);
+        }
+    }
+}

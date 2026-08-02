@@ -4,7 +4,7 @@
 
 An open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore the capability that made the original free CrashPlan compelling — backing up one computer to another computer you control or trust, across a LAN or the internet, with no proprietary cloud service in between.
 
-**Status: design.** There is no implementation yet. This repository currently holds the reviewed architecture and requirements that development will be built from.
+**Status: Phase 0 ready to start.** The architecture is reviewed, the repository format is specified with conformance vectors, and the solution scaffold builds. Engine implementation has not begun.
 
 ---
 
@@ -19,6 +19,8 @@ An open-source backup and archival platform for Windows, macOS, and Linux. Its p
 | What changed in review, and why | [Architecture review](docs/review/2026-08-architecture-review.md) |
 | What is still undecided | [Open questions](docs/open-questions.md) |
 | What gets built, in what order | [Roadmap](docs/roadmap.md) |
+| The on-disk format, normatively | [Repository format specification](specifications/repository-format/README.md) |
+| What to build first | [Phase 0 execution plan](docs/phase-0-execution-plan.md) |
 
 ## Principles
 
@@ -47,6 +49,15 @@ An open-source backup and archival platform for Windows, macOS, and Linux. Its p
 | 6 | Consumer-ready release |
 
 Details in the [roadmap](docs/roadmap.md).
+
+## Building
+
+```bash
+dotnet build FallbackPlan.slnx -c Release
+dotnet test  FallbackPlan.slnx -c Release
+```
+
+Requires the .NET SDK pinned in [`global.json`](global.json). Warnings are errors. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 

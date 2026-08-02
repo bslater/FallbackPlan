@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Repository.Format\FallbackPlan.Repository.Format.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Segmentation\FallbackPlan.Repository.Segmentation.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

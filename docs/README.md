@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: design.** No implementation exists yet. This set is the reviewed architecture that development will be built from. It has been through two passes: a review of the original proposal, and a pressure test of that review's own fixes.
+> **Status: Phase 0 ready to start.** The design has been through two passes — a review of the original proposal, and a pressure test of that review's own fixes. The [format specification](../specifications/repository-format/README.md) and [conformance vectors](../specifications/repository-format/conformance/README.md) are written, and the solution scaffold builds. Engine implementation has not begun.
 
 ---
 
@@ -16,6 +16,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
+| Start building | [Phase 0 execution plan](phase-0-execution-plan.md) · [format specification](../specifications/repository-format/README.md) |
 
 ## Architecture
 
@@ -67,6 +68,12 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains |
 
 Template: [0000](adr/0000-template.md)
+
+## Specification
+
+The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md).
+
+Architecture documents explain *why*; the specification says *what bytes*. Where they disagree about format, the specification wins.
 
 ## Security
 
