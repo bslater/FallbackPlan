@@ -166,4 +166,4 @@ The corrected `IObjectStore` is in [`05-storage-providers.md` §2](05-storage-pr
 
 ---
 
-**Previous:** [10 — Observability](10-observability.md) · **Back to:** [docs index](../README.md)
+**Previous:** [10 — Observability](10-observability.md) · **Next:** [12 — Worked example](12-worked-example.md)

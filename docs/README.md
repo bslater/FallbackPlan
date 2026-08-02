@@ -11,6 +11,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | If you want to… | Read |
 |-----------------|------|
 | Understand what this is | [Overview](architecture/00-overview.md) |
+| See how the pieces fit together | [Worked example](architecture/12-worked-example.md) — one file, end to end |
 | Know what a word means | [Domain model](architecture/01-domain-model.md) — normative glossary |
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
@@ -32,6 +33,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | 09 | [Replication and peers](architecture/09-replication-and-peers.md) | Peer exchange, pairing, durability policy, verification challenges, quotas |
 | 10 | [Observability](architecture/10-observability.md) | User status model, metrics, job state machine, diagnostics, telemetry |
 | 11 | [Solution structure](architecture/11-solution-structure.md) | Project layout, dependency rules, local state separation, technology |
+| 12 | [Worked example](architecture/12-worked-example.md) | One file, end to end — split, hash, dedup, compress, encrypt, pack, publish, restore |
 
 ## Requirements
 
