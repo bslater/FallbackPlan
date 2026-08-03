@@ -82,9 +82,30 @@ public sealed class FileArchiver
     }
 
     /// <summary>Archives <paramref name="source"/> as a new file version.</summary>
-    public async ValueTask<ArchiveResult> ArchiveAsync(Stream source, CancellationToken cancellationToken)
+    public ValueTask<ArchiveResult> ArchiveAsync(Stream source, CancellationToken cancellationToken) =>
+        ArchiveAsync(source, priorVersion: null, cancellationToken);
+
+    /// <summary>
+    /// Archives <paramref name="source"/>, positionally comparing against
+    /// <paramref name="priorVersion"/> (specification 09 §6; FR-ARCH-004):
+    /// segment <em>i</em> whose content identifier and logical length equal
+    /// the prior version's segment <em>i</em> is reused — its existing
+    /// reference is emitted and no record is written. Reuse requires the
+    /// segmentation profile and parameters to match exactly (09 §5); a
+    /// mismatch re-archives in full, never mixes parameters.
+    /// </summary>
+    /// <remarks>
+    /// The prior content identifiers come from the in-memory
+    /// <see cref="ArchiveResult"/> — catalogue-domain data, never durable
+    /// (specification 02 §2).
+    /// </remarks>
+    public async ValueTask<ArchiveResult> ArchiveAsync(Stream source, ArchiveResult? priorVersion, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
+
+        var comparable = priorVersion is not null &&
+            priorVersion.SegmentationProfile == _policy.SegmentationProfile &&
+            priorVersion.SegmentSize == _policy.SegmentSize;
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
@@ -114,6 +135,23 @@ public sealed class FileArchiver
                 // 04 §5 order: content id, object id, compress, ordinal, encrypt.
                 var contentId = ContentHasher.Hash(plaintext.Span);
                 wholeFile.AppendData(plaintext.Span);
+
+                // Positional reuse (09 §6): identical content at the same
+                // position of the prior version needs no new record — the
+                // existing object already carries these bytes.
+                if (comparable &&
+                    segment.Index < priorVersion!.SegmentReferences.Count &&
+                    priorVersion.SegmentReferences[(int)segment.Index].LogicalLength == segment.Length &&
+                    priorVersion.SegmentContentIds[(int)segment.Index] == contentId)
+                {
+                    references.Add(new SegmentReference(
+                        segment.Offset,
+                        segment.Length,
+                        priorVersion.SegmentReferences[(int)segment.Index].ObjectId));
+                    contentIds.Add(contentId);
+                    continue;
+                }
+
                 var objectId = objectIdDeriver.Derive(ObjectType.SegmentRecord, contentId);
 
                 var payload = plaintext;
