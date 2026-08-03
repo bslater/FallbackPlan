@@ -45,6 +45,8 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.Tests/
 │   ├── FallbackPlan.Repository.ConformanceTests/
 │   ├── FallbackPlan.Repository.FuzzTests/
+│   ├── FallbackPlan.Restore.Tests/
+│   ├── FallbackPlan.Retention.Tests/
 │   ├── FallbackPlan.Protocol.Tests/
 │   ├── FallbackPlan.Storage.ContractTests/
 │   ├── FallbackPlan.Import.CrashPlan.Tests/

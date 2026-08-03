@@ -26,15 +26,17 @@ User passphrase                          Hardware / OS key store
                           |
                   Repository Master Key
                           |
-        +-----------------+------------------+------------------+
-        |                 |                  |                  |
-  Content-ID key    Data key gen(s)   Metadata key gen(s)   Signing key(s)
-        |                 |                  |                  |
-        |            per-blob keys      per-blob keys      snapshot &
-        |            (§3.1)             (§3.1)             journal records
+        +-----------------+------------------+------------------+------------------+
+        |                 |                  |                  |                  |
+  Content-ID key    Data key gen(s)   Metadata key gen(s)   Signing key gen(s)  Key-ID key
+        |                 |                  |                  |                  |
+        |            per-blob keys      per-blob keys      snapshot &         store blob
+        |            (§3.1)             (§3.1)             journal records    keys (02 §4.3)
         |
    object identifiers (§4)
 ```
+
+Five derived keys, not four — the key-ID key is easy to forget and is what every blob's store key is derived from, so a hierarchy that omits it describes a repository whose objects cannot be named.
 
 Requirements:
 
@@ -57,13 +59,15 @@ blob_salt   ← 256 bits from a CSPRNG, drawn once per blob,
 
 blob_key    ← HKDF-Expand(
                   PRK  = data_key[generation],       (or metadata_key[generation])
-                  info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ blob_counter,
+                  info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ u64(blob_counter),
                   L    = 32 bytes)
 
 nonce(i)    ← 96-bit big-endian ordinal of record i within that blob (0, 1, 2, …)
 
-AAD(i)      ← repository_id ‖ format_version ‖ object_type ‖ object_id ‖ i
+AAD(i)      ← repository_id ‖ u16(format_version) ‖ u8(object_type) ‖ object_id ‖ u32(i)
 ```
+
+Integer widths are part of the construction — "given in full" means an implementer can reproduce it byte-for-byte, and an unwidthed `blob_counter` is not reproducible. All integers big-endian ([spec 00 §1](../../specifications/repository-format/00-conventions.md#1-notation)); the AAD is exactly 55 bytes.
 
 Every blob has its own key. Nonce uniqueness therefore only has to hold **within a single blob**, where exactly one writer owns a strictly increasing record ordinal.
 

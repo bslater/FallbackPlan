@@ -122,7 +122,7 @@ The blob drew a 256-bit CSPRNG salt when it was opened, and its key derives from
 ```text
 blob_key  = HKDF-Expand(
                 PRK  = data_key[generation],
-                info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ blob_counter,
+                info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ u64(blob_counter),
                 L    = 32)
 
 nonce(47) = 96-bit big-endian 47
@@ -150,11 +150,11 @@ The spool checkpoint stores the **sealed record bytes** — not a plaintext offs
 
 ## 4 · Seal and upload
 
-Sealing appends the authenticated **recovery footer**, listing for every record in the blob: object identifier, physical offset, stored length, logical length, compression profile, encryption profile. Then a digest over the complete sealed representation.
+Sealing appends the authenticated **recovery footer**, listing for every record in the blob: object identifier, ordinal, physical offset, stored length, logical length, object type, compression profile, encryption profile. Then the 16-byte footer locator, and a digest over the complete sealed representation — recorded in the index, not appended to the blob.
 
 That footer is the point of the entire structure. Given the blob and the repository keys and *nothing else* — no index, no catalogue, no other object — every record in it can be located, decrypted, and verified. It is what bounds the blast radius of losing every index object, and what makes forensic rebuild possible at all.
 
-The blob then uploads under its pre-allocated identifier.
+The blob then uploads under the **store blob key** derived from its pre-allocated identifier — an HMAC rendering ([spec 02 §4.3](../../specifications/repository-format/02-identifiers.md#43-not-leaking-writer-identity)), because the raw identifier embeds writer identity and a store key must not.
 
 → [`02-repository-format.md` §5.2](02-repository-format.md#52-layout)
 

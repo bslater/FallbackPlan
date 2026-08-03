@@ -13,8 +13,8 @@ The repository format must be documented · append-oriented · content-addressed
 ```text
 /repository-format                                  format profile, repository ID, feature set
 /keys/<key-id>                                      wrapped key material
-/blobs/data/<shard>/<blob-id>                       segment records
-/blobs/meta/<shard>/<blob-id>                       manifest and tree records
+/blobs/data/<shard>/<store-blob-key>                segment records
+/blobs/meta/<shard>/<store-blob-key>                manifest and tree records
 /index/delta/<generation>/<index-id>                immutable writer index deltas
 /index/checkpoint/<generation>/<checkpoint-id>      compacted index generations
 /snapshots/<device-id>/<backup-set-id>/<snapshot-id>
@@ -105,7 +105,6 @@ Sizing comes from a versioned write profile:
 |---------|---------------------|----------------------|
 | Target blob size | 64 MiB | 128 MiB |
 | Hard maximum | 256 MiB | 512 MiB |
-| Minimum fill before normal sealing | 75% | 75% |
 | Maximum open-blob age | 15 min | 15 min |
 | Maximum records per blob | 65 536 | 65 536 |
 
@@ -117,24 +116,24 @@ A segment record is **never split across blobs** in format v1. When the open blo
 
 ```text
 +-------------------------------------------------------------+
-| Cleartext envelope                                           |
-|   magic, format version, key generation, blob salt,          |
-|   repository ID commitment                                   |
+| Cleartext envelope  (88 bytes, fixed)                        |
+|   magic, format version, blob class, key generation,         |
+|   blob identifier, blob salt, blob counter, writer identity  |
 +-------------------------------------------------------------+
 | Record 0   authenticated header + AEAD ciphertext            |
 | Record 1   authenticated header + AEAD ciphertext            |
 | …                                                            |
 +-------------------------------------------------------------+
 | Recovery footer  (authenticated)                             |
-|   per record: object identifier, physical offset,            |
-|               stored length, logical length,                 |
+|   per record: object identifier, ordinal, physical offset,   |
+|               stored length, logical length, object type,    |
 |               compression profile, encryption profile        |
 +-------------------------------------------------------------+
-| Blob digest over the complete sealed representation          |
+| Footer locator  (16 bytes: footer offset, digest prefix)     |
 +-------------------------------------------------------------+
 ```
 
-The cleartext envelope carries only non-sensitive selectors — enough to derive the blob key and pick a parser, nothing about content. The blob salt is the input to per-blob key derivation ([`03-crypto.md` §3](03-crypto.md#3-nonce-and-key-construction)).
+The cleartext envelope carries only non-sensitive selectors — everything needed to derive the blob key and pick a parser, nothing about content. The blob salt, writer identity and blob counter are the inputs to per-blob key derivation, which is why all three are carried explicitly. The blob digest is computed at sealing and recorded in the **index**, not appended to the blob; the trailing element on disk is the 16-byte footer locator. The normative byte layout is [specification 05](../../specifications/repository-format/05-blob.md); the derivation itself is [`03-crypto.md` §3](03-crypto.md#3-nonce-and-key-construction).
 
 The **recovery footer is the point of the whole structure**. It makes a blob self-describing: given the repository key material and the blob alone, every record in it can be located, decrypted, and verified with no index and no catalogue. That is what makes forensic rebuild (§8.2) possible and what bounds the blast radius of losing every index object.
 
