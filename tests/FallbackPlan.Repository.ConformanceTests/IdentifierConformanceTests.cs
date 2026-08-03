@@ -53,8 +53,8 @@ public sealed class IdentifierConformanceTests
 
             Assert.Equal(vectorCase.GetProperty("plaintext_length").GetInt64(), plaintext.LongLength);
 
-            // The one-MiB cases exercise the incremental path in chunks; the
-            // small cases exercise the one-shot path. Both must agree.
+            // The one-MiB cases exercise the incremental path in bounded
+            // slices; the small cases exercise the one-shot path. Both agree.
             using var hasher = new ContentHasher();
             foreach (var chunk in plaintext.Chunk(4096))
             {

@@ -18,7 +18,7 @@ public sealed class ContentHasher : IDisposable
 {
     private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-    /// <summary>Appends a chunk of segment plaintext.</summary>
+    /// <summary>Appends a slice of segment plaintext.</summary>
     public void Append(ReadOnlySpan<byte> plaintext) => _hash.AppendData(plaintext);
 
     /// <summary>
