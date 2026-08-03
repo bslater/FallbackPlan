@@ -49,7 +49,17 @@ public sealed record RecordReadResult
     /// <summary>A human-readable description of a failure.</summary>
     public string? Detail { get; }
 
-    internal static RecordReadResult Success(byte[] plaintext) => new(RecordReadOutcome.Ok, plaintext, null);
+    /// <summary>Creates a success result carrying the verified plaintext.</summary>
+    public static RecordReadResult Success(byte[] plaintext)
+    {
+        ArgumentNullException.ThrowIfNull(plaintext);
+        return new(RecordReadOutcome.Ok, plaintext, null);
+    }
 
-    internal static RecordReadResult Failure(RecordReadOutcome outcome, string detail) => new(outcome, null, detail);
+    /// <summary>Creates a failure result naming its finding.</summary>
+    public static RecordReadResult Failure(RecordReadOutcome outcome, string detail)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
+        return new(outcome, null, detail);
+    }
 }

@@ -53,6 +53,9 @@ public sealed class BlobReader : IDisposable
         RecordTable = recordTable;
     }
 
+    /// <summary>The store key this blob was opened from.</summary>
+    public ObjectKey StoreKey => _key;
+
     /// <summary>The blob's cleartext envelope.</summary>
     public BlobEnvelope Envelope { get; }
 
