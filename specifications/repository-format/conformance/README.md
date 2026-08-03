@@ -96,7 +96,7 @@ Cross-verification is not an audit. It establishes that two people did not make 
 
 ## Fixtures
 
-The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content, exercising round trips, format upgrades, and injected corruption — are a Phase 0 deliverable and will live in `fixtures/`.
+The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content — live in [`fixtures/`](fixtures/README.md). The first, `fixture-repository-v1`, is a complete deterministic phase-0 repository (descriptor, key object, blobs, standalone snapshot, index delta, journal) whose committed bytes are regenerated and compared on every test run: a diff under `fixtures/` is a format change and must be deliberate.
 
 Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.
 
@@ -110,7 +110,7 @@ Recorded so they are visible rather than discovered:
 | Confirmed-provenance AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
 | **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
 | Negative vectors (rejection cases) | Fixture territory — e.g. a non-power-of-two `fixed-v1` segment size ([09 §2.2](../09-segmentation.md#22-parameters)) MUST be rejected, but every committed case happens to use a conforming size, so a non-enforcing implementation passes today |
-| Fixture repositories | Phase 0 |
+| Corruption-injected fixtures | `fixture-repository-v1` is the intact baseline; committed pre-corrupted variants (each damage class as frozen bytes) remain future work — today corruption is injected at test time by the F2 harness |
 | Format upgrade fixtures | No second format version exists yet |
 
 ## Reporting a defect

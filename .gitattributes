@@ -12,3 +12,9 @@
 *.snk   binary
 *.png   binary
 *.ico   binary
+
+# Committed conformance fixture repositories are frozen bytes (NFR-COMP-004):
+# any transformation — line-ending normalisation included — would corrupt
+# them. The README inside stays text.
+specifications/repository-format/conformance/fixtures/** binary
+specifications/repository-format/conformance/fixtures/**/README.md text eol=lf

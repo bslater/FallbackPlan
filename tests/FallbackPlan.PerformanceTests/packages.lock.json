@@ -172,9 +172,16 @@
           "Bodu.Text.Encoding": "[0.1.1, )"
         }
       },
+      "fallbackplan.import.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Import.Abstractions": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",

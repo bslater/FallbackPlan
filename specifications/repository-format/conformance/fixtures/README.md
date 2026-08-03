@@ -1,0 +1,46 @@
+# Conformance fixtures
+
+Committed, frozen repositories for cross-implementation and cross-version
+verification (wave F7; NFR-COMP-004). Everything here is **synthetic**: fixed
+test keys, fixed salts, generated content. Nothing originates from a real
+machine, and nothing here is secret.
+
+## fixture-repository-v1
+
+A complete, tiny, fully deterministic phase-0 repository:
+
+| Object | What it is |
+|---|---|
+| `repository-format` | Descriptor: repository id `01…10`, format v1, `unstable_format = true` |
+| `keys/…` | One key object wrapping the conformance master key (`00 01 … 1f`) under the fixture passphrase |
+| `blobs/data/…` | One data blob: `fixture.bin` (200 000 bytes of concatenated `SHA-256(BE64(i))`) as four `fixed-v1` 64 KiB segments, compression `none` |
+| `blobs/meta/…` | One metadata blob: file-version, tree, policy, and signed snapshot manifests |
+| `snapshots/…` | The standalone `FBPKSREC` copy of the signed snapshot |
+| `index/delta/…` | One signed index delta covering both blobs |
+| `journal/…` | The write intent (sequence 1) and its retirement (sequence 6) |
+
+The shared sequence space (specification 08 §2) is laid out exactly as a real
+publication produces it: 1 intent · 2 data blob · 3 metadata blob ·
+4 standalone snapshot · 5 delta · 6 retirement.
+
+**Provenance and regeneration.** The generator is
+`tests/FallbackPlan.Repository.ConformanceTests/FixtureRepository.cs`; every
+normally-random input — blob salts, delta id, wrap nonce, identifiers,
+timestamps — is a fixed constant there. `FixtureRepositoryTests` enforces two
+things on every run:
+
+1. regenerating from the constants is **byte-identical** to this committed
+   copy — so any diff under this directory is a repository-format change,
+   and it must be deliberate;
+2. the committed bytes open, restore byte-identically, verify at
+   `EveryRecord` level, and rebuild a catalogue with zero findings using the
+   current reader.
+
+**Passphrase**: `fallbackplan-fixture-passphrase`, with deliberately small
+Argon2id parameters (8 MiB, 1 iteration, 1 lane — below the creation
+minimums, accepted on open with a warning per specification 03 §2) so the
+suite stays fast. That is a fixture-speed decision, not an endorsement.
+
+These files are marked `binary` in `.gitattributes` — no text normalisation
+may ever touch them — and they are deliberately not gitignored: CI's
+source-archive build must see them.

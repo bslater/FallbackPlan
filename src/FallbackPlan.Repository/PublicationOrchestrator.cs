@@ -63,6 +63,11 @@ public interface IPublicationObserver
 }
 
 /// <summary>One publication job: a single file version in phase 0.</summary>
+/// <remarks>
+/// <see cref="CaptureDiagnostics"/> lands in the file-version manifest's
+/// key 13 — the one legitimate home for import provenance (FR-CP-002): an
+/// imported version is otherwise format-indistinguishable from a native one.
+/// </remarks>
 public sealed record BackupJob(
     Stream Source,
     ReadOnlyMemory<byte> FileName,
@@ -72,7 +77,8 @@ public sealed record BackupJob(
     ulong NowUnixMilliseconds,
     ulong DeclaredMaxDurationMs,
     ulong ExpiryGeneration,
-    string ClientVersion);
+    string ClientVersion,
+    IReadOnlyList<string>? CaptureDiagnostics = null);
 
 /// <summary>The published outcome.</summary>
 public sealed record PublishedSnapshot(
@@ -193,7 +199,8 @@ public sealed class PublicationOrchestrator
         await using (builder.ConfigureAwait(false))
         {
             var fileVersion = ManifestBuilder.FromArchiveResult(
-                archive, job.FileName, NameNormalisation.Unknown, EntryMetadata.Empty, parentVersion: null);
+                archive, job.FileName, NameNormalisation.Unknown, EntryMetadata.Empty, parentVersion: null,
+                job.CaptureDiagnostics);
             fileVersionId = await builder.AppendManifestAsync(
                 ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(fileVersion), cancellationToken)
                 .ConfigureAwait(false);

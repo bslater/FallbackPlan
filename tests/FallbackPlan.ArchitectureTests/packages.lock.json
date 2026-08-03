@@ -141,6 +141,8 @@
         "type": "Project",
         "dependencies": {
           "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )",
           "System.CommandLine": "[2.0.0-beta7.25380.108, )"
         }
@@ -160,6 +162,7 @@
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Import.Abstractions": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",

@@ -78,7 +78,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ReadOnlyMemory<byte> name,
         NameNormalisation nameNormalisation,
         EntryMetadata metadata,
-        ObjectId? parentVersion)
+        ObjectId? parentVersion,
+        IReadOnlyList<string>? captureDiagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(metadata);
@@ -94,6 +95,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
             SegmentationProfile = result.SegmentationProfile.Value,
             ParentVersion = parentVersion,
             Metadata = metadata,
+            CaptureDiagnostics = captureDiagnostics ?? [],
         };
     }
 
