@@ -5,52 +5,103 @@ on:
     branches: ["**"]
   pull_request:
 
+# The default GITHUB_TOKEN gets read-only access and nothing else. No job
+# here writes to the repository, and a workflow that could is a workflow a
+# compromised action could abuse (NFR-SUP-002).
+permissions:
+  contents: read
+
+# A superseded push's run is cancelled rather than raced against.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
   CI: true
 
+# Actions are pinned to commit SHAs, not floating tags, because a moved tag
+# is a supply-chain vector this project's own requirements take seriously.
+# Each pin records the tag it was resolved from; bump deliberately.
 jobs:
   build:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
+      # Locked mode: the committed packages.lock.json files are the restore
+      # (NFR-SUP-003). A dependency change that forgot to update them fails
+      # here rather than silently resolving something new.
       - name: Restore
-        run: dotnet restore FallbackPlan.slnx
-      # Vendored code under external/ is built as a dependency and carries its own
-      # analyzer configuration. Its warnings are not ours to fix and must not mask
-      # ours, so the gate is scoped to FallbackPlan's own code.
+        run: dotnet restore FallbackPlan.slnx --locked-mode
+      # Vendored code under external/ is built as a dependency and carries its
+      # own analyzer configuration. Its warnings are not ours to fix and must
+      # not mask ours, so the gate is scoped to FallbackPlan's own code. Both
+      # path-separator forms are excluded so the gate means the same thing on
+      # every runner in the matrix.
       - name: Build
         shell: bash
         run: |
           set -o pipefail
           dotnet build FallbackPlan.slnx -c Release --no-restore 2>&1 | tee build.log
-          # The path separator differs by runner, so both forms are excluded —
-          # matching only '/external/' would let this gate fail on Windows for
-          # vendored warnings it is meant to ignore.
           if grep -E ': (warning|error) ' build.log | grep -vE '[/\\]external[/\\]'; then
             echo "::error::FallbackPlan code produced warnings or errors"
             exit 1
           fi
       - name: Test
         run: dotnet test FallbackPlan.slnx -c Release --no-build
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-log-${{ matrix.os }}
+          path: build.log
+          if-no-files-found: ignore
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore FallbackPlan.slnx --locked-mode
+      # NFR-SUP-002: CI fails on a known-vulnerable dependency. NuGetAudit
+      # already escalates restore-time advisories via warnings-as-errors; this
+      # step is the explicit, named gate so the protection does not rest on an
+      # SDK default and its output is readable in one place.
+      - name: No known-vulnerable packages
+        shell: bash
+        run: |
+          dotnet list FallbackPlan.slnx package --vulnerable --include-transitive 2>&1 | tee vulnerable.log
+          if grep -q "has the following vulnerable packages" vulnerable.log; then
+            echo "::error::Known-vulnerable package in the dependency graph"
+            exit 1
+          fi
 
   conformance-vectors:
     name: Conformance vectors are reproducible
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       # Vectors are committed. If regenerating produces different bytes, either
@@ -62,12 +113,17 @@ jobs:
   documentation:
     name: Documentation integrity
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Links and anchors resolve
         run: python3 eng/check-links.py
       - name: Requirement IDs unique and fully traced
         run: python3 eng/check-requirements.py
+      # A csproj on disk but absent from the .slnx is never built, never
+      # tested, and never architecture-checked - silently.
+      - name: Every project is in the solution
+        run: python3 eng/check-solution.py

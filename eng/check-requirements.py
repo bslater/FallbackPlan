@@ -5,8 +5,10 @@ Verify requirement-ID integrity across the documentation set.
 Checks:
   1. Every FR-*/NFR-* defined in requirements/ is defined exactly once.
   2. Every defined requirement is reachable from the traceability matrix.
-  3. Every requirement ID referenced anywhere in docs/ or specifications/
-     actually exists.
+  3. Every requirement ID referenced anywhere in docs/, specifications/, or a
+     C# source file under src/ or tests/ actually exists. Code comments cite
+     requirement IDs as authority for design rules, and a citation of an ID
+     nobody defined is authority borrowed from nothing.
 
 The third check is the one that earns its keep: a requirement reference that
 looks authoritative but names an ID nobody defined is worse than no reference,
@@ -75,20 +77,32 @@ def main() -> int:
     if orphans:
         failures.append(f"in traceability.md but never defined: {orphans}")
 
+    def reference_files():
+        for root in SEARCH_ROOTS:
+            for path in root.rglob("*.md"):
+                if path.name not in EXCLUDED:
+                    yield path
+        # C# sources cite requirement IDs in XML doc comments. Vendored code
+        # and build output are not ours to validate.
+        for tree in (ROOT / "src", ROOT / "tests"):
+            for path in tree.rglob("*.cs"):
+                rel = path.relative_to(ROOT).as_posix()
+                if "/bin/" not in rel and "/obj/" not in rel:
+                    yield path
+
+    scanned = 0
     dangling: set[tuple[str, str]] = set()
-    for root in SEARCH_ROOTS:
-        for path in root.rglob("*.md"):
-            if path.name in EXCLUDED:
-                continue
-            for rid in ID_PATTERN.findall(path.read_text()):
-                if rid not in defined_set:
-                    dangling.add((str(path.relative_to(ROOT)), rid))
+    for path in reference_files():
+        scanned += 1
+        for rid in ID_PATTERN.findall(path.read_text(encoding="utf-8")):
+            if rid not in defined_set:
+                dangling.add((str(path.relative_to(ROOT)), rid))
     if dangling:
         failures.append(f"references to undefined requirement IDs: {sorted(dangling)}")
 
     print(f"requirements defined : {len(defined)}")
     print(f"traceability coverage: {len(defined_set & traced_ids(traceability))}/{len(defined_set)}")
-    print(f"files scanned        : {sum(len(list(r.rglob('*.md'))) for r in SEARCH_ROOTS)}")
+    print(f"files scanned        : {scanned}")
 
     if failures:
         print()

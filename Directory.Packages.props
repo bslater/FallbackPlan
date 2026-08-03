@@ -33,12 +33,21 @@
        SQLitePCLRaw 2.1.11 arrives transitively via Microsoft.Data.Sqlite and
        carries GHSA-2m69-gcr7-jv3q (high). Warnings-as-errors caught it at
        restore, which is NFR-SUP-002 behaving as intended. Pinned forward to a
-       fixed version rather than suppressed. -->
+       fixed version rather than suppressed.
+
+       These entries mirror what the resolved graph ACTUALLY contains — verify
+       with `dotnet list package` (include transitives) after changing any of
+       them. An earlier revision pinned SQLitePCLRaw.lib.e_sqlite3, a package
+       the 3.x bundle no longer pulls at all: an inert pin that looked like a
+       security control. The native library now arrives as the package named
+       `SQLite`, and the config/core/provider trio at the bundle's version. -->
   <ItemGroup Label="Transitive pins">
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.10" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageVersion Include="SQLitePCLRaw.config.e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.5" />
+    <PackageVersion Include="SQLite" Version="3.53.4" />
   </ItemGroup>
 
 </Project>

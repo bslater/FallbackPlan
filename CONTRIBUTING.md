@@ -58,11 +58,14 @@ That gate covers `src/` and `tests/` and deliberately **excludes `external/`**. 
 
 ```bash
 python3 eng/check-links.py                                              # links and anchors
-python3 eng/check-requirements.py                                       # requirement IDs
+python3 eng/check-requirements.py                                       # requirement IDs, incl. citations in C# comments
+python3 eng/check-solution.py                                           # every csproj is in the solution
 python3 specifications/repository-format/conformance/generate.py --check # vectors reproducible
 ```
 
 Run them before proposing a change. They are fast and they catch the errors that are tedious to find by reading.
+
+CI also restores in **locked mode**: every project commits a `packages.lock.json`, and a dependency change must regenerate it (`dotnet restore FallbackPlan.slnx`) in the same commit or CI fails. That is deliberate — what a build restores is part of what the build *is* (NFR-SUP-003).
 
 ## Conventions that are not negotiable
 

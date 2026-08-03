@@ -118,8 +118,17 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 
 **Vendor Bodu by copying sources.** Rejected. It severs upstream history, makes provenance unauditable, and turns every upstream fix into a manual merge.
 
+## Amendment 1 — the pin is the gitlink, and restore is part of the build
+
+Two clarifications from a supply-chain review of the scaffold, recorded here because this ADR is where the policy lives:
+
+**What pins the submodule.** `.gitmodules` names a branch; that is *advisory* — it tells `git submodule update --remote` where to look. The actual pin is the **gitlink SHA committed in this repository's tree**, which no upstream push can move. A submodule bump is therefore always a reviewable commit here, never something that happens to the build. No CI check re-verifies this because git itself enforces it; a check would restate the guarantee without strengthening it.
+
+**Restore inputs are controlled, not inherited.** The review found the gates this ADR describes resting on defaults: `NuGetAudit` was an unpinned SDK behaviour, one committed "transitive pin" named a package the resolved graph no longer contains, and restore results depended on feed state and machine configuration. Now: audit mode is set explicitly (`NuGetAudit`/`NuGetAuditMode=all`/`NuGetAuditLevel=low`), every project commits a `packages.lock.json` and CI restores in locked mode, `nuget.config` clears inherited sources and maps which source may supply which packages, transitive pins mirror the graph that actually resolves, and CI runs an explicit vulnerable-package gate rather than relying on restore warnings alone (NFR-SUP-002, groundwork for NFR-SUP-003). The submodule's own `Directory.Build.props` shields Bodu projects from the lockfile property, which is what makes it safe to set repo-wide.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Adopted with `Bodu.Core` in packing and `Bodu.Security.Cryptography` confined to crypto |
+| 2026-08 | Accepted (amended) | Amendment 1: gitlink-is-the-pin clarified; restore inputs pinned (explicit NuGetAudit, lockfiles + locked-mode CI, source mapping, graph-accurate transitive pins, explicit vulnerable-package gate) |

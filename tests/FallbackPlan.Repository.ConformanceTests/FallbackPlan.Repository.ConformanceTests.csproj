@@ -22,7 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
     <ProjectReference Include="..\..\external\bodu\Bodu.Security.Cryptography\src\Bodu.Security.Cryptography.csproj"
-                      AdditionalProperties="RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false" />
+                      AdditionalProperties="$(BoduProjectProperties)" />
   </ItemGroup>
 
   <!-- The committed conformance vectors are the fixtures for this project. -->

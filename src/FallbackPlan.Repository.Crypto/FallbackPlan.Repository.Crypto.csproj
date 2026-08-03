@@ -5,10 +5,7 @@
     <!-- Vendored via submodule. Its analyzers and style rules are its own
          concern; suppressed here so they do not appear in our build. -->
     <ProjectReference Include="..\..\external\bodu\Bodu.Security.Cryptography\src\Bodu.Security.Cryptography.csproj"
-                      AdditionalProperties="RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false;NoWarn=$(NoWarn)" />
-  </ItemGroup>
-
-  <ItemGroup>
+                      AdditionalProperties="$(BoduProjectProperties)" />
   </ItemGroup>
 
   <PropertyGroup>

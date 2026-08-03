@@ -23,4 +23,7 @@ csharp_style_namespace_declarations = file_scoped:warning
 csharp_style_var_for_built_in_types = false:suggestion
 dotnet_sort_system_directives_first = true
 dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
-dotnet_diagnostic.CA2007.severity = none
+# CA2007 (ConfigureAwait) is deliberately NOT disabled here: library code will
+# do heavy async I/O and the discipline has to start with the first real src
+# file. Tests, which have no synchronisation context to care about, disable it
+# in tests/.editorconfig.

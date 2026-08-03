@@ -8,7 +8,7 @@
     <!-- Vendored via submodule. Its analyzers and style rules are its own
          concern; suppressed here so they do not appear in our build. -->
     <ProjectReference Include="..\..\external\bodu\Bodu.Core\src\Bodu.Core.csproj"
-                      AdditionalProperties="RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false;NoWarn=$(NoWarn)" />
+                      AdditionalProperties="$(BoduProjectProperties)" />
   </ItemGroup>
 
   <PropertyGroup>
