@@ -69,6 +69,10 @@ This binds each record to its exact context. A record cannot be moved to a diffe
 
 Note that AAD does **not** include the blob identifier. A record is intentionally relocatable between blobs by compaction, which republishes its index entry without re-encrypting it ([07](07-index.md)). Binding the blob would make compaction require decryption and re-encryption of every moved record.
 
+> **Erratum (phase 0).** The relocation claim above is in tension with §2.1: the AAD *does* include `ordinal`, and §2.1 requires the ordinal to equal the record's position in its blob — a byte-identical relocation generally cannot satisfy both. Nothing in phase 0 relocates records, so the contradiction is recorded rather than resolved: see [open questions Q15](../../docs/open-questions.md#q15--record-ordinal-in-the-aad-versus-byte-identical-relocation). Resolve it before implementing compaction.
+>
+> Records also exist **outside** blobs — index deltas, checkpoints, journal records, and the standalone snapshot object are metadata records stored as standalone store objects. This document defines their encryption inputs (`blob_salt`, `writer_id`, counter, `ordinal`) only via the blob envelope, which a standalone object does not have. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1 defines the `FBPKSREC` standalone framing: a 72-byte cleartext prefix carries the same selectors, the record header carries `ordinal = 0`, and this document's key derivation, nonce, and AAD apply byte-for-byte.
+
 ## 5 Producing a record
 
 1. Compute `content_id = H(plaintext)` ([02 §2](02-identifiers.md#2-content-identifier)).

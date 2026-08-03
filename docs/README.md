@@ -68,6 +68,9 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains |
 | [0019](adr/0019-third-party-dependency-policy.md) | Third-party dependency policy, and the Bodu adoption |
 | [0020](adr/0020-ed25519-signing-key-semantics.md) | Ed25519 signing: seed interpretation, repository scope |
+| [0021](adr/0021-consume-bodu-via-committed-package-feed.md) | Consume Bodu as prebuilt packages from a committed local feed |
+| [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) | Standalone metadata records, index identifiers, and phase-0 gap resolutions |
+| [0023](adr/0023-cdc-v1-rabin-parameters.md) | cdc-v1 Rabin fingerprint parameters |
 
 Template: [0000](adr/0000-template.md)
 

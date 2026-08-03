@@ -30,6 +30,8 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 
 `<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` follows the same rule.
 
+> **Erratum (phase 0).** This specification never defines how `<delta-id>`, `<checkpoint-id>`, or `<key-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6); the key identifier is likewise 16 opaque bytes, and readers discover it by listing `/keys/` (see the erratum at §6).
+
 ### 2.1 What keys must not reveal
 
 Every identifier appearing in a key MUST be keyed or opaque. Store keys MUST NOT contain, or allow derivation of: file paths or names, user or device names, plaintext content hashes, backup-set names, or timestamps.
@@ -113,6 +115,8 @@ A reader bootstraps in this order:
 5. Load the index generation needed to resolve that set ([07](07-index.md)).
 
 Step 4 precedes step 5 deliberately. A snapshot is published only after every object it references is durable, so a reader that fixes the snapshot set first and then loads the index can never observe a snapshot whose objects are unresolvable. Doing it the other way round exposes the reader to a partially published view. → [`04-concurrency-and-publication.md` §5](../../docs/architecture/04-concurrency-and-publication.md#5-publication-order)
+
+> **Erratum (phase 0).** Step 3 names `/keys/<key-id>` but nothing tells the reader the key identifier: the descriptor body (§3.2) has no key-id field. Pending a normative fix, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 3 applies: the reader lists `/keys/` and attempts to unwrap what it finds; creation writes the key object before the descriptor, so a visible descriptor implies the key object is durable, and a lagging listing is a transient open failure to retry — not a damage finding.
 
 ---
 

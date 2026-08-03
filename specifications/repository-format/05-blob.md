@@ -129,6 +129,8 @@ Sealing computes the footer, appends it and the locator, and computes the blob d
 
 After sealing, the blob is immutable. Appending to a sealed blob is not permitted, and a reader encountering data beyond the locator MUST report a damage finding.
 
+> **Erratum (phase 0).** Two defects in the digest sentence above. First, "the complete sealed representation" is circular: the locator carries `digest_prefix`, so the locator cannot be inside its own digest's preimage. The digest is computed over bytes `[0, blob_length − 16)` — everything up to but excluding the 16-byte locator. Second, "recorded in the index" names a field that does not exist — no index delta or checkpoint key carries a blob digest ([07](07-index.md)). Phase 0 records the digest in the device-local catalogue; format-level carriage is an open format change ([open questions Q16](../../docs/open-questions.md#q16--the-blob-digest-has-no-home-in-the-index)).
+
 ## 6 The spool
 
 Blobs are assembled in a durable local spool before upload. A blob becomes visible in the repository only after it is sealed, validated, uploaded under its final identifier, and acknowledged.

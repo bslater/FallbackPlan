@@ -15,7 +15,7 @@ The repository format must be documented · append-oriented · content-addressed
 /keys/<key-id>                                      wrapped key material
 /blobs/data/<shard>/<store-blob-key>                segment records
 /blobs/meta/<shard>/<store-blob-key>                manifest and tree records
-/index/delta/<generation>/<index-id>                immutable writer index deltas
+/index/delta/<generation>/<delta-id>                immutable writer index deltas
 /index/checkpoint/<generation>/<checkpoint-id>      compacted index generations
 /snapshots/<device-id>/<backup-set-id>/<snapshot-id>
 /journal/<writer-id>/<sequence>                     write intents, publications, audit
@@ -24,7 +24,7 @@ The repository format must be documented · append-oriented · content-addressed
 /audit/<period>/<record-id>
 ```
 
-Physical naming must not leak source names, user names, paths, timestamps, or raw content hashes. Every identifier exposed to a store is a **keyed** identifier — see [`03-crypto.md` §4](03-crypto.md#4-object-identifiers).
+Physical naming must not leak source names, user names, paths, timestamps, or raw content hashes. Every identifier exposed to a store is a **keyed** identifier — see [`03-crypto.md` §4](03-crypto.md#4-object-identifiers). (An earlier revision of this diagram spelled the delta path segment `<index-id>`; the specification's name is `<delta-id>`, and its allocation is pinned by [ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 2.)
 
 `/repository-format` is the only object a reader can locate without prior knowledge. It is small, unencrypted in its structural fields, and states the repository ID, format version, required feature set, and the key-derivation parameters needed to get everything else. A reader that does not understand a **required** feature refuses the repository rather than guessing (NFR-COMP-003).
 

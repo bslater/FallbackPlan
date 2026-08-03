@@ -184,6 +184,45 @@ A related build decision is recorded here so it is not silently re-made: `Invari
 
 ---
 
+## Q15 — Record ordinal in the AAD versus byte-identical relocation
+
+**Owner:** engineering · **Blocks:** any compaction implementation · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) · **Spec:** [04 §2.1](../specifications/repository-format/04-record.md#21-field-constraints), [04 §4](../specifications/repository-format/04-record.md#4-associated-data)
+
+Specification 04 §4 excludes the blob identifier from the record AAD so that compaction can relocate a record "without re-encrypting it" — the enabling property for [ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)'s manifests-stay-logical rule. But the AAD **does** include `ordinal`, and 04 §2.1 requires the ordinal to equal the record's zero-based position in its blob. A record copied byte-identically into a new blob generally lands at a different position, so it cannot simultaneously keep its authenticated ordinal and satisfy the position rule. The two statements are in live contradiction.
+
+Nothing in phase 0 hits this — compaction is not implemented, and the precedence engine ([ADR-0017](adr/0017-index-entry-supersession.md)) handles supersession entries regardless of who produced them. It must be resolved before the first compaction pass exists. The options:
+
+| Option | Trade |
+|--------|-------|
+| **Relax 04 §2.1 for compacted blobs** — a relocated record keeps its original ordinal; the footer's record table already binds ordinal to offset, so lookup is unaffected. Ordinals in a compacted blob are non-contiguous | Preserves zero-decrypt relocation; weakens the "position = ordinal" invariant readers may be tempted to assume; nonce uniqueness unaffected (the moved record keeps its original blob key) |
+| **Compaction re-encrypts** — moved records are decrypted and re-sealed under the destination blob's key at their new ordinal | Preserves 04 §2.1 as written; makes compaction a cryptographic operation (key access, CPU over every moved byte) and voids 04 §4's stated rationale for excluding the blob id |
+
+**Not decided.**
+
+---
+
+## Q16 — The blob digest has no home in the index
+
+**Owner:** engineering · **Blocks:** replication receipts (verify level 2 at scale) · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) · **Spec:** [05 §5](../specifications/repository-format/05-blob.md#5-sealing), [07 §2](../specifications/repository-format/07-index.md#2-index-delta)
+
+05 §5 says the blob digest is "recorded in the index and used for end-to-end verification during replication", but no index delta or checkpoint field carries it — 07's entry array has no digest position and its object-level keys have none either. Phase 0 records the digest in the **catalogue** (`blobs.digest`, populated at seal and by verify level 2), which serves single-machine verification but is device-local and disposable — it cannot serve as a replication receipt another participant can check.
+
+The candidate format fix is an optional parallel array on the delta (`covered_blob_digests`, aligned with `covered_blob_ids`, inside the signed prefix), which would make digests durable, signed, and discoverable exactly where the covered blobs are declared. That is a format change and waits for a format-change window; the 05 §5 sentence carries an erratum note meanwhile.
+
+**Not decided** (the format-level carriage; the catalogue-domain recording is implemented).
+
+---
+
+## Q17 — Lease, tombstone, and audit-period object formats
+
+**Owner:** engineering · **Blocks:** garbage collection implementation (post-phase-0) · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md)
+
+Three namespaces in [01 §2](../specifications/repository-format/01-object-layout.md#2-namespace) have no object format anywhere in the specification: `/leases/<scope>/<lease-id>` (semantics in [08 §9](../specifications/repository-format/08-journal.md#9-leases) — advisory only, the sole mutable namespace — but no record shape), `/tombstones/<object-type>/<object-id>` (named by the deletion discipline in 01 §5 and 07 §7, shape undefined), and `/audit/<period>/<record-id>` (distinct from audit *journal* records, which live at `/journal/<writer-id>/<sequence>`; nothing defines the period rendering or the object). None are needed by phase 0 — no phase-0 component takes a lease, tombstones an object, or writes the audit-period namespace — so their formats are deliberately not invented here. They must be specified before the garbage collector exists, since all three belong to its surface.
+
+**Not decided.**
+
+---
+
 ## Closed
 
 | Question | Resolution |

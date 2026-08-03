@@ -27,6 +27,10 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 
 `sequence` shares the writer's single monotonic gapless sequence space with index deltas ([07 §4](07-index.md#4-sequence-gaps-and-void-deltas)). One sequence per writer, not one per record type — a gap is then detectable regardless of which kind of record is missing.
 
+> **Erratum (phase 0).** Two resolutions pending normative edits, per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) a standalone object has no blob envelope, so "metadata records" is under-specified — the `FBPKSREC` framing (Decision 1) supplies the encryption context, with object type `0x0A`; (2) the shared sequence space also feeds **blob counters** ([02 §4](02-identifiers.md#4-blob-identifier)), which publish no sequence-addressed object, so gap accounting needs a definition — Decision 7 gives it: a sequence number is accounted for by a delta, a journal record, a void delta, or a blob whose structured identifier embeds that counter named by an intent; nothing else.
+
+> **Erratum (phase 0).** "The repository's current generation" (§7 condition 1) is never defined in this specification. [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 5 defines it: the maximum of the key bundle's `current_data_generation`, `current_metadata_generation`, and the highest generation directory observed under `/index/…` — a lower bound that can only delay expiry, never hasten it.
+
 ## 3 Write intent
 
 `record_kind = 1`.
@@ -90,6 +94,8 @@ Retirement is an **event**, not the absence of a heartbeat. That distinction is 
 | 4 | u64 | `objects_affected` |
 
 Audit records make destructive actions attributable. They do not make them preventable.
+
+> **Erratum (phase 0).** Key 1's values and key 3's shape are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them: `action` = 1 retention-reduction, 2 bulk-snapshot-deletion, 3 gc-pass, 4 force-expiry; `parameters` is a uint-keyed map, per-action, empty in phase 0.
 
 ## 7 Expiry
 

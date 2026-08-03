@@ -67,6 +67,8 @@ Because the key is repository-scoped, two writers in the same repository derive 
 
 Binding the type into the derivation means a record cannot be reinterpreted as a manifest, or the reverse, even if their plaintexts were somehow identical.
 
+> **Erratum (phase 0).** Index deltas, checkpoints, and journal records are records too ([07 §2](07-index.md#2-index-delta), [08 §2](08-journal.md#2-record-framing)) and therefore need `object_type` values, which this table does not assign. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1 assigns: index delta `0x08`, index checkpoint `0x09`, journal record `0x0A`. `0x07` remains reserved.
+
 ### 3.2 What this does and does not protect
 
 Keying defends against the **store**. It does not defend against a **repository member**, because members hold the key.

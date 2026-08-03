@@ -121,6 +121,8 @@ A tree MUST NOT contain two entries with the same `name` bytes. It MAY contain e
 
 Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a metadata record and as a standalone object at `/snapshots/<device-id>/<backup-set-id>/<snapshot-id>`, so a reader can enumerate snapshots from a bounded prefix without an index.
 
+> **Erratum (phase 0).** The standalone copy has no blob envelope, so this specification gives it no encryption inputs. Pending a normative edit, it is sealed under the `FBPKSREC` standalone record framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, keeping object type `0x04` and the same manifest bytes — so its object identifier is identical to the in-blob record's.
+
 | Key | Type | Value |
 |-----|------|-------|
 | 1 | bytes[16] | `snapshot_id` |
@@ -166,6 +168,8 @@ Object type `0x05`. Records the effective configuration a snapshot was captured 
 | 9 | array | `exclude_rules` |
 
 This exists so that a snapshot can always answer "what settings produced this?" years later, without those settings having to still exist in anyone's configuration file. It is also what makes a benchmark comparing two profiles interpretable.
+
+> **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them.
 
 ## 8 Error manifest
 

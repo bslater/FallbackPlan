@@ -31,6 +31,8 @@ Stored at `/index/delta/<generation>/<delta-id>`, encrypted as a metadata record
 | 8 | bool | `is_void` — present and true only for a void delta (§4) |
 | 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
 
+> **Erratum (phase 0).** Three resolutions pending normative edits, all per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) "encrypted as a metadata record" is under-specified for an object outside a blob — the `FBPKSREC` standalone framing (Decision 1) supplies the encryption context, with object type `0x08`; (2) `<delta-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); (3) key 5 `shard` is **optional** — present only when every entry falls in that one shard, absent otherwise (Decision 4), since §8 permits multi-shard deltas that a scalar cannot describe.
+
 ### 2.1 Index entry
 
 CBOR array of six elements:
@@ -97,6 +99,8 @@ Stored at `/index/checkpoint/<generation>/<checkpoint-id>`.
 | 7 | array | `entries` — as §2.1 |
 | 8 | bytes[16] | `writer_id` |
 | 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature) |
+
+> **Erratum (phase 0).** Pending normative edits, per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): `<checkpoint-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); the object is sealed under the `FBPKSREC` standalone framing with object type `0x09` (Decision 1); key 3's elements are `[bytes[16], u64]` pairs, key 4's are u16 shard values; and key 5's preimage — unstated above — is pinned by Decision 6: `shard_hashes[i]` = SHA-256 over the deterministic CBOR array of shard `shard_set[i]`'s post-precedence entries in §2.1 form, sorted by `object_id` bytes ascending.
 
 A reader applies a checkpoint and then **any delta whose `sequence` exceeds that checkpoint's watermark for its writer** — whether or not a store listing revealed it. This is what removes the dependency on listing freshness: a delta written moments ago and not yet visible in a listing is still applied when found, and its absence is detectable via the sequence chain.
 
