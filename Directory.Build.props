@@ -5,7 +5,11 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- InvariantGlobalization is deliberately NOT set. Specification 03 §2
+         requires NFC-normalising passphrases, and string.Normalize throws for
+         non-ASCII input in invariant mode — a non-ASCII passphrase would crash
+         repository creation, the exact case normalisation exists for. The
+         trade-off is recorded with Q14 in docs/open-questions.md. -->
   </PropertyGroup>
 
   <!-- Correctness settings. Warnings-as-errors is deliberate: this is a backup

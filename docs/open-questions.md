@@ -172,6 +172,18 @@ What remains open is whether a later format version should add **per-device sign
 
 ---
 
+## Q14 — Minimum passphrase length, and the globalization dependency behind normalisation
+
+**Owner:** engineering, with security review · **Blocks:** nothing in v1 · **Spec:** [03 §2.1](../specifications/repository-format/03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you)
+
+Specification 03 §2.1 requires refusing an empty passphrase (implemented — `Passphrase.Create` refuses it at the engine level, because Argon2id itself accepts one) and says an implementation SHOULD enforce a minimum length, refusing rather than warning. No number is specified. The engine carries `Passphrase.RecommendedMinimumLength = 12` as a named constant but does not yet enforce it — picking the number is a policy decision that deserves one deliberate pass (length alone versus a strength estimate, and what the recovery story says to a user whose old passphrase no longer meets the bar).
+
+A related build decision is recorded here so it is not silently re-made: `InvariantGlobalization` was removed from `Directory.Build.props` (it had been set for reproducibility hardening) because NFC normalisation of passphrases — mandatory per 03 §2 — throws `PlatformNotSupportedException` for non-ASCII input in invariant mode. Correctness beat the hardening; the runtime now carries ICU. If invariant mode is ever wanted back, passphrase normalisation needs a vendored NFC path first.
+
+**Not decided** (the minimum length); the globalization removal is decided and recorded above.
+
+---
+
 ## Closed
 
 | Question | Resolution |
