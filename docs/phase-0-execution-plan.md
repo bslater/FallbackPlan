@@ -1,6 +1,6 @@
 # Phase 0 — Execution plan
 
-**Status:** ready to start · **Scope:** [Phase 0](roadmap.md#phase-0--archive-engine-vertical-slice) — archive engine vertical slice
+**Status:** implemented — all waves A–F complete; every item below is delivered and its acceptance criterion backed by a named test (benchmarks published at reduced scale, [`phase-0-benchmarks.md`](phase-0-benchmarks.md)) · **Scope:** [Phase 0](roadmap.md#phase-0--archive-engine-vertical-slice) — archive engine vertical slice
 
 ---
 
@@ -111,19 +111,19 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 
 Every one of the 11 criteria in [Phase 0](roadmap.md#phase-0--archive-engine-vertical-slice), mapped to what delivers it. A criterion with nothing behind it is visible at a glance.
 
-| # | Exit criterion | Delivered by |
-|---|----------------|--------------|
-| 1 | Multi-terabyte file within the memory bound, spanning many blobs | B1, C2, F4 |
-| 2 | Changing one segment writes exactly one record plus a manifest | B3, D1 |
-| 3 | Blob targets respected without splitting records | C2 |
-| 4 | Every segment and restored file cryptographically verified | B5, E4 |
-| 5 | Interruption cannot expose an incomplete committed file version | C1, D6, F1 |
-| 6 | Resume byte-identical; restart draws a different salt | C1, F1 |
-| 7 | Catalogue deletable and rebuildable from checkpoint plus deltas | D2, E1 |
-| 8 | Forensic rebuild succeeds with all index objects removed | C2, E2 |
-| 9 | Compaction relocates records without modifying any manifest | D1, D4 |
-| 10 | GC concurrent with a backup deletes no intent-covered blob | D5, F1 |
-| 11 | Synthetic legacy adapter traverses the same pipeline | F6 |
+| # | Exit criterion | Delivered by | Proof (named test) |
+|---|----------------|--------------|--------------------|
+| 1 | Multi-terabyte file within the memory bound, spanning many blobs | B1, C2, F4 | `MemoryBoundProof` — live set flat from 1 GiB to 3 GiB; the multi-TB run itself is future work, recorded in [`phase-0-benchmarks.md`](phase-0-benchmarks.md) §1 |
+| 2 | Changing one segment writes exactly one record plus a manifest | B3, D1 | `SecondBackupTests`, `CdcSecondBackupTests` |
+| 3 | Blob targets respected without splitting records | C2 | `BlobWriterTests` (rotation at target, refusal to split) |
+| 4 | Every segment and restored file cryptographically verified | B5, E4 | `VerifyEngine`/`RestoreEngine` paths in `ForensicRebuildTests` — incl. the swapped-segment forgery only the whole-file hash catches |
+| 5 | Interruption cannot expose an incomplete committed file version | C1, D6, F1 | `PublicationInterruptionTests` — every 04 §5.1 row, committed snapshots stay restorable |
+| 6 | Resume byte-identical; restart draws a different salt | C1, F1 | `SpoolCheckpointTests` |
+| 7 | Catalogue deletable and rebuildable from checkpoint plus deltas | D2, E1 | `CatalogueRebuildTests` |
+| 8 | Forensic rebuild succeeds with all index objects removed | C2, E2 | `ForensicRebuildTests` |
+| 9 | Compaction relocates records without modifying any manifest | D1, D4 | `ManifestCodecTests` (nothing physical decodes), `IndexPrecedenceTests` (supersession converges) |
+| 10 | GC concurrent with a backup deletes no intent-covered blob | D5, F1 | `ConcurrentCollectionTests` |
+| 11 | Synthetic legacy adapter traverses the same pipeline | F6 | `LegacyImportTests` — stripped of provenance, the imported manifest is byte-identical to a native one |
 
 ---
 
