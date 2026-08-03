@@ -33,7 +33,7 @@ namespace FallbackPlan.Repository.Format.Compression;
 public sealed class ZstdSegmentCodec : IDisposable
 {
     private readonly Compressor _compressor;
-    private readonly Decompressor _decompressor;
+    private readonly ZstdSegmentDecompressor _decompressor;
 
     /// <summary>
     /// Creates a codec at <paramref name="level"/> for segments of
@@ -64,8 +64,7 @@ public sealed class ZstdSegmentCodec : IDisposable
             ZstdSharp.Unsafe.ZSTD_cParameter.ZSTD_c_windowLog,
             BitOperations.Log2((uint)segmentSize.Bytes));
 
-        _decompressor = new Decompressor();
-        _decompressor.SetParameter(ZstdSharp.Unsafe.ZSTD_dParameter.ZSTD_d_windowLogMax, 26);
+        _decompressor = new ZstdSegmentDecompressor();
     }
 
     /// <summary>
@@ -128,30 +127,8 @@ public sealed class ZstdSegmentCodec : IDisposable
     /// The frame is malformed, produces more or fewer bytes than the record's
     /// logical length, or carries trailing input (specification 10 §4.1).
     /// </exception>
-    public void Decompress(ReadOnlySpan<byte> stored, Span<byte> destination)
-    {
-        int produced;
-
-        try
-        {
-            // The library refuses output beyond the destination (the bomb
-            // defence) and refuses trailing input bytes after the frame —
-            // both verified behaviours, both mapped to the same refusal.
-            produced = _decompressor.Unwrap(stored, destination);
-        }
-        catch (ZstdException exception)
-        {
-            throw new CompressionFormatException(
-                "Stored bytes are not one standard Zstandard frame producing exactly the record's logical length (specification 10 §4.1).",
-                exception);
-        }
-
-        if (produced != destination.Length)
-        {
-            throw new CompressionFormatException(
-                $"The frame produced {produced} bytes; the record's logical length is {destination.Length} (specification 10 §4.1).");
-        }
-    }
+    public void Decompress(ReadOnlySpan<byte> stored, Span<byte> destination) =>
+        _decompressor.Decompress(stored, destination);
 
     /// <inheritdoc />
     public void Dispose()
