@@ -8,7 +8,7 @@
 
 ```text
 +---------------------------------------------------------------+
-| Cleartext envelope            72 bytes, fixed                  |
+| Cleartext envelope            88 bytes, fixed                  |
 +---------------------------------------------------------------+
 | Record 0                      header + ciphertext + tag        |
 | Record 1                                                       |
@@ -35,9 +35,12 @@ offset  size   field
     16     16  blob_id        bytes[16]
     32     32  blob_salt      bytes[32]
     64      8  blob_counter   u64
+    72     16  writer_id      bytes[16]
 ```
 
-Total: **72 bytes**. `writer_id` is recoverable from `blob_id` ([02 §4](02-identifiers.md#4-blob-identifier)).
+Total: **88 bytes**.
+
+`writer_id` is carried explicitly because it is an input to the blob-key derivation ([03 §5](03-keys.md#5-per-blob-keys)) and is **not** reliably recoverable from `blob_id`: the structured formation embeds only the first 8 of its 16 bytes, and [02 §4](02-identifiers.md#4-blob-identifier) equally permits a `blob_id` of 16 random bytes, which embeds none. A reader holding only the blob and the repository keys must be able to reproduce the derivation — that is the whole recovery property — so every derivation input lives in the envelope.
 
 The envelope is cleartext because a reader must derive the blob key before it can read anything, and the derivation inputs cannot themselves be encrypted under the key they produce. It carries only key-derivation selectors: no content, no path, no count of records, no timestamp.
 
@@ -104,7 +107,7 @@ A reader fetches the final 16 bytes, seeks to `footer_offset`, and reads the foo
 
 ### 4.1 Stores where reading the tail is expensive
 
-Where a store makes tail reads costly or unreliable, a writer MAY additionally publish a **sidecar** object at `/blobs/<class>/<shard>/<blob-id>.footer` containing a byte-identical copy of the footer and locator.
+Where a store makes tail reads costly or unreliable, a writer MAY additionally publish a **sidecar** object at `/blobs/<class>/<shard>/<store-blob-key>.footer` containing a byte-identical copy of the footer and locator. The sidecar's name uses the same HMAC-rendered store blob key as the blob itself ([02 §4.3](02-identifiers.md#43-not-leaking-writer-identity)) — a raw `blob_id` in a store key would leak the writer identity the rendering exists to hide.
 
 A sidecar is an optimisation. A reader MUST be able to operate without one, and where both exist and disagree, the in-blob footer wins — the sidecar is a separate object and may be stale or absent.
 

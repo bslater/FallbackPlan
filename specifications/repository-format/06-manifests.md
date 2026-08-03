@@ -111,6 +111,7 @@ Object type `0x03`.
 | 2 | map | `metadata` — as §4.1, for the directory itself |
 | 3 | bytes | `name` |
 | 4 | u8 | `name_normalisation` |
+| 5 | bytes[32] | `continuation` — object identifier of the next tree manifest in a sharded chain (§9). Absent on the last manifest of a chain and on any unsharded tree. |
 
 Entries MUST be sorted by the **raw bytes** of `name`, ascending. Byte order rather than a collation order, because collation is locale-dependent and would make the encoding non-deterministic across machines — which would break object identifiers ([00 §4](00-conventions.md#4-cbor-encoding)).
 
@@ -144,7 +145,9 @@ Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a m
 
 ### 6.1 Signature
 
-Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the device signing key. A reader MUST verify it against the device's known public key before trusting the snapshot, and MUST report a failure as a **security finding** rather than a corruption finding — a bad signature means substitution or forgery, not a bad disk.
+Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the master key, so the reader computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.
+
+In format version 1 a signature is **repository-scoped**: it proves the snapshot was produced by a holder of the master key at that generation, and no more. It does not attribute the snapshot to a particular device — `device_id` and `writer_id` fields are attribution **by claim**. Per-device signing keys are a considered and deferred extension. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md), [Q13](../../docs/open-questions.md#q13--device-level-signature-attribution)
 
 ## 7 Policy manifest
 
@@ -186,7 +189,14 @@ A path **excluded by policy** is not a failure and MUST NOT appear here — it b
 
 No manifest's size grows with the repository or with total snapshot history. Trees shard the graph naturally: a directory with a million entries produces a large tree manifest, but a repository with a million directories produces a million small ones.
 
-Where a single directory's tree manifest would exceed the 16 MiB metadata limit, a writer MUST split it into an ordered chain of tree manifests, each referencing the next via a continuation entry. This is the only case in the format where a logical object spans multiple physical objects.
+Where a single directory's tree manifest would exceed the 16 MiB metadata limit, a writer MUST split it into an ordered chain of tree manifests, each referencing the next via `continuation` (key 5 in §5). This is the only case in the format where a logical object spans multiple physical objects.
+
+Chain rules:
+
+- Each manifest in the chain except the last carries `continuation`; the last omits it.
+- The `entries` of the whole chain, concatenated in chain order, form one logical entry list; §5's sorting and duplicate rules apply to that **logical** list, not to each shard independently — every entry in a manifest MUST sort strictly after every entry in its predecessor.
+- `metadata`, `name`, and `name_normalisation` are carried by the **first** manifest of the chain and MUST be absent from continuations.
+- A reader MUST follow the chain to its end before treating the directory as read, and MUST treat a cycle or a missing continuation target as a damage finding, not an empty remainder — a truncated directory that reads as complete is silent data loss.
 
 ---
 

@@ -16,7 +16,7 @@ passphrase ──Argon2id──▶ key-encryption key (KEK)
                               │ HKDF-Expand, domain-separated
               ┌───────────────┼───────────────┬───────────────┬──────────────┐
               ▼               ▼               ▼               ▼              ▼
-        content-ID key   data key[gen]  metadata key[gen]  signing key   key-ID key
+        content-ID key   data key[gen]  metadata key[gen]  signing key[gen]  key-ID key
               │               │               │
               │               └───────┬───────┘
               ▼                       ▼
@@ -47,7 +47,7 @@ Argon2id accepts a **zero-length password**. RFC 9106 permits it, and an impleme
 
 A writer MUST reject an empty passphrase and SHOULD enforce a minimum length, refusing rather than warning.
 
-This is stated explicitly because the cross-implementation testing behind §6.2 found that two Argon2id implementations disagree on precisely this boundary — one refuses an empty password, the other accepts it. Relying on either behaviour would be relying on an accident of which library was linked, and the parameter minimums above say nothing about the input those parameters are applied to.
+This is stated explicitly because the cross-implementation testing behind §6.1 found that two Argon2id implementations disagree on precisely this boundary — one refuses an empty password, the other accepts it. Relying on either behaviour would be relying on an accident of which library was linked, and the parameter minimums above say nothing about the input those parameters are applied to.
 
 Passphrase normalisation matters: the same passphrase typed on macOS and Linux can differ in Unicode composition, and an un-normalised comparison would make a repository unopenable on the other platform. NFC is applied before UTF-8 encoding.
 
@@ -60,13 +60,15 @@ offset  size   field
 ------  -----  -------------------------------------------------------------
      0      8  magic         = 0x46 42 50 4B 4B 45 59 53   ("FBPKKEYS")
      8      2  format_version u16
-    10      2  kek_profile    u16  (AEAD suite used for wrapping, §5)
+    10      2  kek_profile    u16  (AEAD suite used for wrapping, §6)
     12     12  wrap_nonce     bytes[12]
     24     16  key_id         bytes[16]
     40      4  cbor_length    u32, max 4 096
     44      N  wrapped        AEAD ciphertext of the CBOR key bundle
   44+N     16  wrap_tag       AEAD authentication tag
 ```
+
+`kek_profile` MUST be `aes-256-gcm-v1` (`0x0001`) in format version 1. The 12-byte `wrap_nonce` field is sized for it exactly; `xchacha20-poly1305-v1` takes a 24-byte nonce and cannot be represented in this layout. Restricting the wrap rather than varying the layout costs nothing — wrapping happens once per repository open, so hardware acceleration is irrelevant — and keeps a fixed-offset header fixed. The record-level profile choice in §6 is unaffected. → [ADR-0005](../../docs/adr/0005-aead-suite-and-nonce-construction.md)
 
 Unwrapping uses:
 
@@ -105,6 +107,8 @@ derive(info) = HKDF-Expand(PRK = master_key, info = info, L = 32)
 
 Info strings are ASCII, without a terminating NUL. Domain separation is by the string, not by chance.
 
+The signing key's 32 derived bytes are an **Ed25519 private-key seed** in the sense of [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) §5.1.5 — the input to the seed-expansion step, not a pre-clamped scalar. Every mainstream Ed25519 API takes exactly this. The corresponding public key is computed from the seed by any holder of the master key, which is why the format stores no public key anywhere: signatures in format version 1 are repository-scoped, not device-scoped. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md)
+
 ### 4.1 Generations
 
 Data and metadata keys are generational. Introducing a new generation lets a repository migrate to a new key without rewriting existing objects: old objects remain readable under the old generation, and new writes use the new one.
@@ -124,7 +128,7 @@ blob_key  = HKDF-Expand(
                 L    = 32)
 ```
 
-`blob_salt`, `writer_id` and `blob_counter` are all stored in the blob's cleartext envelope, so a reader can reproduce the derivation.
+`blob_salt`, `writer_id` and `blob_counter` are all stored in the blob's cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)), so a reader can reproduce the derivation from the blob and the repository keys alone.
 
 ### 5.1 Why per-blob keys
 
@@ -149,11 +153,11 @@ A blob key MUST NOT be stored. It is derived when the blob is written and re-der
 | Profile | Value | Suite | Key | Nonce | Tag | Implementation |
 |---------|-------|-------|-----|-------|-----|----------------|
 | `aes-256-gcm-v1` | `0x0001` | AES-256-GCM | 32 | 12 | 16 | Platform (`System.Security.Cryptography.AesGcm`) |
-| `xchacha20-poly1305-v1` | `0x0002` | XChaCha20-Poly1305 | 32 | 24 | 16 | **Third-party** — see §6.2 |
+| `xchacha20-poly1305-v1` | `0x0002` | XChaCha20-Poly1305 | 32 | 24 | 16 | **Third-party** — see §6.1 |
 
-A writer SHOULD select `aes-256-gcm-v1` where hardware AES is available and `xchacha20-poly1305-v1` otherwise. Both are permitted; the profile is recorded per record.
+A writer SHOULD select `aes-256-gcm-v1` where hardware AES is available and `xchacha20-poly1305-v1` otherwise. Both are permitted for records; the profile is recorded per record. This table governs **records only** — key wrapping is fixed to `aes-256-gcm-v1` in format version 1 (§3).
 
-### 6.2 Where each primitive comes from
+### 6.1 Where each primitive comes from
 
 Rule 1 in §1 says to use audited platform primitives and write none ourselves. That rule is satisfiable for most of what this format needs and **not** for all of it, so the position is stated plainly rather than left to be discovered.
 
@@ -180,7 +184,7 @@ The reference implementation takes Argon2id from `Bodu.Security.Cryptography` an
 
 No other suite is permitted. A writer MUST reject an unapproved suite at configuration time, not at write time — discovering an unusable configuration during a backup is a failure mode the user cannot act on. Insecure selection MUST NOT be available as a compatibility switch.
 
-### 6.1 A note for the security review
+### 6.2 A note for the security review
 
 AES-GCM is **not key-committing**: a ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the master key and an attacker without it cannot choose them. It is recorded because the `repository-unverified` deduplication domain accepts records from other writers without verification, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. → [PT-15](../../docs/review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)
 

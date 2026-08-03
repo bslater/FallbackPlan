@@ -80,7 +80,7 @@ or unconditionally when `current_length == max_size`.
 | Window size | 64 bytes | fixed in v1 |
 | Mask | `target_size − 1` | derived; target MUST be a power of two |
 
-The rolling hash is a Rabin-style polynomial fingerprint. The polynomial and the per-byte table are fixed in v1 and reproduced in [`conformance/vectors/segmentation.json`](conformance/vectors/segmentation.json) — an implementation MUST use those exact values, because two implementations with different tables would produce different boundaries and deduplicate against nothing.
+The rolling hash is a Rabin-style polynomial fingerprint. The polynomial and the per-byte table are **not yet pinned** — [`conformance/vectors/segmentation.json`](conformance/vectors/segmentation.json) records the gap, and pinning them is a Phase 0 prerequisite ([B6](../../docs/phase-0-execution-plan.md)). Once pinned there, an implementation MUST use those exact values, because two implementations with different tables would produce different boundaries and deduplicate against nothing. Until they are pinned, a writer MUST NOT use `cdc-v1` in a repository intended to be portable: its boundaries would be reproducible by no other implementation, which silently defeats deduplication and makes the conformance suite unable to check anything about them.
 
 ### 3.2 Properties
 

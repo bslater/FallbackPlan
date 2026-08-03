@@ -44,7 +44,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019 is **Accepted** on the evidence recorded in it; the rest remain `Proposed`.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019 and 0020 are **Accepted** on the evidence recorded in them; the rest remain `Proposed`.
 
 | ADR | Decision |
 |-----|----------|
@@ -67,6 +67,7 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence |
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains |
 | [0019](adr/0019-third-party-dependency-policy.md) | Third-party dependency policy, and the Bodu adoption |
+| [0020](adr/0020-ed25519-signing-key-semantics.md) | Ed25519 signing: seed interpretation, repository scope |
 
 Template: [0000](adr/0000-template.md)
 

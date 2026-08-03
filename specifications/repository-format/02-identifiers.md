@@ -63,6 +63,7 @@ Because the key is repository-scoped, two writers in the same repository derive 
 | Snapshot manifest | `0x04` | A snapshot root |
 | Policy manifest | `0x05` | Effective capture configuration |
 | Error manifest | `0x06` | Uncapturable paths |
+| *Reserved* | `0x07` | Not an object type. Used as the domain separator in the store-blob-key derivation (§4.3) and MUST NOT be assigned to a record `object_type` — assigning it would collide a future object's identifier space with every existing store key |
 
 Binding the type into the derivation means a record cannot be reinterpreted as a manifest, or the reverse, even if their plaintexts were somehow identical.
 
@@ -83,6 +84,8 @@ blob_id = writer_id[0..8] ‖ u64(blob_counter)
 ```
 
 `blob_counter` is a per-writer monotonic counter drawn from the writer's journal sequence space. An implementation MAY instead use 16 random bytes from a CSPRNG; both satisfy the requirement, and a writer MAY combine them by keying the concatenation, provided the result is unique and allocatable in advance.
+
+Nothing downstream depends on which formation was chosen: the blob-key derivation inputs — including the full `writer_id` — are carried explicitly in the blob's cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)), so a reader never needs to extract anything from a `blob_id`.
 
 ### 4.1 Why this is not content-derived
 
@@ -105,6 +108,8 @@ store_blob_key = HMAC-SHA256(key = key_id_key, message = 0x07 ‖ blob_id)[0..16
 ```
 
 The mapping is deterministic and reversible only by a holder of `key_id_key`, so writers and readers agree on the key while the store learns nothing from it.
+
+**What this does and does not hide.** The rendering keeps writer identity out of store *keys* — the names a store operator can list without reading anything. It does not hide the `writer_id` carried in each blob's cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)): an operator who reads object *contents* can still partition blobs by writer. That was already true of the structured `blob_id` inside the envelope, and it is a recorded residual of [T-11](../../docs/threat-model.md#t-11-metadata-side-channels), not something this construction claims to prevent. The envelope needs the full `writer_id` because it is a blob-key derivation input.
 
 ## 5 Rendering
 

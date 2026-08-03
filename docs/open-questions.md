@@ -133,7 +133,7 @@ Either answer preserves the core decision: because the hint may go stale, compac
 
 ## Q12 — XChaCha20-Poly1305 has no second implementation to check against
 
-**Owner:** engineering, with security review · **Blocks:** format v1 freeze · **ADR:** [0019](adr/0019-third-party-dependency-policy.md) · **Specification:** [03 §6.2](../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from)
+**Owner:** engineering, with security review · **Blocks:** format v1 freeze · **ADR:** [0019](adr/0019-third-party-dependency-policy.md) · **Specification:** [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)
 
 The format admits two AEAD profiles. `aes-256-gcm-v1` uses a platform primitive. `xchacha20-poly1305-v1` cannot: .NET provides `ChaCha20Poly1305` (RFC 8439, 12-byte nonce) and **not** the 24-byte extended-nonce variant, so that profile requires a third-party implementation.
 
@@ -144,10 +144,29 @@ An unverified AEAD is worse than an unverified KDF. A KDF defect makes keys weak
 | Option | Trade |
 |--------|-------|
 | **Find a second implementation and cross-verify** | Matches the Argon2id posture. Depends on one existing and being maintained. |
-| **Drop the profile before freeze** | `aes-256-gcm-v1` alone is sufficient and 03 §6.2 already lets an implementer omit the extended-nonce profile. Costs the non-AES-hardware performance case. |
+| **Drop the profile before freeze** | `aes-256-gcm-v1` alone is sufficient and 03 §6.1 already lets an implementer omit the extended-nonce profile. Costs the non-AES-hardware performance case. |
 | **Ship it unverified, flagged** | Cheapest now, and the option that ages worst — an unverified primitive is hardest to remove after repositories exist that use it. |
 
 **Recommendation:** decide at the freeze gate, and prefer dropping the profile over shipping it unverified. It costs nothing while unused, but a format version cannot un-admit a profile once written repositories depend on it.
+
+**Not decided.**
+
+---
+
+## Q13 — Device-level signature attribution
+
+**Owner:** engineering, with security review · **Blocks:** nothing in v1 · **ADR:** [0020](adr/0020-ed25519-signing-key-semantics.md) · **Finding:** the signing key derives from the shared master key, so signatures cannot attribute anything to a single device
+
+[ADR-0020](adr/0020-ed25519-signing-key-semantics.md) settled format v1: signatures are **repository-scoped** — they prove "a holder of the master key at generation *g* produced this" and no more. `device_id` and `writer_id` are attribution by claim, tamper-evident once signed but chosen freely by the signer. One repository member impersonating another is undetectable cryptographically; the mitigation is the writer-identity conflict alert ([T-18](threat-model.md#t-18-writer-identity-cloning)).
+
+What remains open is whether a later format version should add **per-device signing keys**: device keypairs, an enrolment flow, a public-key registry object with its own integrity rules, and revocation. That buys real attribution — a compromised member can no longer sign as its neighbours — at the cost of a new object type and a trust bootstrap the current format deliberately avoids.
+
+| Option | Trade |
+|--------|-------|
+| **Stay repository-scoped** | No new surface; multi-user trust rests on the conflict alert and on not admitting untrusted members |
+| **Per-device keys + registry** | True attribution and member revocation; new object type, enrolment, registry integrity, key-loss recovery per device |
+
+**Recommendation:** revisit when repository-server mode (Q9) is designed — multi-user households are where attribution starts to matter, and the two designs share an administrative surface.
 
 **Not decided.**
 

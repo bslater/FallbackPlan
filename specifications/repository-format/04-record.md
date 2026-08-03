@@ -41,7 +41,7 @@ The header is **not** unauthenticated, however. It is bound into the AEAD associ
 |-------|-----------|
 | `record_marker` | MUST be `0x52`. A reader scanning for records uses it as a cheap first filter, never as proof. |
 | `ordinal` | MUST equal the record's zero-based position in the blob. MUST be strictly increasing. MUST NOT exceed 65 535. |
-| `logical_length` | For a segment, the plaintext byte count. MUST be 0 only for the empty-file sentinel. |
+| `logical_length` | For a segment, the plaintext byte count. MUST be ≥ 1 — a zero-length file produces no segments and no records at all ([09 §2](09-segmentation.md#2-fixed-v1)), so a record with `logical_length` 0 cannot exist and a reader MUST treat one as a damage finding. |
 | `stored_length` | MUST be ≤ 64 MiB ([00 §8](00-conventions.md#8-lengths-and-limits)). |
 | `compression_profile` | `0x0000` = none. When none, `stored_length` equals `logical_length`. |
 

@@ -29,7 +29,7 @@ Stored at `/index/delta/<generation>/<delta-id>`, encrypted as a metadata record
 | 6 | array | `covered_blob_ids` — array of bytes[16] |
 | 7 | array | `entries` (§2.1) |
 | 8 | bool | `is_void` — present and true only for a void delta (§4) |
-| 9 | bytes[64] | `signature` |
+| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
 
 ### 2.1 Index entry
 
@@ -96,7 +96,7 @@ Stored at `/index/checkpoint/<generation>/<checkpoint-id>`.
 | 6 | bytes[16] | `predecessor_checkpoint_id` |
 | 7 | array | `entries` — as §2.1 |
 | 8 | bytes[16] | `writer_id` |
-| 9 | bytes[64] | `signature` |
+| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature) |
 
 A reader applies a checkpoint and then **any delta whose `sequence` exceeds that checkpoint's watermark for its writer** — whether or not a store listing revealed it. This is what removes the dependency on listing freshness: a delta written moments ago and not yet visible in a listing is still applied when found, and its absence is detectable via the sequence chain.
 

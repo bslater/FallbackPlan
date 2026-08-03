@@ -33,7 +33,7 @@ These are recorded limitations, not vulnerabilities. Reporting them is welcome i
 | Stored record lengths leak compressed sizes | [T-11](docs/threat-model.md#t-11-metadata-side-channels) |
 | Deduplication hits confirm content to repository members | [T-12](docs/threat-model.md#t-12-dedup-confirmation-by-a-repository-member) |
 | Relays observe the communication graph | [T-13](docs/threat-model.md#t-13-relay-traffic-analysis) |
-| AES-GCM is not key-committing | [03 §6.1](specifications/repository-format/03-keys.md#61-a-note-for-the-security-review) |
+| AES-GCM is not key-committing | [03 §6.2](specifications/repository-format/03-keys.md#62-a-note-for-the-security-review) |
 | A compromised source reads plaintext before encryption | [Threat model](docs/threat-model.md#threats-not-solvable-by-backup-software) |
 
 ## What this software cannot do

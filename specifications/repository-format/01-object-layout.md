@@ -15,8 +15,8 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 ```text
 /repository-format
 /keys/<key-id>
-/blobs/data/<shard>/<blob-id>
-/blobs/meta/<shard>/<blob-id>
+/blobs/data/<shard>/<store-blob-key>
+/blobs/meta/<shard>/<store-blob-key>
 /index/delta/<generation>/<delta-id>
 /index/checkpoint/<generation>/<checkpoint-id>
 /snapshots/<device-id>/<backup-set-id>/<snapshot-id>
@@ -26,7 +26,7 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /audit/<period>/<record-id>
 ```
 
-`<shard>` is the **first four characters** of the base32-rendered blob identifier. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories.
+`<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).
 
 `<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` follows the same rule.
 
@@ -64,7 +64,7 @@ The magic string is checked first. An object that does not begin with it is not 
 | Key | Type | Value |
 |-----|------|-------|
 | 1 | bytes[16] | `repository_id` — random at creation, never reused |
-| 2 | u16 | `format_version`, repeated inside the authenticated body |
+| 2 | u16 | `format_version`, repeated inside the digest-covered body — a corruption check against the framing copy, **not** a defence against deliberate downgrade, because the digest is unkeyed (§3.1) |
 | 3 | array | `required_features` — array of u16 feature identifiers |
 | 4 | array | `optional_features` — array of u16 feature identifiers |
 | 5 | map | `kdf_parameters` (§3.3) |

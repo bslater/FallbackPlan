@@ -23,7 +23,7 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 | 3 | u64 | `sequence` |
 | 4 | u64 | `issued_at` |
 | 5 | map | `payload` — per kind, §3–§6 |
-| 6 | bytes[64] | `signature` |
+| 6 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–5; semantics as [06 §6.1](06-manifests.md#61-signature). The record carries no generation field, so a reader verifies against the signing key of each generation from the key bundle's current value downward and accepts the first that verifies — generations are few, monotonic, and enumerable from the bundle |
 
 `sequence` shares the writer's single monotonic gapless sequence space with index deltas ([07 §4](07-index.md#4-sequence-gaps-and-void-deltas)). One sequence per writer, not one per record type — a gap is then detectable regardless of which kind of record is missing.
 

@@ -110,6 +110,8 @@ This is not a performance concern. A parser that allocates from an unvalidated l
 | Maximum records per blob | 65 536 |
 | Maximum blob size | 512 MiB |
 | Maximum metadata object size | 16 MiB |
+| Maximum repository descriptor CBOR body | 65 536 bytes ([01 §3.1](01-object-layout.md#31-framing)) |
+| Maximum key object CBOR bundle | 4 096 bytes ([03 §3](03-keys.md#3-the-key-object)) |
 | Maximum segment references per file-version manifest | 1 048 576 |
 | Maximum path component length | 1 024 bytes |
 | Maximum path depth | 512 components |

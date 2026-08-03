@@ -100,9 +100,18 @@ These are requirements on the suite, not aspirations:
 
 **XChaCha20-Poly1305 with random 192-bit nonces throughout.** Viable — the extended nonce makes random selection safe. Rejected as the sole scheme because AES-GCM is significantly faster on hardware with AES-NI, and the per-blob construction makes both suites safe uniformly rather than making safety a property of the suite choice.
 
+## Amendment 3 — key wrapping is fixed to AES-256-GCM
+
+A specification review found that the key object's fixed 12-byte `wrap_nonce` field cannot represent `xchacha20-poly1305-v1`, whose nonce is 24 bytes — the layout admitted a profile it could not encode. Format v1 therefore fixes `kek_profile` to `aes-256-gcm-v1`.
+
+The wrap happens once per repository open, so the hardware-acceleration argument that justifies offering both suites for records does not apply; and the extended-nonce profile's own future is open ([Q12](../open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against)). The record-level suite choice is unchanged.
+
+*Rejected alternative:* a variable-length nonce field sized by `kek_profile`. It makes every subsequent offset in a fixed-layout header depend on a profile lookup, for the benefit of a profile that may not survive the freeze.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Requires external cryptographic review before format v1 freeze |
 | 2026-08 | Accepted (amended) | Construction unchanged. Amendment 1 binds writer identity into derivation (PT-13); Amendment 2 makes the spool checkpoint store sealed bytes (PT-1, critical). External cryptographic review still required before freeze, and must cover AES-GCM key commitment (PT-15). |
+| 2026-08 | Accepted (amended) | Amendment 3 fixes KEK wrapping to `aes-256-gcm-v1` — the 12-byte `wrap_nonce` field cannot carry the extended-nonce profile. |

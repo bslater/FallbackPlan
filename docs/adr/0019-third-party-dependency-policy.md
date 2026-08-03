@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-08
 **Requirements:** NFR-SEC-002, NFR-SUP-001..002, NFR-PORT-001
-**Related:** [ADR-0001](0001-licence-and-contribution-model.md), [ADR-0004](0004-segment-hash-function.md), [ADR-0005](0005-aead-suite-and-nonce-construction.md), [`../../specifications/repository-format/03-keys.md` §6.2](../../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from)
+**Related:** [ADR-0001](0001-licence-and-contribution-model.md), [ADR-0004](0004-segment-hash-function.md), [ADR-0005](0005-aead-suite-and-nonce-construction.md), [`../../specifications/repository-format/03-keys.md` §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)
 
 ---
 
@@ -43,7 +43,7 @@ A dependency may enter the format-critical path only if **all five** hold, each 
 
 Gate 1 is unsatisfiable for Argon2id and XChaCha20-Poly1305. Where that happens the rule is not to relax the gate quietly but to **record the exception, contain it, and compensate for it**:
 
-- the primitive is named in [specification 03 §6.2](../../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from), with its source and status, so an implementer reads the exposure in the normative text rather than inferring it from a package manifest;
+- the primitive is named in [specification 03 §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from), with its source and status, so an implementer reads the exposure in the normative text rather than inferring it from a package manifest;
 - it is confined to `Repository.Crypto` and may not be referenced from any other project, enforced by `ArchitectureTests` rather than by convention;
 - where a second independent implementation exists, CI cross-verifies against it on every run;
 - where none exists, that is written down as a gap rather than left unstated;
@@ -114,7 +114,7 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 
 **Write Argon2id and XChaCha20-Poly1305 ourselves.** Rejected without hesitation. Specification 03 §1 forbids it, and a self-written KDF standing between a stolen repository and its plaintext is the defect class this project cannot recover from.
 
-**Drop XChaCha20-Poly1305 from the format.** Genuinely open. `aes-256-gcm-v1` alone is sufficient, and specification 03 §6.2 already permits an implementer to omit the profile. Not decided here because the profile costs nothing while unused, and the format freeze gate is the right point to decide whether an unverifiable profile should ship at all.
+**Drop XChaCha20-Poly1305 from the format.** Genuinely open. `aes-256-gcm-v1` alone is sufficient, and specification 03 §6.1 already permits an implementer to omit the profile. Not decided here because the profile costs nothing while unused, and the format freeze gate is the right point to decide whether an unverifiable profile should ship at all.
 
 **Vendor Bodu by copying sources.** Rejected. It severs upstream history, makes provenance unauditable, and turns every upstream fix into a manual merge.
 

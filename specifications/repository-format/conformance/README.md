@@ -79,7 +79,7 @@ Passing these vectors is necessary and not sufficient. A reader claiming conform
 
 ## Cross-implementation verification
 
-Two of the primitives this format needs have no platform implementation, so they come from a third party and do not inherit the platform's audit posture ([03 §6.2](../03-keys.md#62-where-each-primitive-comes-from)). Where a second independent implementation exists, CI checks them against each other:
+Two of the primitives this format needs have no platform implementation, so they come from a third party and do not inherit the platform's audit posture ([03 §6.1](../03-keys.md#61-where-each-primitive-comes-from)). Where a second independent implementation exists, CI checks them against each other:
 
 | Primitive | Second implementation | Result |
 |-----------|----------------------|--------|

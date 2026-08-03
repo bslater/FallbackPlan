@@ -126,7 +126,7 @@ The neutral model exists so that the same import pipeline serves restic, Kopia, 
 | Recovery tool | Native AOT under evaluation | After compatibility is established |
 | SHA-256, HMAC, HKDF, AES-256-GCM | Platform (`System.Security.Cryptography`) | In-box and audited |
 | Argon2id | `Bodu.Security.Cryptography` | **No platform implementation exists** — [ADR-0019](../adr/0019-third-party-dependency-policy.md) |
-| XChaCha20-Poly1305 | Third-party, not yet selected | **No platform implementation exists.** .NET's `ChaCha20Poly1305` is the 12-byte-nonce RFC 8439 variant and is not a substitute — [spec 03 §6.2](../../specifications/repository-format/03-keys.md#62-where-each-primitive-comes-from) |
+| XChaCha20-Poly1305 | Third-party, not yet selected | **No platform implementation exists.** .NET's `ChaCha20Poly1305` is the 12-byte-nonce RFC 8439 variant and is not a substitute — [spec 03 §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from) |
 | General utilities | `Bodu.Core` | Referenced from `Repository.Packing` |
 
 ### 5.1 Vendored dependencies
