@@ -3,6 +3,8 @@
   <ItemGroup>
     <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Format\FallbackPlan.Repository.Format.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
   </ItemGroup>
 

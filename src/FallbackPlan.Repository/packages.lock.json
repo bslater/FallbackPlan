@@ -34,7 +34,9 @@
         "type": "Project",
         "dependencies": {
           "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
+          "FallbackPlan.Repository.Packing": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
         }
       },

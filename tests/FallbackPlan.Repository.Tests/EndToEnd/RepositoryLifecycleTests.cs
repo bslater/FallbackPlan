@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;

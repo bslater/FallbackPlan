@@ -1,4 +1,4 @@
-namespace FallbackPlan.Repository;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// Allocates monotonic per-writer blob counters (specification 02 §4). The
