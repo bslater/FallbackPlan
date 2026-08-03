@@ -1,0 +1,14 @@
+# Normalize everything git classifies as text to LF in the repository.
+* text=auto
+
+# The working tree is LF too, matching .editorconfig's end_of_line = lf, so
+# checkouts on Windows do not churn line endings.
+*.cs  text eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf
+
+# Never normalize binary artifacts.
+*.nupkg binary
+*.snk   binary
+*.png   binary
+*.ico   binary

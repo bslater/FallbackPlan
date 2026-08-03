@@ -1,0 +1,34 @@
+# external/packages — committed local NuGet feed
+
+This directory is the `bodu-local` package source declared in the repository's
+`nuget.config`. It carries the prebuilt Bodu packages that FallbackPlan
+consumes, committed to the repository so that a plain `git clone` and a GitHub
+"Download ZIP" both restore and build with no extra steps — including opening
+`FallbackPlan.slnx` directly in Visual Studio on Windows. See ADR-0021.
+
+## Contents and provenance
+
+| Package | Version | Origin |
+|---|---|---|
+| `Bodu.Core` | 0.1.0 | `local-packages/` feed of <https://github.com/bslater/bodu.git> at commit `1b16ae2d25c32ddd12f235a8ea453a22850764b6` |
+| `Bodu.Security.Cryptography` | 0.1.0 | same feed, same commit (depends on `Bodu.Core >= 0.1.0`) |
+
+The packages target `net8.0` and are consumed by the `net10.0` projects via
+NuGet's nearest-TFM selection. Versions are pinned centrally in
+`Directory.Packages.props`; `nuget.config`'s `packageSourceMapping` routes all
+`Bodu.*` IDs to this feed and everything else to nuget.org.
+
+## Upgrading Bodu
+
+An upgrade is a deliberate, reviewed change — not an automatic pull:
+
+1. In a checkout of the upstream Bodu repository at the commit you want,
+   pack the two libraries (`dotnet pack Bodu.Core/src -c Release` and
+   `dotnet pack Bodu.Security.Cryptography/src -c Release`), or take the
+   nupkgs from its `local-packages/` feed if they are current.
+2. Replace the `.nupkg` files here and update the table above (version and
+   upstream commit SHA).
+3. Bump the two `PackageVersion` entries in `Directory.Packages.props`.
+4. Regenerate lockfiles (`dotnet restore FallbackPlan.slnx`) and run the full
+   verification sweep (conformance vectors, build, tests, `eng/` checks)
+   before committing.

@@ -40,27 +40,15 @@
        time. CI restores in locked mode so a drifted lockfile fails rather
        than silently regenerating.
 
-       This file does not reach external/bodu — the submodule has its own
-       Directory.Build.props, which stops MSBuild's upward search. That
-       shielding is what makes a repo-root lockfile property safe to set. -->
+       Bodu is consumed as prebuilt packages from the committed
+       external/packages feed (ADR-0021), so every project this file reaches
+       is our own, and the Bodu packages sit inside the audit and lockfile
+       graph like any other package. -->
   <PropertyGroup>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
     <NuGetAuditLevel>low</NuGetAuditLevel>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-  </PropertyGroup>
-
-  <!-- Global properties applied to every ProjectReference into the vendored
-       Bodu submodule. Vendored code is held to its own repository's standards,
-       not ours (ADR-0019) — and this must be ONE property, not three hand-
-       maintained copies: the copies had already drifted, and differing
-       property strings make MSBuild build the same Bodu project once per
-       distinct set. The earlier NoWarn=$(NoWarn) passthrough is gone for the
-       same reason — src and tests expand $(NoWarn) differently, which split
-       the property sets again; with warnings unpromoted and analyzers off,
-       Bodu needs no NoWarn from us. -->
-  <PropertyGroup>
-    <BoduProjectProperties>RunAnalyzers=false;EnforceCodeStyleInBuild=false;TreatWarningsAsErrors=false;GenerateDocumentationFile=false</BoduProjectProperties>
   </PropertyGroup>
 
   <PropertyGroup>

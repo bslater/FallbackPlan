@@ -260,25 +260,26 @@ public sealed class DependencyRuleTests
     /// list on purpose. Repository.Crypto currently contains only an assembly
     /// marker, so the compiler emits no reference to a library no code has
     /// called yet — an assembly-level assertion would fail today for a reason
-    /// that has nothing to do with the rule. The project reference is the
-    /// containment that exists right now, so it is the thing to pin.
+    /// that has nothing to do with the rule. The package reference (from the
+    /// committed external/packages feed, ADR-0021) is the containment that
+    /// exists right now, so it is the thing to pin.
     /// </summary>
     [Fact]
     public void Repository_Crypto_is_where_third_party_cryptography_actually_lives()
     {
-        AssertProjectReferences("FallbackPlan.Repository.Crypto", "Bodu.Security.Cryptography.csproj");
+        AssertProjectReferences("FallbackPlan.Repository.Crypto", "<PackageReference Include=\"Bodu.Security.Cryptography\" />");
     }
 
     /// <summary>
-    /// Same canary pattern for the other vendored reference: Repository.Packing
-    /// is where Bodu.Core lives (ADR-0019). If that reference moves or is
+    /// Same canary pattern for the other Bodu reference: Repository.Packing
+    /// is where Bodu.Core lives (ADR-0021). If that reference moves or is
     /// removed, this fails, and whoever made the change decides deliberately
     /// whether the containment rules above still cover what they should.
     /// </summary>
     [Fact]
-    public void Repository_Packing_is_where_the_vendored_utility_library_actually_lives()
+    public void Repository_Packing_is_where_the_bodu_utility_library_actually_lives()
     {
-        AssertProjectReferences("FallbackPlan.Repository.Packing", "Bodu.Core.csproj");
+        AssertProjectReferences("FallbackPlan.Repository.Packing", "<PackageReference Include=\"Bodu.Core\" />");
     }
 
     private static void AssertProjectReferences(string projectName, string expectedReference)
