@@ -68,3 +68,4 @@ BenchmarkDotNet.Artifacts/
 # The committed local NuGet feed (ADR-0021): the Bodu nupkgs there are
 # tracked inputs, not build output.
 !external/packages/*.nupkg
+__pycache__/
