@@ -1,6 +1,6 @@
 using FallbackPlan.Domain.Identifiers;
 
-namespace FallbackPlan.Repository;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// One logical segment of a file version — exactly the triple a file-version
