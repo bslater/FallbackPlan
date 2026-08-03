@@ -100,7 +100,7 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 | F1 | Interruption harness at every persistence boundary | NFR-REL-001, NFR-REL-005 | Kill at each step in [08 §10](../specifications/repository-format/08-journal.md#10-publication-order); every published snapshot stays readable |
 | F2 | Corruption harness | NFR-REL-004, FR-MAN-011 | Bit flips, truncation, missing blobs, forged identifiers, replayed snapshots — each detected and scoped |
 | F3 | Fuzzing of every binary parser | NFR-PORT-003 | No crash, no unbounded allocation, on any input |
-| F4 | Benchmarks against the stated targets | NFR-PERF-001..015 | Published numbers; **targets revised with the revision recorded**, per [Q7](open-questions.md#q7--performance-targets) |
+| F4 | Benchmarks against the stated targets | NFR-PERF-001..015 | Published numbers; **targets revised with the revision recorded**, per [Q7](open-questions.md#q7--performance-targets). First round published at reduced scale in [`phase-0-benchmarks.md`](phase-0-benchmarks.md) — the scale caveats are part of the publication |
 | F5 | Low-level CLI | — | `archive`, `inspect-blob`, `inspect-manifest`, `rebuild-index`, `verify`, `restore-file` |
 | F6 | Synthetic legacy source adapter | FR-CP-002 | An arbitrary byte stream plus a provenance record traverses the same pipeline |
 | F7 | Fixture repositories | NFR-COMP-004 | Committed under `conformance/fixtures/`; synthetic only |
