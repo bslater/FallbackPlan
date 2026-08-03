@@ -1,18 +1,24 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository;
 
-/// <summary>One blob the archiver sealed and uploaded.</summary>
+/// <summary>
+/// One blob the archiver sealed and uploaded — including its record table,
+/// in memory, which is what index-delta publication projects entries from
+/// (specification 07 §10: every index-entry field is present in the footer).
+/// </summary>
 public sealed record ArchivedBlob(
     BlobId BlobId,
     StoreBlobKey StoreBlobKey,
     ObjectKey StoreKey,
     IReadOnlyList<byte> Digest,
     int RecordCount,
-    long Length);
+    long Length,
+    IReadOnlyList<RecordTableEntry> RecordTable);
 
 /// <summary>
 /// The outcome of archiving one file version: the ordered logical segment

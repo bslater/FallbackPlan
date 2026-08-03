@@ -22,11 +22,11 @@ namespace FallbackPlan.Repository;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Uploading is not publication</b> (specification 05 §7): no write intent
-/// precedes these uploads yet, and nothing here publishes a snapshot. Write
-/// intents (specification 08 §3.1) arrive with Wave D, before any real
-/// publication path exists — this type is the record path and container, not
-/// the publication engine.
+/// <b>Uploading is not publication</b> (specification 05 §7): nothing here
+/// publishes a snapshot — that is <see cref="PublicationOrchestrator"/>'s
+/// job. When an <see cref="IIntentScope"/> is supplied, every blob's upload
+/// is preceded by a durable covering intent (specification 08 §3.1); without
+/// one, this type serves non-publishing paths — tests, probes, tools.
 /// </para>
 /// <para>
 /// An <c>AlreadyExists</c> outcome on upload is idempotent-retry success:
@@ -45,6 +45,7 @@ public sealed class FileArchiver
     private readonly IBlobCounterAllocator _counters;
     private readonly string _spoolDirectory;
     private readonly SpoolPinnedConfiguration _pinned;
+    private readonly IIntentScope? _intentScope;
 
     /// <summary>Creates an archiver over a validated policy.</summary>
     /// <exception cref="ArgumentException">The policy is invalid — the message names each defect (FR-ARCH-007).</exception>
@@ -56,7 +57,8 @@ public sealed class FileArchiver
         RepositoryKeySet keys,
         IObjectStore store,
         IBlobCounterAllocator counters,
-        string spoolDirectory)
+        string spoolDirectory,
+        IIntentScope? intentScope = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(keys);
@@ -83,6 +85,7 @@ public sealed class FileArchiver
         _store = store;
         _counters = counters;
         _spoolDirectory = spoolDirectory;
+        _intentScope = intentScope;
     }
 
     /// <summary>Archives <paramref name="source"/> as a new file version.</summary>
@@ -282,6 +285,14 @@ public sealed class FileArchiver
             var storeBlobKey = storeKeyDeriver.Derive(sealedBlob.BlobId);
             var storeKey = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeBlobKey);
 
+            // 08 §3.1: no blob is uploaded before an unretired intent naming
+            // it is durable. The scope publishes the covering extension and
+            // awaits durability before the put leaves this process.
+            if (_intentScope is not null)
+            {
+                await _intentScope.EnsureCoveredAsync(sealedBlob.BlobId, cancellationToken).ConfigureAwait(false);
+            }
+
             var put = await _store.PutAsync(storeKey, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -296,7 +307,8 @@ public sealed class FileArchiver
                 storeKey,
                 sealedBlob.Digest,
                 sealedBlob.RecordTable.Count,
-                sealedBlob.Length));
+                sealedBlob.Length,
+                sealedBlob.RecordTable));
         }
 
         await writer.DisposeAsync().ConfigureAwait(false);

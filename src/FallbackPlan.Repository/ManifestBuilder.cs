@@ -30,6 +30,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
     private readonly byte[] _metadataClassKey;
     private readonly List<ArchivedBlob> _blobs = [];
+    private readonly IIntentScope? _intentScope;
     private BlobWriter? _writer;
 
     /// <summary>Creates a builder writing metadata blobs under <paramref name="blobProfile"/>.</summary>
@@ -41,7 +42,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         IObjectStore store,
         IBlobCounterAllocator counters,
         string spoolDirectory,
-        BlobWriteProfile blobProfile)
+        BlobWriteProfile blobProfile,
+        IIntentScope? intentScope = null)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(store);
@@ -57,6 +59,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         _counters = counters;
         _spoolDirectory = spoolDirectory;
         _blobProfile = blobProfile;
+        _intentScope = intentScope;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         _metadataClassKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
@@ -200,6 +203,13 @@ public sealed class ManifestBuilder : IAsyncDisposable
             var storeBlobKey = _storeKeyDeriver.Derive(sealedBlob.BlobId);
             var storeKey = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeBlobKey);
 
+            // Metadata blobs are blobs: the 08 §3.1 rule has no exception
+            // for them.
+            if (_intentScope is not null)
+            {
+                await _intentScope.EnsureCoveredAsync(sealedBlob.BlobId, cancellationToken).ConfigureAwait(false);
+            }
+
             var put = await _store.PutAsync(storeKey, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -214,7 +224,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 storeKey,
                 sealedBlob.Digest,
                 sealedBlob.RecordTable.Count,
-                sealedBlob.Length));
+                sealedBlob.Length,
+                sealedBlob.RecordTable));
         }
 
         await _writer.DisposeAsync().ConfigureAwait(false);
