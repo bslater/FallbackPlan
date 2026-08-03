@@ -32,7 +32,8 @@ public sealed class ArchiveResult
         long logicalLength,
         IReadOnlyList<byte> wholeFileHash,
         SegmentationProfile segmentationProfile,
-        SegmentSize segmentSize)
+        SegmentSize segmentSize,
+        CdcParameters? cdcParameters)
     {
         SegmentReferences = segmentReferences;
         SegmentContentIds = segmentContentIds;
@@ -41,6 +42,7 @@ public sealed class ArchiveResult
         WholeFileHash = wholeFileHash;
         SegmentationProfile = segmentationProfile;
         SegmentSize = segmentSize;
+        CdcParameters = cdcParameters;
     }
 
     /// <summary>The ordered logical segment references.</summary>
@@ -64,8 +66,11 @@ public sealed class ArchiveResult
     /// <summary>The segmentation profile this version used.</summary>
     public SegmentationProfile SegmentationProfile { get; }
 
-    /// <summary>The segment size this version used.</summary>
+    /// <summary>The segment size this version used (fixed-v1).</summary>
     public SegmentSize SegmentSize { get; }
+
+    /// <summary>The cdc parameters this version used (cdc-v1); part of the reuse key (specification 09 §5).</summary>
+    public CdcParameters? CdcParameters { get; }
 
     /// <summary>The number of records this archive run wrote.</summary>
     public int RecordsWritten => Blobs.Sum(blob => blob.RecordCount);

@@ -33,6 +33,22 @@ public abstract class ArchiveTestHarness : IDisposable
         },
     };
 
+    /// <summary>
+    /// cdc-v1 at the conformance-vector parameters (target 64 KiB, min 8 KiB,
+    /// max 512 KiB), with blob targets sized so the maximum segment still
+    /// fits one blob.
+    /// </summary>
+    protected static CapturePolicy CdcPolicy { get; } = CapturePolicy.Default with
+    {
+        SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
+        CdcParameters = CdcParameters.Create(64 * 1024, 8 * 1024, 512 * 1024),
+        BlobWriteProfile = BlobWriteProfile.LocalDefault with
+        {
+            TargetSizeBytes = 1024 * 1024,
+            MaximumSizeBytes = 2 * 1024 * 1024,
+        },
+    };
+
     /// <summary>The store root on disk — corruption probes reach beneath the interface here.</summary>
     protected string StoreRoot => Path.Combine(_root, "store");
 
@@ -44,14 +60,21 @@ public abstract class ArchiveTestHarness : IDisposable
     protected static RepositoryKeySet CreateKeys() =>
         RepositoryKeySet.FromMasterKey(Enumerable.Range(0, 32).Select(value => (byte)value).ToArray());
 
-    protected FileArchiver CreateArchiver(LocalFileSystemObjectStore store, RepositoryKeySet keys) => new(
-        SmallBlobPolicy,
+    protected FileArchiver CreateArchiver(LocalFileSystemObjectStore store, RepositoryKeySet keys) =>
+        CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 1);
+
+    protected FileArchiver CreateArchiver(
+        LocalFileSystemObjectStore store,
+        RepositoryKeySet keys,
+        CapturePolicy policy,
+        ulong firstCounter) => new(
+        policy,
         Repo,
         Writer,
         KeyGeneration.Zero,
         keys,
         store,
-        new MonotonicBlobCounterAllocator(1),
+        new MonotonicBlobCounterAllocator(firstCounter),
         SpoolDirectory);
 
     /// <summary>

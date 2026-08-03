@@ -86,13 +86,14 @@ public sealed class FileArchiver
         ArchiveAsync(source, priorVersion: null, cancellationToken);
 
     /// <summary>
-    /// Archives <paramref name="source"/>, positionally comparing against
-    /// <paramref name="priorVersion"/> (specification 09 §6; FR-ARCH-004):
-    /// segment <em>i</em> whose content identifier and logical length equal
-    /// the prior version's segment <em>i</em> is reused — its existing
-    /// reference is emitted and no record is written. Reuse requires the
-    /// segmentation profile and parameters to match exactly (09 §5); a
-    /// mismatch re-archives in full, never mixes parameters.
+    /// Archives <paramref name="source"/>, comparing against
+    /// <paramref name="priorVersion"/> (specification 09 §6 step 4;
+    /// FR-ARCH-004): positionally under <c>fixed-v1</c>, by content
+    /// identifier across the whole prior version under <c>cdc-v1</c>. A
+    /// reused segment emits its existing reference and writes no record.
+    /// Reuse requires the segmentation profile and parameters to match
+    /// exactly (09 §5); a mismatch re-archives in full, never mixes
+    /// parameters.
     /// </summary>
     /// <remarks>
     /// The prior content identifiers come from the in-memory
@@ -103,21 +104,41 @@ public sealed class FileArchiver
     {
         ArgumentNullException.ThrowIfNull(source);
 
+        var usesCdc = _policy.SegmentationProfile == SegmentationProfile.CdcV1;
+
+        // The reuse key (09 §5): content identifier + logical length +
+        // segmentation profile + segmentation parameters, all matching.
         var comparable = priorVersion is not null &&
             priorVersion.SegmentationProfile == _policy.SegmentationProfile &&
-            priorVersion.SegmentSize == _policy.SegmentSize;
+            (usesCdc
+                ? priorVersion.CdcParameters == _policy.CdcParameters
+                : priorVersion.SegmentSize == _policy.SegmentSize);
+
+        // cdc-v1 compares by content across the whole prior version — an
+        // insertion shifts positions but not content (09 §3.2, §6).
+        Dictionary<ContentId, (ObjectId ObjectId, long Length)>? priorByContent = null;
+        if (comparable && usesCdc)
+        {
+            priorByContent = new Dictionary<ContentId, (ObjectId, long)>(priorVersion!.SegmentReferences.Count);
+            for (var i = 0; i < priorVersion.SegmentReferences.Count; i++)
+            {
+                priorByContent.TryAdd(
+                    priorVersion.SegmentContentIds[i],
+                    (priorVersion.SegmentReferences[i].ObjectId, priorVersion.SegmentReferences[i].LogicalLength));
+            }
+        }
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
         var blobs = new List<ArchivedBlob>();
         var classKey = _keys.DeriveClassKey(BlobClass.Data, _generation);
-        var segmentBuffer = ArrayPool<byte>.Shared.Rent(_policy.SegmentSize.Bytes);
-        var compressed = ArrayPool<byte>.Shared.Rent(_policy.SegmentSize.Bytes);
+        var segmentBuffer = ArrayPool<byte>.Shared.Rent(_policy.MaximumSegmentBytes);
+        var compressed = ArrayPool<byte>.Shared.Rent(_policy.MaximumSegmentBytes);
         using var objectIdDeriver = new ObjectIdDeriver(_keys.ContentIdKey);
         using var storeKeyDeriver = new StoreBlobKeyDeriver(_keys.KeyIdKey);
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var codec = _policy.Compression.Profile == CompressionProfile.ZstdV1
-            ? new ZstdSegmentCodec(_policy.Compression.ZstdLevel, _policy.SegmentSize)
+            ? new ZstdSegmentCodec(_policy.Compression.ZstdLevel, _policy.MaximumSegmentBytes)
             : null;
 
         BlobWriter? writer = null;
@@ -125,7 +146,9 @@ public sealed class FileArchiver
 
         try
         {
-            var segmentReader = new FixedSegmentReader(source, _policy.SegmentSize);
+            ISegmentReader segmentReader = usesCdc
+                ? new CdcSegmentReader(source, _policy.CdcParameters!.Value)
+                : new FixedSegmentReader(source, _policy.SegmentSize);
 
             while (await segmentReader.ReadNextAsync(segmentBuffer, cancellationToken).ConfigureAwait(false) is { } segment)
             {
@@ -136,10 +159,21 @@ public sealed class FileArchiver
                 var contentId = ContentHasher.Hash(plaintext.Span);
                 wholeFile.AppendData(plaintext.Span);
 
-                // Positional reuse (09 §6): identical content at the same
-                // position of the prior version needs no new record — the
+                // Content-based reuse (09 §6, cdc-v1): the same bytes anywhere
+                // in the prior version need no new record.
+                if (priorByContent is not null &&
+                    priorByContent.TryGetValue(contentId, out var prior) &&
+                    prior.Length == segment.Length)
+                {
+                    references.Add(new SegmentReference(segment.Offset, segment.Length, prior.ObjectId));
+                    contentIds.Add(contentId);
+                    continue;
+                }
+
+                // Positional reuse (09 §6, fixed-v1): identical content at the
+                // same position of the prior version needs no new record — the
                 // existing object already carries these bytes.
-                if (comparable &&
+                if (comparable && !usesCdc &&
                     segment.Index < priorVersion!.SegmentReferences.Count &&
                     priorVersion.SegmentReferences[(int)segment.Index].LogicalLength == segment.Length &&
                     priorVersion.SegmentContentIds[(int)segment.Index] == contentId)
@@ -227,7 +261,8 @@ public sealed class FileArchiver
             logicalLength,
             hash,
             _policy.SegmentationProfile,
-            _policy.SegmentSize);
+            _policy.SegmentSize,
+            _policy.CdcParameters);
     }
 
     private async ValueTask SealAndUploadAsync(

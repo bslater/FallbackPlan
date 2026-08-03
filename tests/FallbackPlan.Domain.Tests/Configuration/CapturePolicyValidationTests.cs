@@ -17,14 +17,46 @@ public sealed class CapturePolicyValidationTests
     }
 
     [Fact]
-    public void Cdc_v1_is_refused_until_its_parameters_are_pinned()
+    public void Cdc_v1_with_validated_parameters_is_clean()
+    {
+        var policy = CapturePolicy.Default with
+        {
+            SegmentationProfile = SegmentationProfile.CdcV1,
+            CdcParameters = CdcParameters.Default,
+        };
+
+        Assert.True(policy.Validate().IsValid);
+    }
+
+    [Fact]
+    public void Cdc_v1_without_parameters_is_refused_by_name()
     {
         var policy = CapturePolicy.Default with { SegmentationProfile = SegmentationProfile.CdcV1 };
 
         var result = policy.Validate();
 
         Assert.False(result.IsValid);
-        Assert.True(result.Has("segmentation_cdc_parameters_not_pinned"));
+        Assert.True(result.Has("cdc_parameters_missing"));
+    }
+
+    [Fact]
+    public void Cdc_parameters_under_a_fixed_profile_are_refused_by_name()
+    {
+        var policy = CapturePolicy.Default with { CdcParameters = CdcParameters.Default };
+
+        Assert.True(policy.Validate().Has("cdc_parameters_without_cdc_profile"));
+    }
+
+    [Theory]
+    [InlineData(100_000, 12_500, 800_000)]        // target not a power of two
+    [InlineData(32 * 1024, 4 * 1024, 256 * 1024)] // target below 64 KiB
+    [InlineData(65_536, 8_191, 524_288)]          // min below target/8
+    [InlineData(65_536, 8_192, 524_289)]          // max above target*8
+    [InlineData(1_048_576, 900_000, 800_000)]     // min above max
+    public void Out_of_range_cdc_parameters_cannot_be_constructed(int target, int min, int max)
+    {
+        Assert.False(CdcParameters.TryCreate(target, min, max, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CdcParameters.Create(target, min, max));
     }
 
     [Fact]
@@ -78,9 +110,8 @@ public sealed class CapturePolicyValidationTests
         var result = policy.Validate();
 
         Assert.False(result.IsValid);
-        Assert.True(result.Defects.Count >= 4);
-        Assert.True(result.Has("segmentation_cdc_parameters_not_pinned"));
-        Assert.True(result.Has("segment_size_out_of_range"));
+        Assert.True(result.Defects.Count >= 3);
+        Assert.True(result.Has("cdc_parameters_missing"));
         Assert.True(result.Has("compression_level_out_of_range"));
         Assert.True(result.Has("compression_threshold_out_of_range"));
     }

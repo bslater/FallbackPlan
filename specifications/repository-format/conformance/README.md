@@ -27,7 +27,7 @@ The generator depends on nothing but the Python standard library. That is delibe
 | [`keys.json`](vectors/keys.json) | ✅ Yes | Your HKDF derivation and domain separation match the specification |
 | [`identifiers.json`](vectors/identifiers.json) | ✅ Yes | Your content and object identifiers match |
 | [`records.json`](vectors/records.json) | ✅ Yes | Your nonce and AAD construction match — record **and** footer AAD, as bytes |
-| [`segmentation.json`](vectors/segmentation.json) | ✅ Yes | Your `fixed-v1` boundaries match |
+| [`segmentation.json`](vectors/segmentation.json) | ✅ Yes | Your `fixed-v1` **and** `cdc-v1` boundaries match — the Rabin polynomial, tables, and boundary cases are computed here from the ADR-0023 rule |
 | [`compression.json`](vectors/compression.json) | ✅ Yes | Your threshold decisions match |
 | [`aes-gcm.json`](vectors/aes-gcm.json) | ❌ **No** — pinned constants, provenance per case | You use AES-256-GCM correctly, including AAD absorption over the format's real 55-byte AAD — see the note below |
 | [`argon2id.json`](vectors/argon2id.json) | ❌ **No** — pinned from two agreeing implementations | Your Argon2id matches both reference implementations at the mandated minimum parameters |
@@ -108,7 +108,6 @@ Recorded so they are visible rather than discovered:
 | AEAD record ciphertext vectors | See above — deliberate. One platform-derived *regression* case now exists in `aes-gcm.json`, labelled as such; it is not conformance evidence |
 | Confirmed-provenance AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
 | **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
-| `cdc-v1` boundary vectors | Rabin polynomial and per-byte table not yet pinned ([09 §3.1](../09-segmentation.md#31-definition)) |
 | Ed25519 signature vectors | Seed interpretation now fixed ([ADR-0020](../../../docs/adr/0020-ed25519-signing-key-semantics.md)); vectors await an implementation to produce them |
 | Negative vectors (rejection cases) | Fixture territory — e.g. a non-power-of-two `fixed-v1` segment size ([09 §2.2](../09-segmentation.md#22-parameters)) MUST be rejected, but every committed case happens to use a conforming size, so a non-enforcing implementation passes today |
 | Fixture repositories | Phase 0 |

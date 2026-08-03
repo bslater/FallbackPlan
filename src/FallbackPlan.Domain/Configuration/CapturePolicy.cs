@@ -32,8 +32,11 @@ public sealed record CapturePolicy
     /// <summary>The segmentation profile.</summary>
     public required SegmentationProfile SegmentationProfile { get; init; }
 
-    /// <summary>The fixed-v1 segment size.</summary>
+    /// <summary>The fixed-v1 segment size; ignored under cdc-v1.</summary>
     public required SegmentSize SegmentSize { get; init; }
+
+    /// <summary>The cdc-v1 parameters; required under cdc-v1, absent otherwise.</summary>
+    public CdcParameters? CdcParameters { get; init; }
 
     /// <summary>Compression policy.</summary>
     public required CompressionSettings Compression { get; init; }
@@ -48,6 +51,16 @@ public sealed record CapturePolicy
     public required DedupTrustDomain DedupTrustDomain { get; init; }
 
     /// <summary>
+    /// The largest segment this policy can produce — what bounds working
+    /// buffers (NFR-PERF-001): the fixed size under fixed-v1, the maximum
+    /// under cdc-v1.
+    /// </summary>
+    public int MaximumSegmentBytes =>
+        SegmentationProfile == SegmentationProfile.CdcV1
+            ? CdcParameters?.MaxSize ?? 0
+            : SegmentSize.Bytes;
+
+    /// <summary>
     /// Validates the whole policy, aggregating every named defect from every
     /// section.
     /// </summary>
@@ -57,18 +70,28 @@ public sealed record CapturePolicy
 
         if (SegmentationProfile == SegmentationProfile.CdcV1)
         {
-            // The rolling-hash parameters are not yet pinned; until they are, a
-            // portable repository must not be written with cdc-v1 (09 §3.1).
-            (defects ??= []).Add(new ConfigurationDefect(
-                "segmentation_cdc_parameters_not_pinned",
-                "cdc-v1 cannot be used yet: its rolling-hash polynomial and table are not pinned (specification 09 §3.1)."));
+            if (CdcParameters is not { TargetSize: > 0 })
+            {
+                (defects ??= []).Add(new ConfigurationDefect(
+                    "cdc_parameters_missing",
+                    "cdc-v1 requires validated parameters; construct them via CdcParameters.Create (specification 09 §3.1; ADR-0023)."));
+            }
         }
-
-        if (SegmentSize.Bytes == 0)
+        else
         {
-            (defects ??= []).Add(new ConfigurationDefect(
-                "segment_size_out_of_range",
-                "The segment size is unset; construct it via SegmentSize.Create (specification 09 §2.2)."));
+            if (SegmentSize.Bytes == 0)
+            {
+                (defects ??= []).Add(new ConfigurationDefect(
+                    "segment_size_out_of_range",
+                    "The segment size is unset; construct it via SegmentSize.Create (specification 09 §2.2)."));
+            }
+
+            if (CdcParameters is not null)
+            {
+                (defects ??= []).Add(new ConfigurationDefect(
+                    "cdc_parameters_without_cdc_profile",
+                    "cdc parameters are set but the segmentation profile is not cdc-v1 — one of the two is a mistake."));
+            }
         }
 
         if (!Enum.IsDefined(DedupTrustDomain))

@@ -72,6 +72,111 @@ def b32(data: bytes) -> str:
 
 
 # --------------------------------------------------------------------------
+# cdc-v1 Rabin fingerprint (specification 09 section 3, ADR-0023)
+#
+# Everything below is computed from the pinned polynomial with GF(2) integer
+# arithmetic -- no reference implementation involved, which is what lets
+# segmentation.json keep independently_derived = true.
+# --------------------------------------------------------------------------
+
+CDC_POLYNOMIAL_LOW = 0x1B                      # x^4 + x^3 + x + 1; the x^64 term is implicit
+CDC_MODULUS = (1 << 64) | CDC_POLYNOMIAL_LOW   # P(x) = x^64 + x^4 + x^3 + x + 1
+CDC_WINDOW = 64
+_M64 = (1 << 64) - 1
+
+
+def gf2_mod(value: int) -> int:
+    """Reduce a GF(2) polynomial (bits = coefficients) modulo P(x)."""
+    while value.bit_length() > 64:
+        value ^= CDC_MODULUS << (value.bit_length() - 65)
+    return value
+
+
+def _gf2_polymod(a: int, b: int) -> int:
+    """a mod b over GF(2), for arbitrary modulus b (used by the gcd below)."""
+    db = b.bit_length()
+    while a.bit_length() >= db:
+        a ^= b << (a.bit_length() - db)
+    return a
+
+
+def _gf2_mulmod(a: int, b: int) -> int:
+    """(a * b) mod P over GF(2)."""
+    r = 0
+    while b:
+        if b & 1:
+            r ^= a
+        b >>= 1
+        a <<= 1
+    return gf2_mod(r)
+
+
+def _cdc_polynomial_self_test() -> None:
+    """
+    Rabin's irreducibility test for P over GF(2), degree n = 64.
+
+    P is irreducible iff x^(2^64) == x (mod P) and, for each prime q dividing
+    64 (only q = 2), gcd(x^(2^32) - x mod P, P) = 1. If this ever fails, the
+    pinned constant does not define the field ADR-0023 claims it does, and
+    every cdc vector would be built on a degenerate ring.
+    """
+
+    def pow_x(squarings: int) -> int:
+        r = 2  # the polynomial x
+        for _ in range(squarings):
+            r = _gf2_mulmod(r, r)
+        return r
+
+    if pow_x(64) != 2:
+        sys.exit("FATAL: cdc-v1 polynomial fails x^(2^64) == x; not irreducible.")
+
+    t = pow_x(32) ^ 2
+    a, b = CDC_MODULUS, t
+    while b:
+        a, b = b, _gf2_polymod(a, b)
+    if a != 1:
+        sys.exit("FATAL: cdc-v1 polynomial shares a factor with x^(2^32) - x; not irreducible.")
+
+
+def _cdc_tables() -> tuple[list[int], list[int]]:
+    """push_table[b] = (b * x^64) mod P; pop_table[b] = (b * x^(8*64)) mod P."""
+    push = [gf2_mod(b << 64) for b in range(256)]
+    pop = [gf2_mod(b << (8 * CDC_WINDOW)) for b in range(256)]
+    return push, pop
+
+
+def cdc_segments(data: bytes, target: int, min_size: int, max_size: int) -> list[dict]:
+    """
+    The cdc-v1 reference segmenter (specification 09 section 3.1, ADR-0023).
+
+    The window rolls continuously across segment boundaries -- never reset --
+    so a boundary is a pure function of the local 64 bytes, which is the whole
+    resynchronisation property.
+    """
+    push, pop = _CDC_PUSH, _CDC_POP
+    mask = target - 1
+    h = 0
+    window = bytearray(CDC_WINDOW)
+    segments: list[dict] = []
+    start = 0
+    for p, byte in enumerate(data):
+        i = p & (CDC_WINDOW - 1)
+        outgoing = window[i]
+        window[i] = byte
+        h = ((h << 8) & _M64) ^ push[h >> 56] ^ byte ^ pop[outgoing]
+        length = p - start + 1
+        if length == max_size or (length >= min_size and (h & mask) == 0):
+            segments.append({"offset": start, "length": length})
+            start = p + 1
+    if start < len(data):
+        segments.append({"offset": start, "length": len(data) - start})
+    return segments
+
+
+_CDC_PUSH, _CDC_POP = _cdc_tables()
+
+
+# --------------------------------------------------------------------------
 # Fixed inputs
 #
 # Every value here is a constant so the vectors are reproducible. Nothing is
@@ -331,19 +436,144 @@ def segmentation_vectors() -> dict:
         )
 
     return {
-        "description": "fixed-v1 segment boundaries (specification 09 section 2).",
+        "description": "fixed-v1 and cdc-v1 segment boundaries (specification 09).",
         "independently_derived": True,
         "profile": "fixed-v1",
         "cases": cases,
-        "cdc_v1": {
-            "status": "parameters not yet pinned",
-            "comment": (
-                "cdc-v1 requires a fixed Rabin polynomial and per-byte table before "
-                "vectors can be generated. Until those are pinned, two implementations "
-                "would produce different boundaries and deduplicate against nothing. "
-                "Pinning them is a Phase 0 work item; see docs/phase-0-execution-plan.md."
-            ),
-        },
+        "cdc_v1": cdc_v1_vectors(),
+    }
+
+
+def cdc_v1_vectors() -> dict:
+    """
+    cdc-v1 boundaries under the ADR-0023 pin.
+
+    Reduced parameters (target 64 KiB, min 8 KiB, max 512 KiB) sit exactly on
+    the specification's ratio bounds (min = target/8, max = target*8) and keep
+    the inputs small enough to segment in pure Python. Every boundary below is
+    COMPUTED from the pinned polynomial -- the tables are committed alongside
+    so an implementation may either regenerate them from the rule or embed
+    them; this generator proves the two routes agree by construction.
+    """
+    _cdc_polynomial_self_test()
+
+    target, min_size, max_size = 64 * 1024, 8 * 1024, 512 * 1024
+
+    def sha_stream(blocks: int) -> bytes:
+        return b"".join(
+            hashlib.sha256(u64(i)).digest() for i in range(blocks)
+        )
+
+    stream = sha_stream(16384)  # 512 KiB, statistically random, stdlib-reproducible
+
+    cases = []
+    for name, data, input_desc in [
+        ("empty", b"", {"kind": "empty"}),
+        (
+            "all_zeros_256_kib",
+            bytes(256 * 1024),
+            {"kind": "zeros", "length": 256 * 1024},
+        ),
+        (
+            "sha256_stream_512_kib",
+            stream,
+            {
+                "kind": "sha256_stream",
+                "blocks": 16384,
+                "rule": "concatenation of SHA-256(u64_be(i)) for i in 0..blocks-1",
+            },
+        ),
+        (
+            "sha256_stream_one_byte_prepended",
+            b"\xa5" + stream,
+            {
+                "kind": "prefixed_sha256_stream",
+                "prefix": "a5",
+                "blocks": 16384,
+                "rule": "one byte 0xA5 followed by the sha256_stream_512_kib input",
+            },
+        ),
+        (
+            "max_size_forcing_repeat",
+            bytes([0x01, 0x02, 0x03, 0x04]) * (1_310_720 // 4),
+            {
+                "kind": "repeat",
+                "pattern": "01020304",
+                "repetitions": 1_310_720 // 4,
+            },
+        ),
+    ]:
+        segments = cdc_segments(data, target, min_size, max_size)
+
+        # Invariants the specification requires (09 section 3.1).
+        assert sum(s["length"] for s in segments) == len(data)
+        for i in range(len(segments) - 1):
+            assert segments[i]["offset"] + segments[i]["length"] == segments[i + 1]["offset"]
+            assert min_size <= segments[i]["length"] <= max_size
+        if segments:
+            assert segments[-1]["length"] <= max_size
+
+        cases.append(
+            {
+                "name": name,
+                "input": input_desc,
+                "target_size": target,
+                "min_size": min_size,
+                "max_size": max_size,
+                "mask": f"0x{target - 1:016x}",
+                "segment_count": len(segments),
+                "segments": segments,
+            }
+        )
+
+    by_name = {c["name"]: c for c in cases}
+
+    # The zero window fingerprints to zero, so every boundary test passes and
+    # every segment is exactly min_size -- the sharp edge of the min rule.
+    zeros = by_name["all_zeros_256_kib"]["segments"]
+    assert all(s["length"] == min_size for s in zeros)
+
+    # Resynchronisation (09 section 3.2): boundaries are a pure function of
+    # the local window, so prepending one byte shifts every cut by exactly
+    # one. This is the property cdc-v1 exists for, asserted rather than hoped.
+    base_cuts = [s["offset"] + s["length"] for s in by_name["sha256_stream_512_kib"]["segments"][:-1]]
+    shifted_cuts = [
+        s["offset"] + s["length"] - 1
+        for s in by_name["sha256_stream_one_byte_prepended"]["segments"][:-1]
+    ]
+    assert base_cuts == shifted_cuts, "insertion failed to resynchronise"
+
+    # The repeating pattern never satisfies the mask, so every non-final
+    # segment is a forced max_size cut.
+    forced = by_name["max_size_forcing_repeat"]["segments"]
+    assert all(s["length"] == max_size for s in forced[:-1]) and len(forced) > 1
+
+    return {
+        "profile": "cdc-v1",
+        "polynomial": "0x000000000000001b",
+        "polynomial_comment": (
+            "Low 64 coefficient bits of P(x) = x^64 + x^4 + x^3 + x + 1; the "
+            "x^64 term is implicit. Irreducible over GF(2), asserted by this "
+            "generator on every run (ADR-0023)."
+        ),
+        "window_size": CDC_WINDOW,
+        "hash_rule": (
+            "H(p) = the 64 bytes ending at and including position p, "
+            "interpreted most-significant-byte-first as a GF(2) polynomial, "
+            "reduced mod P. The window rolls continuously across segment "
+            "boundaries and is never reset. A segment ends at p (inclusive) "
+            "when (H(p) & mask) == 0 and its length is >= min_size, or "
+            "unconditionally at max_size; the final short segment is emitted "
+            "as-is."
+        ),
+        "table_rule": (
+            "push_table[b] = (b * x^64) mod P; pop_table[b] = (b * x^512) mod P. "
+            "Rolling step: H' = ((H << 8) & (2^64-1)) XOR push_table[H >> 56] "
+            "XOR incoming XOR pop_table[outgoing]."
+        ),
+        "push_table": [f"{v:016x}" for v in _CDC_PUSH],
+        "pop_table": [f"{v:016x}" for v in _CDC_POP],
+        "cases": cases,
     }
 
 

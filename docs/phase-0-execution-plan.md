@@ -58,7 +58,7 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 | B5 | AEAD record framing, nonce and AAD | [04](../specifications/repository-format/04-record.md) | FR-ARCH-009, NFR-SEC-003 | AAD matches `records.json` and is exactly 55 bytes; a record moved between ordinals or repositories fails authentication |
 | B6 | `cdc-v1`: **pin the Rabin polynomial and table**, then implement | [09 §3](../specifications/repository-format/09-segmentation.md#3-cdc-v1) | FR-ARCH-014 | Parameters committed to `segmentation.json`; boundaries reproducible across implementations |
 
-> **B6 has an unmet prerequisite.** The rolling-hash polynomial and per-byte table are not yet pinned, and until they are, two implementations produce different boundaries and deduplicate against nothing. Pinning them is the first task of B6, not an afterthought.
+> **B6's prerequisite is met.** The rolling-hash polynomial and per-byte tables are pinned by [ADR-0023](adr/0023-cdc-v1-rabin-parameters.md) and committed to `segmentation.json` — polynomial, derivation rule, tables, and computed boundary cases, including the insertion-resynchronisation property asserted rather than assumed.
 
 ### Wave C — The container
 

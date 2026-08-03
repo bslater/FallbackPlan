@@ -16,7 +16,7 @@ namespace FallbackPlan.Repository.Segmentation;
 /// a zero-length file has an empty segment list by specification, not a
 /// zero-length segment (09 §2.1).
 /// </remarks>
-public sealed class FixedSegmentReader
+public sealed class FixedSegmentReader : ISegmentReader
 {
     private readonly Stream _source;
     private readonly SegmentSize _segmentSize;
@@ -45,6 +45,9 @@ public sealed class FixedSegmentReader
         _source = source;
         _segmentSize = segmentSize;
     }
+
+    /// <inheritdoc />
+    public int RequiredBufferSize => _segmentSize.Bytes;
 
     /// <summary>
     /// Reads the next segment into <paramref name="buffer"/>, looping over

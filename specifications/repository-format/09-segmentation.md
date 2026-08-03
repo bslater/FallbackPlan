@@ -80,7 +80,15 @@ or unconditionally when `current_length == max_size`.
 | Window size | 64 bytes | fixed in v1 |
 | Mask | `target_size − 1` | derived; target MUST be a power of two |
 
-The rolling hash is a Rabin-style polynomial fingerprint. The polynomial and the per-byte table are **not yet pinned** — [`conformance/vectors/segmentation.json`](conformance/vectors/segmentation.json) records the gap, and pinning them is a Phase 0 prerequisite ([B6](../../docs/phase-0-execution-plan.md)). Once pinned there, an implementation MUST use those exact values, because two implementations with different tables would produce different boundaries and deduplicate against nothing. Until they are pinned, a writer MUST NOT use `cdc-v1` in a repository intended to be portable: its boundaries would be reproducible by no other implementation, which silently defeats deduplication and makes the conformance suite unable to check anything about them.
+The rolling hash is a **Rabin polynomial fingerprint over GF(2) with a 64-bit state**, pinned by [ADR-0023](../../docs/adr/0023-cdc-v1-rabin-parameters.md) and frozen in [`conformance/vectors/segmentation.json`](conformance/vectors/segmentation.json):
+
+- **Modulus:** `P(x) = x⁶⁴ + x⁴ + x³ + x + 1` (recorded as `0x000000000000001b`, the low 64 coefficient bits; the x⁶⁴ term is implicit). Irreducible over GF(2); the vector generator asserts irreducibility on every run.
+- **The hash at position *p*** (the zero-based offset of the most recently consumed byte) is the 64 bytes ending at and **including** *p*, interpreted most-significant-byte-first as a GF(2) polynomial and reduced mod P. It is undefined for `p < 63`; no boundary may be declared there — which can never matter in a conforming configuration, because `min_size ≥ target/8 ≥ 8 KiB` puts every candidate boundary far past the 64-byte warm-up.
+- **The window never resets.** It rolls continuously across declared segment boundaries, including forced `max_size` boundaries, so a boundary is a pure function of the local 64 bytes — that locality is the §3.2 resynchronisation property.
+- **A segment ends at byte *p* inclusive** (`length = p − segment_start + 1`) when the boundary condition above holds; the final segment of a file is emitted as-is, however short, exactly as in §2.1.
+- **Tables:** an implementation maintains the state with two 256-entry u64 tables derived from P alone — `push_table[b] = (b·x⁶⁴) mod P` and `pop_table[b] = (b·x⁵¹²) mod P` — stepping `H' = ((H << 8) & (2⁶⁴−1)) ⊕ push_table[H >> 56] ⊕ incoming ⊕ pop_table[outgoing]`. The vectors commit the polynomial, this rule, and both computed tables, so an implementation may regenerate the tables or embed them.
+
+An implementation MUST use exactly these values and conventions: two implementations with different tables produce different boundaries and deduplicate against nothing.
 
 ### 3.2 Properties
 

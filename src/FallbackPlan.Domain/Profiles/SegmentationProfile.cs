@@ -12,9 +12,8 @@ public sealed class SegmentationProfile : IEquatable<SegmentationProfile>
     public static readonly SegmentationProfile FixedV1 = new(0x0001, "fixed-v1");
 
     /// <summary>
-    /// Content-defined segmentation (<c>0x0002</c>). Specified but not yet
-    /// usable in a portable repository: the rolling-hash polynomial and table
-    /// are not pinned (specification 09 §3.1).
+    /// Content-defined segmentation (<c>0x0002</c>), under the Rabin
+    /// fingerprint parameters pinned by ADR-0023 (specification 09 §3.1).
     /// </summary>
     public static readonly SegmentationProfile CdcV1 = new(0x0002, "cdc-v1");
 

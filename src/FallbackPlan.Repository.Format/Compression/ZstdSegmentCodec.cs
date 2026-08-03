@@ -41,6 +41,18 @@ public sealed class ZstdSegmentCodec : IDisposable
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The level is outside 1–19 (specification 10 §4).</exception>
     public ZstdSegmentCodec(int level, SegmentSize segmentSize)
+        : this(level, segmentSize.Bytes)
+    {
+    }
+
+    /// <summary>
+    /// Creates a codec at <paramref name="level"/> for segments of at most
+    /// <paramref name="maximumSegmentBytes"/> — the shape <c>cdc-v1</c>
+    /// needs, whose maximum segment size need not be a power of two.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The level is outside 1–19 (specification 10 §4).</exception>
+    /// <exception cref="ArgumentException">The maximum segment size is unset.</exception>
+    public ZstdSegmentCodec(int level, int maximumSegmentBytes)
     {
         if (level is < CompressionSettings.MinimumZstdLevel or > CompressionSettings.MaximumZstdLevel)
         {
@@ -50,9 +62,9 @@ public sealed class ZstdSegmentCodec : IDisposable
                 "zstd levels 1-19 are permitted; levels above 19 are not (specification 10 §4).");
         }
 
-        if (segmentSize.Bytes == 0)
+        if (maximumSegmentBytes <= 0)
         {
-            throw new ArgumentException("The segment size is unset.", nameof(segmentSize));
+            throw new ArgumentException("The maximum segment size is unset.", nameof(maximumSegmentBytes));
         }
 
         _compressor = new Compressor(level);
@@ -62,7 +74,7 @@ public sealed class ZstdSegmentCodec : IDisposable
         // decoder memory an honest reader needs.
         _compressor.SetParameter(
             ZstdSharp.Unsafe.ZSTD_cParameter.ZSTD_c_windowLog,
-            BitOperations.Log2((uint)segmentSize.Bytes));
+            BitOperations.Log2(BitOperations.RoundUpToPowerOf2((uint)maximumSegmentBytes)));
 
         _decompressor = new ZstdSegmentDecompressor();
     }
