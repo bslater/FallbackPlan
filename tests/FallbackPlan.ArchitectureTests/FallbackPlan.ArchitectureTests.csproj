@@ -31,6 +31,10 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Import.Abstractions\FallbackPlan.Import.Abstractions.csproj" />
+    <!-- Referenced so the containment rules can inspect every src assembly,
+         including the executable. Cli has no AssemblyMarker; it is loaded by
+         name from the test output directory. -->
+    <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
   </ItemGroup>
 
 </Project>

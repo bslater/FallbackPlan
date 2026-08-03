@@ -12,14 +12,44 @@ namespace FallbackPlan.ArchitectureTests;
 /// down is a rule that erodes. Each test names the rule it enforces and why the
 /// rule exists, so a future reader deciding whether to relax one knows what they
 /// would be giving up.
+///
+/// An honest caveat, stated here rather than discovered: the IL-level rules in
+/// this file are currently VACUOUS. Every src assembly contains only an
+/// AssemblyMarker, so an assertion that empty assembly X does not reference Y
+/// cannot fail under any circumstances today. The rules exist so that the first
+/// real code lands under enforcement rather than before it — but green here
+/// does not yet mean "verified", and the two project-file canary tests at the
+/// bottom are the only assertions in this file with teeth right now.
 /// </summary>
 public sealed class DependencyRuleTests
 {
     private static Assembly Domain => typeof(Domain.AssemblyMarker).Assembly;
     private static Assembly Format => typeof(Repository.Format.AssemblyMarker).Assembly;
     private static Assembly Crypto => typeof(Repository.Crypto.AssemblyMarker).Assembly;
+    private static Assembly Segmentation => typeof(Repository.Segmentation.AssemblyMarker).Assembly;
+    private static Assembly Packing => typeof(Repository.Packing.AssemblyMarker).Assembly;
+    private static Assembly Index => typeof(Repository.Index.AssemblyMarker).Assembly;
+    private static Assembly Catalogue => typeof(Repository.Catalogue.AssemblyMarker).Assembly;
+    private static Assembly RepositoryRootAssembly => typeof(Repository.AssemblyMarker).Assembly;
     private static Assembly StorageAbstractions => typeof(Storage.Abstractions.AssemblyMarker).Assembly;
+    private static Assembly StorageLocal => typeof(Storage.Local.AssemblyMarker).Assembly;
     private static Assembly ImportAbstractions => typeof(Import.Abstractions.AssemblyMarker).Assembly;
+
+    /// <summary>
+    /// The Cli project has no AssemblyMarker — it is an executable, not a
+    /// library — so it is loaded by name from the test output directory, where
+    /// its ProjectReference guarantees it has been copied.
+    /// </summary>
+    private static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
+
+    /// <summary>
+    /// Every src assembly. Containment rules iterate this list rather than a
+    /// hand-picked subset, because a subset is how Repository.Packing acquired
+    /// a Bodu reference with no rule covering it.
+    /// </summary>
+    private static IEnumerable<Assembly> AllSourceAssemblies =>
+        [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
+         RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions, Cli];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -160,14 +190,18 @@ public sealed class DependencyRuleTests
     /// FallbackPlan needs exactly two cryptographic primitives .NET does not
     /// provide — Argon2id and XChaCha20-Poly1305 — so both come from a third
     /// party and neither inherits the platform's audit posture
-    /// (specification 03 section 6.2, ADR-0019).
+    /// (specification 03 section 6.1, ADR-0019).
     ///
     /// That exposure is bounded by keeping it in one project. Repository.Crypto
     /// is the only assembly permitted to reference Bodu.Security.Cryptography;
     /// everywhere else, a call reaching an unaudited primitive would be a
     /// dependency nobody chose and nobody reviewed.
     ///
-    /// Note especially that Repository.Format is on this list. It is what the
+    /// The rule covers EVERY src assembly except Repository.Crypto, not a
+    /// hand-picked subset — an earlier version listed four assemblies and
+    /// silently left Repository.Packing (which already references Bodu.Core),
+    /// Index, Catalogue, the engine root, Storage.Local and Cli uncovered.
+    /// Note especially that Repository.Format is covered: it is what the
     /// standalone recovery tool links, and its dependency closure has to stay
     /// small enough to build and run on a clean machine when everything else
     /// has already failed (NFR-PORT-001).
@@ -175,7 +209,7 @@ public sealed class DependencyRuleTests
     [Fact]
     public void Only_Repository_Crypto_may_reference_third_party_cryptography()
     {
-        foreach (var assembly in new[] { Domain, Format, StorageAbstractions, ImportAbstractions })
+        foreach (var assembly in AllSourceAssemblies.Where(a => a != Crypto))
         {
             AssertPasses(
                 Types.InAssembly(assembly)
@@ -184,6 +218,30 @@ public sealed class DependencyRuleTests
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference third-party cryptography. " +
                 "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto (ADR-0019).");
+        }
+    }
+
+    /// <summary>
+    /// Konscious exists in this repository for exactly one purpose: as the
+    /// independent oracle Argon2idCrossVerificationTests checks Bodu against.
+    /// It is a test-only dependency and is never shipped — a claim that was,
+    /// until this rule, enforced by nothing but a comment in
+    /// Directory.Packages.props. Two Argon2id implementations in production
+    /// would double the unaudited surface for zero gain and make "which one
+    /// derived this repository's KEK" a per-callsite accident.
+    /// </summary>
+    [Fact]
+    public void No_source_assembly_references_the_test_only_argon2id_oracle()
+    {
+        foreach (var assembly in AllSourceAssemblies)
+        {
+            AssertPasses(
+                Types.InAssembly(assembly)
+                    .ShouldNot()
+                    .HaveDependencyOn("Konscious.Security.Cryptography")
+                    .GetResult(),
+                $"{assembly.GetName().Name} must not reference Konscious — it is the " +
+                "test-only cross-verification oracle, never a production dependency.");
         }
     }
 
@@ -208,18 +266,28 @@ public sealed class DependencyRuleTests
     [Fact]
     public void Repository_Crypto_is_where_third_party_cryptography_actually_lives()
     {
-        var project = Path.Combine(
-            RepositoryRoot(),
-            "src",
-            "FallbackPlan.Repository.Crypto",
-            "FallbackPlan.Repository.Crypto.csproj");
+        AssertProjectReferences("FallbackPlan.Repository.Crypto", "Bodu.Security.Cryptography.csproj");
+    }
+
+    /// <summary>
+    /// Same canary pattern for the other vendored reference: Repository.Packing
+    /// is where Bodu.Core lives (ADR-0019). If that reference moves or is
+    /// removed, this fails, and whoever made the change decides deliberately
+    /// whether the containment rules above still cover what they should.
+    /// </summary>
+    [Fact]
+    public void Repository_Packing_is_where_the_vendored_utility_library_actually_lives()
+    {
+        AssertProjectReferences("FallbackPlan.Repository.Packing", "Bodu.Core.csproj");
+    }
+
+    private static void AssertProjectReferences(string projectName, string expectedReference)
+    {
+        var project = Path.Combine(RepositoryRoot(), "src", projectName, projectName + ".csproj");
 
         Assert.True(File.Exists(project), $"Expected project file at {project}.");
 
-        Assert.Contains(
-            "Bodu.Security.Cryptography.csproj",
-            File.ReadAllText(project),
-            StringComparison.Ordinal);
+        Assert.Contains(expectedReference, File.ReadAllText(project), StringComparison.Ordinal);
     }
 
     /// <summary>
