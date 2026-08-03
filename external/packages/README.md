@@ -19,6 +19,23 @@ NuGet's nearest-TFM selection. Versions are pinned centrally in
 `Directory.Packages.props`; `nuget.config`'s `packageSourceMapping` routes all
 `Bodu.*` IDs to this feed and everything else to nuget.org.
 
+## Candidates for later adoption
+
+Upstream Bodu also ships packages this repository does not consume yet. They
+are recorded here so a later phase reaches for the reviewed candidate instead
+of hand-rolling or pulling a stranger from nuget.org:
+
+| Package | Would serve | Earliest need |
+|---|---|---|
+| `Bodu.Text.Filter` | Wildcard and regex pattern filters — the include/exclude rule engine the Phase 1 streaming scanner needs (policy manifest keys `include_rules`/`exclude_rules`, [06 §7](../../specifications/repository-format/06-manifests.md)) | Phase 1 |
+
+Adoption follows the same flow as an upgrade: pack from a pinned upstream
+commit, add the nupkg here with provenance in the table above, pin the version
+in `Directory.Packages.props`, regenerate lockfiles, full sweep. The rule
+semantics that end up in policy manifests must be specified before the first
+rule string is persisted — rule strings are format surface, and two
+implementations must agree on what `**/.cache/**` matches.
+
 ## Upgrading Bodu
 
 An upgrade is a deliberate, reviewed change — not an automatic pull:
