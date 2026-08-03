@@ -44,6 +44,7 @@ public sealed class FileArchiver
     private readonly IObjectStore _store;
     private readonly IBlobCounterAllocator _counters;
     private readonly string _spoolDirectory;
+    private readonly SpoolPinnedConfiguration _pinned;
 
     /// <summary>Creates an archiver over a validated policy.</summary>
     /// <exception cref="ArgumentException">The policy is invalid — the message names each defect (FR-ARCH-007).</exception>
@@ -72,6 +73,9 @@ public sealed class FileArchiver
         }
 
         _policy = policy;
+        _pinned = SpoolPinnedConfiguration.FromPolicy(
+            policy,
+            policy.Compression.Profile == CompressionProfile.ZstdV1 ? ZstdSegmentCodec.CodecVersion : "none");
         _repositoryId = repositoryId;
         _writerId = writerId;
         _generation = generation;
@@ -212,7 +216,8 @@ public sealed class FileArchiver
                     _counters.AllocateNext(),
                     _policy.EncryptionProfile,
                     _policy.BlobWriteProfile,
-                    _spoolDirectory);
+                    _spoolDirectory,
+                    pinned: _pinned);
 
                 await writer.AppendRecordAsync(
                     ObjectType.SegmentRecord,

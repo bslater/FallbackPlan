@@ -32,6 +32,15 @@ namespace FallbackPlan.Repository.Format.Compression;
 /// </remarks>
 public sealed class ZstdSegmentCodec : IDisposable
 {
+    /// <summary>
+    /// The codec identity the spool checkpoint pins (specification 05 §6.2):
+    /// the loaded compression library and its exact version. Zstandard output
+    /// is deterministic only within one library version, so a resume under a
+    /// different value MUST restart, never recompress.
+    /// </summary>
+    public static readonly string CodecVersion =
+        $"ZstdSharp.Port {typeof(Compressor).Assembly.GetName().Version}";
+
     private readonly Compressor _compressor;
     private readonly ZstdSegmentDecompressor _decompressor;
 

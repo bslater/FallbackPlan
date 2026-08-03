@@ -43,7 +43,9 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly FileStream _spool;
     private readonly IncrementalHash _digest;
     private readonly List<RecordTableEntry> _entries = [];
+    private readonly SpoolPinnedConfiguration? _pinned;
     private bool _sealed;
+    private bool _abandoned;
 
     private BlobWriter(
         BlobEnvelope envelope,
@@ -52,7 +54,8 @@ public sealed class BlobWriter : IAsyncDisposable
         RepositoryId repositoryId,
         byte[] blobKey,
         string spoolPath,
-        FileStream spool)
+        FileStream spool,
+        SpoolPinnedConfiguration? pinned)
     {
         _envelope = envelope;
         _profile = profile;
@@ -61,6 +64,7 @@ public sealed class BlobWriter : IAsyncDisposable
         _blobKey = blobKey;
         _spoolPath = spoolPath;
         _spool = spool;
+        _pinned = pinned;
         _digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
@@ -96,7 +100,8 @@ public sealed class BlobWriter : IAsyncDisposable
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
         string spoolDirectory,
-        ReadOnlySpan<byte> blobSalt = default)
+        ReadOnlySpan<byte> blobSalt = default,
+        SpoolPinnedConfiguration? pinned = null)
     {
         ArgumentNullException.ThrowIfNull(encryptionProfile);
         ArgumentNullException.ThrowIfNull(profile);
@@ -139,7 +144,7 @@ public sealed class BlobWriter : IAsyncDisposable
         var spoolPath = Path.Combine(spoolDirectory, $"blob-{envelope.BlobId}.spool");
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
-        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool);
+        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned);
 
         Span<byte> envelopeBytes = stackalloc byte[BlobEnvelope.Length];
         envelope.WriteTo(envelopeBytes);
@@ -147,7 +152,227 @@ public sealed class BlobWriter : IAsyncDisposable
         writer._digest.AppendData(envelopeBytes);
         writer.CurrentLength = BlobEnvelope.Length;
 
+        if (pinned is not null)
+        {
+            writer._spool.Flush(flushToDisk: true);
+            writer.WriteCheckpoint();
+        }
+
         return writer;
+    }
+
+    /// <summary>
+    /// Attempts to resume the checkpointed spool in
+    /// <paramref name="spoolDirectory"/> (specification 05 §6.3; C1;
+    /// FR-ARCH-011). Resume re-emits the checkpointed sealed bytes verbatim
+    /// and continues at the next ordinal; <b>any</b> mismatch between the
+    /// checkpoint's pinned fields and the current configuration — codec
+    /// version included — discards the spool and reports restart, because a
+    /// restarted blob draws a fresh salt and reuses nothing (05 §6.2).
+    /// </summary>
+    public static ResumeResult TryResume(
+        string spoolDirectory,
+        RepositoryId repositoryId,
+        WriterId writerId,
+        KeyGeneration keyGeneration,
+        BlobClass blobClass,
+        ReadOnlySpan<byte> classKey,
+        EncryptionProfile encryptionProfile,
+        BlobWriteProfile profile,
+        SpoolPinnedConfiguration current)
+    {
+        ArgumentNullException.ThrowIfNull(encryptionProfile);
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+
+        if (!Directory.Exists(spoolDirectory))
+        {
+            return new ResumeResult.NoSpool();
+        }
+
+        var checkpointPath = Directory.EnumerateFiles(spoolDirectory, "blob-*.spool.checkpoint")
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        if (checkpointPath is null)
+        {
+            return new ResumeResult.NoSpool();
+        }
+
+        var spoolPath = checkpointPath[..^".checkpoint".Length];
+
+        ResumeResult.MustRestart Discard(string reason)
+        {
+            File.Delete(checkpointPath);
+            if (File.Exists(spoolPath))
+            {
+                File.Delete(spoolPath);
+            }
+
+            return new ResumeResult.MustRestart(reason);
+        }
+
+        if (!SpoolCheckpoint.TryParse(File.ReadAllBytes(checkpointPath), out var checkpoint))
+        {
+            return Discard("checkpoint_unreadable");
+        }
+
+        // 05 §6.2: every pinned field compared; any mismatch is a restart.
+        if (checkpoint!.Pinned.CodecVersion != current.CodecVersion)
+        {
+            return Discard("codec_version_changed");
+        }
+
+        if (checkpoint.Pinned.CompressionProfile != current.CompressionProfile)
+        {
+            return Discard("compression_profile_changed");
+        }
+
+        if (checkpoint.Pinned.SegmentationProfile != current.SegmentationProfile)
+        {
+            return Discard("segmentation_profile_changed");
+        }
+
+        if (checkpoint.Pinned.SegmentationParameter1 != current.SegmentationParameter1 ||
+            checkpoint.Pinned.SegmentationParameter2 != current.SegmentationParameter2 ||
+            checkpoint.Pinned.SegmentationParameter3 != current.SegmentationParameter3)
+        {
+            return Discard("segmentation_parameters_changed");
+        }
+
+        if (checkpoint.Pinned.EncryptionProfile != current.EncryptionProfile ||
+            checkpoint.Pinned.EncryptionProfile != encryptionProfile.Value)
+        {
+            return Discard("encryption_profile_changed");
+        }
+
+        if (checkpoint.FormatVersion != FormatLimits.FormatVersion)
+        {
+            return Discard("format_version_changed");
+        }
+
+        if (checkpoint.KeyGeneration != keyGeneration)
+        {
+            return Discard("key_generation_changed");
+        }
+
+        if (checkpoint.BlobClass != blobClass)
+        {
+            return Discard("blob_class_changed");
+        }
+
+        if (checkpoint.WriterId != writerId)
+        {
+            return Discard("writer_changed");
+        }
+
+        if (!File.Exists(spoolPath))
+        {
+            return Discard("spool_missing");
+        }
+
+        var spoolLength = new FileInfo(spoolPath).Length;
+        if (spoolLength < (long)checkpoint.SealedWatermark ||
+            checkpoint.SealedWatermark < BlobEnvelope.Length)
+        {
+            return Discard("spool_shorter_than_watermark");
+        }
+
+        // Read the checkpointed prefix, verify the envelope, and walk the
+        // sealed records to rebuild the table — the bytes themselves are the
+        // checkpoint state (05 §6.1); nothing is recompressed or re-encrypted.
+        var watermark = (int)checkpoint.SealedWatermark;
+        byte[] prefix;
+        using (var read = new FileStream(spoolPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            prefix = new byte[watermark];
+            read.ReadExactly(prefix);
+        }
+
+        BlobEnvelope envelope;
+        try
+        {
+            envelope = BlobEnvelope.Parse(prefix.AsSpan(0, BlobEnvelope.Length));
+        }
+        catch (BlobFormatException)
+        {
+            return Discard("envelope_unreadable");
+        }
+
+        if (envelope.BlobId != checkpoint.BlobId ||
+            envelope.BlobCounter != checkpoint.BlobCounter ||
+            envelope.WriterId != checkpoint.WriterId ||
+            envelope.KeyGeneration != checkpoint.KeyGeneration ||
+            envelope.BlobClass != checkpoint.BlobClass ||
+            !envelope.BlobSalt.SequenceEqual(checkpoint.BlobSalt.Span))
+        {
+            return Discard("envelope_checkpoint_mismatch");
+        }
+
+        var entries = new List<RecordTableEntry>();
+        var offset = BlobEnvelope.Length;
+
+        while (offset < watermark)
+        {
+            if (offset + RecordHeader.Length > watermark)
+            {
+                return Discard("spool_walk_mismatch");
+            }
+
+            RecordHeader header;
+            try
+            {
+                header = RecordHeader.Parse(prefix.AsSpan(offset, RecordHeader.Length));
+            }
+            catch (RecordFormatException)
+            {
+                return Discard("spool_walk_mismatch");
+            }
+
+            if (header.Ordinal != entries.Count)
+            {
+                return Discard("spool_walk_mismatch");
+            }
+
+            entries.Add(new RecordTableEntry(
+                header.ObjectId,
+                header.Ordinal,
+                (ulong)offset,
+                header.StoredLength,
+                header.LogicalLength,
+                header.CompressionProfile.Value,
+                header.EncryptionProfile.Value,
+                header.ObjectType));
+
+            var recordLength = RecordHeader.Length + (long)header.StoredLength + RecordCipher.TagLength;
+            if (offset + recordLength > watermark)
+            {
+                return Discard("spool_walk_mismatch");
+            }
+
+            offset += (int)recordLength;
+        }
+
+        if (offset != watermark)
+        {
+            return Discard("spool_walk_mismatch");
+        }
+
+        var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(classKey, envelope.BlobSalt, envelope.WriterId, envelope.BlobCounter, blobKey);
+
+        // Drop any torn tail beyond the watermark and reopen for append.
+        var spool = new FileStream(spoolPath, FileMode.Open, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
+        spool.SetLength(watermark);
+        spool.Seek(0, SeekOrigin.End);
+
+        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current);
+        writer._digest.AppendData(prefix);
+        writer._entries.AddRange(entries);
+        writer.CurrentLength = watermark;
+
+        return new ResumeResult.Resumed(writer);
     }
 
     /// <summary>
@@ -222,6 +447,14 @@ public sealed class BlobWriter : IAsyncDisposable
         await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(record);
 
+        if (_pinned is not null)
+        {
+            // The sealed bytes reach the disk before the watermark that
+            // covers them — a checkpoint claiming bytes the disk may not
+            // hold would resume into a torn record (05 §6.1).
+            _spool.Flush(flushToDisk: true);
+        }
+
         _entries.Add(new RecordTableEntry(
             objectId,
             ordinal,
@@ -234,7 +467,50 @@ public sealed class BlobWriter : IAsyncDisposable
 
         CurrentLength += record.Length;
 
+        if (_pinned is not null)
+        {
+            WriteCheckpoint();
+        }
+
         return ordinal;
+    }
+
+    /// <summary>
+    /// Releases handles and key material <b>without</b> deleting the spool or
+    /// its checkpoint — the orderly-shutdown and crash-simulation path. The
+    /// spool stays on disk for <see cref="TryResume"/>; a partial spool is
+    /// still never uploaded (specification 05 §6.3).
+    /// </summary>
+    public async ValueTask AbandonAsync()
+    {
+        ObjectDisposedException.ThrowIf(_sealed, this);
+        _abandoned = true;
+
+        CryptographicOperations.ZeroMemory(_blobKey);
+        _digest.Dispose();
+        _spool.Flush(flushToDisk: true);
+        await _spool.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private void WriteCheckpoint()
+    {
+        var checkpoint = new SpoolCheckpoint(
+            _envelope.FormatVersion,
+            _envelope.BlobClass,
+            _envelope.KeyGeneration,
+            _envelope.BlobSalt.ToArray(),
+            _envelope.WriterId,
+            _envelope.BlobCounter,
+            _envelope.BlobId,
+            _pinned!,
+            (ulong)CurrentLength);
+
+        // Replace atomically so a crash mid-rewrite leaves the previous
+        // checkpoint intact rather than a torn one.
+        var checkpointPath = SpoolCheckpoint.PathFor(_spoolPath);
+        var temporary = checkpointPath + ".tmp";
+        File.WriteAllBytes(temporary, checkpoint.Serialize());
+        File.Move(temporary, checkpointPath, overwrite: true);
     }
 
     /// <summary>
@@ -286,6 +562,12 @@ public sealed class BlobWriter : IAsyncDisposable
         await _spool.DisposeAsync().ConfigureAwait(false);
         CryptographicOperations.ZeroMemory(_blobKey);
 
+        // A sealed blob is no longer resumable state; the sidecar goes.
+        if (_pinned is not null)
+        {
+            File.Delete(SpoolCheckpoint.PathFor(_spoolPath));
+        }
+
         return new SealedBlob(_spoolPath, _envelope.BlobId, _envelope.BlobClass, CurrentLength, digest, _entries);
     }
 
@@ -297,6 +579,12 @@ public sealed class BlobWriter : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         CryptographicOperations.ZeroMemory(_blobKey);
+
+        if (_abandoned)
+        {
+            return;
+        }
+
         _digest.Dispose();
 
         if (!_sealed)
@@ -305,6 +593,12 @@ public sealed class BlobWriter : IAsyncDisposable
             if (File.Exists(_spoolPath))
             {
                 File.Delete(_spoolPath);
+            }
+
+            var checkpointPath = SpoolCheckpoint.PathFor(_spoolPath);
+            if (File.Exists(checkpointPath))
+            {
+                File.Delete(checkpointPath);
             }
         }
     }
