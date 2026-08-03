@@ -29,6 +29,15 @@ public enum ObjectType : byte
 
     /// <summary>An error manifest (specification 06 §8).</summary>
     ErrorManifest = 0x06,
+
+    /// <summary>An index delta (specification 07 §2; ADR-0022 §Decision 1).</summary>
+    IndexDelta = 0x08,
+
+    /// <summary>An index checkpoint (specification 07 §5; ADR-0022 §Decision 1).</summary>
+    IndexCheckpoint = 0x09,
+
+    /// <summary>A journal record (specification 08 §2; ADR-0022 §Decision 1).</summary>
+    JournalRecord = 0x0A,
 }
 
 /// <summary>
@@ -38,12 +47,13 @@ public static class ObjectTypes
 {
     /// <summary>
     /// Returns whether <paramref name="value"/> is an assigned object type.
-    /// Rejects zero, the reserved store-key domain separator <c>0x07</c>, and
-    /// everything unassigned above it — an unknown type in an object the
-    /// reader must interpret is refused, never guessed (specification 00 §3).
+    /// Rejects zero, the reserved store-key domain separator <c>0x07</c> —
+    /// which stays reserved forever (specification 02 §3.1) — and everything
+    /// unassigned above <c>0x0A</c>: an unknown type in an object the reader
+    /// must interpret is refused, never guessed (specification 00 §3).
     /// </summary>
     public static bool IsValid(byte value) =>
-        value is >= 0x01 and <= 0x06;
+        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0A);
 
     /// <summary>
     /// Converts a byte read from untrusted input into an
