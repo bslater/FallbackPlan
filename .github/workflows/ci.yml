@@ -35,8 +35,6 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          submodules: recursive
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
@@ -45,11 +43,11 @@ jobs:
       # here rather than silently resolving something new.
       - name: Restore
         run: dotnet restore FallbackPlan.slnx --locked-mode
-      # Vendored code under external/ is built as a dependency and carries its
-      # own analyzer configuration. Its warnings are not ours to fix and must
-      # not mask ours, so the gate is scoped to FallbackPlan's own code. Both
-      # path-separator forms are excluded so the gate means the same thing on
-      # every runner in the matrix.
+      # The exclusion of external/ is retained defensively: Bodu arrives as
+      # prebuilt packages today (ADR-0021), but the gate should keep meaning
+      # "FallbackPlan's own code" if anything under external/ is ever built
+      # again. Both path-separator forms are excluded so the gate means the
+      # same thing on every runner in the matrix.
       - name: Build
         shell: bash
         run: |
@@ -75,8 +73,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          submodules: recursive
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
@@ -94,6 +90,30 @@ jobs:
             echo "::error::Known-vulnerable package in the dependency graph"
             exit 1
           fi
+
+  # A GitHub "Download ZIP" is `git archive` output: no .git directory, no
+  # submodules, nothing gitignored. Building from that shape proves the tree
+  # is self-contained (ADR-0021) — the property that lets a laptop with no
+  # git at all open FallbackPlan.slnx in Visual Studio and build.
+  archive-build:
+    name: Source archive is self-contained
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build and test from a git archive of the tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          git archive HEAD | tar -x -C "$tmp"
+          cd "$tmp"
+          dotnet restore FallbackPlan.slnx --locked-mode
+          dotnet build FallbackPlan.slnx -c Release --no-restore
+          dotnet test FallbackPlan.slnx -c Release --no-build
 
   conformance-vectors:
     name: Conformance vectors are reproducible

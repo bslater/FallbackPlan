@@ -6,9 +6,9 @@ for dp, dn, fn in os.walk(ROOT):
     # Normalised so the exclusions below hold on Windows too, where os.walk
     # yields backslashes and a '/'-only test would silently stop excluding.
     norm = dp.replace(os.sep, "/") + "/"
-    # Vendored submodules are excluded: they carry their own documentation
-    # conventions (DocFX ~/ and xref: links here) and their integrity is their
-    # own repository's concern, not this gate's.
+    # external/ is excluded: vendored content there (today the committed
+    # package feed, ADR-0021) is not held to this repository's documentation
+    # conventions. Links *to* files under external/ still resolve normally.
     if ".git" in norm or "/bin/" in norm or "/obj/" in norm or "/external/" in norm: continue
     for f in fn:
         if f.endswith(".md"): md_files.append(os.path.join(dp, f))

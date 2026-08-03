@@ -56,7 +56,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.PerformanceTests/
 │   └── FallbackPlan.EndToEndTests/
 ├── external/
-│   └── bodu/                      vendored submodule — see §5.1
+│   └── packages/                  committed Bodu package feed — see §5.1
 ├── specifications/                repository-format, peer-protocol, discovery-protocol,
 │                                  recovery-kit, conformance-vectors
 ├── docs/                          this set
@@ -133,9 +133,9 @@ The neutral model exists so that the same import pipeline serves restic, Kopia, 
 
 ### 5.1 Vendored dependencies
 
-`external/bodu` is a **git submodule** pinned to a commit, referenced by project reference rather than by package, because it is not published to nuget.org. Contributors clone with `--recursive`; CI checks out with `submodules: recursive`.
+Bodu is not published to nuget.org, so it is consumed as **prebuilt packages from the committed feed at `external/packages`** — the `bodu-local` source in `nuget.config`, version-pinned in `Directory.Packages.props`. The pin is the committed nupkg plus the upstream commit SHA recorded in [`external/packages/README.md`](../../external/packages/README.md); upgrades are deliberate, reviewed changes. Because the feed travels with the tree, a plain `git clone`, a GitHub ZIP download, and Visual Studio's clone dialog all restore identically — no submodule, no `--recursive`, and CI enforces archive-buildability with a dedicated job. → [ADR-0021](../adr/0021-consume-bodu-via-committed-package-feed.md)
 
-Two gates are scoped to exclude `external/`: the warnings-as-errors build check and `eng/check-links.py`. Vendored code is held to its own repository's standards. Our code stays at zero warnings, and a submodule bump cannot fail our build on someone else's style rule — the alternative trains people to ignore the gate, which costs more than it saves. → [ADR-0019](../adr/0019-third-party-dependency-policy.md)
+Two gates remain scoped to exclude `external/`: the warnings-as-errors build check (defensively — nothing under `external/` compiles today) and `eng/check-links.py`. The dependency policy — tiers, gates, containment, cross-verification — is unchanged. → [ADR-0019](../adr/0019-third-party-dependency-policy.md)
 
 ## 6. Public API shapes
 

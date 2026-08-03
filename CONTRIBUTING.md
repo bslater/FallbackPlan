@@ -32,27 +32,26 @@ Start with [`docs/README.md`](docs/README.md). The [worked example](docs/archite
 
 ## Building
 
-The build depends on a vendored submodule, so clone recursively:
+A plain clone is all you need — a GitHub "Download ZIP" works identically:
 
 ```bash
-git clone --recursive https://github.com/bslater/fallbackplan.git
+git clone https://github.com/bslater/fallbackplan.git
 
-# Already cloned without it, or the pinned commit moved:
-git submodule update --init --recursive
-```
-
-`external/bodu` supplies Argon2id — one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)). Without it the solution does not restore, and the error you get is a missing project reference rather than anything that names the submodule.
-
-```bash
 dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
 ```
 
 Requires the .NET SDK pinned in [`global.json`](global.json).
 
-**Warnings are errors.** This is a backup engine; a warning we habitually ignore is a defect we ship.
+Bodu — the library supplying Argon2id, one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)) — is consumed as prebuilt packages from the committed [`external/packages`](external/packages/README.md) feed ([ADR-0021](docs/adr/0021-consume-bodu-via-committed-package-feed.md)), so restore needs nothing beyond this tree and nuget.org. Upgrading those packages is a deliberate, reviewed change; the procedure is in the feed's README.
 
-That gate covers `src/` and `tests/` and deliberately **excludes `external/`**. Vendored code is held to its own repository's standards; a submodule bump must not be able to fail this build on a style rule. If you see warnings from `external/`, they are not yours to fix here.
+**Warnings are errors.** This is a backup engine; a warning we habitually ignore is a defect we ship. The gate covers `src/` and `tests/` and excludes `external/`.
+
+### Building on Windows with Visual Studio
+
+- **Visual Studio 2022 17.14 or later** (or Visual Studio 2026) — earlier versions cannot open the `.slnx` solution format.
+- **.NET SDK 10.0.1xx** — [`global.json`](global.json) pins the band; VS uses it automatically once installed.
+- Open `FallbackPlan.slnx`, build, and run tests from Test Explorer. Restore resolves the Bodu packages from the committed feed, so this works from a `git clone`, from Visual Studio's own clone dialog, and from an extracted "Download ZIP" alike.
 
 ## Checks that run in CI
 

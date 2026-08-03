@@ -79,6 +79,8 @@ Finding that is the whole argument for keeping the second implementation.
 
 ### 6. Vendoring mechanics
 
+> **Superseded by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md).** Bodu is now consumed as prebuilt packages from the committed `external/packages` feed; the submodule described below no longer exists. This section and Amendment 1's gitlink discussion are retained as the record of the earlier mechanics. The dependency policy in §§1–5 is unaffected.
+
 Bodu enters as a **git submodule** at `external/bodu` with project references, not as NuGet packages, because it is not published to nuget.org.
 
 - The submodule is pinned to a commit; a submodule bump is a reviewable change like any other.
@@ -132,3 +134,4 @@ Two clarifications from a supply-chain review of the scaffold, recorded here bec
 |------|--------|------|
 | 2026-08 | Accepted | Adopted with `Bodu.Core` in packing and `Bodu.Security.Cryptography` confined to crypto |
 | 2026-08 | Accepted (amended) | Amendment 1: gitlink-is-the-pin clarified; restore inputs pinned (explicit NuGetAudit, lockfiles + locked-mode CI, source mapping, graph-accurate transitive pins, explicit vulnerable-package gate) |
+| 2026-08 | Accepted (amended) | Amended by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md): submodule replaced by the committed `external/packages` feed; dependency-tier policy, five gates, and containment unchanged |

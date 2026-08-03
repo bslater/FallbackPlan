@@ -57,7 +57,7 @@ dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
 ```
 
-Requires the .NET SDK pinned in [`global.json`](global.json). Warnings are errors. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Requires the .NET SDK pinned in [`global.json`](global.json). Warnings are errors. A plain `git clone` and a GitHub "Download ZIP" both build — all dependencies restore from this tree and nuget.org, and `FallbackPlan.slnx` opens directly in Visual Studio 2022 17.14+ on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
