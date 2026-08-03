@@ -78,8 +78,21 @@ The eventual-visibility and quota cases matter most: the engine's correctness ar
 
 **Provider-specific interfaces.** Rejected — it is how provider capabilities leak into repository semantics, which NFR-COMP-005 forbids.
 
+## Amendment 1 — the concrete shapes, as implemented (Wave A6)
+
+The first implementation (`FallbackPlan.Storage.Abstractions` + the local filesystem provider) fixed the supporting-type shapes this ADR named but did not define. Recorded here because the next provider author will look here first:
+
+- **`ObjectKey` grammar** — one or more `/`-separated components of `[a-z0-9._-]`, no component starting with `.`, component ≤ 255 chars, total ≤ 1024. Traversal (`..`) and hidden paths are *unconstructible*, which is the first line of the local provider's path-safety defence; providers get the same guarantee for free.
+- **Immutability at the contract level** — a put against any existing key reports `PutOutcome.AlreadyExists` (never overwrites, never throws), unconditionally: store objects are immutable (spec 01 §4) and the idempotent-retry read of §2.2 applies to the unconditional path too. `PutConditions.IfNotExists` exists for providers whose conditional-create needs to be explicit; `PreconditionFailed` is reserved for genuinely conditional operations arriving with later providers.
+- **Results** — `GetMetadataResult` (found/not-found + `ObjectMetadata(Length, LastModified?)`), `OpenReadResult` (`Found`/`NotFound`/`RangeNotSatisfiable`, disposable, owning the stream when found), `DeleteResult` (`Deleted`/`NotFound`/`PreconditionFailed`).
+- **Listing** — ordinal key order is part of the contract; `ObjectEntry.ResumeToken` is opaque (the local provider uses the key itself) and `ListOptions.ResumeAfter` resumes strictly after the token's entry across enumerator instances and process restarts.
+- **Local provider durability** — contents are flushed to disk before the temp-to-final rename publishes an object; the directory *entry* is best-effort (no directory fsync in .NET), which is acceptable because write intents and publication ordering (Waves C–D) make entry loss detectable.
+
+The contract suite named below now exists as `ObjectStoreContractTests`, inherited per provider; the simulated-fault cases (throttling, credential expiry, eventual visibility, quota) remain to be added alongside the first remote provider.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Revisit after the first two providers are implemented |
+| 2026-08 | Proposed (amended) | Amendment 1: concrete type shapes fixed by the Wave A6 implementation |
