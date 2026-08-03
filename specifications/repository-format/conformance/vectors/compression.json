@@ -13,13 +13,13 @@
       "expected_profile": "zstd-v1"
     },
     {
-      "name": "marginal_just_over",
+      "name": "saving_just_above_threshold",
       "logical_length": 1000000,
       "compressed_length": 949000,
       "expected_profile": "zstd-v1"
     },
     {
-      "name": "marginal_just_under",
+      "name": "saving_just_below_threshold",
       "logical_length": 1000000,
       "compressed_length": 951000,
       "expected_profile": "none"
@@ -37,10 +37,10 @@
       "expected_profile": "none"
     },
     {
-      "name": "empty",
-      "logical_length": 0,
-      "compressed_length": 0,
-      "expected_profile": "zstd-v1"
+      "name": "small_incompressible",
+      "logical_length": 100,
+      "compressed_length": 99,
+      "expected_profile": "none"
     }
   ]
 }

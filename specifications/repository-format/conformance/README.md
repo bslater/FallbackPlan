@@ -26,13 +26,16 @@ The generator depends on nothing but the Python standard library. That is delibe
 |---|---|---|
 | [`keys.json`](vectors/keys.json) | ✅ Yes | Your HKDF derivation and domain separation match the specification |
 | [`identifiers.json`](vectors/identifiers.json) | ✅ Yes | Your content and object identifiers match |
-| [`records.json`](vectors/records.json) | ✅ Yes | Your nonce and AAD construction match |
+| [`records.json`](vectors/records.json) | ✅ Yes | Your nonce and AAD construction match — record **and** footer AAD, as bytes |
 | [`segmentation.json`](vectors/segmentation.json) | ✅ Yes | Your `fixed-v1` boundaries match |
 | [`compression.json`](vectors/compression.json) | ✅ Yes | Your threshold decisions match |
-| [`aes-gcm.json`](vectors/aes-gcm.json) | ⚠️ Correctness verified, **provenance not** | You use AES-256-GCM correctly — see the note below |
+| [`aes-gcm.json`](vectors/aes-gcm.json) | ❌ **No** — pinned constants, provenance per case | You use AES-256-GCM correctly, including AAD absorption over the format's real 55-byte AAD — see the note below |
+| [`argon2id.json`](vectors/argon2id.json) | ❌ **No** — pinned from two agreeing implementations | Your Argon2id matches both reference implementations at the mandated minimum parameters |
 | **AEAD record ciphertexts** | ❌ **Not present** | — |
 
-"Independently derived" means computed here from published algorithms using standard-library primitives, with no input from the reference implementation. You can reproduce them in any language.
+"Independently derived" means computed here from published algorithms using standard-library primitives, with no input from the reference implementation. You can reproduce them in any language. Each file carries the flag as `independently_derived`, and `VectorFileTests` asserts the flag **per file against what the content actually is** — an earlier revision asserted `true` for every file, including one whose values the generator cannot compute, which was precisely the overstatement the flag exists to prevent.
+
+The two ❌ groups exist because the generator's stdlib-only rule cuts both ways: AES-GCM and Argon2id cannot be computed from the Python standard library, so those values are pinned constants whose provenance is declared per case, and their correctness is re-verified against real implementations on every CI run (`CryptographicPrimitiveTests` against the platform `AesGcm`; `Argon2idCrossVerificationTests` against **both** Bodu and Konscious).
 
 ### The gap: AEAD record ciphertexts
 
@@ -60,6 +63,8 @@ It has been **removed rather than replaced with another remembered value**, and 
 
 The surviving case verifies against the platform implementation, so its correctness as an AES-256-GCM triple is established. Its provenance as a CAVP vector is asserted from memory and could not be re-fetched — `csrc.nist.gov` and `raw.githubusercontent.com` are both unreachable from the environment these vectors were generated in. The file marks this with `provenance_reverified: false`.
 
+A second case was later added because the surviving CAVP case is empty-plaintext, empty-AAD — it proves nothing about AAD absorption, the one property the record format leans on (04 §4). The new case uses the format's **real construction** — the `keys.json` blob key, ordinal 47's nonce and its 55-byte AAD from `records.json` — and was computed **once with the platform `AesGcm` and pinned**. Its provenance field says exactly that: it is a *regression* vector proving a future implementation matches the platform over the format's exact inputs, not conformance evidence that either matches the specification. It was not remembered; it was computed, which is the difference that matters here.
+
 **To expand this set properly:** fetch `gcmEncryptExtIV256` from the NIST CAVP archive and add cases from it. Do not add remembered values — that is what produced the defect.
 
 This is recorded rather than quietly fixed because a conformance suite's value is entirely in whether its claims can be trusted, and a suite that has silently corrected a fabricated vector is indistinguishable from one that has not.
@@ -83,7 +88,7 @@ Two of the primitives this format needs have no platform implementation, so they
 
 | Primitive | Second implementation | Result |
 |-----------|----------------------|--------|
-| **Argon2id** | Konscious (test-only dependency, never shipped) | Bit-identical across the parameter range, including the mandated minimums. The two differ only in refusing versus accepting an empty password — an API-boundary policy difference, not an algorithmic one, and the reason [03 §2.1](../03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) now exists. |
+| **Argon2id** | Konscious (test-only dependency, never shipped) | Bit-identical across the parameter range, including the mandated minimums — and both reproduce the committed [`argon2id.json`](vectors/argon2id.json) vector on every run. The two differ only in refusing versus accepting an empty password — an API-boundary policy difference, not an algorithmic one, and the reason [03 §2.1](../03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) now exists. |
 | **XChaCha20-Poly1305** | None available | **Unverified.** Recorded rather than glossed over — and open as [Q12](../../../docs/open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against), which asks whether an unverifiable profile should ship at all. |
 
 Cross-verification is not an audit. It establishes that two people did not make the same mistake; it does not establish that either is correct. The external cryptographic review required before the first beta must cover both primitives specifically.
@@ -100,11 +105,12 @@ Recorded so they are visible rather than discovered:
 
 | Gap | Blocked on |
 |-----|-----------|
-| AEAD record ciphertext vectors | See above — deliberate |
-| Additional AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
+| AEAD record ciphertext vectors | See above — deliberate. One platform-derived *regression* case now exists in `aes-gcm.json`, labelled as such; it is not conformance evidence |
+| Confirmed-provenance AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
 | **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
 | `cdc-v1` boundary vectors | Rabin polynomial and per-byte table not yet pinned ([09 §3.1](../09-segmentation.md#31-definition)) |
-| Ed25519 signature vectors | Signing key derivation is specified; the signature scheme's test vectors are not yet included |
+| Ed25519 signature vectors | Seed interpretation now fixed ([ADR-0020](../../../docs/adr/0020-ed25519-signing-key-semantics.md)); vectors await an implementation to produce them |
+| Negative vectors (rejection cases) | Fixture territory — e.g. a non-power-of-two `fixed-v1` segment size ([09 §2.2](../09-segmentation.md#22-parameters)) MUST be rejected, but every committed case happens to use a conforming size, so a non-enforcing implementation passes today |
 | Fixture repositories | Phase 0 |
 | Format upgrade fixtures | No second format version exists yet |
 

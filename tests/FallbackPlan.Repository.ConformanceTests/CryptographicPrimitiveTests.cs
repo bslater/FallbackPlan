@@ -264,14 +264,55 @@ public sealed class CryptographicPrimitiveTests
         }
     }
 
+    /// <summary>
+    /// The footer AAD (specification 05 section 3) is pinned as bytes, not just
+    /// as a shape string. A shape an implementer assembles themselves is a shape
+    /// two implementers can assemble differently — the record AAD gets exact
+    /// bytes, and the footer's deserves the same.
+    /// </summary>
+    [Fact]
+    public void Footer_associated_data_matches_the_committed_vector()
+    {
+        using var document = Load("records.json");
+        var inputs = document.RootElement.GetProperty("inputs");
+        var footer = document.RootElement.GetProperty("footer");
+
+        var repositoryId = Hex(inputs.GetProperty("repository_id").GetString()!);
+        var formatVersion = (ushort)inputs.GetProperty("format_version").GetInt32();
+        var blobId = Hex(footer.GetProperty("blob_id").GetString()!);
+        var recordCount = footer.GetProperty("record_count").GetUInt32();
+
+        var aad = new List<byte>(38);
+        aad.AddRange(repositoryId);
+        aad.AddRange([(byte)(formatVersion >> 8), (byte)formatVersion]);
+        aad.AddRange(blobId);
+        aad.AddRange(BigEndian(recordCount));
+
+        Assert.Equal(footer.GetProperty("aad_length").GetInt32(), aad.Count);
+        Assert.Equal(38, aad.Count);
+        Assert.Equal(footer.GetProperty("aad").GetString(), Hex([.. aad]));
+
+        // The reserved all-ones footer nonce is unreachable by any record:
+        // ordinals stop at 65 535 and the nonce is the ordinal's big-endian
+        // encoding, so no record nonce has a nonzero byte above position 8.
+        Assert.Equal("ffffffffffffffffffffffff", footer.GetProperty("nonce").GetString());
+    }
+
     // ---------------------------------------------------------------------
-    // NIST known-answer tests — independent of both our implementations
+    // AES-GCM known-answer tests — pinned constants, provenance per case
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// NIST CAVP AES-256-GCM vectors. These are the only AEAD vectors in the suite
-    /// derived independently of anything we wrote, and they establish that the
-    /// primitive is used correctly — nonce and tag handling included.
+    /// Verifies every case in aes-gcm.json against the platform AesGcm.
+    ///
+    /// These are not independently derived and the vector file says so —
+    /// case 1's NIST CAVP provenance is believed but could not be re-fetched
+    /// to confirm, and case 2 was computed once with this very primitive and
+    /// pinned as a regression vector over the format's real construction
+    /// (keys.json blob key, ordinal 47's nonce and 55-byte AAD). Case 2 is
+    /// the one that exercises AAD absorption at all: case 1 is
+    /// empty-plaintext, empty-AAD, so alone it proves nothing about the
+    /// property the record format leans on.
     /// </summary>
     [Fact]
     public void Aes_gcm_matches_known_answer_tests()

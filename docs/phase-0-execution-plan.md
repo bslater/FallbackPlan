@@ -16,9 +16,9 @@ If the engine is wrong, every later phase inherits the defect and the format can
 |---|---|
 | Architecture, reviewed twice | [`docs/architecture/`](architecture/) |
 | Requirements with acceptance criteria | 142 IDs, fully traced |
-| Decisions | 18 ADRs; 8 accepted, the rest proposed |
+| Decisions | 20 ADRs; 10 accepted, the rest proposed |
 | **Normative format specification** | [`specifications/repository-format/`](../specifications/repository-format/README.md) |
-| **Conformance vectors** | Identifiers, keys, AAD, segmentation, compression, NIST GCM |
+| **Conformance vectors** | Identifiers, keys, record and footer AAD, segmentation, compression, AES-GCM and Argon2id known-answer tests |
 | **Solution scaffold** | 12 src + 8 test projects, building clean with warnings-as-errors |
 | **CI** | Build and test on three platforms; vector reproducibility; documentation integrity |
 
@@ -41,7 +41,7 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 | A1 | Domain primitives: identifiers, profiles, generations, sizes | [02](../specifications/repository-format/02-identifiers.md), [00 §3](../specifications/repository-format/00-conventions.md#3-profiles) | — | Types are immutable; an invalid profile cannot be constructed |
 | A2 | Canonical CBOR encode/decode with **strict** determinism enforcement | [00 §4](../specifications/repository-format/00-conventions.md#4-cbor-encoding) | NFR-PORT-003, NFR-COMP-004 | Round-trips byte-identically; **rejects** non-canonical input — indefinite lengths, non-shortest integers, unsorted or duplicate keys |
 | A3 | Content and object identifiers | [02](../specifications/repository-format/02-identifiers.md) | FR-ARCH-003, NFR-SEC-004 | Matches `identifiers.json` exactly |
-| A4 | Key hierarchy: Argon2id, wrapping, HKDF derivation | [03](../specifications/repository-format/03-keys.md) | FR-ARCH-008, NFR-SEC-008 | Matches `keys.json`; two writers with an identical CSPRNG stream derive distinct blob keys |
+| A4 | Key hierarchy: Argon2id, wrapping, HKDF derivation | [03](../specifications/repository-format/03-keys.md) | FR-ARCH-008, NFR-SEC-008 | Matches `keys.json` and `argon2id.json`; two writers with an identical CSPRNG stream derive distinct blob keys; **an empty passphrase is rejected at repository creation** ([03 §2.1](../specifications/repository-format/03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) — the primitive accepts one, so refusing is the engine's job and untestable until the engine exists) |
 | A5 | Configuration schemas, validated before use | [06 §7](../specifications/repository-format/06-manifests.md#7-policy-manifest) | FR-ARCH-007, NFR-OPS-003 | A profile exceeding a provider limit is rejected **at configuration time** with a named reason |
 | A6 | `IObjectStore` and the local filesystem provider | [`05-storage-providers.md` §2](architecture/05-storage-providers.md#2-the-store-interface) | FR-REP-002, NFR-PORT-004 | Content supplied as a re-openable factory; expected outcomes are results, not exceptions |
 
@@ -141,7 +141,7 @@ Four rules that apply to every item, each closing a failure already documented i
 | Item | Blocked on | Effect |
 |------|-----------|--------|
 | B6 `cdc-v1` | Rabin polynomial and table not pinned | Cannot generate boundary vectors; blocks the [freeze-gate](roadmap.md#format-v1-freeze-gate) benchmark |
-| AEAD conformance vectors | No independent generator available | Framing is covered by `records.json` plus the independent reader. The single AES-GCM known-answer test is correctness-verified but its NIST provenance is **not** — see [conformance README](../specifications/repository-format/conformance/README.md) |
+| AEAD conformance vectors | No independent generator available | Framing is covered by `records.json` plus the independent reader. The AES-GCM known-answer tests are correctness-verified but the CAVP case's NIST provenance is **not** — see [conformance README](../specifications/repository-format/conformance/README.md) |
 | Ed25519 signature vectors | Not yet included | Snapshot signature verification untested against external vectors |
 | XChaCha20-Poly1305 cross-verification | No second implementation available | An unaudited AEAD ships unchecked unless the profile is dropped — [Q12](open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against) |
 | — | [ADR-0001](adr/0001-licence-and-contribution-model.md) licence | Blocks external contributions and the freeze gate. **Does not block any item above.** |

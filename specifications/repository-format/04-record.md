@@ -119,7 +119,7 @@ Record framing vectors, including header layouts and AAD construction, are in [`
 
 **There are no AEAD ciphertext vectors.** Producing them independently requires an AES-GCM implementation the vector generator deliberately does not depend on, and generating them from the reference implementation would prove only that a future build matches today's build. The gap is stated rather than filled with self-certifying values — see [`conformance/README.md`](conformance/README.md).
 
-A single AES-256-GCM known-answer test in [`conformance/vectors/aes-gcm.json`](conformance/vectors/aes-gcm.json) demonstrates the primitive is used correctly. Its correctness is verified against the platform implementation; its provenance as a NIST CAVP vector is recorded as **unverified**, because the CAVP archive was unreachable when these vectors were produced. What ultimately validates the framing is the freeze-gate independent reader, not this file.
+AES-256-GCM known-answer tests in [`conformance/vectors/aes-gcm.json`](conformance/vectors/aes-gcm.json) demonstrate the primitive is used correctly, including AAD absorption over this section's real 55-byte AAD. Their correctness is verified against the platform implementation; their provenance is declared per case — one believed-CAVP case recorded as **unverified** because the archive was unreachable, one platform-derived regression case labelled as such. What ultimately validates the framing is the freeze-gate independent reader, not this file.
 
 ---
 

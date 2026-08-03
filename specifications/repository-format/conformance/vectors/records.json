@@ -42,6 +42,10 @@
   "footer": {
     "comment": "The footer uses a reserved all-ones nonce no record can reach.",
     "nonce": "ffffffffffffffffffffffff",
-    "aad_shape": "repository_id || u16(format_version) || blob_id || u32(record_count)"
+    "aad_shape": "repository_id || u16(format_version) || blob_id || u32(record_count)",
+    "blob_id": "a0a1a2a3a4a5a6a7000000000000002a",
+    "record_count": 3,
+    "aad": "0102030405060708090a0b0c0d0e0f100001a0a1a2a3a4a5a6a7000000000000002a00000003",
+    "aad_length": 38
   }
 }

@@ -17,15 +17,28 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// </summary>
 public sealed class VectorFileTests
 {
-    private static readonly string[] ExpectedFiles =
-    [
-        "keys.json",
-        "identifiers.json",
-        "records.json",
-        "segmentation.json",
-        "compression.json",
-        "aes-gcm.json",
-    ];
+    /// <summary>
+    /// Every committed vector file, with the provenance its content actually
+    /// has. True: computed by the stdlib-only generator from published
+    /// algorithms — reproducible by anyone in any language. False: pinned
+    /// constants the generator cannot compute (AES-GCM, Argon2id), whose
+    /// per-file provenance fields say where the values really came from.
+    ///
+    /// An earlier revision asserted true for every file, including one whose
+    /// values the generator could not possibly have derived. A provenance
+    /// check that enforces an overstatement is worse than no check, so the
+    /// expectation is now per-file.
+    /// </summary>
+    private static readonly Dictionary<string, bool> ExpectedFiles = new()
+    {
+        ["keys.json"] = true,
+        ["identifiers.json"] = true,
+        ["records.json"] = true,
+        ["segmentation.json"] = true,
+        ["compression.json"] = true,
+        ["aes-gcm.json"] = false,
+        ["argon2id.json"] = false,
+    };
 
     private static string VectorDirectory =>
         Path.Combine(AppContext.BaseDirectory, "vectors");
@@ -40,7 +53,7 @@ public sealed class VectorFileTests
     [Fact]
     public void Every_expected_vector_file_is_present_and_parses()
     {
-        foreach (var name in ExpectedFiles)
+        foreach (var name in ExpectedFiles.Keys)
         {
             using var document = Load(name);
             Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
@@ -52,20 +65,28 @@ public sealed class VectorFileTests
 
     /// <summary>
     /// Every group must declare whether it was derived independently of the
-    /// reference implementation. A suite that quietly mixes self-certifying
-    /// vectors with independent ones overstates its own authority, which is
-    /// worse than having fewer vectors.
+    /// reference implementation — and declare it truthfully. A suite that
+    /// quietly mixes self-certifying vectors with independent ones overstates
+    /// its own authority, which is worse than having fewer vectors.
+    ///
+    /// The expected value is per-file: a group of pinned constants claiming
+    /// independent derivation is the overstatement, so flipping a file's flag
+    /// requires flipping the expectation here too — deliberately, in the same
+    /// change, with the reason in view.
     /// </summary>
     [Fact]
-    public void Every_vector_group_declares_its_provenance()
+    public void Every_vector_group_declares_its_provenance_truthfully()
     {
-        foreach (var name in ExpectedFiles)
+        foreach (var (name, expected) in ExpectedFiles)
         {
             using var document = Load(name);
             Assert.True(
                 document.RootElement.TryGetProperty("independently_derived", out var derived),
                 $"{name} does not declare independently_derived");
-            Assert.Equal(JsonValueKind.True, derived.ValueKind);
+            Assert.True(
+                derived.ValueKind is JsonValueKind.True or JsonValueKind.False,
+                $"{name}: independently_derived must be a boolean");
+            Assert.Equal(expected, derived.GetBoolean());
         }
     }
 
@@ -123,6 +144,11 @@ public sealed class VectorFileTests
             var fileLength = testCase.GetProperty("file_length").GetInt64();
             var segmentSize = testCase.GetProperty("segment_size").GetInt64();
             var segments = testCase.GetProperty("segments").EnumerateArray().ToList();
+
+            // segment_count is what an implementation will read; the segments
+            // array is what it will verify against. A generator bug that
+            // desynchronised them would otherwise pass every check here.
+            Assert.Equal(testCase.GetProperty("segment_count").GetInt32(), segments.Count);
 
             long covered = 0;
             long expectedOffset = 0;

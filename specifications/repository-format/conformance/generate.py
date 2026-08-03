@@ -11,8 +11,9 @@ The HKDF implementation below is checked against RFC 5869 test case 1 on every
 run. If that check ever fails, every derived vector in this file is wrong, and
 the script exits non-zero rather than emitting them.
 
-Vectors that CANNOT be produced here -- AEAD ciphertexts -- are not faked. See
-README.md for what is independently derived and what is not.
+Vectors that CANNOT be produced here -- AES-GCM and Argon2id outputs -- are
+pinned constants with their real provenance declared and
+independently_derived set to False. See README.md for what each flag means.
 
 Usage:  python3 generate.py [--check]
         --check verifies the committed vectors match freshly computed ones
@@ -262,6 +263,17 @@ def aad_vectors() -> dict:
             }
         )
 
+    # Footer AAD as bytes, not just a shape string. The record AAD above is
+    # pinned exactly; the footer's deserves the same treatment -- a shape an
+    # implementer has to assemble themselves is a shape two implementers can
+    # assemble differently.
+    footer_blob_id = WRITER_ID[:8] + u64(BLOB_COUNTER)
+    footer_record_count = 3
+    footer_aad = (
+        REPOSITORY_ID + u16(FORMAT_VERSION) + footer_blob_id + u32(footer_record_count)
+    )
+    assert len(footer_aad) == 38, f"footer AAD must be 38 bytes, got {len(footer_aad)}"
+
     return {
         "description": "Record nonce and associated-data construction (specification 04).",
         "independently_derived": True,
@@ -276,6 +288,10 @@ def aad_vectors() -> dict:
             "comment": "The footer uses a reserved all-ones nonce no record can reach.",
             "nonce": "ffffffffffffffffffffffff",
             "aad_shape": "repository_id || u16(format_version) || blob_id || u32(record_count)",
+            "blob_id": footer_blob_id.hex(),
+            "record_count": footer_record_count,
+            "aad": footer_aad.hex(),
+            "aad_length": len(footer_aad),
         },
     }
 
@@ -343,13 +359,21 @@ def compression_vectors() -> dict:
         )
 
     cases = []
+    # Case names state which side of the threshold the SAVING falls on --
+    # earlier names ("marginal_just_over/under") were ambiguous about whether
+    # "over" meant the saving or the compressed size, which is exactly the
+    # confusion a boundary vector exists to remove.
+    #
+    # There is deliberately no (0, 0) case: a zero-length file produces no
+    # segments and no records at all (specification 09 section 2, 04 section
+    # 2.1), so no compression decision for it can ever be taken.
     for name, logical, compressed in [
         ("highly_compressible", 1_048_576, 611_204),
-        ("marginal_just_over", 1_000_000, 949_000),
-        ("marginal_just_under", 1_000_000, 951_000),
+        ("saving_just_above_threshold", 1_000_000, 949_000),
+        ("saving_just_below_threshold", 1_000_000, 951_000),
         ("exactly_at_threshold", 1_000_000, 950_000),
         ("incompressible", 1_048_576, 1_048_600),
-        ("empty", 0, 0),
+        ("small_incompressible", 100, 99),
     ]:
         cases.append(
             {
@@ -377,43 +401,123 @@ def compression_vectors() -> dict:
 
 def aes_gcm_vectors() -> dict:
     """
-    AES-256-GCM known-answer test.
+    AES-256-GCM known-answer tests.
 
-    ONE case, deliberately. An earlier revision of this file carried a second
-    case whose ciphertext was written from memory rather than obtained, and it
-    was wrong -- CryptographicPrimitiveTests caught it on first run. It has been
+    This group is NOT independently derived, and says so. The generator cannot
+    compute AES-GCM from the standard library, so nothing in this file was
+    computed here -- each case's `provenance` field states where its values
+    actually came from, and the file-level flag is False. An earlier revision
+    claimed independent derivation for values the generator could not have
+    derived; that overstatement is exactly the failure mode the provenance
+    flag exists to prevent, so it is now enforced honestly.
+
+    History worth keeping: an even earlier revision carried a case whose
+    ciphertext was written from memory rather than obtained, and it was
+    wrong -- CryptographicPrimitiveTests caught it on first run. It was
     removed rather than replaced with another remembered value.
 
-    The surviving case verifies against the platform AES-GCM implementation, so
-    its correctness as an AES-256-GCM triple is established. Its provenance as a
-    NIST CAVP vector is asserted from memory and could NOT be re-fetched in the
-    environment this file was generated in (csrc.nist.gov and raw.githubusercontent.com
-    are both unreachable), so that claim is marked unverified rather than stated.
+    Case 1 is believed to be a NIST CAVP vector but the archive could not be
+    reached to confirm (csrc.nist.gov is unreachable from this environment);
+    `provenance_reverified: false` records that. It exercises only the
+    empty-plaintext, empty-AAD path.
+
+    Case 2 exists because case 1 proves nothing about AAD absorption -- the
+    one property the record format leans on (specification 04 section 4). It
+    uses the format's REAL construction: the blob key pinned in keys.json,
+    ordinal 47's nonce, and ordinal 47's 55-byte AAD from records.json. It was
+    computed ONCE with the platform implementation
+    (System.Security.Cryptography.AesGcm) and pinned. It is a regression
+    vector, not conformance evidence: it proves a future implementation
+    matches the platform's AES-GCM over the format's exact inputs, not that
+    either matches the specification.
 
     To expand this set properly: fetch gcmEncryptExtIV256 from the NIST CAVP
     archive, and add cases from it. Do not add remembered values.
     """
     return {
-        "description": "AES-256-GCM known-answer test.",
-        "independently_derived": True,
-        "provenance": "believed NIST CAVP gcmEncryptExtIV256, 96-bit IV, 128-bit tag",
-        "provenance_reverified": False,
+        "description": "AES-256-GCM known-answer tests.",
+        "independently_derived": False,
         "comment": (
-            "Correctness is verified by CryptographicPrimitiveTests against the "
-            "platform implementation. Provenance could not be re-fetched here -- see "
-            "the docstring in generate.py. The set is minimal because vectors were "
-            "only included where their correctness could be established, not where "
-            "they could be recalled."
+            "Nothing here was computed by this generator -- it cannot compute "
+            "AES-GCM from the standard library. Correctness of every case is "
+            "verified by CryptographicPrimitiveTests against the platform "
+            "implementation on every CI run; per-case provenance states where "
+            "each value came from."
         ),
         "cases": [
             {
                 "name": "empty_plaintext_empty_aad",
+                "provenance": "believed NIST CAVP gcmEncryptExtIV256, 96-bit IV, 128-bit tag",
+                "provenance_reverified": False,
                 "key": "b52c505a37d78eda5dd34f20c22540ea1b58963cf8e5bf8ffa85f9f2492505b4",
                 "iv": "516c33929df5a3284ff463d7",
                 "plaintext": "",
                 "aad": "",
                 "ciphertext": "",
                 "tag": "bdc1ac884d332457a1d2664f168c76f0",
+            },
+            {
+                "name": "record_ordinal_47_real_construction",
+                "provenance": (
+                    "platform-derived: computed once with "
+                    "System.Security.Cryptography.AesGcm and pinned. Regression "
+                    "vector, not conformance evidence. Key is keys.json blob_key; "
+                    "nonce and AAD are records.json ordinal 47."
+                ),
+                "provenance_reverified": False,
+                "key": "d35875180e8f91a5044f4786c560624cd62ab51f82897b771b5bfbccd9ee313d",
+                "iv": "00000000000000000000002f",
+                "plaintext": (
+                    "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a"
+                    "207265636f7264206f7264696e616c203437"
+                ),
+                "aad": (
+                    "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfe"
+                    "ca501904d9a70aa87b2dd5857e15be14738fdde00000002f"
+                ),
+                "ciphertext": (
+                    "bb9690d382d7f70b6f00d12e22c54208a8c069455a621f254665e8c1f92ebd"
+                    "e56c53f9ea31fca86794953ff5f01cdf3fa6"
+                ),
+                "tag": "d5649651bd6452be41bd0b23f5fff22f",
+            },
+        ],
+    }
+
+
+def argon2id_vectors() -> dict:
+    """
+    Argon2id known-answer test at the specification's mandated minimum
+    parameters (03 section 2: 64 MiB, 3 iterations, parallelism 4).
+
+    NOT independently derived -- the generator cannot compute Argon2id from
+    the standard library. The pinned value was computed by TWO independent
+    implementations (Bodu.Security.Cryptography and
+    Konscious.Security.Cryptography), which agree bit-for-bit; that agreement
+    is re-verified against this committed value by
+    Argon2idCrossVerificationTests on every CI run. Two implementations
+    agreeing is weaker than an independent derivation and much stronger than
+    one implementation asserting itself correct; the flag records which of
+    those this is.
+    """
+    return {
+        "description": "Argon2id KEK derivation at the mandated minimum parameters (specification 03 section 2).",
+        "independently_derived": False,
+        "provenance": (
+            "computed by two independent implementations (Bodu.Security.Cryptography "
+            "and Konscious.Security.Cryptography 1.3.1), which agree bit-for-bit; "
+            "re-verified against both on every CI run by Argon2idCrossVerificationTests"
+        ),
+        "cases": [
+            {
+                "name": "mandated_minimum_parameters",
+                "password_utf8": "fallbackplan conformance passphrase",
+                "salt": "000102030405060708090a0b0c0d0e0f",
+                "memory_kib": 65536,
+                "iterations": 3,
+                "parallelism": 4,
+                "tag_length": 32,
+                "tag": "4f10a625c20dd8499acfd84ec9618d2822928bdc8c66db770e9d27305e2f1aa2",
             },
         ],
     }
@@ -430,6 +534,7 @@ GROUPS = {
     "segmentation.json": segmentation_vectors,
     "compression.json": compression_vectors,
     "aes-gcm.json": aes_gcm_vectors,
+    "argon2id.json": argon2id_vectors,
 }
 
 
@@ -457,7 +562,10 @@ def main() -> int:
 
     self_test()
 
-    VECTORS.mkdir(parents=True, exist_ok=True)
+    if not args.check:
+        # --check must not touch the filesystem at all, so the mkdir happens
+        # only on the write path.
+        VECTORS.mkdir(parents=True, exist_ok=True)
     failures = []
 
     for filename, builder in GROUPS.items():
@@ -466,10 +574,12 @@ def main() -> int:
         if args.check:
             if not path.exists():
                 failures.append(f"{filename}: missing")
-            elif path.read_text() != rendered:
+            elif path.read_text(encoding="utf-8") != rendered:
                 failures.append(f"{filename}: differs from freshly computed output")
         else:
-            path.write_text(rendered)
+            # Encoding and newlines pinned so the comparison above is not
+            # locale- or platform-dependent.
+            path.write_text(rendered, encoding="utf-8", newline="\n")
             print(f"wrote {path.relative_to(VECTORS.parent.parent.parent)}")
 
     if failures:

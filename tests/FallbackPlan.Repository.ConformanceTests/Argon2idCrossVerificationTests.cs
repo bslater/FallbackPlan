@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Bodu.Security.Cryptography;
 using Xunit;
 
@@ -132,6 +133,39 @@ public sealed class Argon2idCrossVerificationTests
         Assert.NotEqual(
             Convert.ToHexString(Bodu(password, saltA, 64, 2, 1, 32)),
             Convert.ToHexString(Bodu(password, saltB, 64, 2, 1, 32)));
+    }
+
+    /// <summary>
+    /// Both implementations must reproduce the committed argon2id.json vector.
+    ///
+    /// The pinned value was computed by these two implementations agreeing —
+    /// the generator cannot compute Argon2id from the Python standard library,
+    /// and the vector file says so (independently_derived: false). Re-checking
+    /// both against the committed bytes on every run is what keeps that pin
+    /// honest: if either implementation drifts, or someone edits the JSON, this
+    /// fails and names which.
+    /// </summary>
+    [Fact]
+    public void Both_implementations_reproduce_the_committed_vector()
+    {
+        using var document = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "argon2id.json")));
+
+        foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var password = Encoding.UTF8.GetBytes(testCase.GetProperty("password_utf8").GetString()!);
+            var salt = Convert.FromHexString(testCase.GetProperty("salt").GetString()!);
+            var memoryKiB = testCase.GetProperty("memory_kib").GetInt32();
+            var iterations = testCase.GetProperty("iterations").GetInt32();
+            var parallelism = testCase.GetProperty("parallelism").GetInt32();
+            var tagLength = testCase.GetProperty("tag_length").GetInt32();
+            var expected = testCase.GetProperty("tag").GetString()!.ToUpperInvariant();
+
+            Assert.Equal(expected, Convert.ToHexString(
+                Bodu(password, salt, memoryKiB, iterations, parallelism, tagLength)));
+            Assert.Equal(expected, Convert.ToHexString(
+                Konscious(password, salt, memoryKiB, iterations, parallelism, tagLength)));
+        }
     }
 
     /// <summary>
