@@ -31,6 +31,7 @@ The generator depends on nothing but the Python standard library. That is delibe
 | [`compression.json`](vectors/compression.json) | ✅ Yes | Your threshold decisions match |
 | [`aes-gcm.json`](vectors/aes-gcm.json) | ❌ **No** — pinned constants, provenance per case | You use AES-256-GCM correctly, including AAD absorption over the format's real 55-byte AAD — see the note below |
 | [`argon2id.json`](vectors/argon2id.json) | ❌ **No** — pinned from two agreeing implementations | Your Argon2id matches both reference implementations at the mandated minimum parameters |
+| [`ed25519.json`](vectors/ed25519.json) | ✅ Yes | Your Ed25519 treats the derived 32 bytes as an RFC 8032 §5.1.5 **seed** ([ADR-0020](../../../docs/adr/0020-ed25519-signing-key-semantics.md)) and reproduces the RFC §7.1 vectors — computed by a pure-Python RFC 8032 implementation in the generator, gated by those published vectors on every run |
 | **AEAD record ciphertexts** | ❌ **Not present** | — |
 
 "Independently derived" means computed here from published algorithms using standard-library primitives, with no input from the reference implementation. You can reproduce them in any language. Each file carries the flag as `independently_derived`, and `VectorFileTests` asserts the flag **per file against what the content actually is** — an earlier revision asserted `true` for every file, including one whose values the generator cannot compute, which was precisely the overstatement the flag exists to prevent.
@@ -108,7 +109,6 @@ Recorded so they are visible rather than discovered:
 | AEAD record ciphertext vectors | See above — deliberate. One platform-derived *regression* case now exists in `aes-gcm.json`, labelled as such; it is not conformance evidence |
 | Confirmed-provenance AES-GCM known-answer tests | NIST CAVP archive unreachable from this environment |
 | **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
-| Ed25519 signature vectors | Seed interpretation now fixed ([ADR-0020](../../../docs/adr/0020-ed25519-signing-key-semantics.md)); vectors await an implementation to produce them |
 | Negative vectors (rejection cases) | Fixture territory — e.g. a non-power-of-two `fixed-v1` segment size ([09 §2.2](../09-segmentation.md#22-parameters)) MUST be rejected, but every committed case happens to use a conforming size, so a non-enforcing implementation passes today |
 | Fixture repositories | Phase 0 |
 | Format upgrade fixtures | No second format version exists yet |

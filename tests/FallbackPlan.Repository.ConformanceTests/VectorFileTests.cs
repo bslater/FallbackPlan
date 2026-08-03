@@ -38,6 +38,7 @@ public sealed class VectorFileTests
         ["compression.json"] = true,
         ["aes-gcm.json"] = false,
         ["argon2id.json"] = false,
+        ["ed25519.json"] = true,
     };
 
     private static string VectorDirectory =>

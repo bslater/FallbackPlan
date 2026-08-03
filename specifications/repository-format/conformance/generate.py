@@ -4,8 +4,10 @@ Generate FallbackPlan repository-format conformance vectors.
 
 Deliberately depends on nothing but the Python standard library. The point of
 these vectors is that an implementer can reproduce them without trusting the
-reference implementation, so anything computed here uses only SHA-256 and
-HMAC-SHA256 -- primitives available in every language.
+reference implementation, so anything computed here uses only SHA-256,
+HMAC-SHA256, SHA-512, and integer arithmetic -- primitives available in every
+language. That includes Ed25519, implemented below directly from RFC 8032 and
+self-checked against the RFC's published test vectors on every run.
 
 The HKDF implementation below is checked against RFC 5869 test case 1 on every
 run. If that check ever fails, every derived vector in this file is wrong, and
@@ -174,6 +176,122 @@ def cdc_segments(data: bytes, target: int, min_size: int, max_size: int) -> list
 
 
 _CDC_PUSH, _CDC_POP = _cdc_tables()
+
+
+# --------------------------------------------------------------------------
+# Ed25519 (RFC 8032), pure Python
+#
+# Implemented from the RFC alone so signature vectors can be computed here
+# with no reference implementation involved (ADR-0022 Decision 8). Slow and
+# simple on purpose; it signs a handful of test messages, nothing more.
+# --------------------------------------------------------------------------
+
+_ED_P = 2**255 - 19
+_ED_L = 2**252 + 27742317777372353535851937790883648493
+_ED_D = (-121665 * pow(121666, _ED_P - 2, _ED_P)) % _ED_P
+
+
+def _ed_recover_x(y: int, sign: int) -> int:
+    x2 = (y * y - 1) * pow(_ED_D * y * y + 1, _ED_P - 2, _ED_P) % _ED_P
+    x = pow(x2, (_ED_P + 3) // 8, _ED_P)
+    if (x * x - x2) % _ED_P != 0:
+        x = x * pow(2, (_ED_P - 1) // 4, _ED_P) % _ED_P
+    if (x * x - x2) % _ED_P != 0:
+        raise ValueError("not a square; invalid point")
+    if x % 2 != sign:
+        x = _ED_P - x
+    return x
+
+
+_ED_GY = 4 * pow(5, _ED_P - 2, _ED_P) % _ED_P
+_ED_GX = _ed_recover_x(_ED_GY, 0)
+_ED_G = (_ED_GX, _ED_GY, 1, _ED_GX * _ED_GY % _ED_P)  # extended coordinates
+
+
+def _ed_add(p: tuple, q: tuple) -> tuple:
+    a = (p[1] - p[0]) * (q[1] - q[0]) % _ED_P
+    b = (p[1] + p[0]) * (q[1] + q[0]) % _ED_P
+    c = 2 * p[3] * q[3] * _ED_D % _ED_P
+    d = 2 * p[2] * q[2] % _ED_P
+    e, f, g, h = b - a, d - c, d + c, b + a
+    return (e * f % _ED_P, g * h % _ED_P, f * g % _ED_P, e * h % _ED_P)
+
+
+def _ed_mul(s: int, p: tuple) -> tuple:
+    q = (0, 1, 1, 0)  # the neutral element
+    while s > 0:
+        if s & 1:
+            q = _ed_add(q, p)
+        p = _ed_add(p, p)
+        s >>= 1
+    return q
+
+
+def _ed_compress(p: tuple) -> bytes:
+    zinv = pow(p[2], _ED_P - 2, _ED_P)
+    x = p[0] * zinv % _ED_P
+    y = p[1] * zinv % _ED_P
+    return int.to_bytes(y | ((x & 1) << 255), 32, "little")
+
+
+def _ed_secret_expand(seed: bytes) -> tuple[int, bytes]:
+    """RFC 8032 section 5.1.5: the 32-byte seed is hashed, clamped, split."""
+    h = hashlib.sha512(seed).digest()
+    a = int.from_bytes(h[:32], "little")
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return a, h[32:]
+
+
+def ed25519_public_key(seed: bytes) -> bytes:
+    a, _ = _ed_secret_expand(seed)
+    return _ed_compress(_ed_mul(a, _ED_G))
+
+
+def ed25519_sign(seed: bytes, message: bytes) -> bytes:
+    a, prefix = _ed_secret_expand(seed)
+    public = _ed_compress(_ed_mul(a, _ED_G))
+    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % _ED_L
+    big_r = _ed_compress(_ed_mul(r, _ED_G))
+    k = int.from_bytes(hashlib.sha512(big_r + public + message).digest(), "little") % _ED_L
+    s = (r + k * a) % _ED_L
+    return big_r + int.to_bytes(s, 32, "little")
+
+
+# RFC 8032 section 7.1 test vectors 1-3: seed, public key, message, signature.
+_ED_RFC8032_CASES = [
+    (
+        "rfc8032_test_1_empty_message",
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "",
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+    ),
+    (
+        "rfc8032_test_2_one_byte",
+        "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "72",
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+    ),
+    (
+        "rfc8032_test_3_two_bytes",
+        "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+        "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+        "af82",
+        "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+    ),
+]
+
+
+def _ed25519_self_test() -> None:
+    """The RFC's own vectors gate every Ed25519 value this generator emits."""
+    for name, seed_hex, public_hex, message_hex, signature_hex in _ED_RFC8032_CASES:
+        seed = bytes.fromhex(seed_hex)
+        if ed25519_public_key(seed).hex() != public_hex:
+            sys.exit(f"FATAL: Ed25519 self-test {name}: public key mismatch.")
+        if ed25519_sign(seed, bytes.fromhex(message_hex)).hex() != signature_hex:
+            sys.exit(f"FATAL: Ed25519 self-test {name}: signature mismatch.")
 
 
 # --------------------------------------------------------------------------
@@ -753,6 +871,86 @@ def argon2id_vectors() -> dict:
     }
 
 
+def ed25519_vectors() -> dict:
+    """
+    Ed25519 signatures (specification 06 section 6.1; ADR-0020, ADR-0022).
+
+    Everything here is computed by the pure-Python RFC 8032 implementation
+    above, which is itself gated by the RFC's published test vectors 1-3 on
+    every run -- the same pattern as the HKDF RFC 5869 self-test. The
+    format-real cases sign with seeds derived exactly as specification 03
+    section 4 derives them, proving the seed interpretation end to end: the
+    32 HKDF bytes are an RFC 8032 section 5.1.5 seed, never a pre-clamped
+    scalar, and the public key is computed from it rather than distributed.
+    """
+    _ed25519_self_test()
+
+    rfc_cases = [
+        {
+            "name": name,
+            "provenance": "RFC 8032 section 7.1; recomputed by this generator on every run",
+            "seed": seed,
+            "public_key": public,
+            "message": message,
+            "signature": signature,
+        }
+        for name, seed, public, message, signature in _ED_RFC8032_CASES
+    ]
+
+    format_cases = []
+    for generation, message, message_comment in [
+        (
+            0,
+            b"FallbackPlan conformance suite: repository-scoped signature domain",
+            "plain ASCII bytes",
+        ),
+        (
+            1,
+            # A hand-assembled deterministic CBOR map (00 section 4.1):
+            # {1: repository_id, 2: 1, 3: "fbp"} -- the shape of a signed
+            # structure's canonical prefix.
+            bytes.fromhex("a3") + bytes.fromhex("01") + bytes.fromhex("50") + REPOSITORY_ID
+            + bytes.fromhex("0201")
+            + bytes.fromhex("0363666270"),
+            "deterministic CBOR map {1: repository_id (bytes 16), 2: 1, 3: \"fbp\"}",
+        ),
+    ]:
+        seed = hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(generation), 32)
+        public = ed25519_public_key(seed)
+        signature = ed25519_sign(seed, message)
+
+        format_cases.append(
+            {
+                "name": f"format_signing_seed_generation_{generation}",
+                "generation": generation,
+                "seed_derivation": "HKDF-Expand(master_key, 'fbp/signing/v1' || u32(generation), 32)",
+                "seed": seed.hex(),
+                "public_key": public.hex(),
+                "message": message.hex(),
+                "message_comment": message_comment,
+                "signature": signature.hex(),
+            }
+        )
+
+    # Generation 0's seed must equal keys.json's signing_key_generation_0 --
+    # one derivation, two files, no drift.
+    assert format_cases[0]["seed"] == hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32).hex()
+
+    return {
+        "description": "Ed25519 signatures over RFC 8032 vectors and the format's real signing seeds.",
+        "independently_derived": True,
+        "comment": (
+            "Computed by a pure-Python RFC 8032 implementation living in this "
+            "generator, gated by the RFC's published test vectors on every "
+            "run. The seed is the RFC 8032 section 5.1.5 private-key seed "
+            "(ADR-0020) -- an implementation that treats it as a pre-clamped "
+            "scalar will fail every case here."
+        ),
+        "rfc8032_cases": rfc_cases,
+        "format_cases": format_cases,
+    }
+
+
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
@@ -765,6 +963,7 @@ GROUPS = {
     "compression.json": compression_vectors,
     "aes-gcm.json": aes_gcm_vectors,
     "argon2id.json": argon2id_vectors,
+    "ed25519.json": ed25519_vectors,
 }
 
 

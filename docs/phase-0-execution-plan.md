@@ -140,9 +140,9 @@ Four rules that apply to every item, each closing a failure already documented i
 
 | Item | Blocked on | Effect |
 |------|-----------|--------|
-| B6 `cdc-v1` | Rabin polynomial and table not pinned | Cannot generate boundary vectors; blocks the [freeze-gate](roadmap.md#format-v1-freeze-gate) benchmark |
+| ~~B6 `cdc-v1`~~ | **Resolved** — polynomial and tables pinned by [ADR-0023](adr/0023-cdc-v1-rabin-parameters.md), boundary vectors committed | The freeze-gate benchmark is unblocked |
 | AEAD conformance vectors | No independent generator available | Framing is covered by `records.json` plus the independent reader. The AES-GCM known-answer tests are correctness-verified but the CAVP case's NIST provenance is **not** — see [conformance README](../specifications/repository-format/conformance/README.md) |
-| Ed25519 signature vectors | Not yet included | Snapshot signature verification untested against external vectors |
+| ~~Ed25519 signature vectors~~ | **Resolved** — `ed25519.json` carries RFC 8032 §7.1 vectors and format-real cases, computed by a pure-Python RFC 8032 implementation in the generator ([ADR-0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) Decision 8) | Snapshot signature verification is vector-tested |
 | XChaCha20-Poly1305 cross-verification | No second implementation available | An unaudited AEAD ships unchecked unless the profile is dropped — [Q12](open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against) |
 | — | [ADR-0001](adr/0001-licence-and-contribution-model.md) licence | Blocks external contributions and the freeze gate. **Does not block any item above.** |
 
