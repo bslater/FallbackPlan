@@ -14,6 +14,9 @@ public sealed class ObjectTypeTests
     [InlineData(0x04, ObjectType.SnapshotManifest)]
     [InlineData(0x05, ObjectType.PolicyManifest)]
     [InlineData(0x06, ObjectType.ErrorManifest)]
+    [InlineData(0x08, ObjectType.IndexDelta)]
+    [InlineData(0x09, ObjectType.IndexCheckpoint)]
+    [InlineData(0x0A, ObjectType.JournalRecord)]
     public void Assigned_types_are_valid(byte value, ObjectType expected)
     {
         Assert.True(ObjectTypes.IsValid(value));
@@ -24,7 +27,7 @@ public sealed class ObjectTypeTests
     [Theory]
     [InlineData(0x00)]
     [InlineData(0x07)] // reserved: store-blob-key domain separator, never a record type
-    [InlineData(0x08)]
+    [InlineData(0x0B)]
     [InlineData(0xFF)]
     public void Unassigned_and_reserved_values_are_refused(byte value)
     {
