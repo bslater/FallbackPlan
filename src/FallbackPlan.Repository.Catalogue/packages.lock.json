@@ -14,7 +14,25 @@
         }
       },
       "fallbackplan.domain": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Text.Encoding": "[0.1.1, )"
+        }
+      },
+      "Bodu.Core": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+      },
+      "Bodu.Text.Encoding": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "PoYL+h1xvxAJD1ajdpXDfAFdMSCe+DCQmFRzF+N1EVgS+B0/OEX0iAsYb+jzew5FAAzX5gVVkziggRdS2YxasQ==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "CentralTransitive",

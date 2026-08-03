@@ -1,22 +1,32 @@
 namespace FallbackPlan.Domain;
 
 /// <summary>
-/// Lowercase unpadded base32 (RFC 4648 §6, alphabet
-/// <c>abcdefghijklmnopqrstuvwxyz234567</c>) as required for identifiers that
+/// Lowercase unpadded base32 (RFC 4648 §6) as required for identifiers that
 /// appear in store keys (specification 00 §6, 02 §5). Store namespaces are
 /// case-insensitive on some providers, which is why the rendering is base32
 /// rather than hex or base64.
 /// </summary>
 /// <remarks>
-/// Decoding is strict: uppercase characters, characters outside the alphabet,
-/// impossible lengths, and non-zero trailing padding bits are all rejected.
-/// RFC 4648 §3.5 merely recommends rejecting non-zero padding bits; this
-/// implementation requires it so that encoding and decoding form a bijection —
-/// two distinct renderings can never name the same identifier.
+/// <para>
+/// The encoding itself is <c>Bodu.Text.Encoding</c>'s Base32 (standard
+/// variant, padding omitted), adopted rather than hand-rolled because the
+/// platform provides no base32 (ADR-0019 §4, ADR-0021). This adapter pins the
+/// format's stricter contract on top: output is folded to lowercase, and
+/// decoding refuses uppercase, out-of-alphabet characters, impossible
+/// lengths, and non-zero trailing padding bits — Bodu enforces the trailing
+/// bits via <c>RequireCanonicalEncoding</c>; the case and length rules are
+/// this repository's own.
+/// </para>
+/// <para>
+/// The strictness exists for bijectivity: exactly one rendering names an
+/// identifier, so two distinct strings can never decode to the same bytes.
+/// </para>
 /// </remarks>
 public static class Base32
 {
-    private const string Alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+    private const Bodu.Text.Encoding.BaseFormatStyles StrictUnpadded =
+        Bodu.Text.Encoding.BaseFormatStyles.AllowMissingPadding |
+        Bodu.Text.Encoding.BaseFormatStyles.RequireCanonicalEncoding;
 
     /// <summary>
     /// Returns the number of characters produced by encoding
@@ -38,29 +48,14 @@ public static class Base32
             return string.Empty;
         }
 
-        var result = new char[GetEncodedLength(bytes.Length)];
-        var buffer = 0;
-        var bits = 0;
-        var written = 0;
+        var encoded = Bodu.Text.Encoding.Base32.Encode(
+            bytes,
+            Bodu.Text.Encoding.Base32Variant.Standard,
+            Bodu.Text.Encoding.BaseFormattingOptions.OmitPadding);
 
-        foreach (var value in bytes)
-        {
-            buffer = (buffer << 8) | value;
-            bits += 8;
-
-            while (bits >= 5)
-            {
-                bits -= 5;
-                result[written++] = Alphabet[(buffer >> bits) & 0x1F];
-            }
-        }
-
-        if (bits > 0)
-        {
-            result[written++] = Alphabet[(buffer << (5 - bits)) & 0x1F];
-        }
-
-        return new string(result, 0, written);
+        // The standard alphabet is uppercase; the store rendering is lowercase
+        // (specification 00 §6).
+        return encoded.ToLowerInvariant();
     }
 
     /// <summary>
@@ -81,50 +76,24 @@ public static class Base32
             return false;
         }
 
-        var buffer = 0;
-        var bits = 0;
-        var written = 0;
-
+        // Only the exact rendering alphabet is accepted. The underlying
+        // decoder is case-insensitive and accepts '=' padding; the format's
+        // renderings are strictly lowercase and unpadded, and bijectivity
+        // demands refusing every other spelling.
         foreach (var character in text)
         {
-            int index;
-            if (character is >= 'a' and <= 'z')
-            {
-                index = character - 'a';
-            }
-            else if (character is >= '2' and <= '7')
-            {
-                index = character - '2' + 26;
-            }
-            else
+            var valid = character is (>= 'a' and <= 'z') or (>= '2' and <= '7');
+            if (!valid)
             {
                 return false;
             }
-
-            buffer = (buffer << 5) | index;
-            bits += 5;
-
-            if (bits >= 8)
-            {
-                bits -= 8;
-
-                if (written >= destination.Length)
-                {
-                    return false;
-                }
-
-                destination[written++] = (byte)((buffer >> bits) & 0xFF);
-            }
         }
 
-        // Bits left over after the final whole byte are padding and must be
-        // zero, or two distinct strings would decode to the same bytes.
-        if ((buffer & ((1 << bits) - 1)) != 0)
-        {
-            return false;
-        }
-
-        bytesWritten = written;
-        return true;
+        return Bodu.Text.Encoding.Base32.TryDecode(
+            text,
+            destination,
+            out bytesWritten,
+            Bodu.Text.Encoding.Base32Variant.Standard,
+            StrictUnpadded);
     }
 }

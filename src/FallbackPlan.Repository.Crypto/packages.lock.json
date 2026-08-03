@@ -4,21 +4,33 @@
     "net10.0": {
       "Bodu.Security.Cryptography": {
         "type": "Direct",
-        "requested": "[0.1.0, )",
-        "resolved": "0.1.0",
-        "contentHash": "QKfLXphFEg+LqLP/QIDEn1ltl2y2Vi1HXAD3vD40sdDlzWBRmI8J3Bv7dC9t/wxopJ0WPCV8CRwMKqkdW0JQpQ==",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "0nlZjvkEKcnolw/xRqder9iEKahTSs26BzWYrimQ5Q583MbHq14V0Jp+plynvORUV2jEn8Az2L4NgSt6orbO5g==",
         "dependencies": {
-          "Bodu.Core": "0.1.0"
+          "Bodu.Core": "0.1.1"
         }
       },
       "fallbackplan.domain": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Text.Encoding": "[0.1.1, )"
+        }
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[0.1.0, )",
-        "resolved": "0.1.0",
-        "contentHash": "giH6Xeybtjaaf6RLHfugNlNjEG4eBUk7GFxMeJXbup3KH5OYZ8zu7Yrw7gwr7bOCZQCQEOp0iepy8vAgeTh56A=="
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+      },
+      "Bodu.Text.Encoding": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "PoYL+h1xvxAJD1ajdpXDfAFdMSCe+DCQmFRzF+N1EVgS+B0/OEX0iAsYb+jzew5FAAzX5gVVkziggRdS2YxasQ==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
       }
     }
   }

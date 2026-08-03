@@ -10,8 +10,9 @@ consumes, committed to the repository so that a plain `git clone` and a GitHub
 
 | Package | Version | Origin |
 |---|---|---|
-| `Bodu.Core` | 0.1.0 | `local-packages/` feed of <https://github.com/bslater/bodu.git> at commit `1b16ae2d25c32ddd12f235a8ea453a22850764b6` |
-| `Bodu.Security.Cryptography` | 0.1.0 | same feed, same commit (depends on `Bodu.Core >= 0.1.0`) |
+| `Bodu.Core` | 0.1.1 | `local-packages/` feed of <https://github.com/bslater/bodu.git> at commit `597e7f4b78e835b7f6041fc862083ef4e8c20ef5` |
+| `Bodu.Security.Cryptography` | 0.1.1 | same feed, same commit (depends on `Bodu.Core 0.1.1`) — Argon2id, cross-verified against Konscious on every CI run |
+| `Bodu.Text.Encoding` | 0.1.1 | same feed, same commit (depends on `Bodu.Core 0.1.1`) — base32 rendering of identifiers, behind the strict lowercase adapter in `FallbackPlan.Domain.Base32` |
 
 The packages target `net8.0` and are consumed by the `net10.0` projects via
 NuGet's nearest-TFM selection. Versions are pinned centrally in

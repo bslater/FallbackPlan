@@ -15,7 +15,25 @@
         "contentHash": "UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ=="
       },
       "fallbackplan.domain": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Text.Encoding": "[0.1.1, )"
+        }
+      },
+      "Bodu.Core": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+      },
+      "Bodu.Text.Encoding": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "PoYL+h1xvxAJD1ajdpXDfAFdMSCe+DCQmFRzF+N1EVgS+B0/OEX0iAsYb+jzew5FAAzX5gVVkziggRdS2YxasQ==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
       }
     }
   }

@@ -5,4 +5,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Prebuilt package from the committed external/packages feed: the base32
+         rendering of identifiers (specification 02 section 5). Adopted rather
+         than hand-rolled per ADR-0019 section 4 / ADR-0021; the platform
+         provides no base32. -->
+    <PackageReference Include="Bodu.Text.Encoding" />
+  </ItemGroup>
+
 </Project>

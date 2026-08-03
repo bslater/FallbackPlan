@@ -130,6 +130,7 @@ The neutral model exists so that the same import pipeline serves restic, Kopia, 
 | Argon2id | `Bodu.Security.Cryptography` | **No platform implementation exists** — [ADR-0019](../adr/0019-third-party-dependency-policy.md) |
 | XChaCha20-Poly1305 | Third-party, not yet selected | **No platform implementation exists.** .NET's `ChaCha20Poly1305` is the 12-byte-nonce RFC 8439 variant and is not a substitute — [spec 03 §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from) |
 | General utilities | `Bodu.Core` | Referenced from `Repository.Packing` |
+| Base32 rendering | `Bodu.Text.Encoding` | **No platform implementation exists** — behind the strict lowercase adapter in `Domain.Base32` ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §4) |
 
 ### 5.1 Vendored dependencies
 

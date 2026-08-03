@@ -12,8 +12,9 @@
     <!-- Prebuilt Bodu packages from the committed external/packages feed —
          not published to nuget.org. Provenance and upgrade procedure:
          external/packages/README.md, ADR-0021. -->
-    <PackageVersion Include="Bodu.Core" Version="0.1.0" />
-    <PackageVersion Include="Bodu.Security.Cryptography" Version="0.1.0" />
+    <PackageVersion Include="Bodu.Core" Version="0.1.1" />
+    <PackageVersion Include="Bodu.Security.Cryptography" Version="0.1.1" />
+    <PackageVersion Include="Bodu.Text.Encoding" Version="0.1.1" />
   </ItemGroup>
 
   <ItemGroup Label="CLI">
