@@ -19,11 +19,61 @@
           "Bodu.Text.Encoding": "[0.1.1, )"
         }
       },
+      "fallbackplan.repository.crypto": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Security.Cryptography": "[0.1.1, )",
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.repository.format": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )",
+          "ZstdSharp.Port": "[0.8.8, )"
+        }
+      },
+      "fallbackplan.repository.index": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Format": "[1.0.0, )",
+          "FallbackPlan.Repository.Packing": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.repository.packing": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.1.1, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Format": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.storage.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
       "Bodu.Core": {
         "type": "CentralTransitive",
         "requested": "[0.1.1, )",
         "resolved": "0.1.1",
         "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+      },
+      "Bodu.Security.Cryptography": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "0nlZjvkEKcnolw/xRqder9iEKahTSs26BzWYrimQ5Q583MbHq14V0Jp+plynvORUV2jEn8Az2L4NgSt6orbO5g==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
@@ -82,6 +132,18 @@
         "dependencies": {
           "SQLitePCLRaw.core": "3.0.5"
         }
+      },
+      "System.Formats.Cbor": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "V8XZBZsORS+NMhM5hc7doU0wKgDe0lJaaUkZGlAgpbYqN5Pd11I3pxwoRQgEyUVbDri/+qm7YCp49gCTYcbqJQ=="
+      },
+      "ZstdSharp.Port": {
+        "type": "CentralTransitive",
+        "requested": "[0.8.8, )",
+        "resolved": "0.8.8",
+        "contentHash": "UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ=="
       }
     }
   }

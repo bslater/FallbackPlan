@@ -146,6 +146,8 @@
         "type": "Project",
         "dependencies": {
           "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Data.Sqlite": "[10.0.10, )"
         }
       },

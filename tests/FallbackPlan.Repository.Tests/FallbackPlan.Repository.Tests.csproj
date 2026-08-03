@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
   </ItemGroup>
 
 </Project>

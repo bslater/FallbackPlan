@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
   </ItemGroup>
 
   <ItemGroup>
