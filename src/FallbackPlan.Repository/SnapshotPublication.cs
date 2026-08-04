@@ -121,10 +121,11 @@ public sealed partial class PublicationOrchestrator
 
         if (!PathRuleSet.TryCreate(
                 job.IncludeRules, job.ExcludeRules, caseSensitive: filesystem.CaseSensitive,
-                out var rules, out var ruleDefect))
+                out var rules, out var ruleDefects))
         {
             throw new ArgumentException(
-                $"The capture rules are invalid and a writer MUST refuse them (specification 06 §7.1): {ruleDefect}",
+                "The capture rules are invalid and a writer MUST refuse them (specification 06 §7.1): " +
+                string.Join("; ", ruleDefects),
                 nameof(job));
         }
 

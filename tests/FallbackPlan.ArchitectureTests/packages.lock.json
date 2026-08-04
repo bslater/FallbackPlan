@@ -140,6 +140,7 @@
       "fallbackplan.cli": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",

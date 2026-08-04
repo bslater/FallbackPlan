@@ -21,6 +21,12 @@
           "FallbackPlan.Repository.Format": "[1.0.0, )"
         }
       },
+      "fallbackplan.filesystem.local": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Filesystem": "[1.0.0, )"
+        }
+      },
       "fallbackplan.import.abstractions": {
         "type": "Project",
         "dependencies": {

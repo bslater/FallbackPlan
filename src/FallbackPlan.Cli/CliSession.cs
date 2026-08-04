@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
@@ -12,7 +11,7 @@ namespace FallbackPlan.Cli;
 /// A command's failure with a message for the operator — distinct from a bug,
 /// which is allowed to escape with a stack trace.
 /// </summary>
-internal sealed class CliFailureException : Exception
+public sealed class CliFailureException : Exception
 {
     public CliFailureException(string message)
         : base(message)
@@ -37,7 +36,7 @@ internal sealed class CliFailureException : Exception
 /// (specification 02 §2) — they live under the state directory, never inside
 /// the repository.
 /// </summary>
-internal sealed class CliSession : IDisposable
+public sealed class CliSession : IDisposable
 {
     private CliSession(LocalFileSystemObjectStore store, OpenedRepository repository, string stateDirectory)
     {
@@ -54,7 +53,16 @@ internal sealed class CliSession : IDisposable
 
     public string SpoolDirectory => Path.Combine(StateDirectory, "spool");
 
+    /// <summary>The disposable catalogue — one of the three separated stores (11 §3).</summary>
     public string CataloguePath => Path.Combine(StateDirectory, "catalogue.db");
+
+    /// <summary>The user-editable configuration — the second store (11 §3).</summary>
+    public string ConfigurationPath => Path.Combine(StateDirectory, "config.json");
+
+    /// <summary>Durable local state — the third store: identities and job history.</summary>
+    public LocalState State => _state ??= LocalState.LoadOrCreate(StateDirectory);
+
+    private LocalState? _state;
 
     /// <summary>The repository's current generation — the larger of the bundle's two.</summary>
     public KeyGeneration CurrentGeneration =>
@@ -118,30 +126,16 @@ internal sealed class CliSession : IDisposable
         Base32.Encode(repositoryId.ToArray()));
 
     /// <summary>This client's writer identity — created once, then stable (02 §4).</summary>
-    public WriterId Writer => WriterId.FromBytes(LoadOrCreateIdentity("writer-id"));
+    public WriterId Writer => WriterId.FromBytes(State.WriterId);
 
     /// <summary>This client's device identity for snapshot addressing (01 §2).</summary>
-    public byte[] DeviceId => LoadOrCreateIdentity("device-id");
+    public byte[] DeviceId => State.DeviceId;
 
     /// <summary>This client's default backup-set identity.</summary>
-    public byte[] BackupSetId => LoadOrCreateIdentity("backup-set-id");
+    public byte[] BackupSetId => State.DefaultBackupSetId;
 
     public WriterSequence CreateSequence() =>
         new(new FileSequenceStateStore(Path.Combine(StateDirectory, "sequence.txt")));
-
-    private byte[] LoadOrCreateIdentity(string name)
-    {
-        var path = Path.Combine(StateDirectory, name);
-        if (File.Exists(path))
-        {
-            var text = File.ReadAllText(path).Trim();
-            return Convert.FromHexString(text);
-        }
-
-        var bytes = RandomNumberGenerator.GetBytes(16);
-        File.WriteAllText(path, Convert.ToHexString(bytes).ToLowerInvariant());
-        return bytes;
-    }
 
     /// <inheritdoc />
     public void Dispose() => Repository.Dispose();

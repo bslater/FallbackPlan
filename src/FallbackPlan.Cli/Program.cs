@@ -553,4 +553,413 @@ static ObjectId ParseObjectId(string hex)
     }
 }
 
+// -------------------------------------------------------------- backup
+
+{
+    var rootArgument = new Argument<string?>("root")
+    {
+        Description = "Directory to back up. Omit when --set names a configured backup set.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var setOption = new Option<string?>("--set") { Description = "Name of a configured backup set (config.json)." };
+    var includeOption = new Option<string[]>("--include") { Description = "rules-v1 include rule (repeatable).", AllowMultipleArgumentsPerToken = true };
+    var excludeOption = new Option<string[]>("--exclude") { Description = "rules-v1 exclude rule (repeatable).", AllowMultipleArgumentsPerToken = true };
+    var fullOption = new Option<bool>("--full") { Description = "Ignore the prior snapshot; read every file." };
+    var command = WithSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot)."));
+    command.Arguments.Add(rootArgument);
+    command.Options.Add(setOption);
+    command.Options.Add(includeOption);
+    command.Options.Add(excludeOption);
+    command.Options.Add(fullOption);
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+
+        string rootPath;
+        IReadOnlyList<string> include, exclude;
+        byte[] backupSetId;
+
+        if (parse.GetValue(setOption) is { } setName)
+        {
+            var configuration = ClientConfiguration.Load(session.ConfigurationPath);
+            var set = configuration.FindSet(setName)
+                ?? throw new CliFailureException($"No backup set named '{setName}' exists in {session.ConfigurationPath}.");
+            rootPath = set.Root;
+            include = set.IncludeRules;
+            exclude = set.ExcludeRules;
+            backupSetId = Convert.FromHexString(set.Id);
+        }
+        else
+        {
+            rootPath = parse.GetValue(rootArgument)
+                ?? throw new CliFailureException("Pass a root directory or --set <name>.");
+            include = parse.GetValue(includeOption) ?? [];
+            exclude = parse.GetValue(excludeOption) ?? [];
+            backupSetId = session.BackupSetId;
+        }
+
+        if (!Directory.Exists(rootPath))
+        {
+            throw new CliFailureException($"'{rootPath}' is not a directory.");
+        }
+
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+
+        // Incremental against the newest snapshot of the same set the
+        // catalogue knows — unless --full asks for a re-read.
+        var prior = parse.GetValue(fullOption)
+            ? null
+            : catalogue.EnumerateSnapshots()
+                .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
+
+        var orchestrator = new PublicationOrchestrator(
+            CapturePolicy.Default,
+            session.Repository.RepositoryId,
+            session.Writer,
+            session.CurrentGeneration,
+            session.Repository.Keys,
+            session.Repository.Hierarchy,
+            session.Store,
+            session.CreateSequence(),
+            session.SpoolDirectory,
+            observer: null,
+            catalogue);
+
+        var snapshotId = RandomNumberGenerator.GetBytes(16);
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var published = await orchestrator.PublishAsync(
+            new SnapshotJob
+            {
+                Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
+                RootPath = rootPath,
+                IncludeRules = include,
+                ExcludeRules = exclude,
+                DeviceId = session.DeviceId,
+                BackupSetId = backupSetId,
+                SnapshotId = snapshotId,
+                ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
+                PriorSnapshotId = prior?.SnapshotId,
+                NowUnixMilliseconds = now,
+                DeclaredMaxDurationMs = 3_600_000,
+                ExpiryGeneration = session.CurrentGeneration.Value + 2,
+                ClientVersion = "fallbackplan-cli/0.1",
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        session.State.RecordJob(new JobHistoryEntry
+        {
+            SnapshotId = Hex(snapshotId),
+            BackupSetId = Hex(backupSetId),
+            StartedAt = now,
+            CaptureStatus = (byte)(published.ErrorManifestObjectId is null ? 1 : 2),
+            Files = published.Files.Count,
+            Failures = published.Failures.Count,
+        });
+
+        var reused = published.Files.Count(file => file.Reused);
+        Console.WriteLine($"snapshot id    {Hex(snapshotId)}");
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"files          {published.Files.Count} ({reused} unchanged, {published.Failures.Count} failed)"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"data blobs     {published.ContentBlobs.Count} new"));
+        if (prior is not null)
+        {
+            Console.WriteLine($"incremental    against {Hex(prior.SnapshotId)}");
+        }
+
+        Console.WriteLine(published.ErrorManifestObjectId is null
+            ? "status         complete"
+            : "status         PARTIAL — see the error manifest");
+        return published.ErrorManifestObjectId is null ? 0 : 2;
+    }));
+}
+
+// ----------------------------------------------------------- snapshots
+
+{
+    var command = WithSession(new Command("snapshots", "List the catalogue's known snapshots, newest first."));
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+
+        var snapshots = catalogue.EnumerateSnapshots();
+        if (snapshots.Count == 0)
+        {
+            Console.WriteLine("no snapshots known to the catalogue — run `rebuild-index` to learn them from the store.");
+            return 0;
+        }
+
+        foreach (var snapshot in snapshots)
+        {
+            var when = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
+                .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            var status = snapshot.CaptureStatus == 1 ? "complete" : "partial";
+            var signature = snapshot.SignatureState == 1 ? "verified" : snapshot.SignatureState == 2 ? "BAD-SIG" : "unverified";
+            Console.WriteLine($"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature}");
+        }
+
+        return 0;
+    }));
+}
+
+// ------------------------------------------------------------------ ls
+
+{
+    var snapshotArgument = new Argument<string>("snapshot") { Description = "Hex snapshot id." };
+    var pathArgument = new Argument<string?>("path")
+    {
+        Description = "Directory path within the snapshot; omit for the root.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var command = WithSession(new Command("ls", "List a directory within a snapshot, from the catalogue."));
+    command.Arguments.Add(snapshotArgument);
+    command.Arguments.Add(pathArgument);
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+
+        var snapshotId = Convert.FromHexString(parse.GetValue(snapshotArgument)!);
+        var path = parse.GetValue(pathArgument) ?? string.Empty;
+
+        var entries = catalogue.ListDirectory(snapshotId, path);
+        if (entries.Count == 0 && path.Length > 0 && catalogue.LookupPath(snapshotId, path) is null)
+        {
+            throw new CliFailureException(
+                $"'{path}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+        }
+
+        foreach (var entry in entries)
+        {
+            var kind = entry.EntryKind switch
+            {
+                EntryKind.DirectoryPlaceholder => "dir ",
+                EntryKind.Symlink => "link",
+                EntryKind.Special => "spec",
+                _ => "file",
+            };
+            var size = entry.LogicalLength is { } length
+                ? length.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+            Console.WriteLine($"{kind}  {size,12}  {entry.Path}");
+        }
+
+        return 0;
+    }));
+}
+
+// ------------------------------------------------------------- restore
+
+{
+    var snapshotArgument = new Argument<string>("snapshot") { Description = "Hex snapshot id." };
+    var pathArgument = new Argument<string?>("path")
+    {
+        Description = "Path within the snapshot to restore; omit for everything.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var outputOption = new Option<string>("--output") { Description = "Destination directory.", Required = true };
+    var command = WithSession(new Command(
+        "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
+    command.Arguments.Add(snapshotArgument);
+    command.Arguments.Add(pathArgument);
+    command.Options.Add(outputOption);
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+
+        var snapshotId = Convert.FromHexString(parse.GetValue(snapshotArgument)!);
+        var wanted = parse.GetValue(pathArgument);
+        var outputRoot = parse.GetValue(outputOption)!;
+
+        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        var engine = new RestoreEngine(reader);
+
+        var restored = 0;
+        var failed = 0;
+
+        async ValueTask RestoreEntryAsync(FallbackPlan.Repository.Catalogue.CatalogueTreeEntry entry)
+        {
+            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
+            {
+                Directory.CreateDirectory(Path.Combine(outputRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+                foreach (var child in catalogue.ListDirectory(snapshotId, entry.Path))
+                {
+                    await RestoreEntryAsync(child).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            var read = await reader.ReadSegmentAsync(entry.ObjectId, cancellationToken).ConfigureAwait(false);
+            if (read.Outcome != RecordReadOutcome.Ok)
+            {
+                Console.Error.WriteLine($"FAILED {entry.Path}: manifest read {read.Outcome}");
+                failed++;
+                return;
+            }
+
+            var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+            if (manifest.EntryKind != EntryKind.File)
+            {
+                // Symlinks and specials materialise in wave R's planner;
+                // reported, never silently dropped.
+                Console.Error.WriteLine($"skipped {entry.Path}: {manifest.EntryKind} restore lands with the restore planner");
+                return;
+            }
+
+            var destinationPath = Path.Combine(outputRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+
+            RestoreResult result;
+            var destination = File.Create(destinationPath);
+            await using (destination.ConfigureAwait(false))
+            {
+                result = await engine.RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!result.Success)
+            {
+                File.Delete(destinationPath);
+                Console.Error.WriteLine($"FAILED {entry.Path}: {result.FailureDetail}");
+                failed++;
+                return;
+            }
+
+            restored++;
+        }
+
+        if (wanted is { Length: > 0 })
+        {
+            var entry = catalogue.LookupPath(snapshotId, wanted)
+                ?? throw new CliFailureException(
+                    $"'{wanted}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+            await RestoreEntryAsync(entry).ConfigureAwait(false);
+        }
+        else
+        {
+            var roots = catalogue.ListDirectory(snapshotId, string.Empty);
+            if (roots.Count == 0)
+            {
+                throw new CliFailureException(
+                    $"The catalogue knows nothing under snapshot {Hex(snapshotId)} — run `rebuild-index` first.");
+            }
+
+            foreach (var entry in roots)
+            {
+                await RestoreEntryAsync(entry).ConfigureAwait(false);
+            }
+        }
+
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"restored {restored} file(s) to {outputRoot}; {failed} failure(s)"));
+        return failed == 0 ? 0 : 2;
+    }));
+}
+
+// --------------------------------------------------------------- check
+
+{
+    var levelOption = new Option<string>("--level")
+    {
+        Description = "Blob verification level: locator | digest | records (05 §8).",
+        DefaultValueFactory = _ => "digest",
+    };
+    var command = WithSession(new Command(
+        "check", "Repository health: blob verification sweep, journal survey, and the catalogue's damage findings."));
+    command.Options.Add(levelOption);
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+
+        var level = parse.GetValue(levelOption) switch
+        {
+            "locator" => VerifyLevel.LocatorAndFooter,
+            "digest" => VerifyLevel.FooterAndDigest,
+            "records" => VerifyLevel.EveryRecord,
+            var other => throw new CliFailureException($"'{other}' is not a verify level (locator | digest | records)."),
+        };
+
+        var problems = 0;
+
+        using (var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store))
+        {
+            var blobs = 0;
+            await foreach (var entry in session.Store
+                .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+            {
+                blobs++;
+                var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken).ConfigureAwait(false);
+                if (!result.Ok)
+                {
+                    problems++;
+                    Console.WriteLine($"blob FAILED  {entry.Key.Value}: {result.Detail}");
+                }
+            }
+
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"blobs      {blobs} verified at {level}"));
+        }
+
+        using (var journalReader = new FallbackPlan.Repository.Index.Journal.JournalReader(
+            session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy))
+        {
+            var (records, unparseable, journalFindings) = await journalReader.LoadAsync(
+                session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
+            problems += unparseable + journalFindings.Count;
+
+            var survey = FallbackPlan.Repository.Index.Journal.IntentSurveyor.Survey(
+                records, unparseable, session.CurrentGeneration.Value,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
+
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"journal    {records.Count} record(s), {unparseable} unparseable, {survey.LiveIntents.Count} live intent(s)"));
+            foreach (var finding in journalFindings)
+            {
+                Console.WriteLine($"journal    {finding.Kind}: {finding.Detail}");
+            }
+        }
+
+        if (File.Exists(session.CataloguePath))
+        {
+            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+            var findings = catalogue.Findings();
+            problems += findings.Count;
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"catalogue  {findings.Count} damage finding(s)"));
+            foreach (var finding in findings)
+            {
+                Console.WriteLine($"catalogue  {finding.Kind}: {finding.Detail}");
+            }
+        }
+        else
+        {
+            Console.WriteLine("catalogue  absent (rebuildable cache — run `rebuild-index` to materialise it)");
+        }
+
+        Console.WriteLine(problems == 0 ? "check: OK" : string.Create(CultureInfo.InvariantCulture, $"check: {problems} problem(s)"));
+        return problems == 0 ? 0 : 2;
+    }));
+}
+
+// ------------------------------------------------------- config-export
+
+{
+    var command = WithSession(new Command(
+        "config-export", "Print the client configuration — schema-versioned and secret-free by construction."));
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        Console.WriteLine(ClientConfiguration.Load(session.ConfigurationPath).ExportJson());
+        return 0;
+    }));
+}
+
 return await root.Parse(args).InvokeAsync().ConfigureAwait(false);
