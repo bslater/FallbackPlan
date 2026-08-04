@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import json
 import pathlib
+import re
 import sys
 
 VECTORS = pathlib.Path(__file__).parent / "vectors"
@@ -952,6 +953,321 @@ def ed25519_vectors() -> dict:
 
 
 # --------------------------------------------------------------------------
+# Path rules (specification 06 section 7.1, rules-v1)
+# --------------------------------------------------------------------------
+
+def _rules_glob_to_regex(rule: str) -> str:
+    """Translates a rules-v1 glob rule to a regex, or raises ValueError.
+
+    The translation is the dialect: `*` -> `[^/]*` within a component, `?`
+    -> `[^/]`, a whole-component `**` -> zero or more components, and a
+    rule without `/` is shorthand for `**/<rule>` (specification 06
+    section 7.1).
+    """
+    if rule == "":
+        raise ValueError("empty rule")
+
+    components = rule.split("/") if "/" in rule else ["**", rule]
+    if any(component == "" for component in components):
+        raise ValueError("empty component")
+
+    parts: list[str] = []
+    for index, component in enumerate(components):
+        last = index == len(components) - 1
+        if component == "**":
+            # A trailing ** matches one or more further components (the
+            # prefix itself is not matched); elsewhere it matches zero or
+            # more whole components including the joining slash.
+            parts.append(".+" if last else "(?:[^/]+/)*")
+            continue
+
+        if "**" in component:
+            raise ValueError("** must stand alone as a component")
+
+        for character in component:
+            if character == "*":
+                parts.append("[^/]*")
+            elif character == "?":
+                parts.append("[^/]")
+            else:
+                parts.append(re.escape(character))
+
+        if not last:
+            parts.append("/")
+
+    return "".join(parts)
+
+
+def _rules_validate_regex(pattern: str) -> None:
+    """Validates the rules-v1 regex subset, raising ValueError on any rule
+    outside it (specification 06 section 7.1): no anchors, no backslash-
+    alphanumeric escapes (shorthand classes, backreferences), no (?...)
+    constructs, and unescaped { only as a counted quantifier.
+    """
+    if pattern == "":
+        raise ValueError("empty rule")
+    if pattern.split("/") != [c for c in pattern.split("/") if c != ""]:
+        raise ValueError("empty component")
+
+    index = 0
+    in_class = False
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "\\":
+            if index + 1 >= len(pattern):
+                raise ValueError("trailing backslash")
+            if pattern[index + 1].isalnum():
+                raise ValueError("backslash-alphanumeric escapes are outside the subset")
+            index += 2
+            continue
+
+        if in_class:
+            if character == "]":
+                in_class = False
+            index += 1
+            continue
+
+        if character == "[":
+            in_class = True
+            index += 1
+            continue
+
+        if character in "^$":
+            raise ValueError("anchors are outside the subset (rules are implicitly anchored)")
+
+        if character == "(" and pattern[index + 1 : index + 2] == "?":
+            raise ValueError("(?...) constructs are outside the subset")
+
+        if character == "{":
+            quantifier = re.match(r"\{\d+(,\d*)?\}", pattern[index:])
+            if quantifier is None:
+                raise ValueError("unescaped { must open a counted quantifier")
+            index += quantifier.end()
+            continue
+
+        if character == "}":
+            raise ValueError("unescaped } outside a quantifier")
+
+        index += 1
+
+    if in_class:
+        raise ValueError("unterminated character class")
+
+
+def _rules_compile(rule: str, case_sensitive: bool):
+    """Compiles one rules-v1 rule of either form, raising ValueError."""
+    if rule.startswith("re:"):
+        pattern = rule[3:]
+        _rules_validate_regex(pattern)
+    else:
+        pattern = _rules_glob_to_regex(rule)
+
+    try:
+        return re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
+    except re.error as error:  # a subset-passing pattern the engine refuses
+        raise ValueError(str(error))
+
+
+def _rules_evaluate(includes, excludes, case_sensitive: bool, path: str):
+    """The section 7.1 evaluation: exclude wins and prunes subtrees; a path
+    is captured when not excluded and reached by an (or no) include.
+    """
+    compiled_includes = [_rules_compile(rule, case_sensitive) for rule in includes]
+    compiled_excludes = [_rules_compile(rule, case_sensitive) for rule in excludes]
+
+    components = path.split("/")
+    prefixes = ["/".join(components[: n + 1]) for n in range(len(components))]
+
+    excluded = any(
+        matcher.fullmatch(prefix)
+        for matcher in compiled_excludes
+        for prefix in prefixes
+    )
+    captured = not excluded and (
+        not compiled_includes
+        or any(
+            matcher.fullmatch(prefix)
+            for matcher in compiled_includes
+            for prefix in prefixes
+        )
+    )
+
+    return excluded, captured
+
+
+def path_rules_vectors() -> dict:
+    """Specification 06 section 7.1 -- the rules-v1 include/exclude dialect."""
+    match_rows = [
+        # (rule, path, case_sensitive, matches) -- single-rule fullmatch
+        # including the no-slash shorthand.
+        ("*.log", "system.log", True, True),
+        ("*.log", "var/log/system.log", True, True),
+        ("*.log", "system.log.1", True, False),
+        ("*.log", "nested.log/file", True, False),
+        ("?.txt", "a.txt", True, True),
+        ("?.txt", "ab.txt", True, False),
+        ("?.txt", "docs/a.txt", True, True),
+        ("build", "build", True, True),
+        ("build", "src/build", True, True),
+        ("build", "buildings", True, False),
+        ("src/*.cs", "src/main.cs", True, True),
+        ("src/*.cs", "src/sub/main.cs", True, False),
+        ("src/*.cs", "other/src/main.cs", True, False),
+        ("src/**", "src", True, False),
+        ("src/**", "src/main.cs", True, True),
+        ("src/**", "src/a/b/c.cs", True, True),
+        ("**/obj/**", "obj/x", True, True),
+        ("**/obj/**", "a/obj/x/y", True, True),
+        ("**/obj/**", "a/obj", True, False),
+        ("**/obj/**", "a/objx/y", True, False),
+        ("a/**/b", "a/b", True, True),
+        ("a/**/b", "a/x/b", True, True),
+        ("a/**/b", "a/x/y/b", True, True),
+        ("a/**/b", "a/x/bc", True, False),
+        ("**", "anything/at/all", True, True),
+        ("*.LOG", "system.log", False, True),
+        ("*.LOG", "system.log", True, False),
+        ("Caf?", "cafe", False, True),
+        (r"re:.*\.(jpg|png)", "photos/a.jpg", True, True),
+        (r"re:.*\.(jpg|png)", "photos/a.gif", True, False),
+        (r"re:.*\.(jpg|png)", "a.jpgx", True, False),
+        (r"re:snap-[0-9]{4}", "snap-2026", True, True),
+        (r"re:snap-[0-9]{4}", "snap-26", True, False),
+        (r"re:snap-[0-9]{4}", "x/snap-2026", True, False),
+        (r"re:re\:literal", "re:literal", True, True),
+        (r"re:a[^/]*", "abc", True, True),
+        (r"re:a[^/]*", "abc/d", True, False),
+        (r"re:docs/.*", "docs/deep/tree/file", True, True),
+    ]
+
+    match_cases = []
+    for rule, candidate, case_sensitive, expected in match_rows:
+        matcher = _rules_compile(rule, case_sensitive)
+        actual = matcher.fullmatch(candidate) is not None
+        assert actual == expected, (rule, candidate, actual)
+        match_cases.append({
+            "rule": rule,
+            "path": candidate,
+            "case_sensitive": case_sensitive,
+            "matches": expected,
+        })
+
+    invalid_rows = [
+        ("", "empty rule"),
+        ("/absolute", "empty component (leading slash)"),
+        ("trailing/", "empty component (trailing slash)"),
+        ("a//b", "empty component"),
+        ("a**b", "** must stand alone as a component"),
+        ("**.log", "** must stand alone as a component"),
+        ("re:", "empty rule"),
+        ("re:^anchored", "anchors are outside the subset"),
+        ("re:anchored$", "anchors are outside the subset"),
+        (r"re:\d+", "backslash-alphanumeric escape (shorthand class)"),
+        (r"re:(a)\1", "backslash-alphanumeric escape (backreference)"),
+        ("re:(?:group)", "(?...) construct"),
+        ("re:(?=look)", "(?...) construct"),
+        ("re:brace{", "unescaped { must open a counted quantifier"),
+        ("re:brace}", "unescaped } outside a quantifier"),
+        ("re:class[unterminated", "unterminated character class"),
+        ("re:trailing\\", "trailing backslash"),
+    ]
+
+    invalid_cases = []
+    for rule, reason in invalid_rows:
+        try:
+            _rules_compile(rule, case_sensitive=True)
+        except ValueError:
+            invalid_cases.append({"rule": rule, "reason": reason})
+        else:
+            raise AssertionError(f"rule {rule!r} unexpectedly valid")
+
+    evaluation_scenarios = [
+        {
+            "name": "empty_includes_capture_everything_not_excluded",
+            "includes": [],
+            "excludes": ["*.tmp", "**/.cache/**", ".cache"],
+            "case_sensitive": True,
+            "paths": [
+                "docs/report.txt",
+                "scratch.tmp",
+                "deep/scratch.tmp",
+                ".cache",
+                ".cache/entry",
+                "home/.cache/a/b",
+                "home/.cachet/file",
+            ],
+        },
+        {
+            "name": "includes_select_subtrees_excludes_prune_within",
+            "includes": ["photos/**", "docs/**"],
+            "excludes": ["**/*.tmp", "docs/drafts"],
+            "case_sensitive": True,
+            "paths": [
+                "photos/2026/a.jpg",
+                "photos",
+                "music/song.mp3",
+                "docs/final.txt",
+                "docs/drafts",
+                "docs/drafts/wip.txt",
+                "docs/edit.tmp",
+            ],
+        },
+        {
+            "name": "ancestor_exclusion_beats_descendant_include",
+            "includes": ["build/keep/**"],
+            "excludes": ["build"],
+            "case_sensitive": True,
+            "paths": ["build", "build/keep/artefact", "build/other"],
+        },
+        {
+            "name": "case_insensitive_filesystem",
+            "includes": [],
+            "excludes": ["*.BAK"],
+            "case_sensitive": False,
+            "paths": ["notes.bak", "notes.Bak", "notes.bakx"],
+        },
+    ]
+
+    for scenario in evaluation_scenarios:
+        expectations = []
+        for candidate in scenario["paths"]:
+            excluded, captured = _rules_evaluate(
+                scenario["includes"], scenario["excludes"],
+                scenario["case_sensitive"], candidate)
+            expectations.append({
+                "path": candidate,
+                "excluded": excluded,
+                "captured": captured,
+            })
+        scenario["paths"] = expectations
+
+    # Spot-check the evaluation semantics inline, the same way the cdc and
+    # segmentation builders assert their own invariants.
+    assert _rules_evaluate([], ["build"], True, "build/keep/artefact") == (True, False)
+    assert _rules_evaluate(["photos/**"], [], True, "photos/a.jpg") == (False, True)
+    assert _rules_evaluate(["photos/**"], [], True, "music/a.mp3") == (False, False)
+    assert _rules_evaluate([], [], True, "anything") == (False, True)
+
+    return {
+        "description": "rules-v1 include/exclude dialect (specification 06 section 7.1).",
+        "independently_derived": True,
+        "comment": (
+            "Single-rule cases exercise fullmatch of each rule against one "
+            "path, including the no-slash shorthand (a rule without / is "
+            "**/<rule>). Invalid cases MUST be refused by a writer before "
+            "publication. Evaluation scenarios apply section 7.1's rules: "
+            "exclude wins and prunes subtrees via ancestors; a path is "
+            "captured when not excluded and the include list is empty or "
+            "reaches it. Case-insensitive cases fold pattern and path."
+        ),
+        "match_cases": match_cases,
+        "invalid_cases": invalid_cases,
+        "evaluation_scenarios": evaluation_scenarios,
+    }
+
+
+
+# --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
 
@@ -964,6 +1280,7 @@ GROUPS = {
     "aes-gcm.json": aes_gcm_vectors,
     "argon2id.json": argon2id_vectors,
     "ed25519.json": ed25519_vectors,
+    "path-rules.json": path_rules_vectors,
 }
 
 

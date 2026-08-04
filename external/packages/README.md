@@ -27,14 +27,17 @@ of hand-rolling or pulling a stranger from nuget.org:
 
 | Package | Would serve | Earliest need |
 |---|---|---|
-| `Bodu.Text.Filter` | Wildcard and regex pattern filters — the include/exclude rule engine the Phase 1 streaming scanner needs (policy manifest keys `include_rules`/`exclude_rules`, [06 §7](../../specifications/repository-format/06-manifests.md)) | Phase 1 |
+| `Bodu.Text.Filter` | Wildcard and regex pattern filters — a candidate engine for the Phase 1 streaming scanner's include/exclude evaluation (policy manifest keys `include_rules`/`exclude_rules`, [06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1)) | Phase 1 |
 
 Adoption follows the same flow as an upgrade: pack from a pinned upstream
 commit, add the nupkg here with provenance in the table above, pin the version
 in `Directory.Packages.props`, regenerate lockfiles, full sweep. The rule
-semantics that end up in policy manifests must be specified before the first
-rule string is persisted — rule strings are format surface, and two
-implementations must agree on what `**/.cache/**` matches.
+semantics are now **specified** — the `rules-v1` dialect ([ADR-0024](../../docs/adr/0024-include-exclude-rule-dialect.md),
+06 §7.1) with a dependency-free reference implementation in
+`FallbackPlan.Domain.PathRules` — so adopting this package additionally
+requires demonstrating it passes every case in
+`conformance/vectors/path-rules.json`; the specification defines the
+dialect, never the library.
 
 ## Upgrading Bodu
 

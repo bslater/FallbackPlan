@@ -39,6 +39,7 @@ public sealed class VectorFileTests
         ["aes-gcm.json"] = false,
         ["argon2id.json"] = false,
         ["ed25519.json"] = true,
+        ["path-rules.json"] = true,
     };
 
     private static string VectorDirectory =>

@@ -164,12 +164,90 @@ Object type `0x05`. Records the effective configuration a snapshot was captured 
 | 5 | u16 | `encryption_profile` |
 | 6 | map | `blob_write_profile` |
 | 7 | u8 | `dedup_trust_domain` — 1 device, 2 repository, 3 repository-unverified |
-| 8 | array | `include_rules` |
-| 9 | array | `exclude_rules` |
+| 8 | array | `include_rules` — array of text strings, `rules-v1` (§7.1) |
+| 9 | array | `exclude_rules` — array of text strings, `rules-v1` (§7.1) |
 
 This exists so that a snapshot can always answer "what settings produced this?" years later, without those settings having to still exist in anyone's configuration file. It is also what makes a benchmark comparing two profiles interpretable.
 
 > **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them.
+
+### 7.1 Rule dialect (rules-v1)
+
+In format v1, every string in `include_rules` and `exclude_rules` is a
+**rules-v1** rule ([ADR-0024](../../docs/adr/0024-include-exclude-rule-dialect.md)).
+No dialect field exists; a future dialect requires a new policy-manifest key
+assigned by a future format revision. Rules are evaluated **at capture** —
+a reader treats stored rules as informational and MUST NOT fail to decode a
+manifest because of their content.
+
+**Matching subject.** A rule is matched against the entry's relative path
+within the backup-set root: components joined by `/`, NFC-normalised, no
+leading `/`, and no trailing `/` for directories. The empty path (the root
+itself) matches no rule.
+
+**Rule forms.** A rule whose first three characters are `re:` is a *regex
+rule*; every other rule is a *glob rule*. There is no glob escape
+mechanism: a pattern that must match a literal `*` or `?`, or a literal
+path beginning `re:`, is written as a regex rule.
+
+**Glob rules.**
+
+| Token | Meaning |
+|-------|---------|
+| `*` | zero or more characters within one component — never matches `/` |
+| `?` | exactly one character, never `/` |
+| `**` | zero or more whole components; valid **only** as a complete component |
+| any other character | itself |
+
+A `**` adjacent to anything else within a component (`a**b`, `**.log`)
+makes the rule **invalid**. A glob rule containing `/` is anchored at the
+backup-set root; a rule containing no `/` is shorthand for `**/<rule>` and
+therefore matches its pattern against the final component of any path. A
+trailing `/**` matches every strict descendant of the prefix and not the
+prefix itself.
+
+**Regex rules.** The characters after `re:` are a pattern in the following
+subset, implicitly anchored at both ends — the whole relative path must
+match, and explicit `^` or `$` make the rule invalid:
+
+- literals; `.` (any character, including `/`)
+- character classes `[...]` and `[^...]`, with ranges
+- alternation `|`; grouping `(...)`
+- quantifiers `*`, `+`, `?`, `{m}`, `{m,n}`
+- `\` escaping a metacharacter (`\.`, `\*`, `\[`, `\\`, `\:`, …)
+
+Backreferences, lookaround, shorthand classes (`\d`, `\w`, `\s`), inline
+flags, and named groups are **not** in the subset; a rule using them is
+invalid. Implementations MUST validate rules against this subset rather
+than passing them to a host regex engine unchecked, and SHOULD match with a
+linear-time engine. Rule strings are bounded at 4 096 UTF-8 bytes.
+
+**Evaluation.** Exclude wins; rules are an unordered set and there is no
+negation.
+
+1. A path is **excluded** iff the path itself or any of its ancestors
+   matches any exclude rule. Excluding a directory prunes its whole
+   subtree.
+2. A path is **captured** iff it is not excluded, and either
+   `include_rules` is empty, or the path or any of its ancestors matches an
+   include rule.
+3. A scanner MAY descend a non-captured, non-excluded directory when some
+   include rule could match beneath it; descending never captures the
+   directory itself.
+
+**Case sensitivity.** Matching follows the source filesystem as the
+snapshot records it (§6 key 12 `case_sensitive`). Case-insensitive
+matching applies Unicode simple case folding to both pattern literals and
+path before comparison; `*`, `?`, `**`, and regex metacharacters are
+unaffected.
+
+**Invalid rules.** The empty rule, and any rule with an empty component
+(leading `/`, trailing `/`, or `//`), is invalid, in both forms. A writer
+MUST NOT publish a policy manifest containing an invalid rule — validation
+happens before capture starts, and each defect is reported by rule and
+reason. Conformance vectors for the whole
+dialect, including invalid-rule cases, live in
+[`conformance/vectors/path-rules.json`](conformance/vectors/path-rules.json).
 
 ## 8 Error manifest
 
@@ -187,7 +265,7 @@ Object type `0x06`. Present only when something could not be captured.
 | 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit |
 | 3 | text | `detail` |
 
-A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules. Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
+A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules (§7.1). Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
 
 ## 9 Sharding
 
