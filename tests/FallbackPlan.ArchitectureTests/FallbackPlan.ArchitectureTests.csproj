@@ -37,6 +37,7 @@
          including the executable. Cli has no AssemblyMarker; it is loaded by
          name from the test output directory. -->
     <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Recovery\FallbackPlan.Recovery.csproj" />
   </ItemGroup>
 
 </Project>

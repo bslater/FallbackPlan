@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FallbackPlan.Cli/FallbackPlan.Cli.csproj" />
+    <Project Path="src/FallbackPlan.Recovery/FallbackPlan.Recovery.csproj" />
     <Project Path="src/FallbackPlan.Domain/FallbackPlan.Domain.csproj" />
     <Project Path="src/FallbackPlan.Filesystem.Local/FallbackPlan.Filesystem.Local.csproj" />
     <Project Path="src/FallbackPlan.Filesystem/FallbackPlan.Filesystem.csproj" />

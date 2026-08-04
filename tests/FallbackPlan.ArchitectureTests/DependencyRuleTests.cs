@@ -44,6 +44,9 @@ public sealed class DependencyRuleTests
     /// </summary>
     private static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
 
+    /// <summary>The standalone recovery tool — also an executable, loaded by name.</summary>
+    private static Assembly Recovery => Assembly.Load("FallbackPlan.Recovery");
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -52,7 +55,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Cli];
+         Filesystem, FilesystemLocal, Cli, Recovery];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -316,6 +319,45 @@ public sealed class DependencyRuleTests
     public void Repository_Packing_is_where_the_bodu_utility_library_actually_lives()
     {
         AssertProjectReferences("FallbackPlan.Repository.Packing", "<PackageReference Include=\"Bodu.Core\" />");
+    }
+
+    /// <summary>
+    /// The recovery tool is the last line of defence: it must build and run
+    /// on a clean machine with the fewest moving parts (architecture 08 §5,
+    /// 11 §2; NFR-PORT-001). Its dependency closure is format, crypto,
+    /// packing, and storage — no engine, no catalogue, no SQLite, no
+    /// scanner, no UI. Enforced at both levels: the IL (no reference to the
+    /// excluded assemblies) and the project file (an exact whitelist, so a
+    /// transitive smuggle via a new ProjectReference fails loudly).
+    /// </summary>
+    [Fact]
+    public void Recovery_depends_on_format_crypto_packing_and_storage_only()
+    {
+        AssertPasses(
+            Types.InAssembly(Recovery)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository.Catalogue",
+                    "FallbackPlan.Repository.Segmentation",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite",
+                    "System.CommandLine")
+                .GetResult(),
+            "FallbackPlan.Recovery must stay restorable on a clean machine (11 §2).");
+
+        var project = Path.Combine(RepositoryRoot(), "src", "FallbackPlan.Recovery", "FallbackPlan.Recovery.csproj");
+        var references = System.Text.RegularExpressions.Regex
+            .Matches(File.ReadAllText(project), "ProjectReference Include=\"[^\"]*\\\\([^\"\\\\]+)\\.csproj\"")
+            .Select(match => match.Groups[1].Value)
+            .Order()
+            .ToArray();
+
+        Assert.Equal(
+            ["FallbackPlan.Repository.Crypto", "FallbackPlan.Repository.Format",
+             "FallbackPlan.Repository.Packing", "FallbackPlan.Storage.Abstractions", "FallbackPlan.Storage.Local"],
+            references);
     }
 
     private static void AssertProjectReferences(string projectName, string expectedReference)

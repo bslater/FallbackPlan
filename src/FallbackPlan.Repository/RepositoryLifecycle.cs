@@ -283,6 +283,71 @@ public static class RepositoryLifecycle
             "The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).");
     }
 
+    /// <summary>
+    /// The key-export path (FR-KIT-001): re-derives the KEK from the
+    /// passphrase, finds the key object it opens, and returns that object's
+    /// <b>verbatim stored bytes</b> together with the verified descriptor —
+    /// the two inputs a recovery kit carries. No re-wrapping: the kit
+    /// reuses the FBPKKEYS object exactly as stored, so a kit is never
+    /// exported that the passphrase cannot open, and the master key never
+    /// outlives this call's stack.
+    /// </summary>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase opens no stored key object.</exception>
+    /// <exception cref="RepositoryOpenException">The store holds no verifiable repository.</exception>
+    public static async ValueTask<(RepositoryDescriptor Descriptor, byte[] KeyObject)> ExportVerifiedKeyObjectAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(passphrase);
+
+        var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
+            ?? throw new RepositoryOpenException("No repository descriptor exists at /repository-format.");
+
+        if (RepositoryDescriptorCodec.Parse(descriptorBytes) is not DescriptorParseResult.Ok { Descriptor: var descriptor })
+        {
+            throw new RepositoryOpenException("The descriptor does not verify — nothing is exported from an unverifiable repository.");
+        }
+
+        using var derivation = KekDerivation.Derive(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, KdfValidationMode.OpenRepository);
+
+        KeyUnwrapFailedException? lastUnwrapFailure = null;
+
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("keys/"), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var keyObjectBytes = await ReadWholeObjectAsync(store, entry.Key, cancellationToken).ConfigureAwait(false);
+            if (keyObjectBytes is null)
+            {
+                continue;
+            }
+
+            var keyObject = KeyObjectFraming.Parse(keyObjectBytes);
+            var aad = KeyObjectFraming.BuildAad(keyObject.FormatVersion, keyObject.KekProfile, keyObject.KeyId);
+
+            byte[] bundleCbor;
+            try
+            {
+                bundleCbor = KeyWrapping.Unwrap(
+                    derivation.Kek, keyObject.WrapNonce, aad, keyObject.Wrapped, keyObject.Tag);
+            }
+            catch (KeyUnwrapFailedException failure)
+            {
+                lastUnwrapFailure = failure;
+                continue;
+            }
+
+            CryptographicOperations.ZeroMemory(bundleCbor);
+            return (descriptor, keyObjectBytes);
+        }
+
+        throw lastUnwrapFailure is not null
+            ? lastUnwrapFailure
+            : new RepositoryOpenException("The descriptor is present but /keys/ listed no key object.");
+    }
+
     private static async ValueTask PutWholeObjectAsync(
         IObjectStore store,
         ObjectKey key,

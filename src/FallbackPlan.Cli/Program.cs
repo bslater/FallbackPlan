@@ -962,4 +962,49 @@ static ObjectId ParseObjectId(string hex)
     }));
 }
 
+// ----------------------------------------------------------- key-export
+
+{
+    var outputOption = new Option<string>("--output")
+    {
+        Description = "Path for the binary kit file (FBPKRKIT). The text form goes to '<output>.txt'.",
+        Required = true,
+    };
+    var command = WithSession(new Command(
+        "key-export",
+        "Export a recovery kit: the verbatim wrapped key object plus everything needed to use it (FR-KIT-001)."));
+    command.Options.Add(outputOption);
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        // The export path re-derives the KEK and proves the passphrase
+        // opens the exported object — a kit that cannot work is never
+        // written.
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        using var passphrase = CliSession.ReadPassphrase(parse.GetValue(passphraseEnvOption)!);
+
+        var kit = await RecoveryKitFactory.BuildAsync(
+            session.Store,
+            passphrase,
+            session.DeviceId,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            [new FallbackPlan.Repository.Format.RecoveryKit.KitDestination(
+                "local-path", Path.GetFullPath(parse.GetValue(repoOption)!), string.Empty, string.Empty)],
+            cancellationToken).ConfigureAwait(false);
+
+        var framed = FallbackPlan.Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(kit);
+        var outputPath = parse.GetValue(outputOption)!;
+        await File.WriteAllBytesAsync(outputPath, framed, cancellationToken).ConfigureAwait(false);
+
+        var text = FallbackPlan.Repository.Format.RecoveryKit.RecoveryKitText.Render(
+            framed, "Keep this page with your passphrase manager, not with your passphrase.");
+        await File.WriteAllTextAsync(outputPath + ".txt", text, cancellationToken).ConfigureAwait(false);
+
+        Console.WriteLine($"kit (binary)   {outputPath}");
+        Console.WriteLine($"kit (text)     {outputPath}.txt");
+        Console.WriteLine("the kit is ONE factor — store it apart from the passphrase (FR-KIT-004).");
+        return 0;
+    }));
+}
+
 return await root.Parse(args).InvokeAsync().ConfigureAwait(false);
