@@ -6,24 +6,6 @@ Decisions that are deliberately unresolved, who owns them, and what they block. 
 
 ---
 
-## Q1 — Project licence
-
-**Owner:** project maintainer · **Blocks:** first public release, any CrashPlan code reuse, external contributions · **ADR:** [0001](adr/0001-licence-and-contribution-model.md)
-
-The document describes an open-source project and never names a licence. The choice has a consequence beyond the usual, because it determines whether GPL-licensed prior art — potentially including CrashPlan reader implementations — could ever be reused.
-
-| Option | Consequence |
-|--------|-------------|
-| Apache-2.0 | Permissive, explicit patent grant. Best for third-party readers and distro packaging. **Cannot absorb GPL code** — the importer would need clean-room implementation. |
-| MPL-2.0 | File-level copyleft. Combinable with proprietary code. Still cannot absorb GPL code. |
-| GPL-3.0 / AGPL-3.0 | Strong copyleft. **Could reuse GPL reader code directly.** Deters some commercial adoption and embedding. |
-
-**Recommendation:** Apache-2.0, with the CrashPlan importer clean-roomed. The format's value depends on independent implementations existing, and a patent grant plus permissive terms maximises that. The importer is isolated in its own package precisely so this choice does not have to be made to suit it ([`architecture/11-solution-structure.md` §4](architecture/11-solution-structure.md#4-import-isolation)).
-
-**Not decided.** Recorded as open at the maintainer's direction.
-
----
-
 ## Q2 — Plan C licence and reuse posture
 
 **Owner:** project maintainer, with legal review · **Blocks:** Phase 5 · **ADR:** [0015](adr/0015-crashplan-importer-isolation.md)
@@ -222,3 +204,4 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 | Does `protected` require an offsite copy? | Yes — a replica outside the source's failure domain ([ADR-0018](adr/0018-replica-failure-domains.md)) |
 | Is the local database disposable? | The catalogue is; device identity and pairings are not ([ADR-0010](adr/0010-local-store-separation.md)) |
 | Can compaction relocate records byte-identically? | No — compaction decrypts and re-seals; the AAD and its ordinal are unchanged ([ADR-0025](adr/0025-compaction-reseals-records.md)) |
+| What licence does the project carry? | Dual: code AGPL-3.0-only + commercial licences from the maintainer; `specifications/` Apache-2.0 so independent readers stay unencumbered ([ADR-0001](adr/0001-licence-and-contribution-model.md)) |

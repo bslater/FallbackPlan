@@ -44,11 +44,11 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019 and 0020 are **Accepted** on the evidence recorded in them; the rest remain `Proposed`.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0025 are **Accepted** on the evidence recorded in them; 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
 
 | ADR | Decision |
 |-----|----------|
-| [0001](adr/0001-licence-and-contribution-model.md) | Licence and contribution model — **open** |
+| [0001](adr/0001-licence-and-contribution-model.md) | Licence: dual AGPL-3.0-only + commercial; `specifications/` Apache-2.0 |
 | [0002](adr/0002-segmentation-strategy.md) | Segmentation: `fixed-v1` default, `cdc-v1` specified, benchmark before freeze |
 | [0003](adr/0003-canonical-metadata-encoding.md) | Canonical metadata encoding |
 | [0004](adr/0004-segment-hash-function.md) | Segment hash function |

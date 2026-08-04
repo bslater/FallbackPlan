@@ -1,6 +1,6 @@
 # ADR-0001 — Licence and contribution model
 
-**Status:** Proposed — *deliberately left open at the maintainer's direction*
+**Status:** Accepted
 **Date:** 2026-08
 **Requirements:** FR-GOV-001, FR-GOV-002, FR-GOV-003
 
@@ -21,9 +21,19 @@ Point 2 has a sequencing consequence that makes this urgent: if the answer is a 
 
 ## Decision
 
-**Deferred.** The maintainer has chosen to record this as an open decision rather than settle it now. See [`../open-questions.md#q1--project-licence`](../open-questions.md#q1--project-licence).
+**Dual licensing: the code is AGPL-3.0-only, with commercial licences available from the maintainer. The specification and conformance suite (`specifications/`) are Apache-2.0.** The map lives in [`LICENSING.md`](../../LICENSING.md); the licence texts are [`LICENSE`](../../LICENSE) and [`specifications/LICENSE`](../../specifications/LICENSE).
 
-The analysis below stands, and the constraints in "Consequences" apply regardless of which option is eventually chosen.
+The maintainer weighed the recommendation below (Apache-2.0 for everything) and decided differently, for a stated reason: for a backup product, the guarantee that **every derivative — distributed or offered as a network service — stays open** is worth more than permissive adoption. The AGPL's network clause is deliberate: the plausible closed fork of a backup engine is a hosted service.
+
+The decision keeps what the Apache recommendation was protecting. Its argument was that independent readers (point 1 of the context) need maximum implementability — but independent readers implement from the **specification and conformance vectors**, not from the code; that separation is the discipline this repository is built on. Licensing `specifications/` under Apache-2.0 gives a third-party reader author permissive terms and a patent grant over everything they actually need, under any licence they choose, owing this project nothing. Copyleft on the code then deters only closed *forks of the code*, which is precisely the intent.
+
+Three further consequences of the choice, recorded rather than implied:
+
+1. **The commercial arm requires copyright unity.** Dual licensing works today because the project has a single copyright holder. External code contributions require a CLA preserving the dual-licensing right; until one is published, external contributions remain unmergeable ([`CONTRIBUTING.md`](../../CONTRIBUTING.md) says so plainly). "AGPL-3.0-only" rather than "or-later" is the same instinct: only the copyright holder moves the terms, deliberately.
+2. **The GPL-reuse door opens** (point 2 of the context, reversed): AGPL-3.0 code can incorporate GPL-3.0-compatible prior art, so the CrashPlan importer's clean-room burden may be avoidable — subject entirely to [ADR-0015](0015-crashplan-importer-isolation.md)'s gate, which still requires verifying Plan C's licence before anyone reads its source.
+3. **Charging is unaffected.** The AGPL obliges providing source to recipients, not giving everything away: selling binaries, packaged builds, and support for the AGPL edition is permitted alongside the commercial arm, and the project name is not licensed with the code.
+
+Per-file licence headers are deferred to first-public-release preparation; `LICENSE` at the root governs in the meantime.
 
 ## Options
 
@@ -50,10 +60,11 @@ The argument against is real and should be weighed: a permissive licence permits
 - The CrashPlan importer keeps its own licence statement and dependency set, isolated from the core.
 - **No Phase 5 parser work begins before this and [ADR-0015](0015-crashplan-importer-isolation.md) are resolved.** Reading incompatibly licensed source first forecloses the clean-room path.
 
-**While it stays open:** external contributions cannot be accepted, and the format cannot be declared v1-frozen ([`../roadmap.md`](../roadmap.md#format-v1-freeze-gate)).
+**Now that it is decided:** freeze-gate item 6 is satisfied (`LICENSE` present, [`../roadmap.md`](../roadmap.md#format-v1-freeze-gate)). External contributions remain gated — on the CLA now, not on the licence — and `CONTRIBUTING.md` states the current posture honestly.
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Analysis recorded; decision explicitly deferred by the maintainer |
+| 2026-08 | Accepted | Dual AGPL-3.0-only + commercial for code; Apache-2.0 for `specifications/`; the recorded Apache-2.0 recommendation consciously overridden with the reader-ecosystem goal preserved via the specification carve-out |

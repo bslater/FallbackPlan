@@ -61,7 +61,7 @@ Requires the .NET SDK pinned in [`global.json`](global.json). Warnings are error
 
 ## Licence
 
-**Not yet chosen.** The project is intended to be open source; the specific licence is an open decision recorded in [ADR-0001](docs/adr/0001-licence-and-contribution-model.md), because it determines whether GPL-licensed prior art could ever be reused in the CrashPlan importer. External contributions cannot be accepted until it is settled.
+**Dual-licensed** ([ADR-0001](docs/adr/0001-licence-and-contribution-model.md)): the code is **AGPL-3.0-only** ([LICENSE](LICENSE)) — every derivative, distributed or hosted, stays open — with commercial licences available from the maintainer for uses the AGPL does not fit. The repository-format **specification and conformance suite are Apache-2.0** ([specifications/LICENSE](specifications/LICENSE)), so independent readers can be implemented under any licence, owing this project nothing. The full map is in [LICENSING.md](LICENSING.md). External code contributions remain unmergeable until a CLA is published — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## A note on CrashPlan
 

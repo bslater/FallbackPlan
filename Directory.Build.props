@@ -58,7 +58,10 @@
   <PropertyGroup>
     <Product>FallbackPlan</Product>
     <RepositoryUrl>https://github.com/bslater/FallbackPlan</RepositoryUrl>
-    <!-- No PackageLicenseExpression: the licence is an open decision (ADR-0001). -->
+    <!-- Code is AGPL-3.0-only, dual-licensed with commercial terms from the
+         maintainer (ADR-0001, LICENSING.md). specifications/ carries
+         Apache-2.0 separately so independent readers stay unencumbered. -->
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
   </PropertyGroup>
 
 </Project>

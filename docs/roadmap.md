@@ -75,7 +75,7 @@ Not a phase — a gate that must pass before the format is declared stable. Unti
 3. **Specification and fixtures public** under `specifications/`.
 4. **External format review** completed.
 5. **Threat model reviewed** against the frozen format.
-6. **Licence decided** — [ADR-0001](adr/0001-licence-and-contribution-model.md) Accepted, `LICENSE` present.
+6. **Licence decided** — [ADR-0001](adr/0001-licence-and-contribution-model.md) Accepted, `LICENSE` present. *Done:* dual AGPL-3.0-only + commercial for code, Apache-2.0 for `specifications/` — the permissive spec carve-out is what keeps item 2's independent reader unencumbered.
 
 ---
 

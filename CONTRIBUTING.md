@@ -1,12 +1,10 @@
 # Contributing to FallbackPlan
 
-> ## ⚠️ External contributions cannot be accepted yet
+> ## ⚠️ External code contributions cannot be merged yet
 >
-> **The project has no licence.** This is a deliberate open decision, not an oversight — see [ADR-0001](docs/adr/0001-licence-and-contribution-model.md) and [Q1](docs/open-questions.md#q1--project-licence).
+> **The licence is decided** — dual AGPL-3.0-only + commercial, with the specification and conformance suite under Apache-2.0 ([ADR-0001](docs/adr/0001-licence-and-contribution-model.md), [LICENSING.md](LICENSING.md)). What is still missing is the **contributor licence agreement**: dual licensing requires the project to retain the right to offer contributed code under both arms, and until a CLA is published there is no instrument by which you could grant that. Please do not open pull requests yet: we would have to leave them unmerged, which wastes your time.
 >
-> Until it is settled there is no basis on which you could grant, or we could accept, rights to your work. Please do not open pull requests: we would have to leave them unmerged, which wastes your time.
->
-> Issues, questions, and specification defect reports **are** welcome now and do not depend on the licence.
+> Issues, questions, specification defect reports, and **independent reader implementations** (the spec is Apache-2.0 precisely so you can build one under any licence you choose) are welcome now and depend on nothing.
 
 ---
 
