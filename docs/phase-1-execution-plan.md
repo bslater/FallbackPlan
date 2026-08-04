@@ -101,6 +101,18 @@ Push 1 is complete; each criterion now names the test that proves it.
 
 Push 2 owes no exit criterion; it owes the roadmap features "OpenTelemetry instrumentation · Agent service and basic scheduling" and the status model of architecture 10 §1.
 
+---
+
+## Push 2 — waves
+
+Shapes pinned by [ADR-0027](adr/0027-services-scheduling-status-telemetry.md) before any service byte: schedule semantics with missed-run coalescing, the job-state store's place in the 11 §3 split, the instrument surface with its NFR-PRIV-002 attribute allowlist, and the phase-1 status derivation.
+
+| # | Item | Decision / Arch | Acceptance |
+|---|------|-----------------|-----------|
+| P2-A | `FallbackPlan.Application`: client configuration and durable local state move from the CLI (CLI behaviour unchanged); `Schedule` (pure next-run arithmetic, missed runs coalesce to one), `JobStateStore` (10 §3 machine, sacrificial by design), status model (10 §1.1 vocabulary, never-merge rules, failure-domain check for `protected`) | ADR-0027 §1, §2, §4 | Schedule arithmetic tested without a clock; deleting `jobs.json` costs history, never identity or correctness; same-device store is never `protected` |
+| P2-O | Engine instrumentation: `FallbackPlan.Engine` meter + activity source, the ADR-0027 §3 instrument table, wired through archive/publication/catalogue/store paths | ADR-0027 §3; NFR-OPS-001 | An automated listener asserts every emitted attribute against the allowlist — no path, name, or identifier can ride telemetry (NFR-PRIV-002) |
+| P2-H | `FallbackPlan.Agent` host: config-driven loop over backup sets, one run per set, catch-up on start, job-state journal, status output; CLI `status` command reading the same derivation | ADR-0027 §1–§4 | An in-process agent pass runs a due set end to end and skips a not-due set; status output distinguishes `captured` from `protected` |
+
 ## Standing constraints
 
 Phase-0 rules carry forward unchanged: implement against the specification; every spec gap is a flagged decision (ADR/erratum/open question), never a silent choice; the spool checkpoint stores sealed bytes; every blob is intent-covered before upload; warnings are errors; vectors and fixtures regenerate byte-identically; *segment* and *blob*, never *chunk*. New for Phase 1: **capture is lossless** (degradation happens at restore, recorded in the receipt, never at backup — arch 06 §3), and **excluded ≠ failed** (policy manifest vs error manifest — 06 §8).
