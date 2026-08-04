@@ -34,6 +34,8 @@ public sealed class DependencyRuleTests
     private static Assembly StorageAbstractions => typeof(Storage.Abstractions.AssemblyMarker).Assembly;
     private static Assembly StorageLocal => typeof(Storage.Local.AssemblyMarker).Assembly;
     private static Assembly ImportAbstractions => typeof(Import.Abstractions.AssemblyMarker).Assembly;
+    private static Assembly Filesystem => typeof(FallbackPlan.Filesystem.AssemblyMarker).Assembly;
+    private static Assembly FilesystemLocal => typeof(FallbackPlan.Filesystem.Local.AssemblyMarker).Assembly;
 
     /// <summary>
     /// The Cli project has no AssemblyMarker — it is an executable, not a
@@ -49,7 +51,8 @@ public sealed class DependencyRuleTests
     /// </summary>
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
-         RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions, Cli];
+         RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
+         Filesystem, FilesystemLocal, Cli];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -163,6 +166,39 @@ public sealed class DependencyRuleTests
                     "Amazon.S3")
                 .GetResult(),
             "Storage.Abstractions must not depend on any concrete provider.");
+    }
+
+    /// <summary>
+    /// The filesystem layer describes what exists on disk; it never decides
+    /// what happens to it. Capture policy, packing, indexing and storage all
+    /// live above it, so a scanner that reached into the engine or a storage
+    /// provider would invert the layering in 11 §2 — the scanner is a source
+    /// the orchestrator consumes, not a client of the repository. Both the
+    /// contracts assembly and its local implementation are held to Domain +
+    /// Repository.Format only (Format for EntryMetadata/SourceFilesystem,
+    /// the shapes the scanner emits).
+    /// </summary>
+    [Fact]
+    public void Filesystem_depends_only_on_Domain_and_Format()
+    {
+        foreach (var assembly in new[] { Filesystem, FilesystemLocal })
+        {
+            AssertPasses(
+                Types.InAssembly(assembly)
+                    .ShouldNot()
+                    .HaveDependencyOnAny(
+                        "FallbackPlan.Repository.Crypto",
+                        "FallbackPlan.Repository.Segmentation",
+                        "FallbackPlan.Repository.Packing",
+                        "FallbackPlan.Repository.Index",
+                        "FallbackPlan.Repository.Catalogue",
+                        "FallbackPlan.Storage",
+                        "FallbackPlan.Import",
+                        "FallbackPlan.Cli",
+                        "Microsoft.Data.Sqlite")
+                    .GetResult(),
+                $"{assembly.GetName().Name} must depend only on Domain and Repository.Format (11 §2).");
+        }
     }
 
     /// <summary>

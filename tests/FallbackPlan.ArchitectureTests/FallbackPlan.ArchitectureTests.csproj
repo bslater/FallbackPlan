@@ -28,6 +28,8 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Import.Abstractions\FallbackPlan.Import.Abstractions.csproj" />

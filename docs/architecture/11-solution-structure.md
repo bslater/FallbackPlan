@@ -19,7 +19,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.Index/        deltas, checkpoints, rebuild
 │   ├── FallbackPlan.Repository.Catalogue/    disposable local catalogue
 │   ├── FallbackPlan.Filesystem/              scanner contracts
-│   ├── FallbackPlan.Filesystem.{Windows,MacOS,Linux}/
+│   ├── FallbackPlan.Filesystem.Local/        local scanner, per-platform interop inside
 │   ├── FallbackPlan.Protocol/                peer protocol
 │   ├── FallbackPlan.Protocol.Grpc/
 │   ├── FallbackPlan.Discovery/
@@ -77,7 +77,7 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 - `Repository.Format` has no UI, host, or provider dependencies. It must be usable by the standalone recovery tool.
 - `Protocol` does not depend on `Desktop` or `Web`.
 - `Import.CrashPlan` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
-- Platform-specific filesystem projects implement shared contracts from `Filesystem`.
+- `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
 - **Third-party cryptography lives only in `Repository.Crypto`.** The two primitives .NET does not supply — Argon2id and XChaCha20-Poly1305 — do not inherit the platform's audit posture, so the exposure is confined to one project rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md)).
 
