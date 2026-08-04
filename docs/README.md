@@ -72,6 +72,7 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) | Standalone metadata records, index identifiers, and phase-0 gap resolutions |
 | [0023](adr/0023-cdc-v1-rabin-parameters.md) | cdc-v1 Rabin fingerprint parameters |
 | [0024](adr/0024-include-exclude-rule-dialect.md) | Include/exclude rule dialect (rules-v1) |
+| [0025](adr/0025-compaction-reseals-records.md) | Compaction re-seals records; the ordinal stays in the AAD |
 
 Template: [0000](adr/0000-template.md)
 

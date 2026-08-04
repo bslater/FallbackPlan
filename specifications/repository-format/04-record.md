@@ -67,9 +67,25 @@ Total: 16 + 2 + 1 + 32 + 4 = **55 bytes**.
 
 This binds each record to its exact context. A record cannot be moved to a different ordinal, a different object type, a different repository, or replayed under a different format version without authentication failing. It is what defends against the substitution and splicing attacks in [T-3](../../docs/threat-model.md#t-3-object-substitution-and-splicing).
 
-Note that AAD does **not** include the blob identifier. A record is intentionally relocatable between blobs by compaction, which republishes its index entry without re-encrypting it ([07](07-index.md)). Binding the blob would make compaction require decryption and re-encryption of every moved record.
+Note that AAD does **not** include the blob identifier — not to enable
+relocation, but because binding it is **redundant**: the record key already
+derives from the blob's salt, writer, and counter ([03 §5](03-keys.md#5-per-blob-keys)),
+so a record cannot be opened under any other blob's context regardless.
+Records are **not** relocatable byte-for-byte: compaction moves a live
+record by decrypting it and re-sealing it into the destination blob — its
+own key, its new ordinal, a fresh AAD — with the object identifier
+unchanged so every manifest reference still resolves, and republishes the
+index entry as a supersession ([07 §3](07-index.md#3-precedence);
+[ADR-0025](../../docs/adr/0025-compaction-reseals-records.md)). A compacted
+blob is an ordinary blob; no reader treats it specially.
 
-> **Erratum (phase 0).** The relocation claim above is in tension with §2.1: the AAD *does* include `ordinal`, and §2.1 requires the ordinal to equal the record's position in its blob — a byte-identical relocation generally cannot satisfy both. Nothing in phase 0 relocates records, so the contradiction is recorded rather than resolved: see [open questions Q15](../../docs/open-questions.md#q15--record-ordinal-in-the-aad-versus-byte-identical-relocation). Resolve it before implementing compaction.
+> **Resolved (was the phase-0 ordinal erratum).** An earlier revision
+> claimed records were relocatable between blobs *without* re-encryption,
+> which contradicted §2.1's position rule and the ordinal in the AAD —
+> recorded as open question Q15.
+> [ADR-0025](../../docs/adr/0025-compaction-reseals-records.md) resolved it
+> the other way, as the paragraph above now states: the AAD is unchanged,
+> §2.1 holds unconditionally, and compaction re-seals.
 >
 > Records also exist **outside** blobs — index deltas, checkpoints, journal records, and the standalone snapshot object are metadata records stored as standalone store objects. This document defines their encryption inputs (`blob_salt`, `writer_id`, counter, `ordinal`) only via the blob envelope, which a standalone object does not have. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1 defines the `FBPKSREC` standalone framing: a 72-byte cleartext prefix carries the same selectors, the record header carries `ordinal = 0`, and this document's key derivation, nonce, and AAD apply byte-for-byte.
 
