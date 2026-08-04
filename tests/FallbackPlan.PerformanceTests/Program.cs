@@ -11,5 +11,10 @@ if (args.Length > 0 && string.Equals(args[0], "membound", StringComparison.Ordin
     return await MemoryBoundProof.RunAsync(gibibytes);
 }
 
+if (args.Length > 0 && string.Equals(args[0], "dedup", StringComparison.OrdinalIgnoreCase))
+{
+    return await DedupCorpusBenchmark.RunAsync();
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(MemoryBoundProof).Assembly).Run(args);
 return 0;

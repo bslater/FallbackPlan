@@ -101,7 +101,9 @@ saturation target on reference hardware.
 ## 3. Raw segmentation (`SegmentationBenchmarks`)
 
 fixed-v1 against cdc-v1 over the same 64 MiB, measuring exactly the price of
-the rolling Rabin window (ADR-0023).
+the rolling Rabin window (ADR-0023). CPU cost only — the *deduplication*
+comparison the freeze gate turns on is published separately in
+[`segmentation-benchmark.md`](segmentation-benchmark.md).
 
 | Method | Input | Mean | StdDev | Throughput (mean) | Allocated/op |
 |---|---|---:|---:|---:|---:|
