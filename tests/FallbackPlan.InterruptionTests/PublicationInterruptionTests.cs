@@ -38,14 +38,17 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
                 .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
     }
 
-    public static TheoryData<PublicationStep> KillPoints() =>
-    [
+    // An explicit initializer rather than a collection expression: Visual
+    // Studio's analyzer lowers the expression through a path that trips
+    // CA1825 (observed on Windows), and warnings are errors everywhere.
+    public static TheoryData<PublicationStep> KillPoints() => new()
+    {
         PublicationStep.PublishIntent,
         PublicationStep.UploadBlobs,
         PublicationStep.PublishIndexDeltas,
         PublicationStep.PublishSnapshot,
         PublicationStep.RetireIntent,
-    ];
+    };
 
     [Theory]
     [MemberData(nameof(KillPoints))]
