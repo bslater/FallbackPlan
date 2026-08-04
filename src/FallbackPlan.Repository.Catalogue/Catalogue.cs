@@ -693,5 +693,14 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => _connection.Dispose();
+    public void Dispose()
+    {
+        // Connection pooling keeps the file handle alive past Dispose, and
+        // Windows cannot delete an open file — but a disposed catalogue
+        // must be deletable: it is a cache, and drop-and-rebuild is its
+        // whole lifecycle. Open() already clears pools before its own
+        // rebuild delete; Dispose owes the same release.
+        SqliteConnection.ClearPool(_connection);
+        _connection.Dispose();
+    }
 }

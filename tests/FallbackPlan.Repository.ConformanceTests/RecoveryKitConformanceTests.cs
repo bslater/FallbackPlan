@@ -84,15 +84,29 @@ public sealed class RecoveryKitConformanceTests
 
     private static string FixtureKitDirectory([CallerFilePath] string sourceFile = "")
     {
-        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!);
+        // The binary's location anchors first: ContinuousIntegrationBuild
+        // maps [CallerFilePath] to /_/…, which does not exist on a CI
+        // runner; the source path remains the fallback.
+        var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
+        Assert.NotNull(root);
+        return Path.Combine(
+            root, "specifications", "repository-format", "conformance", "fixtures", "fixture-repository-v1-kit");
+    }
+
+    private static string? LocateRoot(string? start)
+    {
+        if (string.IsNullOrEmpty(start))
+        {
+            return null;
+        }
+
+        var directory = new DirectoryInfo(start);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FallbackPlan.slnx")))
         {
             directory = directory.Parent;
         }
 
-        Assert.NotNull(directory);
-        return Path.Combine(
-            directory.FullName, "specifications", "repository-format", "conformance", "fixtures", "fixture-repository-v1-kit");
+        return directory?.FullName;
     }
 
     private static string FixtureStorePath(string kitDirectory) =>

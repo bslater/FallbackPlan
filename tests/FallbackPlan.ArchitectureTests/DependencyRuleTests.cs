@@ -400,20 +400,32 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
-    /// Walks up from this source file to the repository root. Anchored to the
-    /// source path rather than the test host's working directory, which varies
-    /// between `dotnet test`, an IDE runner, and CI.
+    /// Walks up to the repository root. Anchored to the test binary's own
+    /// location first — ContinuousIntegrationBuild maps
+    /// <see cref="CallerFilePathAttribute"/> to <c>/_/…</c>, which does not
+    /// exist on a CI runner — with the source path as the fallback for
+    /// runners that relocate binaries.
     /// </summary>
     private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
     {
-        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!);
+        var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
+        Assert.NotNull(root);
+        return root;
+    }
 
+    private static string? LocateRoot(string? start)
+    {
+        if (string.IsNullOrEmpty(start))
+        {
+            return null;
+        }
+
+        var directory = new DirectoryInfo(start);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FallbackPlan.slnx")))
         {
             directory = directory.Parent;
         }
 
-        Assert.NotNull(directory);
-        return directory.FullName;
+        return directory?.FullName;
     }
 }
