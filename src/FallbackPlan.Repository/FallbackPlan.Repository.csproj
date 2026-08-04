@@ -7,6 +7,7 @@
     <ProjectReference Include="..\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
     <ProjectReference Include="..\FallbackPlan.Import.Abstractions\FallbackPlan.Import.Abstractions.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />

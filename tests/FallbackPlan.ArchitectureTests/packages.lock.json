@@ -175,6 +175,7 @@
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Import.Abstractions": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",

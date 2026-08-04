@@ -382,6 +382,15 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     }
 
     /// <inheritdoc />
+    public RevalidationProbe? Revalidate(ScanEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return TryStat(entry.FullPath, out var stat)
+            ? new RevalidationProbe(stat.Size, stat.ModifiedAtMs)
+            : null;
+    }
+
+    /// <inheritdoc />
     public Stream OpenRead(ScanEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);

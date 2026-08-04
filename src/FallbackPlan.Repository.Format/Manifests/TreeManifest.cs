@@ -204,7 +204,9 @@ public static class TreeManifestCodec
         {
             Entries = entries,
             Metadata = metadata,
-            Name = name,
+            // A null byte[] would silently convert to a PRESENT empty
+            // memory through the implicit conversion — keep absence absent.
+            Name = name is null ? null : (ReadOnlyMemory<byte>?)name,
             NameNormalisation = normalisation,
             Continuation = continuation,
         };

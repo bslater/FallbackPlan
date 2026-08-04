@@ -135,6 +135,13 @@ public sealed record SourceFilesystemInfo(
     bool? ReservedNames);
 
 /// <summary>
+/// What a post-read revalidation observed (architecture 06 §1: stat before
+/// and after reading; a difference means the content may be inconsistent
+/// and the read is retried, then diagnosed — ADR-0026 §Decision 2).
+/// </summary>
+public sealed record RevalidationProbe(long Length, ulong? ModifiedAtMs);
+
+/// <summary>
 /// A filesystem the engine can capture from (architecture 11 §6). One
 /// implementation per platform family; the contracts know no platform.
 /// </summary>
@@ -142,6 +149,13 @@ public interface IFileSystemSource
 {
     /// <summary>Probes the filesystem holding <paramref name="rootPath"/>.</summary>
     SourceFilesystemInfo Probe(string rootPath);
+
+    /// <summary>
+    /// Re-stats an entry after its content was read; null when the entry no
+    /// longer exists. The publisher compares against the scan-time values to
+    /// detect a file that changed mid-read.
+    /// </summary>
+    RevalidationProbe? Revalidate(ScanEntry entry);
 
     /// <summary>
     /// Streams the tree under <paramref name="rootPath"/> depth-first,

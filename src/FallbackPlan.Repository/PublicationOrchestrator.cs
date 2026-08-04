@@ -104,7 +104,7 @@ public sealed record PublishedSnapshot(
 /// specification 08 §6 defines audit records for destructive operations,
 /// and a backup is not one; its step-8 action is the retirement event.
 /// </remarks>
-public sealed class PublicationOrchestrator
+public sealed partial class PublicationOrchestrator
 {
     private readonly CapturePolicy _policy;
     private readonly RepositoryId _repositoryId;
@@ -173,7 +173,8 @@ public sealed class PublicationOrchestrator
             _generation.Value,
             cancellationToken).ConfigureAwait(false);
 
-        var scope = new ExtensionIntentScope(journal, intentSequence, job, _generation.Value);
+        var scope = new ExtensionIntentScope(
+            journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
         // Step 2: scan. Phase 0's job is one stream; the scan is its metadata.
@@ -321,7 +322,8 @@ public sealed class PublicationOrchestrator
     private sealed class ExtensionIntentScope(
         JournalPublisher journal,
         ulong intentSequence,
-        BackupJob job,
+        ulong declaredMaxDurationMs,
+        ulong nowUnixMilliseconds,
         uint generation) : IIntentScope
     {
         private readonly HashSet<BlobId> _covered = [];
@@ -335,8 +337,8 @@ public sealed class PublicationOrchestrator
 
             await journal.PublishAsync(
                 JournalRecordKind.IntentExtension,
-                new JournalPayload.IntentExtension(intentSequence, [blobId], job.DeclaredMaxDurationMs),
-                job.NowUnixMilliseconds,
+                new JournalPayload.IntentExtension(intentSequence, [blobId], declaredMaxDurationMs),
+                nowUnixMilliseconds,
                 generation,
                 cancellationToken).ConfigureAwait(false);
         }

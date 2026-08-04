@@ -8,6 +8,13 @@
           "Bodu.Text.Encoding": "[0.1.1, )"
         }
       },
+      "fallbackplan.filesystem": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Format": "[1.0.0, )"
+        }
+      },
       "fallbackplan.import.abstractions": {
         "type": "Project",
         "dependencies": {

@@ -4,8 +4,19 @@ using FallbackPlan.Repository.Format.Cbor;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
-/// <summary>The source filesystem's observed capabilities (specification 06 §6 key 12; shape per ADR-0022 §Decision 6).</summary>
-public sealed record SourceFilesystem(bool CaseSensitive, bool SupportsSparse, string Name);
+/// <summary>
+/// The source filesystem's observed capabilities (specification 06 §6
+/// key 12; keys 1–3 per ADR-0022 §Decision 6, optional keys 4–6 per
+/// ADR-0026 §Decision 7). An absent limit means "limits unknown", never
+/// "no limits" — restore-plan conflict detection consumes these values.
+/// </summary>
+public sealed record SourceFilesystem(
+    bool CaseSensitive,
+    bool SupportsSparse,
+    string Name,
+    uint? MaxPathBytes = null,
+    uint? MaxComponentBytes = null,
+    bool? ReservedNames = null);
 
 /// <summary>
 /// A snapshot (specification 06 §6, object type <c>0x04</c>): the signed
@@ -300,13 +311,35 @@ public static class SnapshotManifestCodec
         writer.WriteKey(11);
         writer.WriteUnsignedInteger(manifest.CaptureStatus);
         writer.WriteKey(12);
-        writer.WriteStartMap(3);
+        var filesystem = manifest.SourceFilesystem;
+        writer.WriteStartMap(3
+            + (filesystem.MaxPathBytes is not null ? 1 : 0)
+            + (filesystem.MaxComponentBytes is not null ? 1 : 0)
+            + (filesystem.ReservedNames is not null ? 1 : 0));
         writer.WriteKey(1);
-        writer.WriteBoolean(manifest.SourceFilesystem.CaseSensitive);
+        writer.WriteBoolean(filesystem.CaseSensitive);
         writer.WriteKey(2);
-        writer.WriteBoolean(manifest.SourceFilesystem.SupportsSparse);
+        writer.WriteBoolean(filesystem.SupportsSparse);
         writer.WriteKey(3);
-        writer.WriteTextString(manifest.SourceFilesystem.Name);
+        writer.WriteTextString(filesystem.Name);
+        if (filesystem.MaxPathBytes is { } maxPath)
+        {
+            writer.WriteKey(4);
+            writer.WriteUnsignedInteger(maxPath);
+        }
+
+        if (filesystem.MaxComponentBytes is { } maxComponent)
+        {
+            writer.WriteKey(5);
+            writer.WriteUnsignedInteger(maxComponent);
+        }
+
+        if (filesystem.ReservedNames is { } reserved)
+        {
+            writer.WriteKey(6);
+            writer.WriteBoolean(reserved);
+        }
+
         writer.WriteEndMap();
         writer.WriteKey(13);
         writer.WriteUnsignedInteger(manifest.PublicationGeneration);
@@ -341,8 +374,9 @@ public static class SnapshotManifestCodec
     {
         var count = reader.ReadStartMap();
 
-        bool? caseSensitive = null, supportsSparse = null;
+        bool? caseSensitive = null, supportsSparse = null, reservedNames = null;
         string? name = null;
+        uint? maxPathBytes = null, maxComponentBytes = null;
 
         for (var i = 0; i < count; i++)
         {
@@ -357,9 +391,18 @@ public static class SnapshotManifestCodec
                 case 3:
                     name = reader.ReadTextString(maxUtf8Length: 128);
                     break;
+                case 4:
+                    maxPathBytes = reader.ReadUInt32();
+                    break;
+                case 5:
+                    maxComponentBytes = reader.ReadUInt32();
+                    break;
+                case 6:
+                    reservedNames = reader.ReadBoolean();
+                    break;
                 default:
                     throw new ManifestValidationException(
-                        "source_filesystem carries an unknown key (ADR-0022 §Decision 6).");
+                        "source_filesystem carries an unknown key (ADR-0022 §Decision 6; ADR-0026 §Decision 7).");
             }
         }
 
@@ -370,7 +413,8 @@ public static class SnapshotManifestCodec
             throw new ManifestValidationException("source_filesystem omits a mandatory key (ADR-0022 §Decision 6).");
         }
 
-        return new SourceFilesystem(caseSensitive.Value, supportsSparse.Value, name);
+        return new SourceFilesystem(
+            caseSensitive.Value, supportsSparse.Value, name, maxPathBytes, maxComponentBytes, reservedNames);
     }
 
     private static void Validate(SnapshotManifest manifest)
