@@ -79,7 +79,7 @@ Template: [0000](adr/0000-template.md)
 
 ## Specification
 
-The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md).
+The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md). The [recovery-kit format](../specifications/recovery-kit/README.md) is specified alongside it.
 
 Architecture documents explain *why*; the specification says *what bytes*. Where they disagree about format, the specification wins.
 

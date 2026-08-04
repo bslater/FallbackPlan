@@ -1,0 +1,189 @@
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text.Json;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Keys;
+using FallbackPlan.Repository.Format.RecoveryKit;
+using FallbackPlan.Repository.Packing;
+using FallbackPlan.Storage.Local;
+using Xunit;
+
+namespace FallbackPlan.Repository.ConformanceTests;
+
+/// <summary>
+/// The recovery kit against its specification (specifications/recovery-kit;
+/// ADR-0013; FR-KIT-001..003): every vector case round-trips or refuses as
+/// committed, the text form is canonical to the character, a transcription
+/// error is caught by its line, and the committed fixture kit — regenerated
+/// byte-identically — opens the fixture repository with nothing but the
+/// passphrase.
+/// </summary>
+public sealed class RecoveryKitConformanceTests
+{
+    private static JsonDocument Vectors { get; } =
+        JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "recovery-kit.json")));
+
+    private static JsonElement Kit => Vectors.RootElement.GetProperty("kit");
+
+    [Fact]
+    public void The_vector_kit_parses_with_every_committed_field()
+    {
+        var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
+        var kit = RecoveryKitCodec.Parse(framed);
+        var fields = Kit.GetProperty("fields");
+
+        Assert.Equal(fields.GetProperty("kit_format_version").GetUInt16(), kit.KitFormatVersion);
+        Assert.Equal(fields.GetProperty("minimum_tool_version").GetString(), kit.MinimumToolVersion);
+        Assert.Equal(
+            fields.GetProperty("repository_id").GetString(),
+            Convert.ToHexString(kit.RepositoryId.ToArray()).ToLowerInvariant());
+        Assert.Equal(fields.GetProperty("issued_at").GetUInt64(), kit.IssuedAt);
+        Assert.Equal(fields.GetProperty("destination_count").GetInt32(), kit.Destinations.Count);
+        Assert.Equal(fields.GetProperty("kdf").GetProperty("memory_kib").GetUInt32(), kit.KdfMemoryKiB);
+    }
+
+    [Fact]
+    public void The_text_form_renders_canonically_and_parses_back()
+    {
+        var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
+
+        // The committed text is the canonical layout minus our instruction
+        // header — compare payload lines exactly, then round-trip.
+        var expected = Kit.GetProperty("text_form").GetString()!;
+        var rendered = RecoveryKitText.Render(framed);
+        Assert.Equal(
+            expected.Split('\n').Where(line => line.Length > 2 && char.IsAsciiDigit(line[0])),
+            rendered.Split('\n').Where(line => line.Length > 2 && char.IsAsciiDigit(line[0])));
+
+        Assert.Equal(framed, RecoveryKitText.ParseToFramed(expected));
+        Assert.Equal(framed, RecoveryKitText.ParseToFramed(rendered));
+    }
+
+    [Fact]
+    public void A_transcription_error_is_caught_by_its_line()
+    {
+        var damaged = Kit.GetProperty("damaged_text_form").GetString()!;
+
+        var exception = Assert.Throws<RecoveryKitFormatException>(() => RecoveryKitText.ParseToFramed(damaged));
+        Assert.Contains("Line 02", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_refusal_case_is_refused()
+    {
+        foreach (var refusal in Vectors.RootElement.GetProperty("refusal_cases").EnumerateArray())
+        {
+            var framed = Convert.FromHexString(refusal.GetProperty("framed_hex").GetString()!);
+
+            Assert.Throws<RecoveryKitFormatException>(() => RecoveryKitCodec.Parse(framed));
+        }
+    }
+
+    // ------------------------------------------------------- fixture kit
+
+    private static string FixtureKitDirectory([CallerFilePath] string sourceFile = "")
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FallbackPlan.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+        return Path.Combine(
+            directory.FullName, "specifications", "repository-format", "conformance", "fixtures", "fixture-repository-v1-kit");
+    }
+
+    private static string FixtureStorePath(string kitDirectory) =>
+        Path.Combine(Path.GetDirectoryName(kitDirectory)!, "fixture-repository-v1");
+
+    [Fact]
+    public async Task The_committed_fixture_kit_is_byte_identical_to_regeneration()
+    {
+        var directory = FixtureKitDirectory();
+        var binPath = Path.Combine(directory, "kit.bin");
+        var textPath = Path.Combine(directory, "kit.txt");
+
+        if (!File.Exists(binPath))
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllBytesAsync(binPath, FixtureRepository.BuildKitFramed());
+            await File.WriteAllTextAsync(textPath, FixtureRepository.BuildKitText());
+            Assert.Fail($"The committed fixture kit was absent and has been generated at {directory} — review and commit it.");
+        }
+
+        Assert.Equal(await File.ReadAllBytesAsync(binPath), FixtureRepository.BuildKitFramed());
+        Assert.Equal(await File.ReadAllTextAsync(textPath), FixtureRepository.BuildKitText());
+    }
+
+    [Fact]
+    public async Task The_fixture_kit_plus_passphrase_opens_the_fixture_repository()
+    {
+        // FR-KIT-001, the clean-machine premise: no catalogue, no state
+        // directory, no /keys/ listing — the kit supplies the key object and
+        // KDF parameters; the store supplies everything else.
+        var kit = RecoveryKitCodec.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(FixtureKitDirectory(), "kit.bin")));
+
+        using var passphrase = FixtureRepository.CreatePassphrase();
+        using var derivation = KekDerivation.Derive(
+            passphrase,
+            new Argon2Parameters
+            {
+                MemoryKiB = kit.KdfMemoryKiB,
+                Iterations = kit.KdfIterations,
+                Parallelism = kit.KdfParallelism,
+            },
+            kit.KdfSalt.Span,
+            KdfValidationMode.OpenRepository);
+
+        var keyObject = KeyObjectFraming.Parse(kit.KeyObject.Span);
+        var bundleCbor = KeyWrapping.Unwrap(
+            derivation.Kek,
+            keyObject.WrapNonce,
+            KeyObjectFraming.BuildAad(keyObject.FormatVersion, keyObject.KekProfile, keyObject.KeyId),
+            keyObject.Wrapped,
+            keyObject.Tag);
+
+        try
+        {
+            using var bundle = KeyBundleCodec.Decode(bundleCbor);
+            Assert.Equal(FixtureRepository.MasterKey, bundle.MasterKey.ToArray());
+
+            // With the unwrapped keys, restore the fixture file through the
+            // ordinary read path — the kit was the only key source.
+            using var keys = RepositoryKeySet.FromMasterKey(bundle.MasterKey);
+            var store = new LocalFileSystemObjectStore(FixtureStorePath(FixtureKitDirectory()));
+
+            using var reader = new RepositoryReader(kit.RepositoryId, keys, store);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+
+            var manifestEntry = reader.AllRecords.Single(
+                record => record.ObjectType == Domain.ObjectType.FileVersionManifest);
+            var read = await reader.ReadSegmentAsync(manifestEntry.ObjectId, CancellationToken.None);
+            Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+
+            var manifest = Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext!);
+            using var restored = new MemoryStream();
+            var result = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
+
+            Assert.True(result.Success, result.FailureDetail);
+            Assert.Equal(FixtureRepository.FileContent(), restored.ToArray());
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bundleCbor);
+        }
+    }
+
+    [Fact]
+    public async Task The_fixture_kit_text_form_round_trips_to_the_binary()
+    {
+        var directory = FixtureKitDirectory();
+        var framed = await File.ReadAllBytesAsync(Path.Combine(directory, "kit.bin"));
+        var text = await File.ReadAllTextAsync(Path.Combine(directory, "kit.txt"));
+
+        Assert.Equal(framed, RecoveryKitText.ParseToFramed(text));
+    }
+}

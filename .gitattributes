@@ -18,3 +18,4 @@
 # them. The README inside stays text.
 specifications/repository-format/conformance/fixtures/** binary
 specifications/repository-format/conformance/fixtures/**/README.md text eol=lf
+specifications/repository-format/conformance/fixtures/**/kit.txt   text eol=lf

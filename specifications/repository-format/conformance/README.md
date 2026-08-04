@@ -98,6 +98,8 @@ Cross-verification is not an audit. It establishes that two people did not make 
 
 The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content — live in [`fixtures/`](fixtures/README.md). The first, `fixture-repository-v1`, is a complete deterministic phase-0 repository (descriptor, key object, blobs, standalone snapshot, index delta, journal) whose committed bytes are regenerated and compared on every test run: a diff under `fixtures/` is a format change and must be deliberate.
 
+The suite also carries the **recovery kit** ([specifications/recovery-kit](../../recovery-kit/README.md)): framing and text-form vectors in `vectors/recovery-kit.json`, and a committed kit for the fixture repository under `fixtures/fixture-repository-v1-kit/`.
+
 Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.
 
 ## Known gaps

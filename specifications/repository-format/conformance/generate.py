@@ -1268,6 +1268,204 @@ def path_rules_vectors() -> dict:
 
 
 # --------------------------------------------------------------------------
+# Recovery kit (specifications/recovery-kit, sections 2-4)
+# --------------------------------------------------------------------------
+
+
+def _cbor_uint(value: int) -> bytes:
+    """Minimal-length unsigned integer, major type 0 (deterministic CBOR)."""
+    if value < 24:
+        return bytes([value])
+    if value < 0x100:
+        return bytes([0x18, value])
+    if value < 0x10000:
+        return b"\x19" + value.to_bytes(2, "big")
+    if value < 0x100000000:
+        return b"\x1a" + value.to_bytes(4, "big")
+    return b"\x1b" + value.to_bytes(8, "big")
+
+
+def _cbor_head(major: int, argument: int) -> bytes:
+    head = _cbor_uint(argument)
+    return bytes([head[0] | (major << 5)]) + head[1:]
+
+
+def _cbor_bytes(value: bytes) -> bytes:
+    return _cbor_head(2, len(value)) + value
+
+
+def _cbor_text(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return _cbor_head(3, len(raw)) + raw
+
+
+def _cbor_map(entries: list) -> bytes:
+    """Definite-length map of (uint key, encoded value) pairs, key-sorted."""
+    body = b"".join(_cbor_uint(k) + v for k, v in sorted(entries))
+    return _cbor_head(5, len(entries)) + body
+
+
+def _cbor_array(items: list) -> bytes:
+    return _cbor_head(4, len(items)) + b"".join(items)
+
+
+def _kit_body(overrides: dict | None = None) -> bytes:
+    """The synthetic v1 kit body: all ten keys, a placeholder key object
+    (framing-level parsers treat key 5 as opaque past its magic).
+    """
+    fields = {
+        1: _cbor_uint(1),
+        2: _cbor_text("0.1.0"),
+        3: _cbor_bytes(bytes.fromhex("0102030405060708090a0b0c0d0e0f10")),
+        4: _cbor_uint(1),
+        5: _cbor_bytes(b"FBPKKEYS" + bytes(88)),
+        6: _cbor_map([
+            (1, _cbor_uint(8192)),
+            (2, _cbor_uint(1)),
+            (3, _cbor_uint(1)),
+            (4, _cbor_bytes(bytes(range(0x10, 0x20)))),
+        ]),
+        7: _cbor_array([
+            _cbor_map([
+                (1, _cbor_text("local-path")),
+                (2, _cbor_text("file:///backups/fallbackplan")),
+                (3, _cbor_text("")),
+                (4, _cbor_text("")),
+            ]),
+        ]),
+        8: _cbor_bytes(bytes([0x22]) * 16),
+        9: _cbor_uint(1_722_600_000_000),
+        10: _cbor_text("Install the recovery tool, then: recover --kit this-file."),
+    }
+    if overrides:
+        fields.update(overrides)
+    return _cbor_map(sorted(fields.items()))
+
+
+def _kit_frame(body: bytes, version: int = 1, declared_length: int | None = None,
+               corrupt_checksum: bool = False) -> bytes:
+    header = b"FBPKRKIT" + u16(version) + u16(0) + u32(
+        len(body) if declared_length is None else declared_length)
+    checksum = hashlib.sha256(header + body).digest()
+    if corrupt_checksum:
+        checksum = bytes([checksum[0] ^ 0x01]) + checksum[1:]
+    return header + body + checksum
+
+
+def _kit_line_check(number: str, payload: str) -> str:
+    digest = hashlib.sha256((number + ":" + payload.lower()).encode("utf-8")).digest()
+    return b32(digest)[:4]
+
+
+def _kit_text(framed: bytes) -> str:
+    """The canonical section 4 layout: 12 groups of 4, per-line checks."""
+    encoded = b32(framed)
+    per_line = 48
+    lines = [encoded[i : i + per_line] for i in range(0, len(encoded), per_line)]
+    width = 3 if len(lines) >= 100 else 2
+    rendered = ["FALLBACKPLAN RECOVERY KIT v1", ""]
+    for index, payload in enumerate(lines):
+        number = str(index + 1).zfill(width)
+        groups = " ".join(payload[i : i + 4] for i in range(0, len(payload), 4))
+        rendered.append(f"{number}: {groups} {_kit_line_check(number, payload)}")
+    rendered.append("END FALLBACKPLAN RECOVERY KIT")
+    return "\n".join(rendered) + "\n"
+
+
+def recovery_kit_vectors() -> dict:
+    """Specifications/recovery-kit sections 2-4 -- framing and text form."""
+    body = _kit_body()
+    framed = _kit_frame(body)
+
+    refusals = [
+        {
+            "name": "checksum_flip",
+            "framed_hex": _kit_frame(body, corrupt_checksum=True).hex(),
+            "reason": "checksum does not verify (transcription or storage damage)",
+        },
+        {
+            "name": "unknown_body_key",
+            "framed_hex": _kit_frame(_cbor_map(
+                sorted(({**{k: v for k, v in [
+                    (1, _cbor_uint(1))]}, 11: _cbor_uint(0)}).items()))).hex(),
+            "reason": "a v1 kit body assigns keys 1-10 only",
+        },
+        {
+            "name": "version_mismatch",
+            "framed_hex": _kit_frame(_kit_body({1: _cbor_uint(2)})).hex(),
+            "reason": "framed version and body key 1 disagree",
+        },
+        {
+            "name": "oversize_declared_body",
+            "framed_hex": _kit_frame(body, declared_length=65 * 1024 + 1).hex(),
+            "reason": "declared body exceeds the 64 KiB bound",
+        },
+        {
+            "name": "truncated",
+            "framed_hex": framed[:-8].hex(),
+            "reason": "length does not match the framing declaration",
+        },
+        {
+            "name": "wrong_magic",
+            "framed_hex": (b"NOTAKIT!" + framed[8:]).hex(),
+            "reason": "not a recovery kit",
+        },
+    ]
+
+    text = _kit_text(framed)
+
+    # A single-character transcription error must be caught by that LINE's
+    # check, before the whole-kit checksum is even reachable.
+    damaged_lines = text.split("\n")
+    target = next(i for i, line in enumerate(damaged_lines) if line.startswith("02: "))
+    damaged_lines[target] = damaged_lines[target].replace(" ", "  ", 1)
+    line = damaged_lines[target]
+    payload_start = line.index(":") + 1
+    body_chars = line[payload_start:].replace(" ", "")
+    flip = "a" if body_chars[0] != "a" else "b"
+    damaged_lines[target] = line.replace(body_chars[0], flip, 1)
+    damaged_text = "\n".join(damaged_lines)
+
+    # Inline self-checks, the same discipline as every other builder.
+    assert len(framed) == 16 + len(body) + 32
+    assert hashlib.sha256(framed[:-32]).digest() == framed[-32:]
+    assert _kit_line_check("01", b32(framed)[:48]) in text
+
+    return {
+        "description": "Recovery-kit framing and text form (specifications/recovery-kit sections 2-4).",
+        "independently_derived": True,
+        "comment": (
+            "The kit body is synthetic: key 5 carries a placeholder FBPKKEYS "
+            "prefix because framing-level conformance treats it as opaque "
+            "bytes; unwrap-level conformance is exercised by the committed "
+            "fixture kit, whose key object is real. Text-form cases pin the "
+            "canonical layout exactly: base32 of the framed binary, 12 "
+            "groups of 4 per line, per-line check = first 4 base32 chars of "
+            "SHA-256(line_number ':' payload)."
+        ),
+        "kit": {
+            "body_hex": body.hex(),
+            "framed_hex": framed.hex(),
+            "checksum_hex": framed[-32:].hex(),
+            "text_form": text,
+            "damaged_text_form": damaged_text,
+            "fields": {
+                "kit_format_version": 1,
+                "minimum_tool_version": "0.1.0",
+                "repository_id": "0102030405060708090a0b0c0d0e0f10",
+                "repository_format_version": 1,
+                "kdf": {"memory_kib": 8192, "iterations": 1, "parallelism": 1,
+                        "salt": bytes(range(0x10, 0x20)).hex()},
+                "issued_at": 1_722_600_000_000,
+                "destination_count": 1,
+            },
+        },
+        "refusal_cases": refusals,
+    }
+
+
+
+# --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
 
@@ -1281,6 +1479,7 @@ GROUPS = {
     "argon2id.json": argon2id_vectors,
     "ed25519.json": ed25519_vectors,
     "path-rules.json": path_rules_vectors,
+    "recovery-kit.json": recovery_kit_vectors,
 }
 
 

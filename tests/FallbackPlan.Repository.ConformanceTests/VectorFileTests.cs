@@ -40,6 +40,7 @@ public sealed class VectorFileTests
         ["argon2id.json"] = false,
         ["ed25519.json"] = true,
         ["path-rules.json"] = true,
+        ["recovery-kit.json"] = true,
     };
 
     private static string VectorDirectory =>
