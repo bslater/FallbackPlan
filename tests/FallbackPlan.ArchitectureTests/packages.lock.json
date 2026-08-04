@@ -137,6 +137,17 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "fallbackplan.agent": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Filesystem.Local": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
+          "FallbackPlan.Storage.Local": "[1.0.0, )"
+        }
+      },
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {

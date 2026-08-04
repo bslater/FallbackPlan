@@ -49,6 +49,9 @@ public sealed class DependencyRuleTests
     /// <summary>The standalone recovery tool — also an executable, loaded by name.</summary>
     private static Assembly Recovery => Assembly.Load("FallbackPlan.Recovery");
 
+    /// <summary>The Agent host — an executable, loaded by name.</summary>
+    private static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -57,7 +60,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Cli, Recovery];
+         Filesystem, FilesystemLocal, Restore, Application, Cli, Recovery, Agent];
 
     private static void AssertPasses(TestResult result, string rule)
     {

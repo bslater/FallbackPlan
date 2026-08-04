@@ -1013,4 +1013,83 @@ static ObjectId ParseObjectId(string hex)
     }));
 }
 
+// -------------------------------------------------------------- status
+
+{
+    var command = WithSession(new Command(
+        "status", "Per-set protection status (architecture 10 §1) — captured is never protected, degraded is never unrecoverable."));
+
+    command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+    {
+        using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        var configuration = ClientConfiguration.Load(session.ConfigurationPath);
+        var jobs = JobStateStore.Open(session.StateDirectory);
+        var repoPath = parse.GetValue(repoOption)!;
+
+        var findings = catalogue.Findings();
+        var requiredMissing = findings.Any(finding =>
+            finding.Kind is DamageKind.MissingBlob or DamageKind.MissingIndexObject);
+        var reachable = File.Exists(Path.Combine(repoPath, "repository-format"));
+        var snapshots = catalogue.EnumerateSnapshots();
+
+        var sets = configuration.BackupSets.Count > 0
+            ? configuration.BackupSets
+            : [new BackupSetConfiguration
+               {
+                   Id = Hex(session.BackupSetId), Name = "(default)", Root = string.Empty,
+               }];
+
+        foreach (var set in sets)
+        {
+            var setId = Convert.FromHexString(set.Id);
+            var latest = snapshots.FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
+
+            // The failure-domain fact (PT-8): same device as the source is
+            // never `protected`. Unknown roots stay conservative.
+            var sameDomain = true;
+            if (set.Root.Length > 0 &&
+                FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat) &&
+                FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(repoPath, out var repoStat))
+            {
+                sameDomain = rootStat.Device == repoStat.Device;
+            }
+
+            var status = StatusDeriver.Derive(new StatusInputs
+            {
+                LatestSnapshotAt = latest?.CapturedAt,
+                LatestCaptureStatus = latest?.CaptureStatus,
+                DestinationReachable = reachable,
+                SameFailureDomain = sameDomain,
+                DamageFindings = findings.Count,
+                RequiredObjectsMissing = requiredMissing,
+            });
+
+            var lastProtected = latest is null
+                ? "never"
+                : DateTimeOffset.FromUnixTimeMilliseconds((long)latest.CapturedAt)
+                    .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+
+            string nextRun = "manual";
+            if (!string.IsNullOrWhiteSpace(set.Schedule) &&
+                FallbackPlan.Application.Schedule.TryParse(set.Schedule!, out var schedule, out _))
+            {
+                var anchor = jobs.LastCompleted(set.Id) is { } completed
+                    ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
+                    : (DateTimeOffset?)null;
+                nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now)
+                    .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            }
+
+            Console.WriteLine($"{set.Name,-20} {status.State,-14} last: {lastProtected}  next: {nextRun}");
+            foreach (var warning in status.Warnings)
+            {
+                Console.WriteLine($"{string.Empty,-20} warning: {warning}");
+            }
+        }
+
+        return 0;
+    }));
+}
+
 return await root.Parse(args).InvokeAsync().ConfigureAwait(false);

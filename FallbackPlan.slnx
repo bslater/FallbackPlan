@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/FallbackPlan.Agent/FallbackPlan.Agent.csproj" />
     <Project Path="src/FallbackPlan.Application/FallbackPlan.Application.csproj" />
     <Project Path="src/FallbackPlan.Cli/FallbackPlan.Cli.csproj" />
     <Project Path="src/FallbackPlan.Domain/FallbackPlan.Domain.csproj" />

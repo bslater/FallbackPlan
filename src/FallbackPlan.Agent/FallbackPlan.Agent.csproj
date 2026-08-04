@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Application\FallbackPlan.Application.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+  </ItemGroup>
+
+</Project>
