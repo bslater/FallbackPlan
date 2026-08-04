@@ -220,6 +220,11 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
             }
 
+            FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(
+                1, new KeyValuePair<string, object?>("class", "meta"));
+            FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobFillFraction.Record(
+                sealedBlob.Length / (double)_blobProfile.TargetSizeBytes);
+
             _blobs.Add(new ArchivedBlob(
                 sealedBlob.BlobId,
                 storeBlobKey,

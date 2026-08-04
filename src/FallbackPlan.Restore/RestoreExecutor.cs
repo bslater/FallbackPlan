@@ -96,6 +96,7 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         ArgumentNullException.ThrowIfNull(options);
 
+        using var activity = FallbackPlan.Domain.Diagnostics.EngineDiagnostics.Activities.StartActivity("restore");
         Directory.CreateDirectory(outputDirectory);
         var quarantineRoot = Path.Combine(outputDirectory, ".fbp-quarantine");
         var engine = new RestoreEngine(reader);

@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
@@ -137,6 +138,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         {
             var plaintext = _segmentBuffer.AsMemory(0, segment.Length);
             logicalLength = segment.Offset + segment.Length;
+            EngineDiagnostics.ArchiveBytesLogical.Add(segment.Length);
 
             // 04 §5 order: content id, object id, compress, ordinal, encrypt.
             var contentId = ContentHasher.Hash(plaintext.Span);
@@ -148,6 +150,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 priorByContent.TryGetValue(contentId, out var prior) &&
                 prior.Length == segment.Length)
             {
+                EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
                 references.Add(new SegmentReference(segment.Offset, segment.Length, prior.ObjectId));
                 contentIds.Add(contentId);
                 continue;
@@ -160,6 +163,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 priorVersion.SegmentReferences[(int)segment.Index].LogicalLength == segment.Length &&
                 priorVersion.SegmentContentIds[(int)segment.Index] == contentId)
             {
+                EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
                 references.Add(new SegmentReference(
                     segment.Offset,
                     segment.Length,
@@ -326,6 +330,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         // survives a catalogue rebuild.
         if (_writtenThisSession.Contains(objectId) || _segmentExists?.Invoke(objectId) == true)
         {
+            EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
             return objectId;
         }
 
@@ -364,6 +369,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
 
         _writtenThisSession.Add(objectId);
+        EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
+        EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
 
         if (_writer.ShouldSeal)
         {
@@ -395,6 +402,10 @@ public sealed class ArchiveSession : IAsyncDisposable
             {
                 throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
             }
+
+            EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
+            EngineDiagnostics.BlobFillFraction.Record(
+                sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
 
             _blobs.Add(new ArchivedBlob(
                 sealedBlob.BlobId,

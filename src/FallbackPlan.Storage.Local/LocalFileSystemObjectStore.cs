@@ -77,6 +77,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     /// <inheritdoc />
     public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
     {
+        FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "get"));
         cancellationToken.ThrowIfCancellationRequested();
 
         var path = ResolvePath(key);
@@ -119,6 +120,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     {
         ArgumentNullException.ThrowIfNull(openContent);
         ArgumentNullException.ThrowIfNull(conditions);
+        FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "put"));
 
         var finalPath = ResolvePath(key);
 
@@ -190,6 +192,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
+        FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "list"));
 
         await Task.Yield();
 
@@ -242,6 +245,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(conditions);
+        FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "delete"));
         cancellationToken.ThrowIfCancellationRequested();
 
         var path = ResolvePath(key);

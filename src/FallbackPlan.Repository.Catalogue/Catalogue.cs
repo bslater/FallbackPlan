@@ -1,6 +1,8 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
+using System.Diagnostics;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace FallbackPlan.Repository.Catalogue;
@@ -354,6 +356,7 @@ public sealed class Catalogue : IDisposable
     public CatalogueTreeEntry? LookupPath(ReadOnlySpan<byte> snapshotId, string path, bool caseInsensitive = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        var started = Stopwatch.GetTimestamp();
 
         using var command = _connection.CreateCommand();
         command.CommandText = caseInsensitive
@@ -379,7 +382,9 @@ public sealed class Catalogue : IDisposable
         }
 
         using var reader = command.ExecuteReader();
-        return reader.Read() ? ReadTreeEntry(reader) : null;
+        var entry = reader.Read() ? ReadTreeEntry(reader) : null;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return entry;
     }
 
     /// <summary>
@@ -530,6 +535,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public bool HasLocation(ObjectId objectId)
     {
+        var started = Stopwatch.GetTimestamp();
         using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT EXISTS (
@@ -539,17 +545,22 @@ public sealed class Catalogue : IDisposable
             );
             """;
         command.Parameters.AddWithValue("$object", objectId.ToArray());
-        return (long)command.ExecuteScalar()! > 0;
+        var exists = (long)command.ExecuteScalar()! > 0;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return exists;
     }
 
     /// <summary>Looks up a prior segment by content identifier — the dedup path (NFR-PERF-010).</summary>
     public ObjectId? LookupByContent(ContentId contentId)
     {
+        var started = Stopwatch.GetTimestamp();
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT object_id FROM segment_dedup WHERE content_id = $content;";
         command.Parameters.AddWithValue("$content", contentId.ToArray());
 
-        return command.ExecuteScalar() is byte[] bytes ? ObjectId.FromBytes(bytes) : null;
+        var result = command.ExecuteScalar() is byte[] bytes ? ObjectId.FromBytes(bytes) : (ObjectId?)null;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return result;
     }
 
     /// <summary>The number of applied deltas — the idempotence ledger's size.</summary>

@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Diagnostics;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
@@ -114,6 +116,9 @@ public sealed partial class PublicationOrchestrator
     public async ValueTask<PublishedTreeSnapshot> PublishAsync(SnapshotJob job, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(job);
+
+        using var activity = EngineDiagnostics.Activities.StartActivity("publish");
+        var publicationStarted = Stopwatch.GetTimestamp();
 
         // Probe first: rule case-sensitivity is the filesystem's, and the
         // snapshot records what was actually observed.
@@ -301,6 +306,8 @@ public sealed partial class PublicationOrchestrator
                 ProjectIntoCatalogue(job, walker, session, builder, snapshotObjectId, rootTreeId, deltaId, delta, errorId);
             }
 
+            EngineDiagnostics.PublicationDuration.Record(
+                Stopwatch.GetElapsedTime(publicationStarted).TotalSeconds);
             _observer?.AfterStep(PublicationStep.Complete);
 
             return new PublishedTreeSnapshot(
@@ -494,6 +501,7 @@ public sealed partial class PublicationOrchestrator
                 entry.Identity is { } identity &&
                 identity.Device == priorDevice && identity.FileId == priorFileId)
             {
+                EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
@@ -520,6 +528,8 @@ public sealed partial class PublicationOrchestrator
                     ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(manifest), cancellationToken)
                     .ConfigureAwait(false);
 
+                EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
+                EngineDiagnostics.ScanBytes.Add(entry.Length);
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
@@ -528,6 +538,7 @@ public sealed partial class PublicationOrchestrator
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
         }
