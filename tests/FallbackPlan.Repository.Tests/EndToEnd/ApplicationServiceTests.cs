@@ -77,6 +77,32 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public void Daily_schedule_answers_do_not_depend_on_the_machine_timezone()
+    {
+        // NFR-TIME-001: IsDue is a pure function of its arguments. The same
+        // instants expressed in any offset — here UTC+10, chosen because a
+        // UTC machine masks the difference — must give the same answers as
+        // the UTC assertions above.
+        Assert.True(Schedule.TryParse("daily at 02:30", out var schedule, out _));
+
+        static DateTimeOffset Local(int day, int hour, int minute = 0) =>
+            new(2026, 8, day, hour, minute, 0, TimeSpan.FromHours(10));
+
+        Assert.False(schedule!.IsDue(Local(3, 2, 45), Local(4, 1)));
+        Assert.True(schedule.IsDue(Local(3, 2, 45), Local(4, 3)));
+        Assert.False(schedule.IsDue(Local(4, 3, 10), Local(4, 9)));
+
+        // Mixed offsets: the anchor arrives in UTC (as a journal timestamp
+        // would), now in the Agent's local offset. 2026-08-03T16:45Z is
+        // 02:45 on the 4th in UTC+10 — today's occurrence already ran.
+        Assert.False(schedule.IsDue(
+            new DateTimeOffset(2026, 8, 3, 16, 45, 0, TimeSpan.Zero), Local(4, 9)));
+
+        Assert.Equal(Local(4, 2, 30), schedule.NextRun(Local(3, 2, 45), Local(4, 1)));
+        Assert.Equal(Local(5, 2, 30), schedule.NextRun(Local(4, 3, 10), Local(4, 9)));
+    }
+
+    [Fact]
     public void The_job_journal_records_transitions_and_anchors_the_schedule()
     {
         var store = JobStateStore.Open(_stateDirectory);

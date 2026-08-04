@@ -101,12 +101,15 @@ public sealed class Schedule
         }
 
         // daily at HH:mm: due when today's occurrence has passed and the
-        // last completed run predates it. One run per calendar day.
+        // last completed run predates it. One run per calendar day. All
+        // arithmetic stays in now's own offset — converting through the
+        // machine timezone would make the answer depend on where the code
+        // runs, not on the arguments (NFR-TIME-001).
         var today = now.Date + _dailyAt!.Value.ToTimeSpan();
-        var occurrence = now.LocalDateTime >= today
+        var occurrence = now.DateTime >= today
             ? today
             : today.AddDays(-1);
-        return lastCompleted.Value.LocalDateTime < occurrence && now.LocalDateTime >= occurrence;
+        return lastCompleted.Value.ToOffset(now.Offset).DateTime < occurrence;
     }
 
     /// <summary>The next scheduled run after <paramref name="now"/> — the status display's "next run".</summary>
@@ -123,7 +126,7 @@ public sealed class Schedule
         }
 
         var today = now.Date + _dailyAt!.Value.ToTimeSpan();
-        var next = now.LocalDateTime < today ? today : today.AddDays(1);
+        var next = now.DateTime < today ? today : today.AddDays(1);
         return new DateTimeOffset(next, now.Offset);
     }
 }
