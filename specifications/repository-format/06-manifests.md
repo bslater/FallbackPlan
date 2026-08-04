@@ -95,6 +95,19 @@ Names rather than numeric IDs for owner and group: a UID means nothing on the ma
 
 Absent keys mean the source did not provide the value. They do not mean zero.
 
+> **Erratum (phase 1).** Several shapes in §4 and §4.1 were unassigned
+> until the first production writer needed them. Pending a normative edit,
+> [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) pins them:
+> `hardlink_group` (key 12) = the first 16 bytes of
+> HMAC-SHA-256(content_id_key, `"fbp/hardlink/v1"` ‖ device_id ‖
+> u64(file_identity)) — deterministic, keyed, equal within one snapshot for
+> links to one inode (§Decision 1); `capture_diagnostics` (key 13) uses the
+> documented `key: value` vocabulary incl. `captured-inconsistent:`
+> (§Decision 2); an alternate stream's `object_id` (§4.1 key 9) names a
+> segment record (`0x01`) holding the whole stream, one segment maximum in
+> v1 (§Decision 5); special files (`entry_kind` 4) are zero-content file
+> versions with `special-kind:`/`device:` diagnostics (§Decision 4).
+
 ### 4.2 The whole-file hash
 
 `whole_file_hash` is computed over the **reconstructed plaintext file**, including materialised sparse extents as zeroes, using the repository's content-hash profile.
@@ -116,6 +129,15 @@ Object type `0x03`.
 Entries MUST be sorted by the **raw bytes** of `name`, ascending. Byte order rather than a collation order, because collation is locale-dependent and would make the encoding non-deterministic across machines — which would break object identifiers ([00 §4](00-conventions.md#4-cbor-encoding)).
 
 A tree MUST NOT contain two entries with the same `name` bytes. It MAY contain entries differing only by case or Unicode normalisation — that is a legitimate state on a case-sensitive source, and it becomes a restore-plan conflict rather than a capture error. → [`06-filesystem-capture.md` §2](../../docs/architecture/06-filesystem-capture.md#2-path-handling)
+
+> **Erratum (phase 1).** The relationship between a tree entry and a child
+> directory was unstated. Pending a normative edit,
+> [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 6
+> pins it: a subdirectory entry carries `entry_kind` 3 and its `object_id`
+> names the child directory's **tree manifest** (`0x03`) — the first
+> manifest of the chain when sharded; resolution to any other object type
+> is a damage finding. An empty directory is a tree manifest with zero
+> entries.
 
 ## 6 Snapshot manifest
 
@@ -169,7 +191,7 @@ Object type `0x05`. Records the effective configuration a snapshot was captured 
 
 This exists so that a snapshot can always answer "what settings produced this?" years later, without those settings having to still exist in anyone's configuration file. It is also what makes a benchmark comparing two profiles interpretable.
 
-> **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them.
+> **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them. Phase 1 extends `source_filesystem` with optional keys 4 `max_path_bytes` (u32), 5 `max_component_bytes` (u32), and 6 `reserved_names` (bool) — the filesystem capability record of [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 7; absence means "limits unknown". The snapshot manifest's `capture_status` triggers are pinned by the same ADR §Decision 3: 2 (partial) iff key 9 references a non-empty error manifest; 3 (aborted) is never published by this implementation.
 
 ### 7.1 Rule dialect (rules-v1)
 
