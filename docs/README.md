@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: Phase 0 implemented; Phase 1 in progress.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) (filesystem capture, multi-file snapshots, restore planning, recovery kit) is underway.
+> **Status: Phase 0 implemented; Phase 1 push 1 complete.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) is done, every push-1 exit criterion traced to a named test; push 2 (Agent, scheduling, OpenTelemetry, status model) remains. Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md).
 
 ---
 

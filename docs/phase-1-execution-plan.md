@@ -87,15 +87,17 @@ G · Decisions on paper ──▶ S · Scanner ──▶ T · Publication ──
 
 ## Exit-criteria coverage (push 1 unless noted)
 
-| # | Exit criterion | Delivered by |
-|---|----------------|--------------|
-| 1 | Cross-platform backup and point-in-time restore | S2, T1, C1, R1 + CI matrix |
-| 2 | Path and version lookups meet NFR-PERF-004 | T2, V2 |
-| 3 | Interruption testing at every publication boundary | V1 |
-| 4 | Complete rebuild without the local database | T2 rebuild parity (extends phase-0 E1/E2) |
-| 5 | Restore begins during partial rebuild | R2 |
-| 6 | Clean-machine recovery using only repository plus kit | C2, V4 |
-| 7 | Public conformance fixtures cover blobs, records, manifests, indexes, and snapshots | G2, V3 |
+Push 1 is complete; each criterion now names the test that proves it.
+
+| # | Exit criterion | Proven by |
+|---|----------------|-----------|
+| 1 | Cross-platform backup and point-in-time restore | `LocalTreeBackupTests`, `SnapshotPublicationTests`, `RestorePlanTests`, CLI `backup`/`restore` — cross-platform via the CI matrix |
+| 2 | Path and version lookups meet NFR-PERF-004 | `IncrementalBackupTests` + the `pathlookup` measurement ([phase-1-benchmarks.md](phase-1-benchmarks.md): ~29 µs lookup, ~0.28 ms listing at 100k files) |
+| 3 | Interruption testing at every publication boundary | `TreeSnapshotInterruptionTests` (five kill points over `SnapshotJob`) + the phase-0 `PublicationInterruptionTests` matrix |
+| 4 | Complete rebuild without the local database | `IncrementalBackupTests.A_rebuilt_catalogue_answers_the_same_queries…` (E1 + `CatalogueProjector`), `ForensicRebuildTests` path tables |
+| 5 | Restore begins during partial rebuild | `RestorePlanTests.A_targeted_forensic_rebuild_is_enough_to_restore_that_snapshot` |
+| 6 | Clean-machine recovery using only repository plus kit | `KitDrillTests` (store + kit + passphrase only; text round trip; per-line transcription check) + the live CLI→`fallbackplan-recover` drill |
+| 7 | Public conformance fixtures cover blobs, records, manifests, indexes, and snapshots | `fixture-repository-v1` (blobs, records, manifests, index delta, journal, snapshot, key object, descriptor) + the committed kit fixtures — asserted by the conformance fixture tests; the v1 bytes stayed frozen through the whole phase |
 
 Push 2 owes no exit criterion; it owes the roadmap features "OpenTelemetry instrumentation · Agent service and basic scheduling" and the status model of architecture 10 §1.
 

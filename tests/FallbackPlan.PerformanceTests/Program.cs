@@ -16,5 +16,10 @@ if (args.Length > 0 && string.Equals(args[0], "dedup", StringComparison.OrdinalI
     return await DedupCorpusBenchmark.RunAsync();
 }
 
+if (args.Length > 0 && string.Equals(args[0], "pathlookup", StringComparison.OrdinalIgnoreCase))
+{
+    return PathLookupBenchmark.Run();
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(MemoryBoundProof).Assembly).Run(args);
 return 0;
