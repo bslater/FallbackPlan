@@ -248,6 +248,13 @@
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
+      "fallbackplan.restore": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Filesystem": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )"
+        }
+      },
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {

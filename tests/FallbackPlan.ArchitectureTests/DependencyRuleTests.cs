@@ -36,6 +36,7 @@ public sealed class DependencyRuleTests
     private static Assembly ImportAbstractions => typeof(Import.Abstractions.AssemblyMarker).Assembly;
     private static Assembly Filesystem => typeof(FallbackPlan.Filesystem.AssemblyMarker).Assembly;
     private static Assembly FilesystemLocal => typeof(FallbackPlan.Filesystem.Local.AssemblyMarker).Assembly;
+    private static Assembly Restore => typeof(FallbackPlan.Restore.AssemblyMarker).Assembly;
 
     /// <summary>
     /// The Cli project has no AssemblyMarker — it is an executable, not a
@@ -55,7 +56,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Cli, Recovery];
+         Filesystem, FilesystemLocal, Restore, Cli, Recovery];
 
     private static void AssertPasses(TestResult result, string rule)
     {

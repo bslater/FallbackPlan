@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
+  </ItemGroup>
+
+</Project>
