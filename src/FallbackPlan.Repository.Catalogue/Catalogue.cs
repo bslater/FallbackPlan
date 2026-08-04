@@ -5,6 +5,34 @@ using Microsoft.Data.Sqlite;
 
 namespace FallbackPlan.Repository.Catalogue;
 
+/// <summary>One snapshot as the catalogue projects it (schema v2).</summary>
+public sealed record CatalogueSnapshot(
+    ReadOnlyMemory<byte> SnapshotId,
+    ReadOnlyMemory<byte> DeviceId,
+    ReadOnlyMemory<byte> BackupSetId,
+    ObjectId ObjectId,
+    ObjectId RootTree,
+    ulong PublicationGeneration,
+    byte CaptureStatus,
+    int SignatureState,
+    ulong CapturedAt);
+
+/// <summary>
+/// One path within a snapshot (schema v2 <c>tree_entries</c>), joined with
+/// the file-version columns the NFR-PERF-003 short-circuit compares. The
+/// identity columns are scan-time local facts — never durable in the
+/// repository — so they are null in a rebuilt catalogue, and a null
+/// identity disables the short-circuit rather than weakening it.
+/// </summary>
+public sealed record CatalogueTreeEntry(
+    string Path,
+    EntryKind EntryKind,
+    ObjectId ObjectId,
+    ulong? LogicalLength,
+    ulong? ModifiedAt,
+    ulong? IdentityDevice,
+    ulong? IdentityFileId);
+
 /// <summary>A resolved physical location: everything a targeted read needs to open one blob and one record.</summary>
 public sealed record ResolvedLocation(
     BlobId BlobId,
@@ -212,7 +240,12 @@ public sealed class Catalogue : IDisposable
         transaction.Commit();
     }
 
-    /// <summary>Records a file-version manifest's projection and its segments' dedup mappings.</summary>
+    /// <summary>
+    /// Records a file-version manifest's projection. The optional
+    /// modification time and identity are the NFR-PERF-003 short-circuit's
+    /// comparison key; identity is catalogue-domain only (02 §2) and absent
+    /// after any rebuild.
+    /// </summary>
     public void RecordFileVersion(
         ObjectId objectId,
         ReadOnlySpan<byte> name,
@@ -220,13 +253,17 @@ public sealed class Catalogue : IDisposable
         ulong logicalLength,
         ReadOnlySpan<byte> wholeFileHash,
         ObjectId? parentVersion,
-        int segmentCount)
+        int segmentCount,
+        ulong? modifiedAt = null,
+        ulong? identityDevice = null,
+        ulong? identityFileId = null)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO file_versions
-                (object_id, name, entry_kind, logical_length, whole_file_hash, parent_version, segment_count)
-            VALUES ($id, $name, $kind, $length, $hash, $parent, $segments);
+                (object_id, name, entry_kind, logical_length, whole_file_hash, parent_version, segment_count,
+                 modified_at, identity_device, identity_file_id)
+            VALUES ($id, $name, $kind, $length, $hash, $parent, $segments, $modified, $device, $fileid);
             """;
         command.Parameters.AddWithValue("$id", objectId.ToArray());
         command.Parameters.AddWithValue("$name", name.ToArray());
@@ -235,8 +272,153 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$hash", wholeFileHash.ToArray());
         command.Parameters.AddWithValue("$parent", parentVersion is { } p ? p.ToArray() : DBNull.Value);
         command.Parameters.AddWithValue("$segments", segmentCount);
+        command.Parameters.AddWithValue("$modified", modifiedAt is { } m ? (long)m : DBNull.Value);
+        command.Parameters.AddWithValue("$device", identityDevice is { } d ? unchecked((long)d) : DBNull.Value);
+        command.Parameters.AddWithValue("$fileid", identityFileId is { } f ? unchecked((long)f) : DBNull.Value);
         command.ExecuteNonQuery();
     }
+
+    /// <summary>
+    /// The catalogue's path index key: the invariant lowercase form of the
+    /// NFC-normalised path — the same case regime rules-v1 matching uses
+    /// (ADR-0026 §Decision 8). Applied for indexing only; stored paths keep
+    /// their original form.
+    /// </summary>
+    public static string Casefold(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+    }
+
+    /// <summary>Records one path of a snapshot's tree (schema v2 <c>tree_entries</c>).</summary>
+    public void RecordTreeEntry(
+        ReadOnlySpan<byte> snapshotId,
+        string path,
+        EntryKind entryKind,
+        ObjectId objectId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+
+        var slash = path.LastIndexOf('/');
+        var parent = slash < 0 ? string.Empty : path[..slash];
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR REPLACE INTO tree_entries (snapshot_id, path, parent, path_casefold, entry_kind, object_id)
+            VALUES ($snapshot, $path, $parent, $casefold, $kind, $object);
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$parent", parent);
+        command.Parameters.AddWithValue("$casefold", Casefold(path));
+        command.Parameters.AddWithValue("$kind", (int)entryKind);
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Every known snapshot, newest capture first.</summary>
+    public IReadOnlyList<CatalogueSnapshot> EnumerateSnapshots()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT snapshot_id, device_id, backup_set_id, object_id, root_tree,
+                   publication_generation, capture_status, signature_state, captured_at
+            FROM snapshots
+            ORDER BY captured_at DESC, snapshot_id;
+            """;
+
+        var snapshots = new List<CatalogueSnapshot>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            snapshots.Add(new CatalogueSnapshot(
+                (byte[])reader.GetValue(0),
+                (byte[])reader.GetValue(1),
+                (byte[])reader.GetValue(2),
+                ObjectId.FromBytes((byte[])reader.GetValue(3)),
+                ObjectId.FromBytes((byte[])reader.GetValue(4)),
+                (ulong)reader.GetInt64(5),
+                (byte)reader.GetInt64(6),
+                (int)reader.GetInt64(7),
+                (ulong)reader.GetInt64(8)));
+        }
+
+        return snapshots;
+    }
+
+    /// <summary>
+    /// Resolves one path within a snapshot — the NFR-PERF-004 lookup.
+    /// Case-insensitive resolution folds through the ADR-0026 §Decision 8
+    /// key; an exact match always wins over a folded one.
+    /// </summary>
+    public CatalogueTreeEntry? LookupPath(ReadOnlySpan<byte> snapshotId, string path, bool caseInsensitive = false)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = caseInsensitive
+            ? """
+              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+              FROM tree_entries t
+              LEFT JOIN file_versions f ON f.object_id = t.object_id
+              WHERE t.snapshot_id = $snapshot AND t.path_casefold = $casefold
+              ORDER BY (t.path = $path) DESC, t.path
+              LIMIT 1;
+              """
+            : """
+              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+              FROM tree_entries t
+              LEFT JOIN file_versions f ON f.object_id = t.object_id
+              WHERE t.snapshot_id = $snapshot AND t.path = $path;
+              """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$path", path);
+        if (caseInsensitive)
+        {
+            command.Parameters.AddWithValue("$casefold", Casefold(path));
+        }
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadTreeEntry(reader) : null;
+    }
+
+    /// <summary>
+    /// Lists a directory's immediate children within a snapshot, in path
+    /// order. The root is the empty string.
+    /// </summary>
+    public IReadOnlyList<CatalogueTreeEntry> ListDirectory(ReadOnlySpan<byte> snapshotId, string parentPath)
+    {
+        ArgumentNullException.ThrowIfNull(parentPath);
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+            FROM tree_entries t
+            LEFT JOIN file_versions f ON f.object_id = t.object_id
+            WHERE t.snapshot_id = $snapshot AND t.parent = $parent
+            ORDER BY t.path;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$parent", parentPath);
+
+        var entries = new List<CatalogueTreeEntry>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            entries.Add(ReadTreeEntry(reader));
+        }
+
+        return entries;
+    }
+
+    private static CatalogueTreeEntry ReadTreeEntry(SqliteDataReader reader) => new(
+        reader.GetString(0),
+        (EntryKind)reader.GetInt64(1),
+        ObjectId.FromBytes((byte[])reader.GetValue(2)),
+        reader.IsDBNull(3) ? null : (ulong)reader.GetInt64(3),
+        reader.IsDBNull(4) ? null : (ulong)reader.GetInt64(4),
+        reader.IsDBNull(5) ? null : unchecked((ulong)reader.GetInt64(5)),
+        reader.IsDBNull(6) ? null : unchecked((ulong)reader.GetInt64(6)));
 
     /// <summary>Records a content-to-object dedup mapping — catalogue-domain only, never durable in the repository (02 §2).</summary>
     public void RecordSegmentDedup(ContentId contentId, ObjectId objectId)
@@ -259,13 +441,14 @@ public sealed class Catalogue : IDisposable
         ObjectId rootTree,
         ulong publicationGeneration,
         byte captureStatus,
-        int signatureState)
+        int signatureState,
+        ulong capturedAt = 0)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO snapshots
-                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state)
-            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature);
+                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state, captured_at)
+            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature, $captured);
             """;
         command.Parameters.AddWithValue("$id", snapshotId.ToArray());
         command.Parameters.AddWithValue("$device", deviceId.ToArray());
@@ -275,6 +458,7 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$generation", (long)publicationGeneration);
         command.Parameters.AddWithValue("$status", captureStatus);
         command.Parameters.AddWithValue("$signature", signatureState);
+        command.Parameters.AddWithValue("$captured", (long)capturedAt);
         command.ExecuteNonQuery();
     }
 
@@ -335,6 +519,27 @@ public sealed class Catalogue : IDisposable
         }
 
         return live;
+    }
+
+    /// <summary>
+    /// Whether any live index entry locates <paramref name="objectId"/> —
+    /// the segment-reuse test (NFR-PERF-010). Keyed by object identifier
+    /// rather than content identifier so the answer survives a catalogue
+    /// rebuild: locations come from durable deltas, while content mappings
+    /// are catalogue-domain and lost with the file (02 §2).
+    /// </summary>
+    public bool HasLocation(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM object_locations l
+                LEFT JOIN blobs b ON b.blob_id = l.blob_id
+                WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3
+            );
+            """;
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        return (long)command.ExecuteScalar()! > 0;
     }
 
     /// <summary>Looks up a prior segment by content identifier — the dedup path (NFR-PERF-010).</summary>

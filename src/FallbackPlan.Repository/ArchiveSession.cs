@@ -44,6 +44,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
     private readonly ZstdSegmentCodec? _codec;
     private readonly List<ArchivedBlob> _blobs = [];
+    private readonly Func<ObjectId, bool>? _segmentExists;
+    private readonly HashSet<ObjectId> _writtenThisSession = [];
     private BlobWriter? _writer;
 
     internal ArchiveSession(
@@ -56,8 +58,10 @@ public sealed class ArchiveSession : IAsyncDisposable
         IBlobCounterAllocator counters,
         string spoolDirectory,
         SpoolPinnedConfiguration pinned,
-        IIntentScope? intentScope)
+        IIntentScope? intentScope,
+        Func<ObjectId, bool>? segmentExists)
     {
+        _segmentExists = segmentExists;
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -315,6 +319,16 @@ public sealed class ArchiveSession : IAsyncDisposable
     {
         var objectId = _objectIdDeriver.Derive(ObjectType.SegmentRecord, contentId);
 
+        // Segment reuse by object identifier (specification 09 §6;
+        // NFR-PERF-010): equal content derives an equal identifier, and an
+        // identifier the index already locates — or this session already
+        // wrote — needs no new record. Keyed on the object id so the test
+        // survives a catalogue rebuild.
+        if (_writtenThisSession.Contains(objectId) || _segmentExists?.Invoke(objectId) == true)
+        {
+            return objectId;
+        }
+
         var payload = plaintext;
         var profile = CompressionProfile.None;
         if (_codec is not null &&
@@ -348,6 +362,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             (ulong)plaintext.Length,
             payload,
             cancellationToken).ConfigureAwait(false);
+
+        _writtenThisSession.Add(objectId);
 
         if (_writer.ShouldSeal)
         {

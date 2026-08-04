@@ -39,7 +39,11 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         Assert.Equal(original.LongLength, result.LogicalLength);
         Assert.Equal(original.Length / (64 * 1024), result.SegmentReferences.Count);
         Assert.True(result.Blobs.Count > 1, "The small blob targets must force multiple blobs.");
-        Assert.Equal(result.SegmentReferences.Count, result.RecordsWritten);
+
+        // One record per DISTINCT segment: identical content derives an
+        // identical object identifier and is stored once (09 §6) — the test
+        // file's repeating regions make several segments byte-identical.
+        Assert.Equal(result.SegmentContentIds.Distinct().Count(), result.RecordsWritten);
 
         // Every stored object sits at blobs/data/<shard>/<store-blob-key>,
         // and the shard is the rendering's first four characters.

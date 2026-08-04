@@ -274,6 +274,68 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         Assert.False(level2.Ok);
     }
 
+    [Fact]
+    public async Task A_forensic_rebuild_of_a_tree_snapshot_repopulates_the_path_tables()
+    {
+        // A multi-directory tree snapshot, then a forensic rebuild into a
+        // fresh catalogue: `ls` must work from footers alone (wave T2 —
+        // the v2 tables are part of what "rebuilt" means).
+        var treeSource = new FakeFileSystemSource();
+        treeSource.AddFile("docs/inner/deep.bin", [1, 2, 3, 4]);
+        treeSource.AddFile("docs/top.bin", [5, 6, 7]);
+        treeSource.AddFile("root.bin", [8, 9]);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+
+        var orchestrator = new PublicationOrchestrator(
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            new Repository.Index.WriterSequence(
+                new Repository.Index.FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence-tree.txt"))),
+            SpoolDirectory);
+
+        await orchestrator.PublishAsync(
+            new SnapshotJob
+            {
+                Source = treeSource,
+                RootPath = "/",
+                DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+                SnapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray(),
+                NowUnixMilliseconds = 1_722_600_000_000,
+                DeclaredMaxDurationMs = 3_600_000,
+                ExpiryGeneration = 5,
+                ClientVersion = "forensic-tests/1.0",
+            },
+            CancellationToken.None);
+
+        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "forensic-tree.db"), Repo);
+        var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
+
+        Assert.True(report.TargetSatisfied);
+
+        var snapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray();
+        var snapshot = Assert.Single(
+            catalogue.EnumerateSnapshots(), row => row.SnapshotId.Span.SequenceEqual(snapshotId));
+        Assert.Equal(1, snapshot.SignatureState);
+        Assert.Equal(1_722_600_000_000ul, snapshot.CapturedAt);
+
+        Assert.Equal(
+            ["docs", "root.bin"],
+            catalogue.ListDirectory(snapshotId, string.Empty).Select(entry => entry.Path));
+        Assert.Equal(
+            ["docs/inner", "docs/top.bin"],
+            catalogue.ListDirectory(snapshotId, "docs").Select(entry => entry.Path));
+
+        var deep = catalogue.LookupPath(snapshotId, "docs/inner/deep.bin");
+        Assert.NotNull(deep);
+        Assert.Equal(4ul, deep!.LogicalLength);
+        Assert.NotNull(deep.ModifiedAt);
+        Assert.Null(deep.IdentityDevice); // identity is never durable (02 §2)
+    }
+
     private static async Task<byte[]> ReadSnapshotStandaloneAsync(Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys)
     {
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))

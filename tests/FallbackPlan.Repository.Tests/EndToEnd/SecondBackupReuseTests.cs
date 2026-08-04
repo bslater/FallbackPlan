@@ -141,7 +141,9 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
         using var secondSource = new MemoryStream(original);
         var second = await rescaled.ArchiveAsync(secondSource, first, CancellationToken.None);
 
-        Assert.Equal(second.SegmentReferences.Count, second.RecordsWritten);
+        // Re-archived in full under the new geometry — no cross-parameter
+        // reuse — with one record per distinct segment (09 §5, §6).
+        Assert.Equal(second.SegmentContentIds.Distinct().Count(), second.RecordsWritten);
         Assert.Equal(first.SegmentReferences.Count / 2, second.SegmentReferences.Count);
     }
 }

@@ -116,8 +116,16 @@ public sealed partial class PublicationOrchestrator
     private readonly WriterSequence _sequence;
     private readonly string _spoolDirectory;
     private readonly IPublicationObserver? _observer;
+    private readonly Catalogue.Catalogue? _catalogue;
 
-    /// <summary>Creates an orchestrator for one writer.</summary>
+    /// <summary>
+    /// Creates an orchestrator for one writer. When
+    /// <paramref name="catalogue"/> is supplied, each completed publication
+    /// is projected into it live (architecture 02 §7) — and its location
+    /// index answers the segment-reuse and unchanged-file questions for
+    /// incremental jobs. The catalogue stays a cache: publication
+    /// correctness never depends on it.
+    /// </summary>
     public PublicationOrchestrator(
         CapturePolicy policy,
         RepositoryId repositoryId,
@@ -128,8 +136,10 @@ public sealed partial class PublicationOrchestrator
         IObjectStore store,
         WriterSequence sequence,
         string spoolDirectory,
-        IPublicationObserver? observer = null)
+        IPublicationObserver? observer = null,
+        Catalogue.Catalogue? catalogue = null)
     {
+        _catalogue = catalogue;
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(hierarchy);

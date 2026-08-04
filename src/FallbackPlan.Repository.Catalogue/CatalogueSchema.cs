@@ -10,7 +10,7 @@ namespace FallbackPlan.Repository.Catalogue;
 public static class CatalogueSchema
 {
     /// <summary>The current schema version; a mismatch rebuilds.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -78,20 +78,38 @@ public static class CatalogueSchema
             root_tree              BLOB NOT NULL,
             publication_generation INTEGER NOT NULL,
             capture_status         INTEGER NOT NULL,
-            signature_state        INTEGER NOT NULL
+            signature_state        INTEGER NOT NULL,
+            captured_at            INTEGER NOT NULL DEFAULT 0
         ) WITHOUT ROWID;
 
         CREATE TABLE file_versions (
-            object_id       BLOB PRIMARY KEY,
-            name            BLOB NOT NULL,
-            entry_kind      INTEGER NOT NULL,
-            logical_length  INTEGER NOT NULL,
-            whole_file_hash BLOB NOT NULL,
-            parent_version  BLOB,
-            segment_count   INTEGER NOT NULL
+            object_id        BLOB PRIMARY KEY,
+            name             BLOB NOT NULL,
+            entry_kind       INTEGER NOT NULL,
+            logical_length   INTEGER NOT NULL,
+            whole_file_hash  BLOB NOT NULL,
+            parent_version   BLOB,
+            segment_count    INTEGER NOT NULL,
+            modified_at      INTEGER,
+            identity_device  INTEGER,
+            identity_file_id INTEGER
         ) WITHOUT ROWID;
 
         CREATE INDEX ix_file_versions_hash ON file_versions (whole_file_hash);
+
+        CREATE TABLE tree_entries (
+            snapshot_id   BLOB NOT NULL,
+            path          TEXT NOT NULL,
+            parent        TEXT NOT NULL,
+            path_casefold TEXT NOT NULL,
+            entry_kind    INTEGER NOT NULL,
+            object_id     BLOB NOT NULL,
+            PRIMARY KEY (snapshot_id, path)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX ix_tree_entries_parent ON tree_entries (snapshot_id, parent);
+
+        CREATE INDEX ix_tree_entries_casefold ON tree_entries (snapshot_id, path_casefold);
 
         CREATE TABLE segment_dedup (
             content_id BLOB PRIMARY KEY,

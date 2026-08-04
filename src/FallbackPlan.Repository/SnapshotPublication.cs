@@ -47,6 +47,15 @@ public sealed record SnapshotJob
     /// <summary>Parent snapshot identities, 16 bytes each.</summary>
     public IReadOnlyList<ReadOnlyMemory<byte>> ParentSnapshots { get; init; } = [];
 
+    /// <summary>
+    /// The catalogue-known snapshot this job is incremental against; null
+    /// for a full backup. An unchanged file — same identity, size, and
+    /// modification time as this snapshot's version of the same path
+    /// (NFR-PERF-003) — re-emits the prior file-version reference without
+    /// its content ever being read.
+    /// </summary>
+    public ReadOnlyMemory<byte>? PriorSnapshotId { get; init; }
+
     /// <summary>Wall-clock now, epoch milliseconds.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
 
@@ -60,12 +69,21 @@ public sealed record SnapshotJob
     public required string ClientVersion { get; init; }
 }
 
-/// <summary>One published file version within a tree snapshot.</summary>
+/// <summary>
+/// One published file version within a tree snapshot. <see cref="Reused"/>
+/// marks the NFR-PERF-003 short-circuit: the object identifier names the
+/// prior snapshot's version and no content was read.
+/// </summary>
 public sealed record PublishedFileVersion(
     string RelativePath,
+    ReadOnlyMemory<byte> NameBytes,
     ObjectId ObjectId,
     EntryKind EntryKind,
-    ArchiveResult? Archive);
+    ArchiveResult? Archive,
+    ulong? ModifiedAt = null,
+    ulong? IdentityDevice = null,
+    ulong? IdentityFileId = null,
+    bool Reused = false);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -139,13 +157,14 @@ public sealed partial class PublicationOrchestrator
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
             _policy.BlobWriteProfile, scope);
 
-        var session = archiver.OpenSession();
+        var session = archiver.OpenSession(
+            _catalogue is { } dedupCatalogue ? dedupCatalogue.HasLocation : null);
         await using (builder.ConfigureAwait(false))
         await using (session.ConfigureAwait(false))
         {
             using var grouper = new HardlinkGrouper(_keys.ContentIdKey);
 
-            var walker = new TreeWalkPublisher(job, options, session, builder, grouper);
+            var walker = new TreeWalkPublisher(job, options, session, builder, grouper, _catalogue);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -255,7 +274,7 @@ public sealed partial class PublicationOrchestrator
                 }
             }
 
-            var deltaId = await indexPublisher.PublishDeltaAsync(
+            var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
@@ -273,7 +292,14 @@ public sealed partial class PublicationOrchestrator
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
 
-            // Step 9: the local job is complete.
+            // Step 9: the local job is complete — and the live catalogue
+            // learns what was published without re-reading the store
+            // (architecture 02 §7). A cache write, never a correctness step.
+            if (_catalogue is not null)
+            {
+                ProjectIntoCatalogue(job, walker, session, builder, snapshotObjectId, rootTreeId, deltaId, delta, errorId);
+            }
+
             _observer?.AfterStep(PublicationStep.Complete);
 
             return new PublishedTreeSnapshot(
@@ -291,6 +317,85 @@ public sealed partial class PublicationOrchestrator
     }
 
     /// <summary>
+    /// Projects one completed publication into the live catalogue: blobs,
+    /// the applied delta, the snapshot row with its capture time, every
+    /// tree path, and each new file version with the identity and time the
+    /// next incremental compares (NFR-PERF-003). Reused versions get a
+    /// tree-entry row only — their file-version rows already exist.
+    /// </summary>
+    private void ProjectIntoCatalogue(
+        SnapshotJob job,
+        TreeWalkPublisher walker,
+        ArchiveSession session,
+        ManifestBuilder builder,
+        ObjectId snapshotObjectId,
+        ObjectId rootTreeId,
+        DeltaId deltaId,
+        IndexDelta delta,
+        ObjectId? errorId)
+    {
+        foreach (var blob in session.Blobs)
+        {
+            _catalogue!.RecordBlob(
+                blob.BlobId, blob.StoreBlobKey, BlobClass.Data, _generation,
+                blob.RecordCount, blob.Length, [.. blob.Digest]);
+        }
+
+        foreach (var blob in builder.Blobs)
+        {
+            _catalogue!.RecordBlob(
+                blob.BlobId, blob.StoreBlobKey, BlobClass.Metadata, _generation,
+                blob.RecordCount, blob.Length, [.. blob.Digest]);
+        }
+
+        _catalogue!.ApplyDelta(deltaId, delta);
+
+        // Signature state 1: this writer signed it in this process.
+        _catalogue.RecordSnapshot(
+            job.SnapshotId.Span, job.DeviceId.Span, job.BackupSetId.Span,
+            snapshotObjectId, rootTreeId, _generation.Value,
+            (byte)(errorId is null ? 1 : 2), signatureState: 1, capturedAt: job.NowUnixMilliseconds);
+
+        foreach (var (path, treeId) in walker.Directories)
+        {
+            _catalogue.RecordTreeEntry(job.SnapshotId.Span, path, EntryKind.DirectoryPlaceholder, treeId);
+        }
+
+        foreach (var file in walker.Files)
+        {
+            _catalogue.RecordTreeEntry(job.SnapshotId.Span, file.RelativePath, file.EntryKind, file.ObjectId);
+
+            if (file.Reused)
+            {
+                continue;
+            }
+
+            var archive = file.Archive;
+            _catalogue.RecordFileVersion(
+                file.ObjectId,
+                file.NameBytes.Span,
+                file.EntryKind,
+                (ulong)(archive?.LogicalLength ?? 0),
+                archive is null ? TreeWalkPublisher.EmptyHash : [.. archive.WholeFileHash],
+                parentVersion: null,
+                archive?.SegmentReferences.Count ?? 0,
+                file.ModifiedAt,
+                file.IdentityDevice,
+                file.IdentityFileId);
+
+            if (archive is not null)
+            {
+                for (var i = 0; i < archive.SegmentReferences.Count; i++)
+                {
+                    _catalogue.RecordSegmentDedup(archive.SegmentContentIds[i], archive.SegmentReferences[i].ObjectId);
+                }
+            }
+        }
+
+        _catalogue.SetSource("live");
+    }
+
+    /// <summary>
     /// Consumes the scan event stream and turns it into the manifest graph:
     /// a frame per open directory, entries accumulating in the scanner's
     /// byte-sorted order, each directory's tree chain written at its
@@ -302,13 +407,15 @@ public sealed partial class PublicationOrchestrator
         ScanOptions options,
         ArchiveSession session,
         ManifestBuilder builder,
-        HardlinkGrouper grouper)
+        HardlinkGrouper grouper,
+        Catalogue.Catalogue? catalogue)
     {
-        private static readonly byte[] EmptyHash = SHA256.HashData([]);
+        internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
         private readonly Stack<Frame> _frames = new();
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
+        private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -317,6 +424,9 @@ public sealed partial class PublicationOrchestrator
         public IReadOnlyList<PublishedFileVersion> Files => _files;
 
         public List<CaptureFailure> Failures => _failures;
+
+        /// <summary>Every published subdirectory (path, head tree id); the root is the snapshot's own row.</summary>
+        public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
         {
@@ -361,11 +471,35 @@ public sealed partial class PublicationOrchestrator
             {
                 _frames.Peek().Entries.Add(
                     new TreeEntry(frame.Directory.NameBytes, headId, EntryKind.DirectoryPlaceholder));
+                _directories.Add((frame.Directory.RelativePath, headId));
             }
         }
 
         private async ValueTask PublishLeafAsync(ScanEntry entry, CancellationToken cancellationToken)
         {
+            // The NFR-PERF-003 short-circuit: same identity, size, and
+            // modification time as the prior snapshot's version of this path
+            // — re-emit its reference; the content is never opened. All
+            // three keys must be present and equal; a rebuilt catalogue has
+            // no identities, so it disables this rather than weakening it.
+            if (entry.Kind == ScanEntryKind.File &&
+                catalogue is not null &&
+                job.PriorSnapshotId is { } priorSnapshot &&
+                catalogue.LookupPath(priorSnapshot.Span, entry.RelativePath) is
+                    { EntryKind: EntryKind.File } prior &&
+                prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
+                prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
+                prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
+                entry.Identity is { } identity &&
+                identity.Device == priorDevice && identity.FileId == priorFileId)
+            {
+                _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
+                _files.Add(new PublishedFileVersion(
+                    entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
+                    priorModified, priorDevice, priorFileId, Reused: true));
+                return;
+            }
+
             try
             {
                 var manifest = entry.Kind switch
@@ -386,7 +520,9 @@ public sealed partial class PublicationOrchestrator
                     .ConfigureAwait(false);
 
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
-                _files.Add(new PublishedFileVersion(entry.RelativePath, objectId, manifest.EntryKind, LastArchive));
+                _files.Add(new PublishedFileVersion(
+                    entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
+                    entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId));
                 LastArchive = null;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

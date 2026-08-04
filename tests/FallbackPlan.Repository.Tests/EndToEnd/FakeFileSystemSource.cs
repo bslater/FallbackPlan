@@ -25,7 +25,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         public ScanIdentity? Identity { get; init; }
 
-        public EntryMetadata Metadata { get; init; } = EntryMetadata.Empty;
+        public EntryMetadata Metadata { get; set; } = EntryMetadata.Empty;
 
         public byte[]? LinkTarget { get; init; }
 
@@ -55,6 +55,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     /// <summary>The scan failures to inject verbatim into the event stream.</summary>
     public List<ScanFailure> InjectedFailures { get; } = [];
+
+    /// <summary>Every path whose content was opened — the short-circuit oracle (NFR-PERF-003).</summary>
+    public List<string> OpenedPaths { get; } = [];
 
     public Node AddFile(string relativePath, byte[] content, uint linkCount = 1, ulong? fileId = null)
     {
@@ -204,6 +207,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
             throw node.OpenFailure;
         }
 
+        OpenedPaths.Add(entry.RelativePath);
         return new MemoryStream(node.Content, writable: false);
     }
 

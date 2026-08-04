@@ -270,9 +270,32 @@ public sealed class ForensicRebuilder : IDisposable
                 continue;
             }
 
-            // Walk root tree → file versions → segments through the indexed
-            // metadata records.
-            await WalkTreeAsync(decoded.Manifest.RootTree, indexed, needed, findings, catalogue, cancellationToken)
+            // Project the snapshot row — with the signature's verdict — so
+            // the rebuilt catalogue answers `snapshots` (schema v2).
+            int signatureState;
+            using (var signer = RepositorySigner.Create(
+                _hierarchy, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
+            {
+                signatureState = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? 1 : 2;
+            }
+
+            catalogue.RecordSnapshot(
+                decoded.Manifest.SnapshotId.Span,
+                decoded.Manifest.DeviceId.Span,
+                decoded.Manifest.BackupSetId.Span,
+                _objectIdDeriver.Derive(ObjectType.SnapshotManifest, ContentHasher.Hash(
+                    SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span))),
+                decoded.Manifest.RootTree,
+                decoded.Manifest.PublicationGeneration,
+                decoded.Manifest.CaptureStatus,
+                signatureState,
+                decoded.Manifest.CaptureCompletedAt);
+
+            // Walk root tree → subdirectories → file versions → segments
+            // through the indexed metadata records, projecting the paths.
+            await WalkTreeAsync(
+                decoded.Manifest.SnapshotId, decoded.Manifest.RootTree, prefix: string.Empty,
+                indexed, needed, findings, catalogue, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -280,7 +303,9 @@ public sealed class ForensicRebuilder : IDisposable
     }
 
     private async ValueTask WalkTreeAsync(
+        ReadOnlyMemory<byte> snapshotId,
         ObjectId treeId,
+        string prefix,
         Dictionary<ObjectId, BlobId> indexed,
         HashSet<ObjectId> needed,
         List<DamageFinding> findings,
@@ -291,7 +316,7 @@ public sealed class ForensicRebuilder : IDisposable
         if (plaintext is null)
         {
             var finding = new DamageFinding(
-                DamageKind.MissingIndexObject, $"The root tree {treeId} is not present in any metadata blob.");
+                DamageKind.MissingIndexObject, $"The tree manifest {treeId} is not present in any metadata blob.");
             findings.Add(finding);
             catalogue.RecordFinding(finding, treeId);
             return;
@@ -301,8 +326,16 @@ public sealed class ForensicRebuilder : IDisposable
 
         foreach (var entry in tree.Entries)
         {
-            if (entry.EntryKind != EntryKind.File)
+            var name = System.Text.Encoding.UTF8.GetString(entry.Name.Span);
+            var path = prefix.Length == 0 ? name : prefix + "/" + name;
+            catalogue.RecordTreeEntry(snapshotId.Span, path, entry.EntryKind, entry.ObjectId);
+
+            // A subdirectory entry names its child tree manifest
+            // (ADR-0026 §Decision 6) — the walk descends it.
+            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
             {
+                await WalkTreeAsync(snapshotId, entry.ObjectId, path, indexed, needed, findings, catalogue, cancellationToken)
+                    .ConfigureAwait(false);
                 continue;
             }
 
@@ -317,15 +350,31 @@ public sealed class ForensicRebuilder : IDisposable
             }
 
             var manifest = FileVersionManifestCodec.Decode(manifestBytes);
+            catalogue.RecordFileVersion(
+                entry.ObjectId,
+                manifest.Name.Span,
+                manifest.EntryKind,
+                manifest.LogicalLength,
+                manifest.WholeFileHash.Span,
+                manifest.ParentVersion,
+                manifest.SegmentReferences.Count,
+                manifest.Metadata.ModifiedAt);
+
             foreach (var reference in manifest.SegmentReferences)
             {
                 needed.Add(reference.ObjectId);
+            }
+
+            foreach (var stream in manifest.Metadata.AlternateStreams)
+            {
+                needed.Add(stream.ObjectId);
             }
         }
 
         if (tree.Continuation is { } continuation)
         {
-            await WalkTreeAsync(continuation, indexed, needed, findings, catalogue, cancellationToken).ConfigureAwait(false);
+            await WalkTreeAsync(snapshotId, continuation, prefix, indexed, needed, findings, catalogue, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 

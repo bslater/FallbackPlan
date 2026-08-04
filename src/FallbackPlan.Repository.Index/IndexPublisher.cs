@@ -54,6 +54,22 @@ public sealed class IndexPublisher : IDisposable
         IReadOnlyList<IndexEntry> entries,
         CancellationToken cancellationToken)
     {
+        var (deltaId, _) = await PublishDeltaDetailedAsync(generation, coveredBlobIds, entries, cancellationToken)
+            .ConfigureAwait(false);
+        return deltaId;
+    }
+
+    /// <summary>
+    /// As <see cref="PublishDeltaAsync"/>, also returning the published
+    /// delta itself — what a live catalogue applies without re-reading the
+    /// store (architecture 02 §7).
+    /// </summary>
+    public async ValueTask<(DeltaId DeltaId, IndexDelta Delta)> PublishDeltaDetailedAsync(
+        ulong generation,
+        IReadOnlyList<BlobId> coveredBlobIds,
+        IReadOnlyList<IndexEntry> entries,
+        CancellationToken cancellationToken)
+    {
         var sequence = _sequence.AllocateNext();
 
         var delta = new IndexDelta
@@ -68,7 +84,7 @@ public sealed class IndexPublisher : IDisposable
 
         var deltaId = await PublishDeltaObjectAsync(delta, cancellationToken).ConfigureAwait(false);
         _sequence.MarkAccounted(sequence, deltaId);
-        return deltaId;
+        return (deltaId, delta);
     }
 
     /// <summary>
