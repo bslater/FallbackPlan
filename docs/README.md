@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: Phase 0 ready to start.** The design has been through two passes — a review of the original proposal, and a pressure test of that review's own fixes. The [format specification](../specifications/repository-format/README.md) and [conformance vectors](../specifications/repository-format/conformance/README.md) are written, and the solution scaffold builds. Engine implementation has not begun.
+> **Status: Phase 0 implemented; Phase 1 in progress.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) (filesystem capture, multi-file snapshots, restore planning, recovery kit) is underway.
 
 ---
 
@@ -16,7 +16,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
-| Start building | [Phase 0 execution plan](phase-0-execution-plan.md) · [format specification](../specifications/repository-format/README.md) |
+| Start building | [Phase 1 execution plan](phase-1-execution-plan.md) · [Phase 0 execution plan](phase-0-execution-plan.md) (implemented) · [format specification](../specifications/repository-format/README.md) |
 
 ## Architecture
 

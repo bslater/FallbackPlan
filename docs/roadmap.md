@@ -32,7 +32,7 @@ Architecture decision records and threat model · versioned configuration schema
 
 ## Phase 1 — Snapshot and local repository MVP
 
-Filesystem capture, immutable tree and snapshot manifests, reliable local restore.
+Filesystem capture, immutable tree and snapshot manifests, reliable local restore. *Execution plan:* [`phase-1-execution-plan.md`](phase-1-execution-plan.md).
 
 **Features:** cross-platform streaming scanner · include/exclude rules · file identity and version comparison · immutable file, tree, policy, error, and snapshot manifests · local store and catalogue integration · CLI `init`, `backup`, `snapshots`, `ls`, `restore`, `check`, `key export` · restore planner and verifier · recovery kit · repository inspector · integrity verification · retention selection without physical pruning · three-way local state separation · OpenTelemetry instrumentation · Agent service and basic scheduling.
 
