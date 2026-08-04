@@ -1,4 +1,4 @@
-using FallbackPlan.Cli;
+using FallbackPlan.Application;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -101,14 +101,14 @@ public sealed class LocalStateSeparationTests : IDisposable
 
         // A typo'd field silently dropped is a schedule that silently never
         // runs — named-field rejection is the guard (11 §3).
-        Assert.Throws<CliFailureException>(() => ClientConfiguration.Load(ConfigPath));
+        Assert.Throws<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
     }
 
     [Fact]
     public void A_future_schema_version_is_refused_not_guessed()
     {
         File.WriteAllText(ConfigPath, """{ "schema_version": 999, "backup_sets": [] }""");
-        Assert.Throws<CliFailureException>(() => ClientConfiguration.Load(ConfigPath));
+        Assert.Throws<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class LocalStateSeparationTests : IDisposable
             { "schema_version": 1, "backup_sets": [
               { "id": "{{new string('c', 32)}}", "name": "bad", "root": "/x", "exclude_rules": ["a**b"] } ] }
             """);
-        var exception = Assert.Throws<CliFailureException>(() => ClientConfiguration.Load(ConfigPath));
+        var exception = Assert.Throws<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
         Assert.Contains("a**b", exception.Message, StringComparison.Ordinal);
     }
 

@@ -37,6 +37,7 @@ public sealed class DependencyRuleTests
     private static Assembly Filesystem => typeof(FallbackPlan.Filesystem.AssemblyMarker).Assembly;
     private static Assembly FilesystemLocal => typeof(FallbackPlan.Filesystem.Local.AssemblyMarker).Assembly;
     private static Assembly Restore => typeof(FallbackPlan.Restore.AssemblyMarker).Assembly;
+    private static Assembly Application => typeof(FallbackPlan.Application.AssemblyMarker).Assembly;
 
     /// <summary>
     /// The Cli project has no AssemblyMarker — it is an executable, not a
@@ -56,7 +57,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Cli, Recovery];
+         Filesystem, FilesystemLocal, Restore, Application, Cli, Recovery];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -320,6 +321,31 @@ public sealed class DependencyRuleTests
     public void Repository_Packing_is_where_the_bodu_utility_library_actually_lives()
     {
         AssertProjectReferences("FallbackPlan.Repository.Packing", "<PackageReference Include=\"Bodu.Core\" />");
+    }
+
+    /// <summary>
+    /// Application is the use-case layer: it "depends on domain
+    /// abstractions, never on provider implementations" (11 §2). Hosts —
+    /// the CLI and the Agent — compose engines and providers and pass
+    /// facts in; the layer itself stays pure functions over Domain, which
+    /// is what makes schedule arithmetic and status derivation testable
+    /// without a repository, a clock, or a filesystem.
+    /// </summary>
+    [Fact]
+    public void Application_depends_only_on_Domain()
+    {
+        AssertPasses(
+            Types.InAssembly(Application)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Application must depend only on Domain (11 §2).");
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
+using FallbackPlan.Application;
 using FallbackPlan.Cli;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -56,6 +57,11 @@ static async Task<int> GuardAsync(Func<Task<int>> action)
         return await action().ConfigureAwait(false);
     }
     catch (CliFailureException exception)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+    catch (ClientStateException exception)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- The use-case layer (architecture 11 §1): domain abstractions only,
+       never a provider or engine implementation — hosts compose those and
+       pass facts in. DependencyRuleTests enforces this. -->
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

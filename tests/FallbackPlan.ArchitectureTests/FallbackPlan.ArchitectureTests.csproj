@@ -39,6 +39,7 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Recovery\FallbackPlan.Recovery.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Application\FallbackPlan.Application.csproj" />
   </ItemGroup>
 
 </Project>

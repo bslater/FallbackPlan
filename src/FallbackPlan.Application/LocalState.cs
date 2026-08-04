@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace FallbackPlan.Cli;
+namespace FallbackPlan.Application;
 
 /// <summary>One completed (or failed) backup job, for the operator's history.</summary>
 public sealed record JobHistoryEntry
@@ -97,12 +97,12 @@ public sealed class LocalState
             try
             {
                 var model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path), SerializerOptions)
-                    ?? throw new CliFailureException($"'{path}' holds no state object.");
+                    ?? throw new ClientStateException($"'{path}' holds no state object.");
                 return new LocalState(path, model);
             }
             catch (JsonException exception)
             {
-                throw new CliFailureException(
+                throw new ClientStateException(
                     $"'{path}' is not a valid state file: {exception.Message} — durable local state is never guessed.",
                     exception);
             }
@@ -134,7 +134,7 @@ public sealed class LocalState
         return File.Exists(legacy)
             ? Convert.FromHexString(File.ReadAllText(legacy).Trim()) is { Length: 16 } bytes
                 ? Convert.ToHexString(bytes).ToLowerInvariant()
-                : throw new CliFailureException($"Legacy identity file '{legacy}' is not 16 bytes of hex.")
+                : throw new ClientStateException($"Legacy identity file '{legacy}' is not 16 bytes of hex.")
             : Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
     }
 }
