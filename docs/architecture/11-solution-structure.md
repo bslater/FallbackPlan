@@ -55,6 +55,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.InterruptionTests/
 │   ├── FallbackPlan.PerformanceTests/
 │   ├── FallbackPlan.TestSupport/            platform gating, shared by test projects
+│   ├── FallbackPlan.Cli.Tests/              drives real commands in process
 │   └── FallbackPlan.EndToEndTests/
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
@@ -84,7 +85,25 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 
 `FallbackPlan.ArchitectureTests` enforces these as tests. A rule that is only written down is a rule that erodes.
 
-### 2.1 Environment-specific tests
+### 2.1 Coverage
+
+`eng/coverage.py` reports line coverage per production assembly, and takes a
+`--floor` so it can gate rather than inform.
+
+A host whose logic lives in `Main` cannot be covered by anything except
+launching a process, so the CLI measured **zero** — not for want of tests,
+but because nothing could call it. Commands therefore live in a callable
+type (`CliApplication`) with the entry point reduced to one line, and output
+goes to injected writers rather than `Console`, so a test captures it
+without mutating global state. Covering that one surface moved the whole
+codebase from 64.7% to 83.9%, because the CLI is where the engine is
+integrated.
+
+Coverage from a single OS is a partial answer by construction: the scanner's
+Linux, Darwin and Windows interop can only run on its own platform, so a
+one-OS report understates it and the honest total merges the CI matrix.
+
+### 2.2 Environment-specific tests
 
 Two environment dimensions decide whether a test's subject exists at all:
 the **operating system** (POSIX modes, xattrs and symlinks against Windows
