@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
@@ -117,6 +118,7 @@ public sealed partial class PublicationOrchestrator
     private readonly string _spoolDirectory;
     private readonly IPublicationObserver? _observer;
     private readonly Catalogue.Catalogue? _catalogue;
+    private readonly IJobProgressReporter? _progress;
 
     /// <summary>
     /// Creates an orchestrator for one writer. When
@@ -137,7 +139,8 @@ public sealed partial class PublicationOrchestrator
         WriterSequence sequence,
         string spoolDirectory,
         IPublicationObserver? observer = null,
-        Catalogue.Catalogue? catalogue = null)
+        Catalogue.Catalogue? catalogue = null,
+        IJobProgressReporter? progress = null)
     {
         _catalogue = catalogue;
         ArgumentNullException.ThrowIfNull(policy);
@@ -157,6 +160,7 @@ public sealed partial class PublicationOrchestrator
         _sequence = sequence;
         _spoolDirectory = spoolDirectory;
         _observer = observer;
+        _progress = progress;
     }
 
     /// <summary>Runs one publication end to end.</summary>

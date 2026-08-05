@@ -134,12 +134,19 @@
       "fallbackplan.agent": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.api": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
       "fallbackplan.application": {

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
@@ -175,18 +176,31 @@ public sealed partial class PublicationOrchestrator
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
             // bounded by tree depth, never by file count.
+            //
+            // The reported state follows that interleaving rather than
+            // pretending it does not happen: a job announces the latest stage
+            // it entered, and the counts carry what is actually going on.
+            // A pipeline that announces `Scanning` and then says nothing for
+            // ten hours is the failure the 10 section 3 state machine exists
+            // to prevent.
+            var reporter = new PublicationProgress(_progress, job.SnapshotId);
+            reporter.Enter(JobState.Scanning);
+
             await foreach (var scanEvent in job.Source
                 .ScanAsync(job.RootPath, options, cancellationToken).ConfigureAwait(false))
             {
                 await walker.ConsumeAsync(scanEvent, cancellationToken).ConfigureAwait(false);
+                reporter.Observe(JobState.Packing, walker.Files, walker.Failures.Count);
             }
 
             var rootTreeId = walker.RootTreeId
                 ?? throw new InvalidOperationException("The scan produced no root directory.");
             _observer?.AfterStep(PublicationStep.ScanSource);
 
+            reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
             await session.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.SegmentAndSeal);
+            reporter.Observe(JobState.Publishing, walker.Files, walker.Failures.Count);
 
             // The error manifest exists exactly when something failed —
             // and capture_status follows it (ADR-0026 §Decision 3).
@@ -689,6 +703,55 @@ public sealed partial class PublicationOrchestrator
 
         private static List<ReadOnlyMemory<byte>> SplitPath(string relativePath) =>
             [.. relativePath.Split('/').Select(component => (ReadOnlyMemory<byte>)Encoding.UTF8.GetBytes(component))];
+    }
+
+    /// <summary>
+    /// Turns the publication's own knowledge into progress a client can watch.
+    /// </summary>
+    /// <remarks>
+    /// Counts only — files and bytes, never a path or a filename. Progress
+    /// travels to an authenticated caller and may carry job identity for that
+    /// reason (ADR-0029 section 5), but nothing here needs to name a file, so
+    /// nothing here does.
+    /// </remarks>
+    private sealed class PublicationProgress(IJobProgressReporter? reporter, ReadOnlyMemory<byte> snapshotId)
+    {
+        private readonly string _jobId = Convert.ToHexString(snapshotId.Span).ToLowerInvariant();
+
+        public void Enter(JobState state) => Emit(state, [], 0);
+
+        public void Observe(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures) =>
+            Emit(state, files, failures);
+
+        private void Emit(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures)
+        {
+            if (reporter is null)
+            {
+                return;
+            }
+
+            long reused = 0;
+            long seen = 0;
+            long stored = 0;
+            foreach (var file in files)
+            {
+                if (file.Reused)
+                {
+                    reused++;
+                }
+
+                if (file.Archive is { } archive)
+                {
+                    seen += archive.LogicalLength;
+                    foreach (var blob in archive.Blobs)
+                    {
+                        stored += blob.Length;
+                    }
+                }
+            }
+
+            reporter.Report(new JobProgress(_jobId, state, files.Count, files.Count, reused, failures, seen, stored));
+        }
     }
 }
 

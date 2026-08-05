@@ -1,4 +1,5 @@
 using System.Globalization;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -6,19 +7,24 @@ using FallbackPlan.Repository.Crypto;
 namespace FallbackPlan.Agent;
 
 /// <summary>
-/// The Agent host's command line, as a callable unit. The loop, argument
-/// parsing and error mapping used to live in <c>Main</c>, where only
-/// launching a process could reach them; the pass itself was tested, but
-/// everything around it — the usage errors, the exit codes, the
-/// <c>--once</c> contract — was not.
+/// The service host's command line, as a callable unit.
 /// </summary>
+/// <remarks>
+/// What this file no longer does is the interesting part. It used to re-derive
+/// Argon2id, re-read the configuration and open and close SQLite on every poll,
+/// because nothing was permitted to live between passes — two peer processes
+/// sharing a state directory could not safely hold anything open. Holding the
+/// writer role exclusively (ADR-0028 §2) is what makes holding the repository
+/// open correct, and the loop is now a scheduler over a long-lived service
+/// rather than a process that rebuilds itself once a minute.
+/// </remarks>
 public static class AgentHost
 {
-    /// <summary>Runs the agent with the given command line.</summary>
+    /// <summary>Runs the service with the given command line.</summary>
     /// <param name="args">The command line, as the process received it.</param>
     /// <param name="output">Where run lines and help are written.</param>
     /// <param name="error">Where operator-facing failures are written.</param>
-    /// <param name="cancellationToken">Stops the poll loop; a clean shutdown, not a failure.</param>
+    /// <param name="cancellationToken">Stops the service; a clean shutdown, not a failure.</param>
     /// <returns>0 on success, 1 for a usage or open failure, 2 when a pass reported a failed set.</returns>
     public static async Task<int> RunAsync(
         string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
@@ -26,15 +32,11 @@ public static class AgentHost
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
-        // The Agent host (ADR-0027): a thin loop over AgentPass. Every behaviour —
-        // schedule arithmetic, job transitions, status derivation — lives in
-        // Application or AgentPass where tests drive it; this file only parses
-        // arguments, reads the passphrase by name, and sleeps between passes.
 
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
             output.WriteLine("""
-                FallbackPlan Agent — scheduled backups over the configured sets
+                FallbackPlan service — scheduled backups, and the command surface clients talk to
 
                 usage:
                   fallbackplan-agent run   --repo <path> --state <dir> --passphrase-env <VAR> [--once]
@@ -42,6 +44,11 @@ public static class AgentHost
 
                 Backup sets and their schedules come from <state>/config.json.
                 Missed runs coalesce to one catch-up run per set (ADR-0027 §1).
+
+                While it runs the service holds the writer role for <dir> exclusively,
+                and listens on a local socket or named pipe there. It listens on no
+                network port: the remote binding is off until explicitly enabled
+                (ADR-0028 §5).
                 """);
             return 0;
         }
@@ -78,38 +85,77 @@ public static class AgentHost
         }
 
         var once = args.Contains("--once");
-        var pollSeconds = Get("--poll-seconds") is { } poll
-            ? int.Parse(poll, CultureInfo.InvariantCulture)
-            : 60;
+        int pollSeconds;
+        if (Get("--poll-seconds") is { } poll)
+        {
+            if (!int.TryParse(poll, CultureInfo.InvariantCulture, out pollSeconds) || pollSeconds <= 0)
+            {
+                error.WriteLine($"error: --poll-seconds '{poll}' is not a positive number of seconds.");
+                return 1;
+            }
+        }
+        else
+        {
+            pollSeconds = 60;
+        }
+
+        var options = new ServiceOptions
+        {
+            RepositoryPath = repoPath,
+            StateDirectory = stateDirectory,
+            PollSeconds = pollSeconds,
+        };
 
         try
         {
+            using var passphrase = Passphrase.Create(passphraseValue);
+            await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
+                .ConfigureAwait(false);
+
+            // The command surface comes up before the first pass, so a client
+            // that starts alongside the service is not told "nothing is
+            // listening" while a ten-hour backup runs.
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await using var listener = LocalServiceListener.Start(handler, stateDirectory);
+            if (!once)
+            {
+                output.WriteLine($"{DateTimeOffset.Now:u}  listening on {listener.Address}");
+            }
+
+            var failed = 0;
             while (!cancellationToken.IsCancellationRequested)
             {
-                using var passphrase = Passphrase.Create(passphraseValue);
-                var result = await AgentPass.RunAsync(
-                    repoPath, passphrase, stateDirectory, DateTimeOffset.Now, cancellationToken).ConfigureAwait(false);
+                var result = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, cancellationToken)
+                    .ConfigureAwait(false);
 
                 foreach (var set in result.Sets)
                 {
-                    output.WriteLine($"{DateTimeOffset.Now:u}  {set.SetName,-20} {set.Outcome}{(set.Detail is null ? "" : "  " + set.Detail)}");
+                    output.WriteLine(
+                        $"{DateTimeOffset.Now:u}  {set.SetName,-20} {set.Outcome}{(set.Detail is null ? "" : "  " + set.Detail)}");
                 }
 
+                failed = result.Failed;
                 if (once)
                 {
-                    return result.Failed == 0 ? 0 : 2;
+                    return failed == 0 ? 0 : 2;
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken).ConfigureAwait(false);
             }
+
+            return failed == 0 ? 0 : 2;
         }
         catch (OperationCanceledException)
         {
             // A clean shutdown: in-flight publication either completed or will be
-            // resumed by the engine's own checkpoints — the Agent owns neither.
+            // resumed by the engine's own checkpoints — the service owns neither.
+            return 0;
         }
         catch (ClientStateException exception)
         {
+            // This is where a second service, or a CLI holding the writer role,
+            // is refused by name rather than proceeding into a shared sequence
+            // space (FR-SVC-002).
             error.WriteLine($"error: {exception.Message}");
             return 1;
         }
@@ -123,8 +169,5 @@ public static class AgentHost
             error.WriteLine("error: the passphrase does not open this repository.");
             return 1;
         }
-
-        return 0;
-
     }
 }
