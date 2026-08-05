@@ -41,6 +41,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 - [Functional](requirements/functional.md) — FR-*, each with an observable acceptance criterion
 - [Non-functional](requirements/non-functional.md) — NFR-*, with quantitative targets and a reference machine
 - [Traceability](requirements/traceability.md) — every requirement mapped to architecture, ADR, test, and phase
+- [Shared Bodu recurrence package](bodu-recurrence-requirements.md) — consumer-side requirements on an upstream `Bodu.Globalization.Recurrence` package serving FallbackPlan scheduling and similar hosts
 
 ## Decisions
 
