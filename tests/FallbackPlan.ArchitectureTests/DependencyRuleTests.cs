@@ -52,6 +52,12 @@ public sealed class DependencyRuleTests
     /// <summary>The Agent host — an executable, loaded by name.</summary>
     private static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
 
+    /// <summary>The client contract (ADR-0028 §7).</summary>
+    private static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
+
+    /// <summary>The platform keystores (ADR-0028 §9).</summary>
+    private static Assembly Keystore => Assembly.Load("FallbackPlan.Keystore");
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -60,7 +66,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Cli, Recovery, Agent];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Cli, Recovery, Agent];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -476,4 +482,86 @@ public sealed class DependencyRuleTests
 
         return directory?.FullName;
     }
+
+    /// <summary>
+    /// 11 §2: user interfaces depend on the client contract, never on the
+    /// engine. The rule is enforceable only because <c>Api</c> references
+    /// Domain and nothing else — a front end that could reach the engine
+    /// through the contract would be a second writer, which
+    /// <c>04-concurrency-and-publication.md</c> §9 forbids.
+    /// </summary>
+    [Fact]
+    public void Api_reaches_nothing_below_domain()
+    {
+        AssertPasses(
+            Types.InAssembly(Api)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Keystore",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Api must reference Domain and nothing else (11 §2).");
+    }
+
+    /// <summary>
+    /// 11 §2: <c>Recovery</c> speaks to no service in any topology
+    /// (NFR-OPS-005). A recovery tool that needed a running service would not
+    /// be a recovery tool.
+    /// </summary>
+    [Fact]
+    public void Recovery_references_neither_the_contract_nor_the_application_layer()
+    {
+        AssertPasses(
+            Types.InAssembly(Recovery)
+                .ShouldNot()
+                .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application", "FallbackPlan.Keystore")
+                .GetResult(),
+            "FallbackPlan.Recovery must run from repository plus kit alone (11 §2, NFR-OPS-005).");
+    }
+
+    /// <summary>
+    /// 11 §2: the CLI is a client too, with one exception — its direct mode
+    /// takes the writer role when no service is running, so it alone among the
+    /// front ends may reference <c>Application</c>. That exception is why this
+    /// is the one place the rule must be checked rather than assumed.
+    /// </summary>
+    [Fact]
+    public void The_cli_is_the_only_front_end_permitted_the_application_layer()
+    {
+        var reference = Types.InAssembly(Cli)
+            .That()
+            .HaveDependencyOn("FallbackPlan.Application")
+            .GetTypes()
+            .ToList();
+
+        Assert.True(
+            reference.Count > 0,
+            "The CLI's direct-mode exception exists only while it actually uses Application; if this canary "
+            + "stops holding, the exception should be removed rather than left as dead permission.");
+    }
+
+    /// <summary>
+    /// The keystore holds unlocked key material for the service account and
+    /// must not become a route to anything else (NFR-SEC-009).
+    /// </summary>
+    [Fact]
+    public void The_keystore_knows_nothing_about_repositories()
+    {
+        AssertPasses(
+            Types.InAssembly(Keystore)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Domain",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Api",
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Storage")
+                .GetResult(),
+            "FallbackPlan.Keystore stores a passphrase for an account; it must not reach the repository.");
+    }
+
 }

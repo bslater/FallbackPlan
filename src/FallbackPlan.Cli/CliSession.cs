@@ -39,12 +39,22 @@ public sealed class CliFailureException : Exception
 /// </summary>
 public sealed class CliSession : IDisposable
 {
-    private CliSession(LocalFileSystemObjectStore store, OpenedRepository repository, string stateDirectory)
+    private readonly StateDirectoryLock? _writerRole;
+
+    private CliSession(
+        LocalFileSystemObjectStore store,
+        OpenedRepository repository,
+        string stateDirectory,
+        StateDirectoryLock? writerRole)
     {
         Store = store;
         Repository = repository;
         StateDirectory = stateDirectory;
+        _writerRole = writerRole;
     }
+
+    /// <summary>Whether this command took the writer role — i.e. is in direct mode.</summary>
+    public bool HoldsWriterRole => _writerRole is not null;
 
     public LocalFileSystemObjectStore Store { get; }
 
@@ -81,8 +91,30 @@ public sealed class CliSession : IDisposable
     }
 
     /// <summary>Opens an existing repository (01 §6 steps 1–3) and binds the state directory.</summary>
+    public static ValueTask<CliSession> OpenAsync(
+        string repoPath, string passphraseEnvironmentVariable, string? stateDirectory, CancellationToken cancellationToken) =>
+        OpenAsync(repoPath, passphraseEnvironmentVariable, stateDirectory, writerRole: false, cancellationToken);
+
+    /// <summary>
+    /// Opens a session, optionally taking the device's writer role for the
+    /// duration of the command (ADR-0028 §3).
+    /// </summary>
+    /// <param name="repoPath">The repository.</param>
+    /// <param name="passphraseEnvironmentVariable">The variable naming the passphrase.</param>
+    /// <param name="stateDirectory">The state directory, or null for the default.</param>
+    /// <param name="writerRole">
+    /// Whether this command writes. A command that does must hold the role
+    /// exclusively; a command that only reads must not take it, so it can run
+    /// alongside a service.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <returns>The session; dispose to release the role.</returns>
     public static async ValueTask<CliSession> OpenAsync(
-        string repoPath, string passphraseEnvironmentVariable, string? stateDirectory, CancellationToken cancellationToken)
+        string repoPath,
+        string passphraseEnvironmentVariable,
+        string? stateDirectory,
+        bool writerRole,
+        CancellationToken cancellationToken)
     {
         var store = new LocalFileSystemObjectStore(repoPath);
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
@@ -117,7 +149,24 @@ public sealed class CliSession : IDisposable
         Directory.CreateDirectory(state);
         Directory.CreateDirectory(Path.Combine(state, "spool"));
 
-        return new CliSession(store, repository, state);
+        StateDirectoryLock? role = null;
+        if (writerRole)
+        {
+            // Direct mode is not a fallback that happens silently (ADR-0028 §3).
+            // If a service holds the role, this command is refused naming the
+            // holder — never run anyway against state another process owns.
+            try
+            {
+                role = StateDirectoryLock.Acquire(state, StateDirectoryLock.DirectRole);
+            }
+            catch (ClientStateException exception)
+            {
+                repository.Dispose();
+                throw new CliFailureException(exception.Message, exception);
+            }
+        }
+
+        return new CliSession(store, repository, state, role);
     }
 
     private static string DefaultStateDirectory(RepositoryId repositoryId) => Path.Combine(
@@ -139,5 +188,9 @@ public sealed class CliSession : IDisposable
         new(new FileSequenceStateStore(Path.Combine(StateDirectory, "sequence.txt")));
 
     /// <inheritdoc />
-    public void Dispose() => Repository.Dispose();
+    public void Dispose()
+    {
+        _writerRole?.Dispose();
+        Repository.Dispose();
+    }
 }

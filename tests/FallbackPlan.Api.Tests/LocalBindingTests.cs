@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.NetworkInformation;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Domain.Jobs;
@@ -132,19 +131,36 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [Fact]
-    public async Task A_default_service_listens_on_no_tcp_port()
+    public async Task A_default_service_binds_a_filesystem_endpoint_and_never_a_port()
     {
-        // FR-SVC-003, and the assertion this whole binding exists to make
-        // possible: topologies 1 and 2 carry no port and no credential to talk
-        // to your own machine.
-        var before = ListeningPorts();
-
+        // FR-SVC-003, and the property this whole binding exists for:
+        // topologies 1 and 2 carry no port and no credential to talk to your
+        // own machine.
+        //
+        // Asserted on the endpoint rather than by scanning the machine's
+        // listening ports: test projects run in parallel and their runners own
+        // ports of their own, so a global scan would be measuring the test
+        // harness rather than the service.
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
         await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
         await client.ExecuteAsync(new DescribeServiceCommand(), Timeout);
 
-        Assert.Equal(before, ListeningPorts());
+        Assert.False(IPEndPoint.TryParse(listener.Address, out _));
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.StartsWith("fallbackplan-", listener.Address, StringComparison.Ordinal);
+            Assert.DoesNotContain(":", listener.Address, StringComparison.Ordinal);
+        }
+        else
+        {
+            // A real filesystem object, in a directory only its owner may write.
+            Assert.True(File.Exists(listener.Address));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                File.GetUnixFileMode(_state));
+        }
     }
 
     [Fact]
@@ -175,10 +191,4 @@ public sealed class LocalBindingTests : IDisposable
 
         _timeout.Dispose();
     }
-
-    private static HashSet<int> ListeningPorts() =>
-        [.. IPGlobalProperties.GetIPGlobalProperties()
-            .GetActiveTcpListeners()
-            .Where(endpoint => IPAddress.IsLoopback(endpoint.Address) || endpoint.Address.Equals(IPAddress.Any))
-            .Select(endpoint => endpoint.Port)];
 }

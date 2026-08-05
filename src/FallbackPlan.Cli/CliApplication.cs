@@ -79,6 +79,24 @@ public static class CliApplication
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             parse.GetValue(repoOption)!, parse.GetValue(passphraseEnvOption)!, parse.GetValue(stateOption), cancellationToken);
 
+        // A command that writes takes the device's writer role for its duration
+        // and says so. Direct mode is never a fallback that happens silently
+        // (ADR-0028 §3): "did my backup run against the same state the service
+        // uses" is a question an operator must not have to guess at, and if a
+        // service holds the role this refuses naming the holder.
+        async ValueTask<CliSession> OpenWritingSessionAsync(ParseResult parse, CancellationToken cancellationToken)
+        {
+            var session = await CliSession.OpenAsync(
+                parse.GetValue(repoOption)!,
+                parse.GetValue(passphraseEnvOption)!,
+                parse.GetValue(stateOption),
+                writerRole: true,
+                cancellationToken).ConfigureAwait(false);
+
+            error.WriteLine($"mode: direct — this command holds the writer role for '{session.StateDirectory}'.");
+            return session;
+        }
+
         async Task<int> GuardAsync(Func<Task<int>> action)
         {
             try
@@ -168,7 +186,7 @@ public static class CliApplication
                     throw new CliFailureException($"'{filePath}' does not exist.");
                 }
 
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 var policy = parse.GetValue(cdcOption)
                     ? CapturePolicy.Default with
                     {
@@ -369,7 +387,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 var cataloguePath = parse.GetValue(catalogueOption) ?? session.CataloguePath;
                 using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId);
 
@@ -609,7 +627,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
 
                 string rootPath;
                 IReadOnlyList<string> include, exclude;
