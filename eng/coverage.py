@@ -11,10 +11,13 @@ Two things this handles that a naive aggregation gets wrong:
 
   1. **Paths are normalised before lines are keyed.** The same source file is
      reported as `src/FallbackPlan.Application/Schedule.cs` by one project's
-     report and `FallbackPlan.Application/Schedule.cs` by another. Keyed
-     verbatim, one file becomes two, a line covered under one spelling stays
-     "uncovered" under the other, and modules appear to LOSE coverage when
-     tests are added. Every module here was understated until this was fixed.
+     report, `FallbackPlan.Application/Schedule.cs` by another, and an
+     absolute `/home/…/src/FallbackPlan.Application/Schedule.cs` by a third.
+     Keyed verbatim, one file becomes three, a line covered under one
+     spelling stays "uncovered" under the others, and modules appear to LOSE
+     coverage when tests are added. Both times this bit, the drop looked like
+     a real regression; coverage cannot fall when only tests are added, which
+     is the check worth applying to any such number.
 
   2. **A line is covered if any report covers it.** Each test project emits a
      report for every assembly it loaded, so a module appears many times with
@@ -50,11 +53,15 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # their own coverage; a test asserting nothing would score 100%.
 EXCLUDED_SUFFIXES = ("Tests", "TestSupport")
 
-PATH_PREFIX = re.compile(r"^(src|tests)/")
+# A file is identified by its path from the repository root onwards. Reports
+# spell the same file at least three ways — "src/X/Y.cs", "X/Y.cs", and an
+# absolute "/home/…/src/X/Y.cs" — depending on which project emitted them, so
+# the anchor is the LAST "src/" or "tests/" segment, wherever it appears.
+SOURCE_ROOT = re.compile(r"^.*?(?:^|/)(?:src|tests)/")
 
 
 def normalise(filename: str) -> str:
-    return PATH_PREFIX.sub("", filename.replace("\\", "/"))
+    return SOURCE_ROOT.sub("", filename.replace("\\", "/"))
 
 
 def collect(results_directory: pathlib.Path) -> dict[str, tuple[set, set]]:

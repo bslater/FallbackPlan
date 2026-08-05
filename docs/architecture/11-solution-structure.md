@@ -56,6 +56,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.PerformanceTests/
 │   ├── FallbackPlan.TestSupport/            platform gating, shared by test projects
 │   ├── FallbackPlan.Cli.Tests/              drives real commands in process
+│   ├── FallbackPlan.Hosts.Tests/            drives the Agent and Recovery hosts
 │   └── FallbackPlan.EndToEndTests/
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
@@ -91,13 +92,17 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 `--floor` so it can gate rather than inform.
 
 A host whose logic lives in `Main` cannot be covered by anything except
-launching a process, so the CLI measured **zero** — not for want of tests,
-but because nothing could call it. Commands therefore live in a callable
-type (`CliApplication`) with the entry point reduced to one line, and output
-goes to injected writers rather than `Console`, so a test captures it
-without mutating global state. Covering that one surface moved the whole
-codebase from 64.7% to 83.9%, because the CLI is where the engine is
-integrated.
+launching a process, so all three measured near zero — not for want of
+tests, but because nothing could call them. Each therefore exposes a
+callable type (`CliApplication`, `AgentHost`, `RecoveryHost`) with the entry
+point reduced to a line or two, and output goes to injected writers rather
+than `Console`, so a test captures it without mutating global state.
+Together they took the codebase from 64.7% to 85.0%, most of the gain
+landing in the engine rather than the shells, because the hosts are where
+the engine is integrated.
+
+What stays in `Main` is what genuinely belongs to the process: the Ctrl+C
+handler the Agent installs, and nothing else.
 
 Coverage from a single OS is a partial answer by construction: the scanner's
 Linux, Darwin and Windows interop can only run on its own platform, so a
