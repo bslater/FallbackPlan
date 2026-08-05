@@ -40,6 +40,9 @@
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
+      "fallbackplan.keystore": {
+        "type": "Project"
+      },
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
