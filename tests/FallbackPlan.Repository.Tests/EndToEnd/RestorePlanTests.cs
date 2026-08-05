@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using FallbackPlan.TestSupport;
+using System.Runtime.Versioning;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -142,17 +144,44 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.Equal(
             DateTimeOffset.FromUnixTimeMilliseconds(1_600_000_000_000).UtcDateTime,
             File.GetLastWriteTimeUtc(destination));
-        if (!OperatingSystem.IsWindows())
-        {
-            Assert.Equal(
-                UnixFileMode.UserRead | UnixFileMode.UserWrite,
-                File.GetUnixFileMode(destination) & (UnixFileMode.UserRead | UnixFileMode.UserWrite));
-        }
-
         // The receipt is a valid versioned JSON document.
         using var parsed = JsonDocument.Parse(receipt.ToJson());
         Assert.Equal(1, parsed.RootElement.GetProperty("schema_version").GetInt32());
         Assert.True(parsed.RootElement.GetProperty("complete").GetBoolean());
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "restoring mode bits is a POSIX concern; Windows carries an ACL the executor applies differently")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Restored_files_carry_their_captured_posix_mode()
+    {
+        // The metadata-after-content ordering is asserted platform-neutrally
+        // above; this is the POSIX half of that contract — the captured mode
+        // survives the round trip rather than defaulting to the umask.
+        var source = new FakeFileSystemSource();
+        var node = source.AddFile("data/file.bin", Deterministic(1_024, 7));
+        node.Metadata = node.Metadata with { ModifiedAt = 1_600_000_000_000, PosixMode = 0x180 /* 0600 */ };
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("posix-mode.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xB2), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xB2, 16).ToArray(), string.Empty, target);
+        var output = Path.Combine(SpoolDirectory, "restore-posix");
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output, new RestoreExecutionOptions { NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
+
+        Assert.True(receipt.Complete);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(Path.Combine(output, "data", "file.bin"))
+                & (UnixFileMode.UserRead | UnixFileMode.UserWrite));
     }
 
     [Fact]

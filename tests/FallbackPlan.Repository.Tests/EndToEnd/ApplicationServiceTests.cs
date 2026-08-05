@@ -76,30 +76,74 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.Equal(At(2, 30).AddDays(1).DateTime, schedule.NextRun(At(3, 10), At(9)).DateTime);
     }
 
-    [Fact]
-    public void Daily_schedule_answers_do_not_depend_on_the_machine_timezone()
+    /// <summary>
+    /// The offsets a schedule answer must be identical in. The machine's own
+    /// timezone is deliberately NOT one of the inputs: it is the thing that
+    /// must not matter (NFR-TIME-001). Making the offset an explicit test
+    /// dimension is what stops a UTC build agent from masking the defect —
+    /// this repository shipped exactly that bug, correct on UTC and a day
+    /// wrong everywhere else, and green CI never saw it.
+    /// </summary>
+    public static TheoryData<int, int> ScheduleOffsets => new()
     {
-        // NFR-TIME-001: IsDue is a pure function of its arguments. The same
-        // instants expressed in any offset — here UTC+10, chosen because a
-        // UTC machine masks the difference — must give the same answers as
-        // the UTC assertions above.
+        { 0, 0 },      // UTC — the offset a build agent usually runs in
+        { 10, 0 },     // UTC+10, no DST (Brisbane) — where the defect surfaced
+        { -7, 0 },     // UTC-07
+        { 5, 45 },     // UTC+05:45 (Kathmandu) — a non-hour offset
+        { 13, 0 },     // UTC+13 — past the date line, so "today" differs from UTC's
+        { -11, 0 },    // UTC-11 — the other extreme
+    };
+
+    [Theory]
+    [MemberData(nameof(ScheduleOffsets))]
+    public void Daily_schedule_answers_do_not_depend_on_the_machine_timezone(int offsetHours, int offsetMinutes)
+    {
+        // IsDue is a pure function of its arguments, so the same wall-clock
+        // scenario expressed in ANY offset gives the answers asserted in UTC
+        // above. Each case runs the full daily contract in one offset.
+        var offset = new TimeSpan(offsetHours, offsetMinutes, 0);
         Assert.True(Schedule.TryParse("daily at 02:30", out var schedule, out _));
 
-        static DateTimeOffset Local(int day, int hour, int minute = 0) =>
-            new(2026, 8, day, hour, minute, 0, TimeSpan.FromHours(10));
+        DateTimeOffset Local(int day, int hour, int minute = 0) =>
+            new(2026, 8, day, hour, minute, 0, offset);
 
+        // Before today's occurrence, last run yesterday: not due.
         Assert.False(schedule!.IsDue(Local(3, 2, 45), Local(4, 1)));
+
+        // After it: due exactly once, then not again the same day.
         Assert.True(schedule.IsDue(Local(3, 2, 45), Local(4, 3)));
         Assert.False(schedule.IsDue(Local(4, 3, 10), Local(4, 9)));
 
-        // Mixed offsets: the anchor arrives in UTC (as a journal timestamp
-        // would), now in the Agent's local offset. 2026-08-03T16:45Z is
-        // 02:45 on the 4th in UTC+10 — today's occurrence already ran.
-        Assert.False(schedule.IsDue(
-            new DateTimeOffset(2026, 8, 3, 16, 45, 0, TimeSpan.Zero), Local(4, 9)));
-
+        // Next-run display, in the caller's own offset.
         Assert.Equal(Local(4, 2, 30), schedule.NextRun(Local(3, 2, 45), Local(4, 1)));
         Assert.Equal(Local(5, 2, 30), schedule.NextRun(Local(4, 3, 10), Local(4, 9)));
+
+        // Mixed offsets: the anchor arrives in UTC, as a journal timestamp
+        // does, while now carries the Agent's local offset. The comparison
+        // must be by instant, not by the digits on either clock.
+        Assert.False(schedule.IsDue(Local(4, 3, 10).ToUniversalTime(), Local(4, 9)));
+        Assert.True(schedule.IsDue(Local(3, 2, 45).ToUniversalTime(), Local(4, 3)));
+    }
+
+    [Theory]
+    [MemberData(nameof(ScheduleOffsets))]
+    public void Interval_schedule_answers_do_not_depend_on_the_machine_timezone(int offsetHours, int offsetMinutes)
+    {
+        var offset = new TimeSpan(offsetHours, offsetMinutes, 0);
+        Assert.True(Schedule.TryParse("every 4h", out var schedule, out _));
+
+        DateTimeOffset Local(int day, int hour, int minute = 0) =>
+            new(2026, 8, day, hour, minute, 0, offset);
+
+        Assert.False(schedule!.IsDue(Local(4, 8), Local(4, 9)));
+        Assert.True(schedule.IsDue(Local(4, 8), Local(4, 12)));
+
+        // An anchor in UTC against a local now — the elapsed interval is an
+        // absolute quantity, so the offsets must cancel.
+        Assert.False(schedule.IsDue(Local(4, 8).ToUniversalTime(), Local(4, 9)));
+        Assert.True(schedule.IsDue(Local(4, 8).ToUniversalTime(), Local(4, 12)));
+
+        Assert.Equal(Local(4, 12), schedule.NextRun(Local(4, 8), Local(4, 9)));
     }
 
     [Fact]

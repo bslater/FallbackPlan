@@ -33,5 +33,6 @@
     <Project Path="tests/FallbackPlan.Repository.FuzzTests/FallbackPlan.Repository.FuzzTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.Tests/FallbackPlan.Repository.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Storage.ContractTests/FallbackPlan.Storage.ContractTests.csproj" />
+    <Project Path="tests/FallbackPlan.TestSupport/FallbackPlan.TestSupport.csproj" />
   </Folder>
 </Solution>

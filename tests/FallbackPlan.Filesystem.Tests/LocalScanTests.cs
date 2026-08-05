@@ -2,6 +2,8 @@ using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Filesystem.Local;
+using FallbackPlan.TestSupport;
+using System.Runtime.Versioning;
 
 namespace FallbackPlan.Filesystem.Tests;
 
@@ -105,26 +107,16 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.NotNull(entry.Metadata.ModifiedAt);
         Assert.True(entry.Identity.HasValue && entry.Identity.Value.FileId != 0);
 
-        if (!OperatingSystem.IsWindows())
-        {
-            Assert.NotNull(entry.Metadata.PosixMode);
-            Assert.False(string.IsNullOrEmpty(entry.Metadata.OwnerName));
-        }
-
         // The captured mtime agrees with the filesystem's own report to the
         // millisecond — the value NFR-PERF-003's short-circuit will compare.
         var expected = (ulong)new DateTimeOffset(File.GetLastWriteTimeUtc(full)).ToUnixTimeMilliseconds();
         Assert.Equal(expected, entry.Metadata.ModifiedAt!.Value);
     }
 
-    [Fact]
+    [PlatformFact(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
+    [PlatformTrait(TestPlatforms.Posix)]
     public async Task Symlinks_are_captured_as_links_and_never_followed()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // creating symlinks on Windows CI requires privilege; the POSIX path proves the contract
-        }
-
         Write("target/secret.txt");
         File.CreateSymbolicLink(Path.Combine(_root, "link"), Path.Combine(_root, "target"));
 
@@ -139,14 +131,10 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.Single(events.OfType<ScanEvent.Leaf>(), leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
     }
 
-    [Fact]
+    [PlatformFact(TestPlatforms.Posix, "the link(2) syscall this drives is POSIX; Windows hardlinks are covered separately")]
+    [PlatformTrait(TestPlatforms.Posix)]
     public async Task Hardlinks_share_identity_and_report_their_link_count()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var original = Write("one.bin", "linked");
         Assert.Equal(0, Link(original, Path.Combine(_root, "two.bin")));
 
@@ -161,14 +149,10 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.Equal(2u, one.Identity.Value.LinkCount);
     }
 
-    [Fact]
+    [PlatformFact(TestPlatforms.Posix, "FIFOs, sockets and device nodes are POSIX entry kinds with no Windows analogue")]
+    [PlatformTrait(TestPlatforms.Posix)]
     public async Task Special_files_carry_their_kind_as_diagnostics_and_are_never_errors()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var fifo = Path.Combine(_root, "pipe");
         if (MkFifo(fifo, 0x1B6 /* 0666 */) != 0)
         {
@@ -192,14 +176,10 @@ public sealed partial class LocalScanTests : IDisposable
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
     private static partial int Link(string existingPath, string newPath);
 
-    [Fact]
+    [PlatformFact(TestPlatforms.Posix, "setxattr(2) is POSIX; the Windows analogue is alternate data streams, tested separately")]
+    [PlatformTrait(TestPlatforms.Posix)]
     public async Task Extended_attributes_round_trip_where_the_platform_supports_them()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var full = Write("attr.txt");
         if (SetXattr(full, "user.fbp-test", "hello"u8.ToArray(), 5, 0) != 0)
         {
@@ -218,14 +198,10 @@ public sealed partial class LocalScanTests : IDisposable
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
     private static partial int SetXattr(string path, string name, byte[] value, nuint size, int flags);
 
-    [Fact]
+    [PlatformFact(TestPlatforms.Posix, "hole discovery here uses SEEK_HOLE; Windows sparse files use a different query")]
+    [PlatformTrait(TestPlatforms.Posix)]
     public async Task Sparse_holes_are_reported_as_extents_where_supported()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         // 1 MiB hole between two data regions, created by seeking.
         var full = Path.Combine(_root, "sparse.bin");
         using (var stream = File.Create(full))
@@ -248,14 +224,11 @@ public sealed partial class LocalScanTests : IDisposable
             $"hole [{hole.Offset}, +{hole.Length}) must sit inside the written gap");
     }
 
-    [Fact]
+    [UnprivilegedPlatformFact(TestPlatforms.Posix, "denial is expressed here with chmod, a POSIX permission shape")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
     public async Task An_unreadable_directory_is_a_failure_event_not_an_aborted_scan()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
-        {
-            return; // chmod-based denial is a POSIX shape, and root ignores permission bits
-        }
-
         Write("open/readable.txt");
         var denied = Path.Combine(_root, "denied");
         Directory.CreateDirectory(denied);
@@ -299,11 +272,28 @@ public sealed partial class LocalScanTests : IDisposable
 
         Assert.False(string.IsNullOrEmpty(info.Name));
         Assert.True(info.MaxComponentBytes is null or > 0);
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.True(info.ReservedNames);
-            Assert.False(info.CaseSensitive);
-        }
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "POSIX mode bits and owner names have no NTFS equivalent — Windows carries a security descriptor instead")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Posix_metadata_is_captured_for_a_regular_file()
+    {
+        Write("file.txt", "contents");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.NotNull(entry.Metadata.PosixMode);
+        Assert.False(string.IsNullOrEmpty(entry.Metadata.OwnerName));
+    }
+
+    [PlatformFact(TestPlatforms.Windows, "reserved device names (CON, NUL) and case-insensitive-by-default volumes are Windows filesystem shapes")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void Probe_reports_the_windows_filesystem_shape()
+    {
+        var info = _source.Probe(_root);
+
+        Assert.True(info.ReservedNames);
+        Assert.False(info.CaseSensitive);
     }
 
     /// <inheritdoc />

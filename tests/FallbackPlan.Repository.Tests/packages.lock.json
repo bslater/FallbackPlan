@@ -272,6 +272,12 @@
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
         }
       },
+      "fallbackplan.testsupport": {
+        "type": "Project",
+        "dependencies": {
+          "xunit": "[2.9.3, )"
+        }
+      },
       "Bodu.Core": {
         "type": "CentralTransitive",
         "requested": "[0.2.0, )",

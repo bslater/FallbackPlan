@@ -54,6 +54,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.IntegrationTests/
 │   ├── FallbackPlan.InterruptionTests/
 │   ├── FallbackPlan.PerformanceTests/
+│   ├── FallbackPlan.TestSupport/            platform gating, shared by test projects
 │   └── FallbackPlan.EndToEndTests/
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
@@ -82,6 +83,38 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 - **Third-party cryptography lives only in `Repository.Crypto`.** The two primitives .NET does not supply — Argon2id and XChaCha20-Poly1305 — do not inherit the platform's audit posture, so the exposure is confined to one project rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md)).
 
 `FallbackPlan.ArchitectureTests` enforces these as tests. A rule that is only written down is a rule that erodes.
+
+### 2.1 Environment-specific tests
+
+Two environment dimensions decide whether a test's subject exists at all:
+the **operating system** (POSIX modes, xattrs and symlinks against Windows
+alternate streams and security descriptors) and the **process privilege**
+(permission denial is unobservable as root). A third — the machine's
+**timezone** — must decide nothing, and is treated accordingly.
+
+- **A test that does not run must not report as passed.** Platform gating
+  goes through `FallbackPlan.TestSupport`'s `[PlatformFact]` /
+  `[UnprivilegedPlatformFact]`, which skip with a stated reason. The pattern
+  they replace — an early `return` in the test body — is recorded by the
+  runner as a pass, so a green Windows run silently included tests that
+  asserted nothing and the count could not distinguish "verified here" from
+  "not applicable here".
+- **Platform-specific assertions live in platform-specific tests**, not in
+  `if (!OperatingSystem.IsWindows())` blocks inside shared ones, so each
+  test states one contract and the shared test stays honest about being
+  shared. `[PlatformTrait]` publishes a `Platform` trait, so one platform's
+  surface can be run on its own (`--filter Platform=Posix`).
+- **Where the platform is also a compile-time contract** — a call the BCL
+  marks unsupported on Windows — the method carries
+  `[UnsupportedOSPlatform]` too. The runtime skip and the analyzer then
+  agree, rather than the analyzer being silenced.
+- **Timezone is a test input, never an ambient condition.** Schedule
+  derivations are pure functions of their arguments (NFR-TIME-001), so they
+  are asserted across a fixed set of offsets — including a non-hour offset
+  and one past the date line — rather than in whatever offset the host
+  happens to be in. This repository shipped a schedule defect that was
+  correct in UTC and a day wrong everywhere else; a UTC-only build agent
+  cannot see that class of bug, and CI was green throughout.
 
 ## 3. Local state separation
 
