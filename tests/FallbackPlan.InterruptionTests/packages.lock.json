@@ -126,7 +126,7 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Text.Encoding": "[0.1.1, )"
+          "Bodu.Text.Encoding": "[0.2.0, )"
         }
       },
       "fallbackplan.filesystem": {
@@ -175,7 +175,7 @@
       "fallbackplan.repository.crypto": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Security.Cryptography": "[0.1.1, )",
+          "Bodu.Security.Cryptography": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
@@ -200,7 +200,7 @@
       "fallbackplan.repository.packing": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.1.1, )",
+          "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -227,26 +227,26 @@
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[0.1.1, )",
-        "resolved": "0.1.1",
-        "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",
-        "requested": "[0.1.1, )",
-        "resolved": "0.1.1",
-        "contentHash": "0nlZjvkEKcnolw/xRqder9iEKahTSs26BzWYrimQ5Q583MbHq14V0Jp+plynvORUV2jEn8Az2L4NgSt6orbO5g==",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
         "dependencies": {
-          "Bodu.Core": "0.1.1"
+          "Bodu.Core": "0.2.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.1.1, )",
-        "resolved": "0.1.1",
-        "contentHash": "PoYL+h1xvxAJD1ajdpXDfAFdMSCe+DCQmFRzF+N1EVgS+B0/OEX0iAsYb+jzew5FAAzX5gVVkziggRdS2YxasQ==",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
         "dependencies": {
-          "Bodu.Core": "0.1.1"
+          "Bodu.Core": "0.2.0"
         }
       },
       "Microsoft.Data.Sqlite": {

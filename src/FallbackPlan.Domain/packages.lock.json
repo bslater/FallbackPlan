@@ -4,18 +4,18 @@
     "net10.0": {
       "Bodu.Text.Encoding": {
         "type": "Direct",
-        "requested": "[0.1.1, )",
-        "resolved": "0.1.1",
-        "contentHash": "PoYL+h1xvxAJD1ajdpXDfAFdMSCe+DCQmFRzF+N1EVgS+B0/OEX0iAsYb+jzew5FAAzX5gVVkziggRdS2YxasQ==",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
         "dependencies": {
-          "Bodu.Core": "0.1.1"
+          "Bodu.Core": "0.2.0"
         }
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[0.1.1, )",
-        "resolved": "0.1.1",
-        "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
       }
     }
   }

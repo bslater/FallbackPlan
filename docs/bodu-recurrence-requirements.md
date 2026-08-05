@@ -1,8 +1,9 @@
 # Requirements: a shared Bodu recurrence and scheduling package
 
-**Status: Satisfied upstream** — every requirement below is implemented in
-`Bodu.Globalization.Recurrence` as of bodu `10226cf`, verified against a
-FallbackPlan-semantics probe in three timezones ([§8](#8-disposition)).
+**Status: Satisfied upstream, and adopted** — every requirement below is
+implemented in `Bodu.Globalization.Recurrence`, verified against a
+FallbackPlan-semantics probe in three timezones, and consumed at **0.2.0**
+([§8](#8-disposition)).
 **Audience:** the Bodu maintainer and FallbackPlan contributors ·
 **Raised:** 2026-08-05 · **Verified:** 2026-08-05
 
@@ -277,14 +278,18 @@ their answers.
    scans the **compiled assembly's** member-reference metadata rather than
    the source, so a banned call cannot enter through a helper, a generated
    file, or a future refactor.
-3. **Version at first consumption.** *Resolved:* 0.1.1, matching the three
-   Bodu packages FallbackPlan already consumes.
+3. **Version at first consumption.** *Resolved:* 0.2.0 — upstream versions
+   the Bodu packages in lock-step, so FallbackPlan consumes all four at that
+   version rather than mixing sets that were never built against each other.
 
 ## 8. Disposition
 
 Verified against bodu `10226cf` ("Add AnchoredInterval type and validation
 corpus for recurrence", #652). The library's own suite is **1277 tests, all
-passing**.
+passing**. The consumed 0.2.0 release (`e0f8997`) is a lock-step version bump
+across the Bodu packages: the recurrence sources are byte-identical between
+the two commits, so the verification below applies to the version actually
+consumed and was not re-run against a moving target.
 
 | ID | Requirement | Disposition |
 |----|-------------|-------------|
@@ -303,7 +308,7 @@ passing**.
 | REC-N-003 | DST posture documented | Met — division of responsibility stated on the occurrence types: offsets are the library's, transitions the caller's |
 | REC-N-004 | Minimal dependency closure | Met — `Bodu.Core` only |
 | REC-N-005 | Platform reach | Met — net8.0, `IsAotCompatible` |
-| REC-N-006 | Consumable as a pinned package | Met — `Bodu.Globalization.Recurrence.0.1.1.nupkg` in the local feed |
+| REC-N-006 | Consumable as a pinned package | Met — `Bodu.Globalization.Recurrence.0.2.0.nupkg` in the committed feed, pinned exactly |
 | REC-N-007 | API stability gates | Met — `PublicApiTests` snapshot baselines |
 | REC-N-008 | Independent verifiability | Met, and exceeded — known-answer vectors from **three independent oracles**: Cronos (cron), libical (RRULE), and the RFC 5545 §3.8.5.3 examples |
 | REC-N-009 | Cheap steady-state evaluation | Met on the evidence available — the 1277-test suite runs in ~1 s; not separately benchmarked, and not on the critical path until FallbackPlan adopts |
@@ -347,10 +352,9 @@ reference to the Application project with a canary that it exists, and
 amendment. The schedule tests — including the machine-timezone regression
 — pass unchanged, which is the proof that the swap preserved behaviour.
 
-One packaging caveat is recorded in
-[`external/packages/README.md`](../external/packages/README.md): upstream's
-committed `0.1.1` nupkg predates `AnchoredInterval`, so this repository
-consumes a build packed from source at the pinned commit under a distinct
-version (`0.1.2-local.10226cf`) rather than republishing different bytes
-under a version that already exists. It should be replaced with an upstream
-package as soon as one carrying `AnchoredInterval` is published.
+The consumed version is **0.2.0**, taken from upstream's own feed along with
+the other three Bodu packages, which are versioned in lock-step
+([`external/packages/README.md`](../external/packages/README.md)). An interim
+build packed from source bridged the short gap between `AnchoredInterval`
+landing on master and upstream publishing a release containing it; it has
+been replaced and should not reappear.
