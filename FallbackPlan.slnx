@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FallbackPlan.Agent/FallbackPlan.Agent.csproj" />
+    <Project Path="src/FallbackPlan.Api/FallbackPlan.Api.csproj" />
     <Project Path="src/FallbackPlan.Application/FallbackPlan.Application.csproj" />
     <Project Path="src/FallbackPlan.Cli/FallbackPlan.Cli.csproj" />
     <Project Path="src/FallbackPlan.Domain/FallbackPlan.Domain.csproj" />
@@ -24,6 +25,7 @@
     <Project Path="src/FallbackPlan.Storage.Local/FallbackPlan.Storage.Local.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/FallbackPlan.Api.Tests/FallbackPlan.Api.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Application.Tests/FallbackPlan.Application.Tests.csproj" />
     <Project Path="tests/FallbackPlan.ArchitectureTests/FallbackPlan.ArchitectureTests.csproj" />
     <Project Path="tests/FallbackPlan.Cli.Tests/FallbackPlan.Cli.Tests.csproj" />
