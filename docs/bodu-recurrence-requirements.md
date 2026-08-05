@@ -1,6 +1,10 @@
 # Requirements: a shared Bodu recurrence and scheduling package
 
-**Status:** Proposed · **Audience:** the Bodu maintainer and FallbackPlan contributors · **Date:** 2026-08-05
+**Status: Satisfied upstream** — every requirement below is implemented in
+`Bodu.Globalization.Recurrence` as of bodu `10226cf`, verified against a
+FallbackPlan-semantics probe in three timezones ([§8](#8-disposition)).
+**Audience:** the Bodu maintainer and FallbackPlan contributors ·
+**Raised:** 2026-08-05 · **Verified:** 2026-08-05
 
 FallbackPlan's Agent evaluates backup-set schedules with a deliberately small,
 hand-rolled `Schedule` class ([ADR-0027 §1](adr/0027-services-scheduling-status-telemetry.md)).
@@ -262,16 +266,83 @@ For traceability, the intended consumption once the package exists
 
 ## 7. Open questions
 
-1. **Where does the anchored-interval form live?** It is not RFC 5545 and
-   not cron; options are a third top-level type in
-   `Bodu.Globalization.Recurrence`, or a tiny sibling package. The
-   requirement (REC-F-002) is satisfied either way; one package is simpler
-   to pin.
-2. **Should the purity guard (REC-N-001) be an analyzer or a test?** A
-   banned-API test in the Bodu repo is cheap and catches the whole project;
-   an analyzer travels with the package and protects consumers' own
-   composition code too.
-3. **Version at first consumption.** FallbackPlan pins exact versions; a
-   pre-1.0 Bodu version is acceptable (the other three Bodu packages are
-   consumed at 0.1.1) provided REC-N-007's snapshot gate makes upgrades
-   reviewable.
+All three were resolved by the upstream implementation; recorded here with
+their answers.
+
+1. **Where does the anchored-interval form live?** *Resolved:* a third
+   top-level type, `AnchoredInterval`, inside
+   `Bodu.Globalization.Recurrence` — one package to pin.
+2. **Should the purity guard (REC-N-001) be an analyzer or a test?**
+   *Resolved:* a test, and a stronger one than proposed — `PurityTests`
+   scans the **compiled assembly's** member-reference metadata rather than
+   the source, so a banned call cannot enter through a helper, a generated
+   file, or a future refactor.
+3. **Version at first consumption.** *Resolved:* 0.1.1, matching the three
+   Bodu packages FallbackPlan already consumes.
+
+## 8. Disposition
+
+Verified against bodu `10226cf` ("Add AnchoredInterval type and validation
+corpus for recurrence", #652). The library's own suite is **1277 tests, all
+passing**.
+
+| ID | Requirement | Disposition |
+|----|-------------|-------------|
+| REC-F-001 | Calendar recurrence | Met — `CronExpression`, `RecurrenceRule` |
+| REC-F-002 | Anchored intervals | **Met (new)** — `AnchoredInterval`, series `anchor + k·interval` for `k ≥ 1`; canonical text is the RFC 5545 duration grammar (`PT4H`, `P1D`) |
+| REC-F-003 | Composition with exclusions | Met — `RecurrenceSet` (RDATE/EXDATE) |
+| REC-F-004 | Calendar filtering as composition | Met — no dependency on `Bodu.Globalization.Calendar`; the package carries no holiday or locale data |
+| REC-F-005 | Next **and** previous, everywhere | **Met (new)** — `GetPreviousOccurrence` now on all four forms × `DateTime`/`DateTimeOffset` |
+| REC-F-006 | Bounded enumeration | Met — unsatisfiable rules enumerate empty |
+| REC-F-007 | No due-ness state | Met, and exceeded — `AnchoredInterval` holds no anchor at all; the anchor is a per-query argument, so one interval serves many anchors |
+| REC-F-008 | Strict parsing, defect named | Met — `TryParse(…, out result, out failureMessage)`, messages fit to surface verbatim |
+| REC-F-009 | Round-trip formatting | Met — verified by probe for both cron and interval forms |
+| REC-F-010 | Value equality | Met — verified by probe |
+| REC-N-001 | Purity, enforced | **Met (new), exceeded** — `PurityTests` scans compiled IL member references for banned wall-clock/timezone APIs, and asserts the reference table is non-empty so the scan cannot pass vacuously |
+| REC-N-002 | Offset semantics stated | Met — documented on each type; `CronExpressionTests.Offsets.cs` covers non-UTC offsets |
+| REC-N-003 | DST posture documented | Met — division of responsibility stated on the occurrence types: offsets are the library's, transitions the caller's |
+| REC-N-004 | Minimal dependency closure | Met — `Bodu.Core` only |
+| REC-N-005 | Platform reach | Met — net8.0, `IsAotCompatible` |
+| REC-N-006 | Consumable as a pinned package | Met — `Bodu.Globalization.Recurrence.0.1.1.nupkg` in the local feed |
+| REC-N-007 | API stability gates | Met — `PublicApiTests` snapshot baselines |
+| REC-N-008 | Independent verifiability | Met, and exceeded — known-answer vectors from **three independent oracles**: Cronos (cron), libical (RRULE), and the RFC 5545 §3.8.5.3 examples |
+| REC-N-009 | Cheap steady-state evaluation | Met on the evidence available — the 1277-test suite runs in ~1 s; not separately benchmarked, and not on the critical path until FallbackPlan adopts |
+| REC-N-010 | Pathological inputs bounded | Met — twelve-year search horizon in each direction, documented with its rationale (the largest gap any satisfiable expression can have: a 29 February schedule crossing a non-leap century year); unsatisfiable expressions answer `null` at the horizon |
+
+### Semantic probe
+
+Requirements are only as good as the behaviour they buy, so FallbackPlan's
+committed schedule assertions were replayed against the library directly —
+including the two tests that guard the timezone defect this repository
+already shipped once:
+
+- `A_daily_schedule_runs_once_per_calendar_day_at_its_time` — the daily
+  cases, with `daily at 02:30` expressed as cron `30 2 * * *`.
+- `Daily_schedule_answers_do_not_depend_on_the_machine_timezone` — the same
+  cases in UTC+10, plus the mixed-offset case (a UTC journal anchor against
+  a local `now`).
+- `An_interval_schedule_coalesces_missed_runs` — including the Agent asleep
+  through five intervals, which must still owe exactly one run.
+
+Due-ness was expressed as the intended one-liner —
+`lastCompleted < GetPreviousOccurrence(now, inclusive: true)` for calendar
+forms, and the non-null test on the same call for anchored intervals — and
+next-run as `GetNextOccurrence(now)`. **Every assertion passed, identically,
+under `Etc/UTC`, `Australia/Sydney` (UTC+10) and `America/Los_Angeles`
+(UTC-7)**, confirming REC-N-001/002 hold in practice and not just in the
+metadata scan.
+
+The probe also confirmed the coalescing property concretely: an Agent asleep
+across twelve occurrences of a four-hourly schedule still evaluates to a
+single boolean, never a backlog.
+
+### Remaining work, all on the FallbackPlan side
+
+Nothing further is asked of Bodu. Adoption is now a FallbackPlan decision
+with a known shape ([§5](#5-what-fallbackplan-would-build-on-top)): commit
+the 0.1.1 nupkg to `external/packages`, add the lockfile identity
+deliberately, add the architecture canary test pinning which project may
+reference it (matching the `Bodu.Security.Cryptography` and `Bodu.Core`
+pattern), and amend [ADR-0027](adr/0027-services-scheduling-status-telemetry.md) §1
+for the grammar. The existing machine-timezone regression test must pass
+unchanged across the swap — the probe indicates it will.
