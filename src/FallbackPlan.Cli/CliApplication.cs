@@ -763,10 +763,27 @@ public static class CliApplication
                 var path = parse.GetValue(pathArgument) ?? string.Empty;
 
                 var entries = catalogue.ListDirectory(snapshotId, path);
-                if (entries.Count == 0 && path.Length > 0 && catalogue.LookupPath(snapshotId, path) is null)
+                if (entries.Count == 0)
                 {
-                    throw new CliFailureException(
-                        $"'{path}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+                    // An empty listing is ambiguous, so it is never reported
+                    // as success without establishing which emptiness it is.
+                    // Checking the snapshot first matters: the path guard
+                    // below only runs when a path was given, so listing the
+                    // ROOT of a snapshot that does not exist used to print
+                    // nothing and exit 0 — indistinguishable, to a script,
+                    // from an empty backup.
+                    if (!catalogue.EnumerateSnapshots().Any(
+                            snapshot => snapshot.SnapshotId.Span.SequenceEqual(snapshotId)))
+                    {
+                        throw new CliFailureException(
+                            $"snapshot {Hex(snapshotId)} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.");
+                    }
+
+                    if (path.Length > 0 && catalogue.LookupPath(snapshotId, path) is null)
+                    {
+                        throw new CliFailureException(
+                            $"'{path}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+                    }
                 }
 
                 foreach (var entry in entries)

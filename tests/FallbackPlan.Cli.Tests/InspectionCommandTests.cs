@@ -1,0 +1,282 @@
+using System.Text.RegularExpressions;
+
+namespace FallbackPlan.Cli.Tests;
+
+/// <summary>
+/// The inspection and single-file commands — <c>inspect-blob</c>,
+/// <c>inspect-manifest</c>, <c>restore-file</c> and <c>verify --file</c> —
+/// plus the sub-path forms of <c>ls</c> and <c>restore</c>. These are the
+/// commands an operator reaches for when something looks wrong, so they are
+/// exactly the ones that must not themselves be broken.
+/// </summary>
+public sealed class InspectionCommandTests : IDisposable
+{
+    private readonly CliHarness _cli = new();
+
+    /// <summary>The identifiers <c>archive</c> reports, which the inspection commands take as arguments.</summary>
+    private sealed record ArchivedFile(string SnapshotId, string SnapshotObject, string FileVersion, string RootTree);
+
+    private async Task<ArchivedFile> ArchiveAsync(string content = "hello world content for inspection")
+    {
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("a.txt", content);
+
+        var archive = await _cli.RunAsync("archive", source);
+        Assert.True(archive.ExitCode == 0, archive.All);
+
+        static string Field(string output, string label)
+        {
+            var match = Regex.Match(output, $@"^{label}\s+([0-9a-f]+)\s*$", RegexOptions.Multiline);
+            Assert.True(match.Success, $"'{label}' was not reported by archive:\n{output}");
+            return match.Groups[1].Value;
+        }
+
+        return new ArchivedFile(
+            Field(archive.Output, "snapshot id"),
+            Field(archive.Output, "snapshot object"),
+            Field(archive.Output, "file version"),
+            Field(archive.Output, "root tree"));
+    }
+
+    private string FirstBlobKey(string blobClass)
+    {
+        var root = Path.Combine(_cli.RepositoryPath, "blobs", blobClass);
+        var file = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.Ordinal).First();
+        return Path.GetRelativePath(_cli.RepositoryPath, file).Replace(Path.DirectorySeparatorChar, '/');
+    }
+
+    [Fact]
+    public async Task Inspect_blob_opens_the_envelope_and_lists_its_records()
+    {
+        await ArchiveAsync();
+
+        var inspect = await _cli.RunAsync("inspect-blob", FirstBlobKey("data"));
+
+        Assert.True(inspect.ExitCode == 0, inspect.All);
+        Assert.False(string.IsNullOrWhiteSpace(inspect.Output), "inspect-blob printed nothing");
+    }
+
+    [Fact]
+    public async Task Inspect_blob_refuses_a_key_that_is_not_there()
+    {
+        await ArchiveAsync();
+
+        var inspect = await _cli.RunAsync("inspect-blob", "blobs/data/zzzz/zzzzzzzzzzzzzzzzzzzzzzzzzz");
+
+        Assert.NotEqual(0, inspect.ExitCode);
+        Assert.DoesNotContain("   at ", inspect.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Inspect_manifest_decodes_a_file_version()
+    {
+        var archived = await ArchiveAsync();
+
+        var inspect = await _cli.RunAsync("inspect-manifest", archived.FileVersion);
+
+        Assert.True(inspect.ExitCode == 0, inspect.All);
+        Assert.False(string.IsNullOrWhiteSpace(inspect.Output), "inspect-manifest printed nothing");
+    }
+
+    [Fact]
+    public async Task Inspect_manifest_decodes_a_snapshot_and_a_tree()
+    {
+        var archived = await ArchiveAsync();
+
+        // The same command must decode every manifest kind, because an
+        // operator reading a damaged repository does not know in advance
+        // which one an identifier names.
+        var snapshot = await _cli.RunAsync("inspect-manifest", archived.SnapshotObject);
+        Assert.True(snapshot.ExitCode == 0, snapshot.All);
+
+        var tree = await _cli.RunAsync("inspect-manifest", archived.RootTree);
+        Assert.True(tree.ExitCode == 0, tree.All);
+    }
+
+    [Theory]
+    [InlineData("not-hex-at-all")]
+    [InlineData("abcd")]                                                        // well-formed hex, wrong length
+    [InlineData("0000000000000000000000000000000000000000000000000000000000000000")]  // right shape, absent
+    public async Task Inspect_manifest_refuses_an_identifier_it_cannot_use(string objectId)
+    {
+        await ArchiveAsync();
+
+        var inspect = await _cli.RunAsync("inspect-manifest", objectId);
+
+        Assert.NotEqual(0, inspect.ExitCode);
+        Assert.DoesNotContain("   at ", inspect.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Restore_file_writes_the_bytes_back_from_a_manifest_id()
+    {
+        const string content = "restore-file round trip content";
+        var archived = await ArchiveAsync(content);
+        var destination = Path.Combine(_cli.WorkPath, "restored-a.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+        Assert.True(restore.ExitCode == 0, restore.All);
+        Assert.Equal(content, File.ReadAllText(destination));
+    }
+
+    [Fact]
+    public async Task Restore_file_writes_the_bytes_back_from_a_snapshot_id()
+    {
+        const string content = "restore-file via snapshot";
+        var archived = await ArchiveAsync(content);
+        var destination = Path.Combine(_cli.WorkPath, "restored-by-snapshot.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--snapshot", archived.SnapshotId, "--output", destination);
+
+        Assert.True(restore.ExitCode == 0, restore.All);
+        Assert.Equal(content, File.ReadAllText(destination));
+    }
+
+    [Fact]
+    public async Task Restore_file_requires_something_to_restore()
+    {
+        await ArchiveAsync();
+
+        // Neither --manifest nor --snapshot: the command cannot guess, and
+        // must say so rather than writing an empty file.
+        var restore = await _cli.RunAsync("restore-file", "--output", Path.Combine(_cli.WorkPath, "nothing.txt"));
+
+        Assert.NotEqual(0, restore.ExitCode);
+        Assert.DoesNotContain("   at ", restore.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Restore_file_refuses_a_snapshot_that_is_not_there()
+    {
+        await ArchiveAsync();
+
+        var restore = await _cli.RunAsync(
+            "restore-file", "--snapshot", new string('f', 32), "--output", Path.Combine(_cli.WorkPath, "absent.txt"));
+
+        Assert.NotEqual(0, restore.ExitCode);
+        Assert.DoesNotContain("   at ", restore.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verify_checks_one_file_version_end_to_end()
+    {
+        var archived = await ArchiveAsync();
+
+        var verify = await _cli.RunAsync("verify", "--file", archived.FileVersion);
+
+        Assert.True(verify.ExitCode == 0, verify.All);
+    }
+
+    [Theory]
+    [InlineData("locator")]
+    [InlineData("digest")]
+    [InlineData("records")]
+    public async Task Verify_accepts_every_level(string level)
+    {
+        await ArchiveAsync();
+
+        var verify = await _cli.RunAsync("verify", "--level", level);
+
+        Assert.True(verify.ExitCode == 0, verify.All);
+    }
+
+    [Fact]
+    public async Task Verify_refuses_a_level_that_is_not_one_of_the_three()
+    {
+        await ArchiveAsync();
+
+        var verify = await _cli.RunAsync("verify", "--level", "paranoid");
+
+        Assert.NotEqual(0, verify.ExitCode);
+    }
+
+    // ------------------------------------------------------- sub-path forms
+
+    [Fact]
+    public async Task Ls_lists_a_nested_directory_and_reports_one_that_is_absent()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/top.txt", "top");
+        _cli.WriteFile("tree/nested/inner.txt", "inner");
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+
+        var snapshot = await FirstSnapshotIdAsync();
+
+        var nested = await _cli.RunAsync("ls", snapshot, "nested");
+        Assert.True(nested.ExitCode == 0, nested.All);
+        Assert.Contains("inner.txt", nested.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("top.txt", nested.Output, StringComparison.Ordinal);
+
+        var absent = await _cli.RunAsync("ls", snapshot, "no-such-directory");
+        Assert.NotEqual(0, absent.ExitCode);
+    }
+
+    [Fact]
+    public async Task Restore_takes_a_path_within_the_snapshot()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/top.txt", "top");
+        _cli.WriteFile("tree/nested/inner.txt", "inner");
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+
+        var snapshot = await FirstSnapshotIdAsync();
+        var destination = Path.Combine(_cli.WorkPath, "subset");
+
+        var restore = await _cli.RunAsync("restore", snapshot, "nested", "--output", destination);
+
+        Assert.True(restore.ExitCode == 0, restore.All);
+
+        // Paths stay relative to the SNAPSHOT root, not to the sub-path
+        // selected: a file restored from a subset lands where a full
+        // restore would have put it, so two partial restores into one
+        // directory compose instead of colliding.
+        Assert.Equal("inner", File.ReadAllText(Path.Combine(destination, "nested", "inner.txt")));
+        Assert.False(File.Exists(Path.Combine(destination, "top.txt")), "restoring a sub-path brought the whole tree");
+    }
+
+    [Fact]
+    public async Task Ls_refuses_a_snapshot_that_is_not_there()
+    {
+        // An empty listing must never be reported as success without
+        // establishing WHICH emptiness it is. This exited 0 with no output
+        // for an unknown snapshot, which a script cannot tell apart from an
+        // empty backup — `restore` refused the same input correctly.
+        await _cli.InitAsync();
+
+        var listing = await _cli.RunAsync("ls", new string('a', 32));
+
+        Assert.NotEqual(0, listing.ExitCode);
+        Assert.Contains("not in the catalogue", listing.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", listing.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Ls_of_a_real_snapshot_root_still_succeeds()
+    {
+        // The other side of the fix: a snapshot that IS in the catalogue
+        // lists its root without the new guard firing.
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/top.txt", "top");
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+
+        var listing = await _cli.RunAsync("ls", await FirstSnapshotIdAsync());
+
+        Assert.True(listing.ExitCode == 0, listing.All);
+        Assert.Contains("top.txt", listing.Output, StringComparison.Ordinal);
+    }
+
+    private async Task<string> FirstSnapshotIdAsync()
+    {
+        var snapshots = await _cli.RunAsync("snapshots");
+        Assert.True(snapshots.ExitCode == 0, snapshots.All);
+
+        var first = snapshots.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .First();
+        return first.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _cli.Dispose();
+}
