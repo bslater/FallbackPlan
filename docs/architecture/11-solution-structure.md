@@ -106,7 +106,13 @@ handler the Agent installs, and nothing else.
 
 Coverage from a single OS is a partial answer by construction: the scanner's
 Linux, Darwin and Windows interop can only run on its own platform, so a
-one-OS report understates it and the honest total merges the CI matrix.
+line unreachable on the runner is not uncovered, it is uncovered *there*.
+CI therefore collects coverage on all three platforms and a merge job unions
+them, reporting the total to the run summary — the number that is not
+understated. The floor it enforces sits below today's weakest module
+deliberately: it exists to catch a collapse (a project dropping out of the
+run, a suite silently not executing), not to police ordinary drift, since a
+threshold nobody can move without a fight only teaches people to game it.
 
 ### 2.2 Environment-specific tests
 
