@@ -16,6 +16,13 @@ if (args.Length > 0 && string.Equals(args[0], "dedup", StringComparison.OrdinalI
     return await DedupCorpusBenchmark.RunAsync();
 }
 
+if (args.Length > 0 && string.Equals(args[0], "throughput", StringComparison.OrdinalIgnoreCase))
+{
+    // ADR-0029 section 6 step 1: measure, and attribute, before optimising.
+    var mebibytes = args.Length > 1 ? int.Parse(args[1], CultureInfo.InvariantCulture) : 64;
+    return await ThroughputBenchmarks.RunAsync(mebibytes);
+}
+
 if (args.Length > 0 && string.Equals(args[0], "pathlookup", StringComparison.OrdinalIgnoreCase))
 {
     return PathLookupBenchmark.Run();

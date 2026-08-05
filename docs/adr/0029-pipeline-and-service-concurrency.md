@@ -1,6 +1,6 @@
 # ADR-0029 — Pipeline and service concurrency: the ordering barrier, the bound, and the order of work
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08
 **Requirements:** NFR-PERF-001, NFR-PERF-002, NFR-PERF-007, NFR-PERF-013, NFR-OPS-001, NFR-OPS-004, NFR-SEC-003, NFR-PORT-004
 **Related:** [ADR-0005](0005-aead-suite-and-nonce-construction.md), [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md#5-publication-order), [specification 05 §6](../../specifications/repository-format/05-blob.md), [phase-0 benchmarks](../phase-0-benchmarks.md)
@@ -269,8 +269,30 @@ Rejected: the requirement has an acceptance criterion and a phase, and a
 requirement nobody intends to meet should be deleted rather than left to imply a
 guarantee that is not tracked.
 
+## Implementation status (2026-08)
+
+Built: §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested
+value; §4's service-level scheduling — sets serialised, read work in its own
+lane, user-initiated work ahead of scheduled, and cancellation recording
+`JobState.Cancelled`; §5's progress events, with the states beyond `Scanning`
+actually emitted; and §6 step 1, [`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
+
+Not built: §1's staged pipeline, and §2's upload workers. Nothing consumes
+`Concurrency` yet, and the benchmark reports the settings anyway so that the
+spread across them is visible as noise — a calibration any later concurrency
+result has to beat. The one serial cost removed so far is the per-record `AesGcm`
+construction, which measured below the noise; that is a result, not a
+disappointment.
+
+[Q20](../open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
+stays open on its second half. Its first half now has an answer:
+**`Concurrency` defaults to 2**, below a 4-core laptop's capacity, because a
+backup that makes the machine unpleasant to use gets switched off and a
+switched-off backup protects nothing.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written alongside ADR-0028, after benchmarks showed the gap is serial cost rather than thread count |
+| 2026-08 | Accepted | The shape is settled; §6's sequence is under way and its status is recorded above |

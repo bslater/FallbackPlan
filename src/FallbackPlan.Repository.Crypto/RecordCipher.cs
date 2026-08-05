@@ -22,6 +22,18 @@ public static class RecordCipher
     public const int TagLength = 16;
 
     /// <summary>Encrypts a record payload.</summary>
+    /// <param name="blobKey">The blob key.</param>
+    /// <param name="nonce">The record nonce — the ordinal (ADR-0005).</param>
+    /// <param name="aad">The associated data binding the record's position.</param>
+    /// <param name="plaintext">The stored payload.</param>
+    /// <param name="ciphertext">Where the ciphertext goes.</param>
+    /// <param name="tag">Where the tag goes.</param>
+    /// <remarks>
+    /// Constructs a cipher per call, which pays an AES key schedule per record.
+    /// Callers that seal many records under one key should hold an
+    /// <see cref="AesGcm"/> and call <see cref="Seal(AesGcm, ReadOnlySpan{byte}, ReadOnlySpan{byte}, ReadOnlySpan{byte}, Span{byte}, Span{byte})"/>
+    /// instead (ADR-0029 §6, serial cost 3).
+    /// </remarks>
     public static void Seal(
         ReadOnlySpan<byte> blobKey,
         ReadOnlySpan<byte> nonce,
@@ -31,7 +43,30 @@ public static class RecordCipher
         Span<byte> tag)
     {
         using var aes = new AesGcm(blobKey, TagLength);
-        aes.Encrypt(nonce, plaintext, ciphertext, tag, aad);
+        Seal(aes, nonce, aad, plaintext, ciphertext, tag);
+    }
+
+    /// <summary>Encrypts a record payload under an already-scheduled key.</summary>
+    /// <param name="cipher">
+    /// A cipher holding the blob key. <see cref="AesGcm"/> is not safe for
+    /// concurrent use, so the caller must keep it inside the ordered stage —
+    /// which is where record sealing lives anyway (ADR-0029 §1).
+    /// </param>
+    /// <param name="nonce">The record nonce — the ordinal (ADR-0005).</param>
+    /// <param name="aad">The associated data binding the record's position.</param>
+    /// <param name="plaintext">The stored payload.</param>
+    /// <param name="ciphertext">Where the ciphertext goes.</param>
+    /// <param name="tag">Where the tag goes.</param>
+    public static void Seal(
+        AesGcm cipher,
+        ReadOnlySpan<byte> nonce,
+        ReadOnlySpan<byte> aad,
+        ReadOnlySpan<byte> plaintext,
+        Span<byte> ciphertext,
+        Span<byte> tag)
+    {
+        ArgumentNullException.ThrowIfNull(cipher);
+        cipher.Encrypt(nonce, plaintext, ciphertext, tag, aad);
     }
 
     /// <summary>

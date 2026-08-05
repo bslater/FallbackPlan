@@ -27,7 +27,28 @@ public sealed record CapturePolicy
         EncryptionProfile = EncryptionProfile.Aes256GcmV1,
         BlobWriteProfile = BlobWriteProfile.LocalDefault,
         DedupTrustDomain = DedupTrustDomain.Repository,
+        Concurrency = DefaultConcurrency,
     };
+
+    /// <summary>
+    /// The default concurrency: deliberately below the machine's capacity.
+    /// </summary>
+    /// <remarks>
+    /// NFR-OPS-004 requires defaults safe on a 4-core laptop and NFR-PERF-013
+    /// caps measured background CPU at 30% over any 60-second window. A backup
+    /// that makes the machine unpleasant to use gets switched off, and a
+    /// switched-off backup protects nothing — so saturating the hardware is an
+    /// opt-in for someone who has decided this machine is a backup machine.
+    /// </remarks>
+    public const int DefaultConcurrency = 2;
+
+    /// <summary>The largest concurrency this policy will accept.</summary>
+    /// <remarks>
+    /// A ceiling rather than a preference: memory is bounded by
+    /// <c>concurrency × segment size × a small constant</c> (NFR-PERF-001), and
+    /// an unbounded setting would make that bound unstatable.
+    /// </remarks>
+    public const int MaximumConcurrency = 64;
 
     /// <summary>The segmentation profile.</summary>
     public required SegmentationProfile SegmentationProfile { get; init; }
@@ -49,6 +70,25 @@ public sealed record CapturePolicy
 
     /// <summary>The segment-reuse trust domain.</summary>
     public required DedupTrustDomain DedupTrustDomain { get; init; }
+
+    /// <summary>
+    /// How much of the pipeline may run at once (ADR-0029 §3).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One value, not two, because NFR-PERF-001 bounds memory by "configured
+    /// concurrency" and two independent knobs would make that bound
+    /// unstatable. It bounds the concurrent stage — read, hash, compress — and
+    /// the upload workers together.
+    /// </para>
+    /// <para>
+    /// <b>1 is a valid and tested setting</b>: it is the configuration in which
+    /// the ordering barrier is trivially satisfied, and it is the control case
+    /// for NFR-PERF-002's acceptance test that restored bytes are identical
+    /// regardless of this number.
+    /// </para>
+    /// </remarks>
+    public int Concurrency { get; init; } = DefaultConcurrency;
 
     /// <summary>
     /// The largest segment this policy can produce — what bounds working
@@ -92,6 +132,14 @@ public sealed record CapturePolicy
                     "cdc_parameters_without_cdc_profile",
                     "cdc parameters are set but the segmentation profile is not cdc-v1 — one of the two is a mistake."));
             }
+        }
+
+        if (Concurrency is < 1 or > MaximumConcurrency)
+        {
+            (defects ??= []).Add(new ConfigurationDefect(
+                "concurrency_out_of_range",
+                $"Concurrency {Concurrency} is outside 1..{MaximumConcurrency}; memory is bounded by concurrency × "
+                + "segment size (NFR-PERF-001), so an unbounded setting makes the bound unstatable."));
         }
 
         if (!Enum.IsDefined(DedupTrustDomain))

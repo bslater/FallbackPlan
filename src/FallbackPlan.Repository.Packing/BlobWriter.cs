@@ -39,6 +39,12 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly EncryptionProfile _encryptionProfile;
     private readonly RepositoryId _repositoryId;
     private readonly byte[] _blobKey;
+
+    // One key schedule per blob rather than per record. The blob key does not
+    // change for the writer's life, and AesGcm is not safe for concurrent use —
+    // which is fine, because record sealing sits inside the ordered stage
+    // (ADR-0029 §1) by construction.
+    private readonly AesGcm _cipher;
     private readonly string _spoolPath;
     private readonly FileStream _spool;
     private readonly IncrementalHash _digest;
@@ -62,6 +68,7 @@ public sealed class BlobWriter : IAsyncDisposable
         _encryptionProfile = encryptionProfile;
         _repositoryId = repositoryId;
         _blobKey = blobKey;
+        _cipher = new AesGcm(blobKey, RecordCipher.TagLength);
         _spoolPath = spoolPath;
         _spool = spool;
         _pinned = pinned;
@@ -437,7 +444,7 @@ public sealed class BlobWriter : IAsyncDisposable
         RecordAad.Write(_repositoryId, _envelope.FormatVersion, objectType, objectId, ordinal, aad);
 
         RecordCipher.Seal(
-            _blobKey,
+            _cipher,
             nonce,
             aad,
             storedPayload.Span,
@@ -486,6 +493,7 @@ public sealed class BlobWriter : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_sealed, this);
         _abandoned = true;
 
+        _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
         _digest.Dispose();
         _spool.Flush(flushToDisk: true);
@@ -534,7 +542,7 @@ public sealed class BlobWriter : IAsyncDisposable
         FooterAad.Write(_repositoryId, _envelope.FormatVersion, _envelope.BlobId, (uint)_entries.Count, aad);
 
         RecordCipher.Seal(
-            _blobKey,
+            _cipher,
             nonce,
             aad,
             table,
@@ -560,6 +568,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _spool.Flush(flushToDisk: true);
         await _spool.DisposeAsync().ConfigureAwait(false);
+        _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
 
         // A sealed blob is no longer resumable state; the sidecar goes.
@@ -578,6 +587,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
+        _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
 
         if (_abandoned)

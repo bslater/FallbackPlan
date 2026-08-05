@@ -198,7 +198,7 @@ A console pairs with each service it manages, and pairing is revocable at the se
 
 **Owner:** maintainer · **Blocks:** the throughput work in [ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6
 
-Two numbers cannot be chosen from the armchair. The first is the default concurrency setting, which must satisfy NFR-OPS-004 on a 4-core laptop while being worth having on a workstation. The second is whether per-record spool pinning — an `fsync` plus a checkpoint rewrite per record, currently unconditional for data blobs — earns its cost once measured; it buys resumability of an interrupted blob, and `BlobWriter.TryResume` has no production caller today, so the benefit is currently unrealised while the cost is paid on every record.
+Two numbers cannot be chosen from the armchair. **The first is now answered:** `CapturePolicy.Concurrency` defaults to **2**, deliberately below a 4-core laptop's capacity, because a backup that makes the machine unpleasant to use gets switched off and a switched-off backup protects nothing. It is validated to 1..64 and nothing consumes it yet, so the number will be revisited when the staged pipeline makes it mean something. The second is whether per-record spool pinning — an `fsync` plus a checkpoint rewrite per record, currently unconditional for data blobs — earns its cost once measured; it buys resumability of an interrupted blob, and `BlobWriter.TryResume` has no production caller today, so the benefit is currently unrealised while the cost is paid on every record.
 
 ---
 

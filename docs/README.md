@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: Phase 0 implemented; Phase 1 push 1 complete.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md).
+> **Status: Phase 0 implemented; Phase 1 push 1 complete.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md). **Phase 2 is under way** — the service boundary of [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) is built for the local binding ([phase-2 plan](phase-2-execution-plan.md)); throughput attribution is in [phase-2-benchmarks.md](phase-2-benchmarks.md).
 
 ---
 
@@ -45,7 +45,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0027 are **Accepted** on the evidence recorded in them; 0028–0029 are **Proposed**; 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 are **Accepted** on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
 
 | ADR | Decision |
 |-----|----------|

@@ -117,7 +117,7 @@ Every requirement maps to at least one architecture section. Requirements arisin
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
-| FR-SVC-001..008 | [00 §6.1](../architecture/00-overview.md#61-process-model), [04 §9](../architecture/04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous), [11 §2](../architecture/11-solution-structure.md#2-dependency-rules) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/*`, `Hosts.Tests/*`, `ArchitectureTests/DependencyRuleTests` | 2 |
+| FR-SVC-001..008 | [00 §6.1](../architecture/00-overview.md#61-process-model), [04 §9](../architecture/04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous), [11 §2](../architecture/11-solution-structure.md#2-dependency-rules) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/*`, `Hosts.Tests/ServiceTests`, `Hosts.Tests/ClientModeTests`, `Application.Tests/StateDirectoryLockTests`, `ArchitectureTests/DependencyRuleTests` | 2 |
 | FR-GOV-001..004 | — | [0001](../adr/0001-licence-and-contribution-model.md) | Release checklist | 0 / pre-1.0 |
 | FR-CP-001..006 | [11 §4](../architecture/11-solution-structure.md#4-import-isolation) | [0015](../adr/0015-crashplan-importer-isolation.md) | `Import.CrashPlan.Tests/*`, `ArchitectureTests/ImportIsolationTests` | 5 |
 
@@ -131,7 +131,7 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | NFR-PERF-004, 010, 011 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `PerformanceTests/CatalogueBenchmarks` | 0 |
 | NFR-PERF-005 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | — | `PerformanceTests/MetadataGrowthTests` | 1 |
 | NFR-PERF-006, 008, 009 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | `Storage.ContractTests/RequestCountTests` | 3 |
-| NFR-PERF-007 | [02 §3](../architecture/02-repository-format.md#3-segmentation) | [0002](../adr/0002-segmentation-strategy.md), [0029](../adr/0029-pipeline-and-service-concurrency.md) | `PerformanceTests/ThroughputBenchmarks` ⚠ **not yet written** — [ADR-0029](../adr/0029-pipeline-and-service-concurrency.md) §6 makes it the first deliverable | 1 |
+| NFR-PERF-007 | [02 §3](../architecture/02-repository-format.md#3-segmentation) | [0002](../adr/0002-segmentation-strategy.md), [0029](../adr/0029-pipeline-and-service-concurrency.md) | `PerformanceTests/ThroughputBenchmarks` — results in [phase-2-benchmarks.md](../phase-2-benchmarks.md) | 1 |
 | NFR-PERF-012, 015 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `PerformanceTests/RebuildBenchmarks`, `PerformanceTests/TargetedRecoveryBenchmarks` | 0 |
 | NFR-PERF-014 | [02 §7.1](../architecture/02-repository-format.md#71-structure) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `PerformanceTests/IndexSizeBenchmarks` | 0 |
 | NFR-PERF-013 | [10 §2](../architecture/10-observability.md#2-technical-metrics) | — | `PerformanceTests/ResourceLimitTests` | 1 |
@@ -147,7 +147,7 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | NFR-SEC-006 | [10 §4](../architecture/10-observability.md#4-diagnostics) | — | `IntegrationTests/SecretRedactionTests` | 1 |
 | NFR-SEC-007 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/VerifyOnReuseTests` | 2 |
 | NFR-SEC-008 | [03 §3.1](../architecture/03-crypto.md#31-the-construction) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `Repository.Tests/KeyDerivationSeparationTests` | 0 |
-| NFR-SEC-009 | [00 §6.2](../architecture/00-overview.md#62-installation-topologies) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/KeyMaterialConfinementTests` | 2 |
+| NFR-SEC-009 | [00 §6.2](../architecture/00-overview.md#62-installation-topologies) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/KeyMaterialConfinementTests`, `Hosts.Tests/KeystoreTests` | 2 |
 | NFR-PRIV-001..003 | [10 §4](../architecture/10-observability.md#4-diagnostics), [§5](../architecture/10-observability.md#5-telemetry) | — | `IntegrationTests/TelemetryPrivacyTests` | 1 |
 | NFR-TIME-001, 002 | [04 §7](../architecture/04-concurrency-and-publication.md#7-time-and-clock-skew) | [0009](../adr/0009-garbage-collection-safety.md) | `IntegrationTests/ClockSkewTests` | 4 |
 | NFR-COMP-001..003 | [02 §2](../architecture/02-repository-format.md#2-object-classes) | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.ConformanceTests/FeatureNegotiationTests` | 0 |
@@ -164,7 +164,7 @@ Every requirement maps to at least one architecture section. Requirements arisin
 | NFR-PORT-001 | [11 §5](../architecture/11-solution-structure.md#5-technology) | [0010](../adr/0010-local-store-separation.md) | CI matrix | 0 |
 | NFR-PORT-002 | [11 §2](../architecture/11-solution-structure.md#2-dependency-rules) | — | `ArchitectureTests/*` | 0 |
 | NFR-PORT-003 | — | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.ConformanceTests/*` | 0 |
-| NFR-PORT-004 | [05 §2](../architecture/05-storage-providers.md#2-the-store-interface) | [0012](../adr/0012-storage-provider-contract.md), [0029](../adr/0029-pipeline-and-service-concurrency.md) | `ArchitectureTests/ApiShapeTests` ⚠ **not yet written** | 1 |
+| NFR-PORT-004 | [05 §2](../architecture/05-storage-providers.md#2-the-store-interface) | [0012](../adr/0012-storage-provider-contract.md), [0029](../adr/0029-pipeline-and-service-concurrency.md) | `ArchitectureTests/ApiShapeTests` | 1 |
 | NFR-SUP-001..004 | — | [0001](../adr/0001-licence-and-contribution-model.md) | Release pipeline checks | pre-1.0 |
 
 ---

@@ -32,8 +32,9 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Import.Abstractions/     neutral legacy model
 │   ├── FallbackPlan.Import.CrashPlan/        optional, separately licensed
 │   ├── FallbackPlan.Agent/                   the service host (ADR-0028)
-│   ├── FallbackPlan.Api/                     command contract + both transports,
+│   ├── FallbackPlan.Api/                     command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
+│   ├── FallbackPlan.Keystore/                platform unlock (ADR-0028 §9)
 │   ├── FallbackPlan.Web/
 │   ├── FallbackPlan.Desktop/
 │   ├── FallbackPlan.Cli/

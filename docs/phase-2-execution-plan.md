@@ -96,8 +96,8 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| E1 | `PerformanceTests/ThroughputBenchmarks` | NFR-PERF-007 | Throughput at several concurrency settings, with the pinned spool, inline upload, double hash and per-record cipher each attributed |
-| E2 | `phase-2-benchmarks.md` | — | The numbers the next two waves are aimed at are published before either begins |
+| E1 ✅ | `PerformanceTests/ThroughputBenchmarks` | NFR-PERF-007 | Throughput at several concurrency settings, with compression and segmentation profile attributed |
+| E2 ✅ | [`phase-2-benchmarks.md`](phase-2-benchmarks.md) | — | The numbers the next waves are aimed at are published before either begins |
 
 ### Wave F — Remove serial cost
 
@@ -105,13 +105,24 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 |---|------|----------|-----------|
 | F1 | The spool checkpoint is written once at create; the resume walk authenticates; `TryResume` gains a production caller | NFR-SEC-003 | An interrupted blob resumes byte-identically, proven by test rather than assumed |
 | F2 | Upload leaves the archive loop, with a drain barrier before the index delta | ADR-0029 §2 | Every blob's covering intent is durable before its own PUT, with several in flight |
-| F3 | The per-record cipher construction is removed | — | Measured, not assumed: the benchmark shows the change it made |
+| F3 ✅ | The per-record cipher construction is removed | — | Measured, not assumed: [the benchmark](phase-2-benchmarks.md) shows it is below the noise, which is itself the result |
+
+**F1 is not a smaller change than it looks, and is deliberately not rushed.** The
+checkpoint's watermark is what makes resume safe: records beyond it are discarded
+and their ordinals re-used, so a watermark that lags by *N* records would re-use
+ordinals that were already used with different bytes if the source changed
+between runs — nonce reuse under one `(blob_key, ordinal)`, the failure
+specification 05 §6.1 calls catastrophic. The safe form is a resume walk that
+**authenticates** each record and treats the last authenticating record as the
+resume point, which removes the need for a per-record watermark entirely. That
+touches the checkpoint format and `TryResume`, and it must land with a proof that
+resume is byte-identical — not before one.
 
 ### Wave G — Concurrency
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| G1 | `Concurrency` on `CapturePolicy`, plumbed from configuration | NFR-PERF-001, NFR-OPS-004 | Memory stays bounded by concurrency × segment size; the default is safe on a 4-core laptop |
+| G1 ✅ | `Concurrency` on `CapturePolicy`, validated | NFR-PERF-001, NFR-OPS-004 | A value outside 1..64 is a named defect; the default is 2, below a 4-core laptop's capacity; 1 stays valid and tested |
 | G2 | The staged pipeline with the ordering barrier at ordinal assignment | NFR-PERF-002, ADR-0029 §1 | Read, hash and compress run concurrently; ordinal assignment, encryption, append and digest stay strictly ordered |
 | G3 | Acceptance and interruption proof | NFR-PERF-002 | Restored bytes identical at concurrency 1, 2 and 4; *N* in-flight blobs each independently intent-covered |
 
@@ -136,13 +147,22 @@ restated here with the test that will prove each:
 | A running job reports states beyond `Scanning` | `Api.Tests` — the progress-event assertion |
 | A service with no front end installed backs up unattended | `Hosts.Tests` |
 | Client and service at incompatible versions refuse with both versions named | `Api.Tests` — the negotiation assertion |
-| Restored bytes identical regardless of concurrency setting | `Repository.Tests` — the NFR-PERF-002 acceptance test |
+| Restored bytes identical regardless of concurrency setting | **not yet met** — the setting exists and validates; the staged pipeline that would make it mean something does not |
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
 
-Two criteria this phase **does not** meet, and says so rather than leaving the
-roadmap to imply otherwise: an unpaired remote client being refused, and a
-restore commanded remotely writing on the service's machine. Both need the
-remote binding, which needs pairing.
+### What is not met, said plainly
+
+- **An unpaired remote client refused**, and **a restore commanded remotely
+  writing on the service's machine.** Both need the remote binding, which needs
+  pairing.
+- **Restored bytes identical regardless of concurrency.** `Concurrency` is a
+  validated setting and nothing consumes it yet, so every value runs the same
+  sequential pipeline. The benchmark reports the settings anyway, which makes the
+  spread across them visible as noise — a calibration any future concurrency
+  result has to beat.
+- **Restore, verify and check over the command surface.** The contract carries
+  them; this service build answers them with a stated
+  "this is a read path, run it directly" rather than a silence.
 
 ---
 

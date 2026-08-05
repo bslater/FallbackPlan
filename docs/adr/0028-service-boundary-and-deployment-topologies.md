@@ -1,6 +1,6 @@
 # ADR-0028 — The service boundary: deployment topologies, process ownership, transport, and unlock
 
-**Status:** Proposed
+**Status:** Accepted (amended)
 **Date:** 2026-08
 **Requirements:** FR-SVC-001..008, NFR-SEC-009, NFR-OPS-005, NFR-OPS-006, NFR-PORT-004
 **Related:** [architecture 00 §6.1](../architecture/00-overview.md#61-process-model), [architecture 04](../architecture/04-concurrency-and-publication.md), [architecture 10](../architecture/10-observability.md), [architecture 11](../architecture/11-solution-structure.md), [ADR-0010](0010-local-store-separation.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [threat model T-16/T-18](../threat-model.md)
@@ -386,8 +386,53 @@ purpose. Rejected as incompatible with the product.
 silently stops backups until a human returns. Rejected: silent cessation of
 backup is the failure users discover when they need a restore.
 
+## Amendment (2026-08): what "or an equivalent" means per platform
+
+§9 named "DPAPI (Windows), Keychain (macOS), kernel keyring or an equivalent
+(Linux)". Implementation forced the third to be decided rather than left open,
+so it is recorded here:
+
+| Platform | Mechanism | Note |
+|---|---|---|
+| Windows | DPAPI (`CryptProtectData`), ciphertext in the state directory | Called through `crypt32` directly; the `ProtectedData` package would be a new dependency identity for nothing |
+| macOS | A generic password item in the service account's keychain | Via the `SecKeychain*` functions — deprecated by Apple and working; the modern pair needs `CFDictionary` marshalling for no behavioural gain |
+| Linux | An owner-only file in an owner-only directory | See below |
+
+**The kernel keyring is not used as the durable store on Linux.** It does not
+survive a reboot without something to re-provision it, and this ADR already
+rejected "unlock once per boot, held in memory" because silent cessation of
+backup is the failure users discover when they need a restore. `libsecret` needs
+a D-Bus session a system service does not have. An owner-only file is weaker
+than DPAPI and Keychain in exactly one way — the material is readable by anyone
+who can read the file rather than only through an OS call — and identical in the
+way that decides the threat model: **an attacker who obtains the service account
+obtains the backups** either way, which is [T-19](../threat-model.md)'s accepted
+residual rather than a new one. A TPM-sealed variant is the natural upgrade and
+is not pretended at.
+
+Two implementation rules that are part of the decision, not polish: the file is
+created with its final mode rather than written and then tightened, because a
+world-readable window is all an attacker needs; and material whose permissions
+have drifted is **refused rather than read**, because permissions are the only
+thing protecting it and carrying on would keep working while the property had
+already been lost.
+
+## Implementation status (2026-08)
+
+Built: the writer-role exclusion (§4), the local binding (§5), the command
+contract and its versioning (§7), status aggregation (§8), and unlock (§9). The
+CLI takes the writer role deliberately and says so; a second writer is refused
+naming the holder.
+
+Not built: the remote binding (§5) — it validates and binds nothing, because
+pairing reuses architecture 09 §3's machinery and that does not exist yet — and
+therefore topologies 3 and 4 of §1, and the restore/verify/check commands over
+the surface, which this service build answers with a stated refusal rather than
+a silence.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written after the multi-process hazard was found while designing the service split |
+| 2026-08 | Accepted (amended) | Implemented for the local binding; the Linux keystore question decided in the amendment above |

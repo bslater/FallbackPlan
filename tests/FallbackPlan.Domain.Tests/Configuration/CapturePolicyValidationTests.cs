@@ -115,4 +115,42 @@ public sealed class CapturePolicyValidationTests
         Assert.True(result.Has("compression_level_out_of_range"));
         Assert.True(result.Has("compression_threshold_out_of_range"));
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(CapturePolicy.MaximumConcurrency + 1)]
+    public void A_concurrency_outside_the_bound_is_a_named_defect(int concurrency)
+    {
+        // Memory is bounded by concurrency × segment size (NFR-PERF-001), so an
+        // unbounded setting does not make the pipeline faster — it makes the
+        // bound unstatable.
+        var result = (CapturePolicy.Default with { Concurrency = concurrency }).Validate();
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Defects, defect => defect.Name == "concurrency_out_of_range");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(CapturePolicy.DefaultConcurrency)]
+    [InlineData(CapturePolicy.MaximumConcurrency)]
+    public void Concurrency_within_the_bound_is_accepted(int concurrency)
+    {
+        // 1 in particular must stay valid: it is the configuration in which the
+        // ordering barrier is trivially satisfied, and the control case for
+        // NFR-PERF-002's acceptance test.
+        Assert.True((CapturePolicy.Default with { Concurrency = concurrency }).Validate().IsValid);
+    }
+
+    [Fact]
+    public void The_default_is_below_the_machines_capacity_on_purpose()
+    {
+        // NFR-OPS-004: defaults safe on a 4-core laptop. A backup that makes the
+        // machine unpleasant to use gets switched off, and a switched-off backup
+        // protects nothing.
+        Assert.Equal(CapturePolicy.DefaultConcurrency, CapturePolicy.Default.Concurrency);
+        Assert.True(CapturePolicy.DefaultConcurrency < 4);
+    }
+
 }
