@@ -178,6 +178,30 @@ The candidate format fix is an optional parallel array on the delta (`covered_bl
 
 ---
 
+## Q18 — Streaming restored content to a remote client
+
+**Owner:** product · **Blocks:** Phase 2 console work
+
+[ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §6 withholds file content from remote clients by default: a restore commanded from a console is written on the machine running the service. Whether to offer the opt-in — and what approval it should demand — is undecided. It is the difference between "administer a fleet" and "read a fleet", and the answer probably differs between a household and a managed estate.
+
+---
+
+## Q19 — Console identity and multi-operator access
+
+**Owner:** product · **Blocks:** Phase 2 console work
+
+A console pairs with each service it manages, and pairing is revocable at the service. What is undecided is what happens above that: whether several operators may share one console, whether a service can distinguish them, and whether an action taken through a console is attributable to a person rather than to the console's device identity. Shares an administrative surface with [Q9](#q9--repository-server-scope) and [Q13](#q13--device-level-signature-attribution), and should be settled with them rather than separately.
+
+---
+
+## Q20 — Where the concurrency default sits, and whether pinning survives measurement
+
+**Owner:** maintainer · **Blocks:** the throughput work in [ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6
+
+Two numbers cannot be chosen from the armchair. The first is the default concurrency setting, which must satisfy NFR-OPS-004 on a 4-core laptop while being worth having on a workstation. The second is whether per-record spool pinning — an `fsync` plus a checkpoint rewrite per record, currently unconditional for data blobs — earns its cost once measured; it buys resumability of an interrupted blob, and `BlobWriter.TryResume` has no production caller today, so the benefit is currently unrealised while the cost is paid on every record.
+
+---
+
 ## Q17 — Lease, tombstone, and audit-period object formats
 
 **Owner:** engineering · **Blocks:** garbage collection implementation (post-phase-0) · **Gates:** Phase 4 retention/GC — Phase 1's retention selection without physical pruning is unaffected · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md)

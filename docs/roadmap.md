@@ -40,13 +40,15 @@ Filesystem capture, immutable tree and snapshot manifests, reliable local restor
 
 ---
 
-## Phase 2 — Peer-to-peer backup
+## Phase 2 — Peer-to-peer backup, and the service boundary
 
-Restore CrashPlan-style computer-to-computer backup.
+Restore CrashPlan-style computer-to-computer backup, and make the engine a service that front ends talk to ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)).
 
-**Features:** device identity and pairing · peer store · direct TLS/QUIC transfer · LAN discovery · resumable replication · destination quotas and retention floors · per-destination replication state · keyed random-range verification challenges · dedup trust domains · local web UI · service installation · bandwidth schedules · protocol version negotiation.
+**Features:** device identity and pairing · peer store · direct TLS/QUIC transfer · LAN discovery · resumable replication · destination quotas and retention floors · per-destination replication state · keyed random-range verification challenges · dedup trust domains · **command surface and both transport bindings** · **CLI becomes a client, with direct mode** · **writer-role exclusion on the state directory** · **keystore unlock** · **per-job progress events** · local web UI · **multi-instance console** · service installation · bandwidth schedules · protocol version negotiation.
 
-**Exit criteria:** the source can be destroyed and restored using only destination plus recovery kit · no relay required on a LAN · no destination plaintext visibility · multi-day disconnection and resumption tested · quota exhaustion handled distinctly from disk-full · verify-on-reuse prevents a hostile writer corrupting another device's backup.
+**Exit criteria (service boundary):** a second process cannot take the writer role — it refuses with a stated reason naming the holder · a default install listens on no port · an unpaired remote client is refused, and a substituted identity is refused rather than prompted · a restore commanded remotely writes on the service's machine and no plaintext crosses the remote binding · a running job reports states beyond `Scanning` · a service with no front end installed backs up unattended, and an unreachable console never stops it · client and service at incompatible versions refuse with both versions named.
+
+**Exit criteria (peer-to-peer):** the source can be destroyed and restored using only destination plus recovery kit · no relay required on a LAN · no destination plaintext visibility · multi-day disconnection and resumption tested · quota exhaustion handled distinctly from disk-full · verify-on-reuse prevents a hostile writer corrupting another device's backup.
 
 ---
 
@@ -131,7 +133,7 @@ Streaming scanner · include/exclude rules · snapshot pipeline · CLI · restor
 
 ### P2 — Peer destination
 
-Device identity and pinning · pairing · transfer protocol · resumable blob transfer · LAN discovery · quotas, permissions, retention floors · durability receipts and verification challenges · dedup trust domains · web dashboard · network fault and long-disconnection tests · relay design spike.
+Device identity and pinning · pairing · transfer protocol · resumable blob transfer · LAN discovery · quotas, permissions, retention floors · durability receipts and verification challenges · dedup trust domains · **service boundary: command surface, transports, writer-role exclusion, keystore unlock, progress events** · web dashboard · **multi-instance console** · network fault and long-disconnection tests · relay design spike.
 
 ### P3 — Cloud destinations
 

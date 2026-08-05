@@ -129,6 +129,19 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-QUOTA-001 **[new]** | Quota exhaustion, destination disk-full, and transient errors shall be reported as distinct conditions. | Each produces a distinct status and user action. |
 | FR-QUOTA-002 **[new]** | On exhaustion, transfer shall stop at a blob boundary leaving no partial object visible, and previously durable snapshots shall be unaffected. | Exhaustion mid-set leaves the repository consistent. |
 
+## Service and clients
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-SVC-001 **[new]** | The engine shall run as a service, and every user interface shall be a client of it over one command contract. | The CLI, a desktop shell, and a web front end perform the same operation through the same contract; no front end opens the repository except the CLI's direct mode (FR-SVC-002). |
+| FR-SVC-002 **[new]** | Exactly one process shall hold a device's writer role at a time, enforced by an exclusive lock on the state directory. A process that cannot acquire it and finds no service to call shall refuse with a stated reason naming the holder. | Two concurrent writers cannot be created: the second fails with a message, never proceeds. Killing the holder releases the lock without manual cleanup. |
+| FR-SVC-003 **[new]** | The local binding shall always be present and authenticated by the operating system. The remote binding shall be absent until explicitly enabled and shall name the interface it binds. | A default install listens on no port. With the remote binding enabled, an unpaired client is refused. |
+| FR-SVC-004 **[new]** | Remote clients shall be authenticated by paired device identity pinned on approval, revocable at the service. A changed identity shall be a hard failure requiring re-approval. | Pairing requires approval on both sides; a substituted identity is refused rather than prompted; revocation at the service ends access immediately. |
+| FR-SVC-005 **[new]** | A remote client shall receive control, status, and progress, and shall not receive file content unless that capability is separately and explicitly enabled. | A restore commanded remotely writes on the service's machine; no plaintext crosses the remote binding by default. |
+| FR-SVC-006 **[new]** | The service shall emit per-job progress carrying job identity, the [10 §3](../architecture/10-observability.md#3-job-state-machine) state, and counts of files and bytes. | A running job reports states beyond `Scanning`; a client can distinguish a working job from a stalled one without reading engine files. |
+| FR-SVC-007 **[new]** | Client and service at incompatible contract versions shall refuse to proceed with a message naming both versions. | Neither a blank UI nor a silent partial success; a console managing several services degrades per service rather than refusing to start. |
+| FR-SVC-008 **[new]** | All four installation topologies shall be supported by one service implementation: all-in-one, service-only, a console managing several services, and a client alone. | Each topology is installable and functional; a service with no front end installed backs up unattended, and an unreachable console never stops it. |
+
 ## Governance
 
 | ID | Requirement | Acceptance |

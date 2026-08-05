@@ -96,6 +96,27 @@ restic's write ordering — durable data first, indexes second, snapshot referen
 
 **Improve:** never make a single local SQLite database authoritative · allow complete reconstruction from repository objects · reduce volume-chain fragility · isolate provider plugins from repository semantics · build state-machine and interruption testing in from the start · avoid exposing an unbounded list of backend options in the primary experience.
 
+### 5.6 What the prior art teaches about the service boundary
+
+The sections above take format lessons — chunking, packs, write ordering. The
+**process** shape deserves the same treatment, because CrashPlan and Duplicati
+both arrived at an engine-as-service with thin front ends, and both show where
+that shape goes wrong.
+
+**Adopt:** the engine is a service and every UI is a client of it · the service
+keeps working with no UI installed, running, or reachable · one engine
+implementation behind CLI and GUI alike, so automation and the interface cannot
+diverge in behaviour.
+
+**Improve:** both authenticate a local UI to a local engine over a network
+transport — CrashPlan with a token file, Duplicati with a password on
+`localhost:8200` — and both are well known for the resulting failure, a UI
+insisting it cannot reach an engine that is running perfectly well. A local
+boundary is not a network boundary, and the operating system already knows who
+is on the other end of a socket. Version skew between service and client is the
+second recurring complaint, so it is refused with a message naming both versions
+rather than met with a blank window ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §7).
+
 ## 6. Architecture at a glance
 
 ```text
@@ -103,6 +124,10 @@ restic's write ordering — durable data first, indexes second, snapshot referen
 |                        FallbackPlan UI                        |
 |              Desktop shell / Local Web / CLI                  |
 +-----------------------------+---------------------------------+
+                              |
+                    THE SERVICE BOUNDARY  (ADR-0028)
+        commands, results, progress events — never key material,
+        and by default never file content across a remote binding
                               |
 +-----------------------------v---------------------------------+
 |                    Application Services                       |
@@ -130,18 +155,47 @@ restic's write ordering — durable data first, indexes second, snapshot referen
 
 ### 6.1 Process model
 
+The engine runs as a service; every user interface is a client of it. This is
+the shape CrashPlan and Duplicati use, and the boundary is specified in
+[ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md).
+
 | Component | Role |
 |-----------|------|
-| **Agent** | Long-running service: scans, snapshot creation, transfer, restore, verification, local API hosting |
-| **Desktop** | Optional desktop shell connecting to the local Agent |
-| **Web** | Local browser UI hosted by the Agent, with explicit remote-management controls |
-| **CLI** | Automation and recovery interface |
-| **Recovery** | Standalone emergency restore tool — see [`08-restore-and-recovery.md` §5](08-restore-and-recovery.md#5-emergency-recovery) |
+| **Agent** | The service. Scans, snapshots, transfers, restores, verifies, and hosts the command surface. Sole holder of the writer role for its machine while running |
+| **Desktop** | Optional desktop shell — a client |
+| **Web** | Browser UI — a client. Hosted by a service for one machine, or deployed standalone as a console managing several |
+| **CLI** | Automation interface — a client, with an explicit direct mode when no service is running |
+| **Recovery** | Standalone emergency restore tool. Speaks to no service in any topology — see [`08-restore-and-recovery.md` §5](08-restore-and-recovery.md#5-emergency-recovery) |
 | **Relay** | Separately deployable stateless encrypted-transport relay |
 | **Discovery** | Optional separately deployable discovery service |
 | **Repository Server** | Optional gateway exposing repository operations without granting raw store credentials |
 
-The Agent must remain fully functional without Desktop, Relay, Discovery, or any project-operated service.
+The Agent must remain fully functional without Desktop, Web, a console, Relay,
+Discovery, or any project-operated service. A machine whose console is
+unreachable, or was uninstalled, keeps backing itself up.
+
+### 6.2 Installation topologies
+
+One service implementation and one command contract; the topologies differ only
+in what is installed and whether the remote binding is enabled.
+
+| Topology | Service | Front end | Transport |
+|----------|---------|-----------|-----------|
+| **All-in-one** | local | local app or web | local binding only |
+| **Service only** | local | none | local binding only |
+| **Multi-instance console** | one per managed machine | one web console, elsewhere | remote binding on each managed service |
+| **Client only** | none locally | CLI or app | remote binding to a named service |
+
+The local binding — a Unix domain socket or named pipe, authenticated by the
+operating system — is always present. The **remote binding is off until
+explicitly enabled**, and remote clients are paired with pinned device identity
+rather than given a password, reusing the mechanism [`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)
+already defines for peers.
+
+A console administers machines it cannot read: control and status cross a remote
+binding, file content does not unless separately and explicitly enabled. That
+restraint is what makes fleet administration compatible with the promise in
+principle 1 — the same reason a destination cannot read what it stores.
 
 ## 7. The architectural decision
 

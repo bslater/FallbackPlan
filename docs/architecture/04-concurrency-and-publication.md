@@ -196,6 +196,48 @@ Maintenance operations (compaction, garbage collection, healing) take advisory l
 
 No routine operation requires a global exclusive lock. That was an explicit improvement target over restic ([`00-overview.md` §5.3](00-overview.md#53-restic)) and the mechanisms above are what deliver it.
 
+## 9. Two different concurrencies, and why conflating them is dangerous
+
+Everything above concerns **repository-level concurrency**: many *devices*
+writing one repository, each with its own writer identity, coordinating through
+immutable objects, write intents and generation precedence rather than through
+locks. That is designed in, deliberately lock-free, and is the normal case.
+
+**Local process concurrency is a different question with a different answer.**
+A writer in §2 is a *device* — a keypair, an authorisation grant, a writer ID and
+a journal sequence. Nothing in that definition says how many *processes* on one
+machine may hold it, and the answer is exactly one:
+
+> **A device's writer role is held by one process at a time.** While a service
+> is running it is that process; any other local process is a client of it
+> ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md)).
+
+The rule is not fastidiousness. Two processes sharing a state directory share a
+writer identity, and therefore share the single monotonic gapless sequence
+space §2 requires. Duplicate allocations from it collide on blob identity,
+defeat the store's idempotent-retry handling so that a write intent is *reported
+durable when it was never written*, and let one process publish void deltas for
+sequence numbers another is still using — durable index damage under a valid
+signature. And because §2 classifies a duplicate or regressing sequence as
+identity cloning, the first symptom is [T-18](../threat-model.md)'s security
+alert: an alarm built for a stolen device key, raised by a user running two
+commands at once.
+
+So the two rules coexist without contradiction:
+
+| | Repository level | Local process level |
+|---|---|---|
+| Unit | Device (writer identity) | Process |
+| Concurrency | Many, uncoordinated, normal | One holds the writer role |
+| Mechanism | Immutable objects, intents, precedence | Exclusive lock on the state directory |
+| Lock scope | None — §8's improvement target | The state directory only; never the repository |
+
+The exclusion is on the **state directory**, because that is what carries the
+writer identity. The repository itself stays lock-free, so §8's guarantee — no
+routine operation requires a global exclusive lock — is untouched: a second
+device may still back up to the same repository at the same moment, from
+anywhere, with no coordination at all.
+
 ---
 
 **Previous:** [03 — Cryptography](03-crypto.md) · **Next:** [05 — Storage providers](05-storage-providers.md)

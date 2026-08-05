@@ -84,6 +84,44 @@ Every transition and checkpoint is durable and idempotent. `Segmenting` replaces
 
 `FailedRecoverable` and `FailedPermanent` are separated because the user action differs: the first resolves itself or resumes, the second needs intervention and should say what kind.
 
+### 3.1 How a client learns any of this
+
+Status and progress are computed inside the service and reach a UI over the
+command surface ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md)),
+not by a client reading the engine's files. A front end that parsed `jobs.json`
+would be a second implementation of §1's derivation rules, free to drift from
+the first — and the never-merge rules of §1.2 only hold if one place decides
+them.
+
+Two channels, deliberately distinct:
+
+| | **Status** | **Progress events** |
+|---|---|---|
+| Answers | "am I protected?" (§1) | "what is happening right now?" |
+| Shape | Queried, derived on demand | Streamed while a job runs |
+| Carries | The §1.1 vocabulary, per set and per destination | Job identity, §3 state, counts of files and bytes |
+| Survives a restart | Yes — derived from durable state | No — a job restarted is a new stream |
+
+**Progress events are not telemetry.** They may carry job identity because they
+travel to an authenticated local caller or a paired remote client and are shown
+to the person whose data it is; the OpenTelemetry instruments keep their closed
+attribute allowlist untouched ([ADR-0027](../adr/0027-services-scheduling-status-telemetry.md) §3,
+NFR-PRIV-002). Conflating the two is how a path or a filename ends up in a
+metrics backend, so they stay separate channels with separate rules.
+
+The §3 states are what progress reports. A pipeline that announces `Scanning`
+and then says nothing for ten hours is the failure this state machine was
+specified to prevent, so a state that is never emitted is a state that is not
+implemented.
+
+**A console watching several machines** ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §8)
+aggregates only by derivation: a machine's summary is computed from its per-set,
+per-destination detail, the detail stays reachable, and no roll-up invents a
+state the §1.1 vocabulary does not have. A service the console cannot currently
+reach is shown as **stale, with the age of the last contact** — never healthy,
+never failed, because neither is known. "Unknown" displayed honestly is worth
+more than a green tick that means "I have not heard bad news".
+
 ## 4. Diagnostics
 
 A diagnostic bundle omits, by default: credentials · keys and recovery material · plaintext paths · repository identifiers that could correlate a user across stores.

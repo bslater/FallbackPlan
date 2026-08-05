@@ -9,9 +9,16 @@ This document is versioned alongside the format and must be reviewed before the 
 ## Trust boundaries
 
 ```text
-┌─────────────────────────── Source device (TRUSTED) ────────────────────────────┐
-│  plaintext files · catalogue · device key · repository keys · unwrapped KEK    │
-└──────────────────────────────────┬─────────────────────────────────────────────┘
+┌─────────────────────────── Source device ─────────────────────────────────────┐
+│  ┌───────────── Service account (TRUSTED) ─────────────────────────────────┐  │
+│  │  device key · repository keys · unwrapped KEK · catalogue · spool       │  │
+│  └──────────────────────────────┬──────────────────────────────────────────┘  │
+│   command surface (ADR-0028) →   │  commands · status · progress               │
+│  ┌──────────────────────────────v──────────────────────────────────────────┐  │
+│  │  UI user and local clients (LESS TRUSTED) — never hold key material     │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+│  plaintext files sit outside both: readable by whoever can already read them  │
+└──────────────────────────────────┬────────────────────────────────────────────┘
                                    │  encrypted + authenticated objects only
         ┌──────────────────────────┼──────────────────────────┐
         v                          v                          v
@@ -97,8 +104,8 @@ A crafted CrashPlan archive attacks the importer.
 **Mitigation:** importer isolated in an optional package; read-only source access; bounded allocations; fuzz testing of every parser; path traversal containment. FR-CP-001, FR-CP-006.
 
 ### T-16 Local privilege boundaries
-The UI user and the service run at different privilege levels.
-**Mitigation:** the local API authenticates callers; remote management requires explicit enablement; the service does not expose raw filesystem access to UI clients.
+The UI user and the service run at different privilege levels, and the service holds key material the UI user must never obtain.
+**Mitigation:** the local binding is a Unix domain socket or named pipe in a directory only the service account may write, so **the operating system authenticates callers** — filesystem permissions decide who may connect and the service reads peer credentials to identify them. No token file and no local port, both of which would put a copyable credential where a local process could take it ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §5). Key material never crosses the boundary in either direction; clients receive commands, results and progress only. The service exposes no raw filesystem access to clients.
 
 ### T-17 Secrets in logs and diagnostics
 **Mitigation:** redaction by declared **type**, not string pattern — a new secret-bearing field is redacted by construction. Diagnostic bundles exclude credentials, keys, plaintext paths, and correlatable identifiers by default. NFR-SEC-006, NFR-PRIV-003.
@@ -106,6 +113,17 @@ The UI user and the service run at different privilege levels.
 ### T-18 Writer identity cloning
 A copied device identity publishes under an existing writer ID.
 **Mitigation:** per-writer journal sequences are gapless and monotonic; conflicting or regressing sequence use raises a security alert rather than a log line. [`04-concurrency-and-publication.md` §2](architecture/04-concurrency-and-publication.md#2-writer-identity).
+**Note:** the same alarm fires when two local processes share a state directory, which is why exclusive ownership by the service ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §2) matters to this threat: without it, an ordinary user running two commands at once is indistinguishable from a stolen device key.
+
+### T-19 Unlocked key material at rest in the service account
+The service unlocks itself from the platform keystore so scheduled backups run unattended, which means key material is available to whoever controls the service account — without knowing the passphrase.
+**Mitigation:** partial, and the residual risk is accepted deliberately. Key material is released by the OS keystore (DPAPI, Keychain, kernel keyring) scoped to the service account, so obtaining it requires that account rather than a file read; it lives in the service process only and never crosses the command surface. Operations that mint new access — key export above all — re-derive the KEK from a **user-supplied passphrase per invocation** and never from the keystore, so holding the running service is not sufficient to produce a recovery kit.
+**Residual:** an attacker with the service account can read the backups. The alternative — prompting a human for every scheduled run — is not a backup product, and pretending otherwise would be worse than saying so. Recorded here rather than left implicit in ADR-0028.
+
+### T-20 Hostile client on the command surface
+A local process, or a remote host once the remote binding is enabled, attempts to command the service: start or cancel jobs, alter backup sets, read status, or extract content.
+**Mitigation:** locally, T-16's OS authentication. Remotely, the binding is **off until explicitly enabled** and names the interface it binds; clients are **paired with pinned device identity** rather than given a password, both sides approve, and a changed identity is a hard failure requiring re-approval, not a prompt that can be clicked through ([`architecture/09-replication-and-peers.md` §3](architecture/09-replication-and-peers.md#3-pairing)). Pairing is revocable at the service — the party at risk. A remote client may command and observe but **does not receive file content**: a restore it commands is written on the machine running the service, and streaming content to a remote client is a separately enabled capability. Version skew is refused with both versions named rather than met with a silent failure.
+**Why content is withheld by default:** a management console that could pull plaintext from every machine it administers would concentrate what the repository design refuses to concede to a destination, a relay, or a peer. Withholding it is what lets an operator administer machines they are not entitled to read.
 
 ## Threats not solvable by backup software
 
@@ -120,10 +138,10 @@ Stated plainly so no other document implies otherwise:
 
 ## Controls summary
 
-Mutual device authentication · least-privilege repository grants · separate read/append/retention/administrative permissions · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state · dedup trust domains · keyed verification challenges · bounded parsers · type-based secret redaction · pinned dependencies and vulnerability scanning · signed reproducible releases · rollback-protected auto-update · repository-server rate limits and quotas · signed audit trail for destructive operations · quarantine-by-default restore.
+OS-authenticated local command surface · paired device identity for remote clients, off by default · key material confined to the service account and never crossing the command surface · content withheld from remote clients unless separately enabled · Mutual device authentication · least-privilege repository grants · separate read/append/retention/administrative permissions · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state · dedup trust domains · keyed verification challenges · bounded parsers · type-based secret redaction · pinned dependencies and vulnerability scanning · signed reproducible releases · rollback-protected auto-update · repository-server rate limits and quotas · signed audit trail for destructive operations · quarantine-by-default restore.
 
 ## Review obligations
 
 - Reviewed before the first beta and before format v1 freeze.
-- Re-reviewed whenever a trust boundary changes — new provider class, new sharing model, new relay capability.
+- Re-reviewed whenever a trust boundary changes — new provider class, new sharing model, new relay capability, **or a new client-facing surface** (T-16, T-19, T-20 arrived exactly this way).
 - External security review is a release gate ([`roadmap.md`](roadmap.md#phase-6--consumer-ready-release)).

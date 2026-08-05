@@ -113,6 +113,8 @@ Shapes pinned by [ADR-0027](adr/0027-services-scheduling-status-telemetry.md) be
 | P2-O | Engine instrumentation: `FallbackPlan.Engine` meter + activity source, the ADR-0027 §3 instrument table, wired through archive/publication/catalogue/store paths | ADR-0027 §3; NFR-OPS-001 | An automated listener asserts every emitted attribute against the allowlist — no path, name, or identifier can ride telemetry (NFR-PRIV-002) |
 | P2-H | `FallbackPlan.Agent` host: config-driven loop over backup sets, one run per set, catch-up on start, job-state journal, status output; CLI `status` command reading the same derivation | ADR-0027 §1–§4 | An in-process agent pass runs a due set end to end and skips a not-due set; status output distinguishes `captured` from `protected` |
 
+> **Superseded in part.** P2-H's CLI-and-Agent-as-peer-hosts arrangement is replaced by [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md): the service holds the writer role and the CLI becomes a client. The delivered behaviour stands; the process model does not.
+
 ## Standing constraints
 
 Phase-0 rules carry forward unchanged: implement against the specification; every spec gap is a flagged decision (ADR/erratum/open question), never a silent choice; the spool checkpoint stores sealed bytes; every blob is intent-covered before upload; warnings are errors; vectors and fixtures regenerate byte-identically; *segment* and *blob*, never *chunk*. New for Phase 1: **capture is lossless** (degradation happens at restore, recorded in the receipt, never at backup — arch 06 §3), and **excluded ≠ failed** (policy manifest vs error manifest — 06 §8).

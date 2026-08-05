@@ -176,6 +176,25 @@ now so the UI never has to re-learn the words.
 
 ## Consequences
 
+### Amendment (2026-08): the peer-host model is superseded
+
+This ADR made the CLI and the Agent **peer hosts** over a shared `Application`
+library, each opening the repository and the state directory. That was right
+for a world where one process ran at a time and exited.
+
+It does not survive a service that runs continuously. Two processes sharing a
+state directory share a writer identity, and therefore the single monotonic
+gapless sequence space architecture 04 §2 requires — with consequences up to
+and including a write intent reported durable when it was never written, and
+void deltas published for sequence numbers another process is still using.
+
+[ADR-0028](0028-service-boundary-and-deployment-topologies.md) supersedes the
+peer-host arrangement: the service holds the writer role exclusively and the
+CLI becomes a client, keeping a direct mode for when no service is running.
+**Everything else in this ADR stands** — the schedule semantics, the job-state
+journal, the status model and the instrumentation are unchanged, and the
+Application layer they live in is exactly what the service now hosts.
+
 - The Agent stays a thin host; every service behaviour (schedule
   arithmetic, job-state transitions, status derivation) is a pure,
   tested function in Application.

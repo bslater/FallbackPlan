@@ -31,8 +31,9 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Storage.{Local,Peer,AzureBlob,S3}/
 │   ├── FallbackPlan.Import.Abstractions/     neutral legacy model
 │   ├── FallbackPlan.Import.CrashPlan/        optional, separately licensed
-│   ├── FallbackPlan.Agent/                   long-running service
-│   ├── FallbackPlan.Api/
+│   ├── FallbackPlan.Agent/                   the service host (ADR-0028)
+│   ├── FallbackPlan.Api/                     command contract + both transports,
+│   │                                         hosted by Agent, consumed by clients
 │   ├── FallbackPlan.Web/
 │   ├── FallbackPlan.Desktop/
 │   ├── FallbackPlan.Cli/
@@ -83,6 +84,9 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
 - **Third-party cryptography lives only in `Repository.Crypto`.** The two primitives .NET does not supply — Argon2id and XChaCha20-Poly1305 — do not inherit the platform's audit posture, so the exposure is confined to one project rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md)).
+- **User interfaces depend on the client contract, never on the engine.** `Desktop` and `Web` reference `Api`'s client surface and nothing below it — not `Application`, not `Repository`, not a store provider. A UI that could open the repository directly would be a second writer, which [`04-concurrency-and-publication.md` §9](04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous) forbids, and it would let a front end derive status by its own rules rather than the service's.
+- **`Cli` is a client too**, with one exception: its direct mode ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §3) takes the writer role when no service is running, so it alone among the front ends may reference `Application`. That exception is why the CLI is the one place the rule must be checked rather than assumed.
+- **`Recovery` references neither `Api` nor `Application`.** It speaks to no service in any topology (NFR-OPS-005).
 
 `FallbackPlan.ArchitectureTests` enforces these as tests. A rule that is only written down is a rule that erodes.
 
@@ -178,8 +182,10 @@ The neutral model exists so that the same import pipeline serves restic, Kopia, 
 | Concern | Choice | Note |
 |---------|--------|------|
 | Runtime | .NET 10 LTS | |
-| Local API, repository server | ASP.NET Core | |
-| Typed control operations | gRPC | |
+| Command surface, both bindings | Local: Unix domain socket / named pipe. Remote: TLS over TCP, off by default | [ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §5 |
+| Typed control operations | gRPC | Transport-independent contract; the binding is chosen per §5, not per message |
+| Remote client authentication | Paired device identity, pinned on approval | Reuses [09 §3](09-replication-and-peers.md#3-pairing); no password, no token file |
+| Repository server | ASP.NET Core | A separate remote-destination gateway, not the client surface |
 | Peer transfer | QUIC/HTTP-3 under evaluation, TLS fallback | |
 | Catalogue | SQLite behind an abstraction | Disposable; engine replaceable — [ADR-0010](../adr/0010-local-store-separation.md) |
 | Canonical encoding | Canonical CBOR, pending benchmark | [ADR-0003](../adr/0003-canonical-metadata-encoding.md) |

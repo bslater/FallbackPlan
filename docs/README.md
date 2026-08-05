@@ -45,7 +45,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0027 are **Accepted** on the evidence recorded in them; 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0027 are **Accepted** on the evidence recorded in them; 0028–0029 are **Proposed**; 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
 
 | ADR | Decision |
 |-----|----------|
@@ -76,6 +76,8 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0025](adr/0025-compaction-reseals-records.md) | Compaction re-seals records; the ordinal stays in the AAD |
 | [0026](adr/0026-phase-1-capture-shapes.md) | Phase-1 capture shapes: hardlinks, diagnostics, special files, capabilities |
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Push-2 service shapes: scheduling, job-state store, status model, instrumentation |
+| [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary: deployment topologies, process ownership, transport, unlock |
+| [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency: the ordering barrier, the bound, the order of work |
 
 Template: [0000](adr/0000-template.md)
 
