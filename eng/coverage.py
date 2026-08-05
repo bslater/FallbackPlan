@@ -9,15 +9,15 @@ reads.
 
 Two things this handles that a naive aggregation gets wrong:
 
-  1. **Paths are normalised before lines are keyed.** The same source file is
-     reported as `src/FallbackPlan.Application/Schedule.cs` by one project's
-     report, `FallbackPlan.Application/Schedule.cs` by another, and an
-     absolute `/home/…/src/FallbackPlan.Application/Schedule.cs` by a third.
-     Keyed verbatim, one file becomes three, a line covered under one
-     spelling stays "uncovered" under the others, and modules appear to LOSE
-     coverage when tests are added. Both times this bit, the drop looked like
-     a real regression; coverage cannot fall when only tests are added, which
-     is the check worth applying to any such number.
+  1. **Filenames are resolved against the report's own `<source>` root.**
+     Coverlet chooses a different root per project — "/", the repository's
+     `src/`, or the project directory itself — so one file arrives as
+     `home/…/src/X/Y.cs`, `X/Y.cs` and `Y.cs` in three reports. Keyed
+     verbatim, one file becomes three, a line covered under one spelling
+     stays "uncovered" under the others, and every module is understated.
+     Stripping prefixes off the filename cannot fix this: the information
+     needed lives in the `<source>` element, and ignoring it is what made
+     the first two attempts here wrong.
 
   2. **A line is covered if any report covers it.** Each test project emits a
      report for every assembly it loaded, so a module appears many times with
@@ -53,15 +53,22 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # their own coverage; a test asserting nothing would score 100%.
 EXCLUDED_SUFFIXES = ("Tests", "TestSupport")
 
-# A file is identified by its path from the repository root onwards. Reports
-# spell the same file at least three ways — "src/X/Y.cs", "X/Y.cs", and an
-# absolute "/home/…/src/X/Y.cs" — depending on which project emitted them, so
-# the anchor is the LAST "src/" or "tests/" segment, wherever it appears.
+# Cobertura filenames are relative to the report's own <source> root, and
+# coverlet picks a different root per project — "/", the repository's src/,
+# or the individual project directory. The same file therefore arrives as
+# "home/…/src/X/Y.cs", "X/Y.cs" and "Y.cs" in three reports. Resolving the
+# filename against its declared source root first is what makes them one
+# key; stripping prefixes off the filename alone cannot, because the
+# information needed is in the element that was ignored.
 SOURCE_ROOT = re.compile(r"^.*?(?:^|/)(?:src|tests)/")
 
 
-def normalise(filename: str) -> str:
-    return SOURCE_ROOT.sub("", filename.replace("\\", "/"))
+def normalise(source: str, filename: str) -> str:
+    combined = filename.replace("\\", "/")
+    if source:
+        combined = source.replace("\\", "/").rstrip("/") + "/" + combined.lstrip("/")
+
+    return SOURCE_ROOT.sub("", combined)
 
 
 def collect(results_directory: pathlib.Path) -> dict[str, tuple[set, set]]:
@@ -71,13 +78,16 @@ def collect(results_directory: pathlib.Path) -> dict[str, tuple[set, set]]:
         raise SystemExit(f"no Cobertura reports under {results_directory}")
 
     for report in reports:
-        for package in ET.parse(report).getroot().iter("package"):
+        root = ET.parse(report).getroot()
+        sources = [source.text or "" for source in root.iter("source")]
+        source = sources[0] if len(sources) == 1 else ""
+        for package in root.iter("package"):
             name = package.get("name") or ""
             if name.endswith(EXCLUDED_SUFFIXES):
                 continue
             covered, uncovered = modules[name]
             for klass in package.iter("class"):
-                filename = normalise(klass.get("filename") or "")
+                filename = normalise(source, klass.get("filename") or "")
                 for line in klass.iter("line"):
                     key = (int(line.get("number")), filename)
                     (covered if int(line.get("hits")) > 0 else uncovered).add(key)
