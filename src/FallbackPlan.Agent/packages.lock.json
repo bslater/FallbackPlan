@@ -5,6 +5,7 @@
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Globalization.Recurrence": "[0.1.2-local.10226cf, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
@@ -115,6 +116,15 @@
         "requested": "[0.1.1, )",
         "resolved": "0.1.1",
         "contentHash": "SB2EBZDnyr0noyWMYdNdc43ix1jdrX8eupe9GJrRniv/gd0EIL6/SrNDTjSoXVBQfOn/U4LslQ6bM/qIeWNwaw=="
+      },
+      "Bodu.Globalization.Recurrence": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.2-local.10226cf, )",
+        "resolved": "0.1.2-local.10226cf",
+        "contentHash": "JMzP+n51+cvYr4t3/KeTr/1C3hbFlvqK1Xq7Y33J8gUYFAEFPDT83pW/LTiWzOtiTn+woRXZfAaB673je7Z3cg==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",

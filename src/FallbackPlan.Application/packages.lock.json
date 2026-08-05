@@ -2,6 +2,15 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
+      "Bodu.Globalization.Recurrence": {
+        "type": "Direct",
+        "requested": "[0.1.2-local.10226cf, )",
+        "resolved": "0.1.2-local.10226cf",
+        "contentHash": "JMzP+n51+cvYr4t3/KeTr/1C3hbFlvqK1Xq7Y33J8gUYFAEFPDT83pW/LTiWzOtiTn+woRXZfAaB673je7Z3cg==",
+        "dependencies": {
+          "Bodu.Core": "0.1.1"
+        }
+      },
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {

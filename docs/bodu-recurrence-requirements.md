@@ -336,13 +336,21 @@ The probe also confirmed the coalescing property concretely: an Agent asleep
 across twelve occurrences of a four-hourly schedule still evaluates to a
 single boolean, never a backlog.
 
-### Remaining work, all on the FallbackPlan side
+### Adoption (done)
 
-Nothing further is asked of Bodu. Adoption is now a FallbackPlan decision
-with a known shape ([§5](#5-what-fallbackplan-would-build-on-top)): commit
-the 0.1.1 nupkg to `external/packages`, add the lockfile identity
-deliberately, add the architecture canary test pinning which project may
-reference it (matching the `Bodu.Security.Cryptography` and `Bodu.Core`
-pattern), and amend [ADR-0027](adr/0027-services-scheduling-status-telemetry.md) §1
-for the grammar. The existing machine-timezone regression test must pass
-unchanged across the swap — the probe indicates it will.
+Nothing further is asked of Bodu, and FallbackPlan has adopted the package:
+the nupkg is committed to `external/packages`, the identity is pinned in
+`Directory.Packages.props` and the lockfiles, `Schedule` delegates to
+`AnchoredInterval` and `CronExpression`, `DependencyRuleTests` pins the
+reference to the Application project with a canary that it exists, and
+[ADR-0027](adr/0027-services-scheduling-status-telemetry.md) §1 carries the
+amendment. The schedule tests — including the machine-timezone regression
+— pass unchanged, which is the proof that the swap preserved behaviour.
+
+One packaging caveat is recorded in
+[`external/packages/README.md`](../external/packages/README.md): upstream's
+committed `0.1.1` nupkg predates `AnchoredInterval`, so this repository
+consumes a build packed from source at the pinned commit under a distinct
+version (`0.1.2-local.10226cf`) rather than republishing different bytes
+under a version that already exists. It should be replaced with an upstream
+package as soon as one carrying `AnchoredInterval` is published.

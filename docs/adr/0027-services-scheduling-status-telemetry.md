@@ -54,6 +54,45 @@ Rules:
 - An empty or absent `schedule` means manual-only — the Agent skips the
   set and says so.
 
+#### Amendment (2026-08-05): the arithmetic moves to a shared library
+
+The grammar above is unchanged and the rules still hold; what changed is
+who computes the occurrences. `Schedule` originally derived them inline,
+and that hand-rolled arithmetic shipped a defect: the daily branch mixed
+the argument's own clock with a machine-timezone conversion, so it was
+correct on a UTC machine and wrong by a day on any other — the exact
+class of failure a purity rule exists to prevent, and one that a
+UTC-only CI matrix could not see.
+
+`Schedule` now delegates to
+[`Bodu.Globalization.Recurrence`](../bodu-recurrence-requirements.md),
+adopted against a written requirements statement:
+
+| Form | Backed by | Why that type |
+|------|-----------|---------------|
+| `every <n><unit>` | `AnchoredInterval` | The series `anchor + k·interval`, which cron and RRULE cannot express — our anchor is the last completed run, not a calendar position |
+| `daily at <HH:mm>` | `CronExpression` (`<m> <H> * * *`) | Calendar-aligned time of day, in the offset the caller supplies |
+
+Due-ness becomes one comparison against the previous occurrence, which
+is what keeps the coalescing rule structural rather than arithmetic: the
+answer is a boolean about a single instant, so five slept-through times
+cannot become five owed runs.
+
+The grammar stays FallbackPlan's, deliberately. The library could accept
+raw cron or RRULE text directly, but a schedule is a user-facing promise
+about their backups; `daily at 02:30` is a promise a person can check,
+and `30 2 * * *` is not. Richer forms (weekly, monthly, explicit cron)
+are now cheap to add and are not added here — this amendment records an
+implementation swap with no behaviour change, proven by the schedule
+tests passing unchanged, in three timezones.
+
+The dependency is admitted under [ADR-0019](0019-third-party-dependency-policy.md)
+on the strength of its own purity guarantee — the library's test suite
+scans its compiled assembly for wall-clock and timezone APIs and fails
+if it finds any — and is pinned to the Application project by
+`DependencyRuleTests.Only_Application_may_reference_the_recurrence_engine`,
+with the canary that the reference exists.
+
 ### 2 The job-state store
 
 Job state is a **client-domain JSON journal in the state directory**
@@ -140,8 +179,12 @@ now so the UI never has to re-learn the words.
 - The Agent stays a thin host; every service behaviour (schedule
   arithmetic, job-state transitions, status derivation) is a pure,
   tested function in Application.
-- No new package identities. Exporter wiring is a host concern for the
-  phase that ships a UI or ops deployment.
+- No new package identities for instrumentation — that remains in-box.
+  Exporter wiring is a host concern for the phase that ships a UI or ops
+  deployment. Scheduling since took one identity,
+  `Bodu.Globalization.Recurrence`, per the amendment to §1: the original
+  "no new package identities" claim covered this ADR as first written and
+  no longer holds for the schedule arithmetic.
 - Missed-run coalescing means the Agent's first act after downtime is
   one incremental backup — bounded work, and exactly what the user
   wants after reopening a laptop.

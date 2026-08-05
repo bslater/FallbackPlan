@@ -12,4 +12,11 @@
     <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
   </ItemGroup>
 
+  <!-- Schedule arithmetic (ADR-0027 §1). This project is the only one
+       permitted to reference the recurrence engine; DependencyRuleTests
+       pins that, as it does for the other Bodu packages (ADR-0019/0021). -->
+  <ItemGroup>
+    <PackageReference Include="Bodu.Globalization.Recurrence" />
+  </ItemGroup>
+
 </Project>

@@ -13,6 +13,32 @@ consumes, committed to the repository so that a plain `git clone` and a GitHub
 | `Bodu.Core` | 0.1.1 | `local-packages/` feed of <https://github.com/bslater/bodu.git> at commit `597e7f4b78e835b7f6041fc862083ef4e8c20ef5` |
 | `Bodu.Security.Cryptography` | 0.1.1 | same feed, same commit (depends on `Bodu.Core 0.1.1`) — Argon2id, cross-verified against Konscious on every CI run |
 | `Bodu.Text.Encoding` | 0.1.1 | same feed, same commit (depends on `Bodu.Core 0.1.1`) — base32 rendering of identifiers, behind the strict lowercase adapter in `FallbackPlan.Domain.Base32` |
+| `Bodu.Globalization.Recurrence` | 0.1.2-local.10226cf | **packed from source** at commit `10226cfda8b10a09899370bbfb4a9ea5beead362` (depends on `Bodu.Core 0.1.1`) — schedule occurrence arithmetic, behind `FallbackPlan.Application.Schedule` ([ADR-0027 §1](../../docs/adr/0027-services-scheduling-status-telemetry.md), [requirements](../../docs/bodu-recurrence-requirements.md)) |
+
+### Why the recurrence package carries a different version
+
+The other three were taken verbatim from upstream's `local-packages/` feed,
+where the published `0.1.1` matches the source it was built from. The
+recurrence package's committed `0.1.1` does **not**: it predates the
+`AnchoredInterval` type this repository depends on, so a build against it
+fails to compile. Publishing our own build under the same `0.1.1` would put
+two different assemblies behind one version — and NuGet's global cache is
+keyed on id plus version, so whichever landed in a developer's cache first
+would win, silently.
+
+Hence `0.1.2-local.<commit>`: ahead of the stale `0.1.1` so it sorts after
+it, suffixed so it can never be mistaken for an upstream release. When
+upstream refreshes its `0.1.1` (or cuts a release containing
+`AnchoredInterval`), the fix is to drop that nupkg in here, change the one
+version in `Directory.Packages.props`, and regenerate lockfiles — the
+`-local` build exists only to bridge the gap and should not outlive it.
+
+Packing it, should it need repeating, differs from the upgrade procedure
+below in one respect: set `<Version>` inside
+`Bodu.Globalization.Recurrence/src/…csproj` rather than passing
+`-p:Version=` on the command line. A global property propagates to the
+`Bodu.Core` project reference and rewrites the packaged dependency to a
+version this feed does not carry, which breaks restore.
 
 The packages target `net8.0` and are consumed by the `net10.0` projects via
 NuGet's nearest-TFM selection. Versions are pinned centrally in

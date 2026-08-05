@@ -15,6 +15,10 @@
     <PackageVersion Include="Bodu.Core" Version="0.1.1" />
     <PackageVersion Include="Bodu.Security.Cryptography" Version="0.1.1" />
     <PackageVersion Include="Bodu.Text.Encoding" Version="0.1.1" />
+    <!-- Packed from upstream master, ahead of the published 0.1.1: the
+         version is deliberately distinct so it can never collide in a
+         NuGet cache with the different 0.1.1 build. See the feed README. -->
+    <PackageVersion Include="Bodu.Globalization.Recurrence" Version="0.1.2-local.10226cf" />
   </ItemGroup>
 
   <ItemGroup Label="CLI">

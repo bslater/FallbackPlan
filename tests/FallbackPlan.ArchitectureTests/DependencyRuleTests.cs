@@ -327,12 +327,60 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// Schedule arithmetic is the Application layer's business (ADR-0027 §1),
+    /// and the recurrence engine that performs it belongs there with it.
+    /// Containment matters less here than for cryptography — the library is
+    /// pure occurrence math, not an unaudited primitive — but the reason to
+    /// pin it is the same: a dependency that spreads by accident is one
+    /// nobody chose. An engine or provider reaching for a schedule type is a
+    /// signal that a policy decision has leaked out of the layer that owns
+    /// it, so it should fail here and be made deliberately.
+    /// </summary>
+    [Fact]
+    public void Only_Application_may_reference_the_recurrence_engine()
+    {
+        foreach (var assembly in AllSourceAssemblies.Where(a => a != Application))
+        {
+            AssertPasses(
+                Types.InAssembly(assembly)
+                    .ShouldNot()
+                    .HaveDependencyOn("Bodu.Globalization.Recurrence")
+                    .GetResult(),
+                $"{assembly.GetName().Name} must not reference the recurrence engine. " +
+                "Schedule arithmetic lives in Application (ADR-0027 §1).");
+        }
+    }
+
+    /// <summary>
+    /// The other half of the rule above, in the canary pattern the two
+    /// cryptography rules already use: a prohibition that passes because
+    /// nothing anywhere references the library is a test that keeps passing
+    /// after somebody removes the containment it claims to enforce. If the
+    /// recurrence reference moves out of Application, this fails and the
+    /// move becomes a decision rather than a drift.
+    /// </summary>
+    [Fact]
+    public void Application_is_where_the_recurrence_engine_actually_lives()
+    {
+        AssertProjectReferences(
+            "FallbackPlan.Application", "<PackageReference Include=\"Bodu.Globalization.Recurrence\" />");
+    }
+
+    /// <summary>
     /// Application is the use-case layer: it "depends on domain
     /// abstractions, never on provider implementations" (11 §2). Hosts —
     /// the CLI and the Agent — compose engines and providers and pass
     /// facts in; the layer itself stays pure functions over Domain, which
     /// is what makes schedule arithmetic and status derivation testable
     /// without a repository, a clock, or a filesystem.
+    ///
+    /// "Only Domain" is about FallbackPlan's own layers. The recurrence
+    /// engine (ADR-0027 §1) is the single third-party exception, and it is
+    /// admitted precisely because it preserves the property this rule
+    /// protects: it is pure occurrence arithmetic that forbids itself the
+    /// wall clock and the machine time zone, so it cannot be the thing that
+    /// makes this layer need a clock. The rule above pins it to this
+    /// project.
     /// </summary>
     [Fact]
     public void Application_depends_only_on_Domain()
