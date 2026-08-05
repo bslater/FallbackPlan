@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;

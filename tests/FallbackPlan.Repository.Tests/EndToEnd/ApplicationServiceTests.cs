@@ -1,4 +1,6 @@
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Domain.Status;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 

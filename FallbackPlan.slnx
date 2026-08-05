@@ -24,6 +24,7 @@
     <Project Path="src/FallbackPlan.Storage.Local/FallbackPlan.Storage.Local.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/FallbackPlan.Application.Tests/FallbackPlan.Application.Tests.csproj" />
     <Project Path="tests/FallbackPlan.ArchitectureTests/FallbackPlan.ArchitectureTests.csproj" />
     <Project Path="tests/FallbackPlan.Cli.Tests/FallbackPlan.Cli.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Domain.Tests/FallbackPlan.Domain.Tests.csproj" />

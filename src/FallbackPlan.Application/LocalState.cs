@@ -126,7 +126,10 @@ public sealed class LocalState
         Save();
     }
 
-    private void Save() => File.WriteAllText(_path, JsonSerializer.Serialize(_model, SerializerOptions));
+    // Atomic replacement, not truncate-then-write: a crash between the two
+    // would leave a zero-length state.json, and losing this file loses the
+    // writer identity that the whole journal sequence hangs off.
+    private void Save() => AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_model, SerializerOptions));
 
     private static string LegacyOrNew(string stateDirectory, string legacyName)
     {

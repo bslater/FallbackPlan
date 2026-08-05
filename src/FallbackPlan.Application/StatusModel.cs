@@ -1,39 +1,6 @@
+using FallbackPlan.Domain.Status;
+
 namespace FallbackPlan.Application;
-
-/// <summary>
-/// The normative status vocabulary (architecture 10 §1.1; NFR-OPS-002).
-/// A closed set, because collapsing any two of these is how a user comes
-/// to believe they are protected when they are not.
-/// </summary>
-public enum ProtectionState
-{
-    /// <summary>No committed snapshot exists for the set.</summary>
-    NeverBackedUp = 0,
-
-    /// <summary>Committed, but only within the source's own failure domain — real, and no defence against losing the machine.</summary>
-    Captured = 1,
-
-    /// <summary>Durable at a replica outside the source's failure domain (PT-8).</summary>
-    Protected = 2,
-
-    /// <summary>Durable at a named destination.</summary>
-    Replicated = 3,
-
-    /// <summary>Independently confirmed at that destination — always with coverage and age, never a bare tick.</summary>
-    Verified = 4,
-
-    /// <summary>The set's durability policy is satisfied.</summary>
-    PolicyCompliant = 5,
-
-    /// <summary>Recoverable, but below policy — act soon.</summary>
-    Degraded = 6,
-
-    /// <summary>Required objects are missing or damaged with no replica able to heal them — data is already gone.</summary>
-    Unrecoverable = 7,
-}
-
-/// <summary>A verification claim: never shown without its coverage and age (10 §1.2).</summary>
-public sealed record VerificationDetail(double Coverage, ulong VerifiedAtUnixMilliseconds);
 
 /// <summary>
 /// The facts the derivation consumes — plain values, so the derivation is
@@ -71,21 +38,23 @@ public sealed record StatusInputs
     public VerificationDetail? LastVerification { get; init; }
 }
 
-/// <summary>One backup set's derived status.</summary>
-public sealed record BackupSetStatus(
-    ProtectionState State,
-    VerificationDetail? Verification,
-    IReadOnlyList<string> Warnings);
-
 /// <summary>
 /// Derives the user-level status (10 §1). The never-merge rules hold by
 /// construction: <c>Degraded</c> and <c>Unrecoverable</c> are distinct
 /// outcomes with distinct warnings, and <c>Captured</c> can never become
 /// <c>Protected</c> without an explicit different-failure-domain fact.
 /// </summary>
+/// <remarks>
+/// This is the single place the vocabulary is decided. A client receives the
+/// result over the command surface and never re-derives it (10 §3.1), which is
+/// what keeps the never-merge rules enforceable at one site rather than at
+/// every front end.
+/// </remarks>
 public static class StatusDeriver
 {
     /// <summary>Derives one set's status from observed facts.</summary>
+    /// <param name="inputs">The gathered facts.</param>
+    /// <returns>The derived status with its warnings.</returns>
     public static BackupSetStatus Derive(StatusInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);

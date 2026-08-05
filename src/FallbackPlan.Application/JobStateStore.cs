@@ -1,30 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Application;
-
-/// <summary>The job state machine (architecture 10 §3).</summary>
-public enum JobState
-{
-    Pending = 0,
-    Scanning = 1,
-    Reading = 2,
-    Segmenting = 3,
-    Packing = 4,
-    Uploading = 5,
-    Publishing = 6,
-    Verifying = 7,
-    Complete = 8,
-    Paused = 9,
-    Retrying = 10,
-    Cancelled = 11,
-
-    /// <summary>Resolves itself or resumes — the Agent retries on its next pass (10 §3).</summary>
-    FailedRecoverable = 12,
-
-    /// <summary>Needs intervention; never silently retried.</summary>
-    FailedPermanent = 13,
-}
 
 /// <summary>One job's durable record.</summary>
 public sealed record JobRecord
@@ -156,5 +134,5 @@ public sealed class JobStateStore
         [.. _jobs.Where(job => job.BackupSetId == backupSetId && job.State == JobState.FailedRecoverable)];
 
     private void Save() =>
-        File.WriteAllText(_path, JsonSerializer.Serialize(_jobs, SerializerOptions));
+        AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_jobs, SerializerOptions));
 }

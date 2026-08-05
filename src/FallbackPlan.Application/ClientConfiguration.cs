@@ -90,8 +90,7 @@ public sealed record ClientConfiguration
     /// <summary>Writes the configuration; also the export path — the file holds no secrets.</summary>
     public void Save(string path)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        File.WriteAllText(path, JsonSerializer.Serialize(this, SerializerOptions));
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(this, SerializerOptions));
     }
 
     /// <summary>The configuration as indented JSON — the export form; secret-free by construction.</summary>

@@ -1,5 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
