@@ -40,12 +40,33 @@ Same machine and inputs, after ADR-0029 §2 landed.
 | fixed-v1, concurrency 2 | 61.3 | 68.3 |
 | fixed-v1, no compression | 87.2 | 71.6 |
 
-**Against this store the change is a wash, and that is the expected result.**
-The benchmark uploads to `NullObjectStore`, which consumes and discards; a PUT
-that costs nothing cannot stall a loop, so removing the stall buys nothing here.
-The change is aimed at the destination that is not free — a spinning disk, a
-LAN peer, an object store — and this bench cannot see that. A slow-store row
-belongs here and is not yet written.
+**Against `NullObjectStore` the change is a wash, and that is the expected
+result.** That store consumes and discards, so a PUT costs nothing and cannot
+stall a loop; removing a stall that was not there buys nothing.
+
+### The rows that can see it
+
+`SlowObjectStore` imposes a fixed latency per PUT, and the `stalled` column
+reports the total it imposed. When that exceeds what the run could have absorbed
+serially, the uploads provably overlapped the archive loop — they could not
+otherwise have fitted.
+
+| Configuration | seconds | MiB/s | stalled |
+|---|---|---|---|
+| fixed-v1, concurrency 1 (free store) | 0.63 | 50.5 | — |
+| slow store 200 ms, concurrency 1 | 0.67 | 48.0 | **0.40** |
+| slow store 200 ms, concurrency 2 | 0.69 | 46.5 | **0.40** |
+| slow store 200 ms, concurrency 4 | 0.65 | 49.3 | **0.40** |
+
+0.40 s of store latency lands inside a 0.67 s run. Inline — the behaviour this
+replaced — the same work would have taken about 0.63 + 0.40 = **1.03 s**, and
+throughput would have fallen from 50.5 to roughly 31 MiB/s. It did not fall: it
+went to 48.0, within the run-to-run noise of the free store. The stall is gone,
+and the arithmetic rather than the assertion says so.
+
+The effect scales with how slow the destination is and how many blobs a job
+seals, which is why the claim was always about remote destinations and never
+about local NVMe.
 
 What the run *did* catch is worth more than a number: the first version sized
 the hand-off channel at exactly `Concurrency`, so at 1 the archive loop and the
@@ -86,8 +107,6 @@ result: it was worth doing and it was not the problem.
 ## Re-run this when
 
 - the spool checkpoint stops being rewritten per record;
-- a slow-store row exists, so deferred upload can be measured against a
-  destination that is not free;
 - the staged pipeline lands and the concurrency rows start to mean something.
 
 Each of those should move a number in this table, and if it does not, that is the

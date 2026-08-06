@@ -60,9 +60,14 @@ public abstract class InterruptionHarness : IDisposable
 
     /// <summary>A fresh "process life": new orchestrator, durable state shared through disk.</summary>
     protected PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, IPublicationObserver? observer = null) =>
+        IObjectStore store,
+        RepositoryKeySet keys,
+        KeyHierarchy hierarchy,
+        IPublicationObserver? observer = null,
+        int concurrency = 1) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy with { Concurrency = concurrency },
+            Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
             observer);

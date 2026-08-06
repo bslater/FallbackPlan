@@ -163,10 +163,12 @@ restated here with the test that will prove each:
 - **Restore, verify and check over the command surface.** The contract carries
   them; this service build answers them with a stated
   "this is a read path, run it directly" rather than a silence.
-- **An interruption case for *N* blobs in flight.** ADR-0029 §2 makes the
-  "durable but unreferenced" state of architecture 04 §5.1 reachable *N* at a
-  time. The existing matrix passes unchanged and covers the state at *N*=1; the
-  case that kills a job with several uploads outstanding is not written.
+- **A kill test with several uploads outstanding.** `ConcurrentUploadTests` now
+  proves the per-blob invariant — every blob's covering intent is durable before
+  its own PUT, at concurrency 1 and 4 — and that restores are byte-identical
+  across both. What is still not written is the case that *kills* a job mid-
+  upload with several blobs in flight, which is the harder half of architecture
+  04 §5.1 at *N* > 1.
 
 ---
 

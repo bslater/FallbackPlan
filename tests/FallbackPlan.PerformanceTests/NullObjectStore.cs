@@ -10,11 +10,17 @@ namespace FallbackPlan.PerformanceTests;
 /// </summary>
 public sealed class NullObjectStore : IObjectStore
 {
+    private long _bytesConsumed;
+    private int _puts;
+
+    // Uploads run concurrently now (ADR-0029 §2), so the benchmark's own store
+    // is called from several workers at once. Plain increments here would be a
+    // data race in the measuring instrument.
     /// <summary>Total bytes consumed across all puts.</summary>
-    public long BytesConsumed { get; private set; }
+    public long BytesConsumed => Interlocked.Read(ref _bytesConsumed);
 
     /// <summary>Number of puts accepted.</summary>
-    public int Puts { get; private set; }
+    public int Puts => Volatile.Read(ref _puts);
 
     /// <inheritdoc />
     public StoreCapabilities Capabilities { get; } = new()
@@ -47,11 +53,11 @@ public sealed class NullObjectStore : IObjectStore
             int read;
             while ((read = await content.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                BytesConsumed += read;
+                Interlocked.Add(ref _bytesConsumed, read);
             }
         }
 
-        Puts++;
+        Interlocked.Increment(ref _puts);
         return new PutResult(PutOutcome.Created);
     }
 

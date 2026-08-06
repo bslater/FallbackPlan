@@ -60,29 +60,33 @@ public static class ThroughputBenchmarks
             CultureInfo.InvariantCulture,
             $"ThroughputBenchmarks — {mebibytes} MiB per configuration, {Environment.ProcessorCount} logical cores"));
         Console.WriteLine();
-        Console.WriteLine("configuration                       seconds     MiB/s");
-        Console.WriteLine("----------------------------------- ------- ---------");
+        Console.WriteLine("configuration                       seconds     MiB/s   stalled");
+        Console.WriteLine("----------------------------------- ------- --------- ---------");
 
         var counter = 1UL;
         try
         {
-            foreach (var (name, policy) in Configurations())
+            foreach (var (name, policy, latency) in Configurations())
             {
                 // One untimed pass first: the first archive of a process pays
                 // JIT and allocator warm-up that has nothing to do with the
                 // pipeline, and attributing that to a configuration would be
                 // measuring the runtime.
-                counter = await ArchiveAsync(data[..(4 * 1024 * 1024)], policy, keys, spool, counter).ConfigureAwait(false);
+                (counter, _) = await ArchiveAsync(data[..(4 * 1024 * 1024)], policy, keys, spool, counter, TimeSpan.Zero)
+                    .ConfigureAwait(false);
 
                 var stopwatch = Stopwatch.StartNew();
-                counter = await ArchiveAsync(data, policy, keys, spool, counter).ConfigureAwait(false);
+                var (next, imposed) = await ArchiveAsync(data, policy, keys, spool, counter, latency)
+                    .ConfigureAwait(false);
                 stopwatch.Stop();
+                counter = next;
 
                 var seconds = stopwatch.Elapsed.TotalSeconds;
                 var throughput = mebibytes / seconds;
+                var stalled = imposed > TimeSpan.Zero ? $"{imposed.TotalSeconds,9:F2}" : new string(' ', 9);
                 Console.WriteLine(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{name,-35} {seconds,7:F2} {throughput,9:F1}"));
+                    $"{name,-35} {seconds,7:F2} {throughput,9:F1} {stalled}"));
             }
         }
         finally
@@ -101,7 +105,12 @@ public static class ThroughputBenchmarks
         return 0;
     }
 
-    private static IEnumerable<(string Name, CapturePolicy Policy)> Configurations()
+    /// <summary>
+    /// How slow each blob PUT is for a configuration. Zero is the free store —
+    /// the right instrument for the pipeline and the wrong one for ADR-0029 §2,
+    /// whose claim is entirely about destinations that are not free.
+    /// </summary>
+    private static IEnumerable<(string Name, CapturePolicy Policy, TimeSpan Latency)> Configurations()
     {
         var baseline = CapturePolicy.Default with
         {
@@ -112,10 +121,11 @@ public static class ThroughputBenchmarks
             },
         };
 
-        yield return ("fixed-v1, concurrency 1", baseline with { Concurrency = 1 });
-        yield return ("fixed-v1, concurrency 2", baseline with { Concurrency = 2 });
-        yield return ("fixed-v1, concurrency 4", baseline with { Concurrency = 4 });
-        yield return ("fixed-v1, concurrency 8", baseline with { Concurrency = 8 });
+        var free = TimeSpan.Zero;
+        yield return ("fixed-v1, concurrency 1", baseline with { Concurrency = 1 }, free);
+        yield return ("fixed-v1, concurrency 2", baseline with { Concurrency = 2 }, free);
+        yield return ("fixed-v1, concurrency 4", baseline with { Concurrency = 4 }, free);
+        yield return ("fixed-v1, concurrency 8", baseline with { Concurrency = 8 }, free);
 
         var cdc = baseline with
         {
@@ -123,26 +133,43 @@ public static class ThroughputBenchmarks
             CdcParameters = Domain.CdcParameters.Default,
         };
 
-        yield return ("cdc-v1, concurrency 1", cdc with { Concurrency = 1 });
-        yield return ("cdc-v1, concurrency 4", cdc with { Concurrency = 4 });
+        yield return ("cdc-v1, concurrency 1", cdc with { Concurrency = 1 }, free);
+        yield return ("cdc-v1, concurrency 4", cdc with { Concurrency = 4 }, free);
 
         // The compressor is a candidate serial cost. Measuring with it off
         // separates "the pipeline is slow" from "zstd is slow here".
         yield return (
             "fixed-v1, no compression",
-            baseline with { Compression = CompressionSettings.Default with { Profile = Domain.Profiles.CompressionProfile.None } });
+            baseline with { Compression = CompressionSettings.Default with { Profile = Domain.Profiles.CompressionProfile.None } },
+            free);
+
+        // The rows ADR-0029 §2 is actually about. The `stalled` column reports
+        // the total latency the store imposed; when it exceeds the wall clock,
+        // the uploads provably overlapped the archive loop, because they could
+        // not otherwise have fitted. That is the claim, measured rather than
+        // asserted.
+        var slow = TimeSpan.FromMilliseconds(200);
+        yield return ("slow store 200ms, concurrency 1", baseline with { Concurrency = 1 }, slow);
+        yield return ("slow store 200ms, concurrency 2", baseline with { Concurrency = 2 }, slow);
+        yield return ("slow store 200ms, concurrency 4", baseline with { Concurrency = 4 }, slow);
     }
 
-    private static async Task<ulong> ArchiveAsync(
-        byte[] data, CapturePolicy policy, RepositoryKeySet keys, string spool, ulong counter)
+    private static async Task<(ulong Counter, TimeSpan Imposed)> ArchiveAsync(
+        byte[] data, CapturePolicy policy, RepositoryKeySet keys, string spool, ulong counter, TimeSpan latency)
     {
-        var store = new NullObjectStore();
+        Storage.Abstractions.IObjectStore store = new NullObjectStore();
+        SlowObjectStore? slow = null;
+        if (latency > TimeSpan.Zero)
+        {
+            store = slow = new SlowObjectStore(store, latency);
+        }
+
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, keys, store,
             new MonotonicBlobCounterAllocator(counter), spool);
 
         using var source = new MemoryStream(data);
         await archiver.ArchiveAsync(source, CancellationToken.None).ConfigureAwait(false);
-        return counter + 1_000;
+        return (counter + 1_000, slow?.ImposedLatency ?? TimeSpan.Zero);
     }
 }
