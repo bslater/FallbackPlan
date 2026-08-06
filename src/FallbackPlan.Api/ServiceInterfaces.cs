@@ -12,7 +12,13 @@ namespace FallbackPlan.Api;
 /// OpenTelemetry instruments keep their closed four-attribute allowlist
 /// untouched. Conflating the two is how a path ends up in a metrics backend.
 /// </remarks>
-/// <param name="Sequence">Monotonic per connection, so a client can detect a gap.</param>
+/// <param name="Sequence">
+/// Monotonic, so a client can detect a gap — and gaps are expected, because a
+/// watcher that falls behind has its oldest events dropped rather than being
+/// allowed to stall the engine. Numbered per service rather than per
+/// connection, so a watcher joins at whatever the service has reached instead
+/// of at zero.
+/// </param>
 /// <param name="Progress">The observation.</param>
 public sealed record JobProgressEvent(long Sequence, JobProgress Progress);
 

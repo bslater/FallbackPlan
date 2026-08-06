@@ -68,10 +68,17 @@ public sealed class ServiceTests : IDisposable
 
         await using var runtime = await StartAsync();
         var seen = new List<JobState>();
+
+        // Subscribed here, on this thread, before the backup is commanded.
+        // Calling WatchAsync inside the Task.Run below would leave the
+        // subscription to whenever the pool got round to it, and a busy pool is
+        // exactly when the first states would be missed.
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+
         var watching = Task.Run(
             async () =>
             {
-                await foreach (var progress in runtime.Progress.WatchAsync(_timeout.Token))
+                await foreach (var progress in progressEvents)
                 {
                     lock (seen)
                     {
