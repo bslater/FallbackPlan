@@ -58,6 +58,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly Func<ObjectId, bool>? _segmentExists;
     private readonly HashSet<ObjectId> _writtenThisSession = [];
     private BlobWriter? _writer;
+    private bool _resumeAttempted;
 
     internal ArchiveSession(
         CapturePolicy policy,
@@ -459,17 +460,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        _writer ??= BlobWriter.Create(
-            _repositoryId,
-            _writerId,
-            _generation,
-            BlobClass.Data,
-            _classKey,
-            _counters.AllocateNext(),
-            _policy.EncryptionProfile,
-            _policy.BlobWriteProfile,
-            _spoolDirectory,
-            pinned: _pinned);
+        _writer ??= OpenWriter();
 
         await _writer.AppendRecordAsync(
             ObjectType.SegmentRecord,
@@ -489,6 +480,83 @@ public sealed class ArchiveSession : IAsyncDisposable
         }
 
         return objectId;
+    }
+
+    /// <summary>
+    /// Opens the blob to append to: the spool an interrupted run left behind
+    /// if it can be resumed, otherwise a new blob.
+    /// </summary>
+    private BlobWriter OpenWriter()
+    {
+        // Once per session, and only when a blob is actually wanted — a
+        // session that archives nothing leaves the spool for the next one
+        // rather than discarding work it never looked at.
+        if (!_resumeAttempted)
+        {
+            _resumeAttempted = true;
+            var resumed = TryResumeSpool();
+            if (resumed is not null)
+            {
+                return resumed;
+            }
+        }
+
+        return BlobWriter.Create(
+            _repositoryId,
+            _writerId,
+            _generation,
+            BlobClass.Data,
+            _classKey,
+            _counters.AllocateNext(),
+            _policy.EncryptionProfile,
+            _policy.BlobWriteProfile,
+            _spoolDirectory,
+            pinned: _pinned);
+    }
+
+    /// <summary>
+    /// Resumes the spool an interrupted run left, or <see langword="null"/>
+    /// when there is nothing safely resumable (specification 05 §6.3;
+    /// FR-ARCH-011, NFR-SEC-003).
+    /// </summary>
+    private BlobWriter? TryResumeSpool()
+    {
+        var result = BlobWriter.TryResume(
+            _spoolDirectory,
+            _repositoryId,
+            _writerId,
+            _generation,
+            BlobClass.Data,
+            _classKey,
+            _policy.EncryptionProfile,
+            _policy.BlobWriteProfile,
+            _pinned);
+
+        if (result is not ResumeResult.Resumed resumed)
+        {
+            // NoSpool, or MustRestart having already deleted the spool and its
+            // sidecar. Either way the caller creates a new blob, which draws a
+            // fresh salt and so reuses no ordinal (05 §6.2).
+            return null;
+        }
+
+        var writer = resumed.Writer;
+
+        // The blob arrives holding records this session did not write. Its
+        // segments have to enter the dedup set, or the session appends a
+        // second copy of a segment the blob already carries — the same
+        // content at a second ordinal, which would inflate the blob and
+        // publish two records where the manifest references one.
+        foreach (var entry in writer.Entries)
+        {
+            _writtenThisSession.Add(entry.ObjectId);
+        }
+
+        // Nothing else needs rebuilding: the index entries for these records
+        // are derived from the sealed blob's own record table at seal time,
+        // which the resumed writer holds in full, and the blob's counter and
+        // salt come from its envelope rather than the allocator.
+        return writer;
     }
 
     private async ValueTask SealAndQueueAsync(CancellationToken cancellationToken)
@@ -528,7 +596,14 @@ public sealed class ArchiveSession : IAsyncDisposable
     {
         if (_writer is not null)
         {
-            await _writer.DisposeAsync().ConfigureAwait(false);
+            // A blob still open here means the session did not finish:
+            // FlushAsync seals the open blob, so reaching disposal with one
+            // is the interrupted case (04 §5.1 row 3, "partial spool, nothing
+            // uploaded"). Abandon rather than dispose — the spool and its
+            // sidecar stay on disk for the next session to resume (05 §6.3)
+            // instead of being deleted along with the work they hold. A
+            // partial spool is still never uploaded.
+            await _writer.AbandonAsync().ConfigureAwait(false);
             _writer = null;
         }
 
