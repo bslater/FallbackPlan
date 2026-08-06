@@ -202,24 +202,35 @@ restated here with the test that will prove each:
 The next round starts here. Everything below is in priority order, and each item
 says what "done" looks like so it does not have to be re-derived.
 
-F1 is done and off this list; what it decided is recorded under Wave F above.
-The measurement it was aimed at has not been re-run, which is the first item.
+F1 is done and off this list, and it has now been measured — what it decided is
+recorded under Wave F above, what it bought in
+[phase-2-benchmarks.md](phase-2-benchmarks.md).
 
-### 1. Re-measure, now that the per-record cost is gone
+**What the measurement said.** Ten sweeps per side against `786324f`, five in
+each run order so a warm cache could not read as an improvement, with the
+harness confirmed byte-identical between them. **All ten configurations improved
+in both orders** — twenty comparisons, twenty the same direction — by 4% to 16%,
+largest at high concurrency and with compression off, which is the shape the
+change predicts. Individual percentages sit inside the run-to-run spread and
+should not be quoted alone; the unanimity is the result. The quieter finding may
+be the better one: seven of ten configurations became markedly *more
+predictable*, some from a 40% spread to under 10%, which is what removing an
+`fsync` from a hot loop does to a measurement that was inheriting the disk's
+variance.
 
-F1 removed ~128 `fsync`s and ~128 whole-file sidecar rewrites per 128 MiB blob.
-Nothing has yet said what that bought. `ThroughputBenchmarks` exists and
-[phase-2-benchmarks.md](phase-2-benchmarks.md) still carries the pinned-mode rows
-measured before the change, so they now describe code that is gone.
-
-**Done means:** the benchmark is re-run on the reference machine — not a
-container — and the pinned-mode rows either show a number or are struck with the
-statement that the cost was below noise, which is itself a result (F3's
-precedent). This is ADR-0029 §6 step 1 applied to its own step 2, and it is what
+**So pinning survives measurement**, which is half of what
 [Q20](open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
-needs closing with a number rather than an opinion.
+asks — resumability now costs one `fsync` and one sidecar write per blob instead
+of one of each per record, and the question of whether it was worth its price
+does not arise at that price. Q20's other half, where the concurrency default
+sits, still needs G2 before it means anything.
 
-### 2. G2 — the staged pipeline
+**Still owed: the reference machine.** Everything on the benchmarks page is
+container measurement. It compares configurations and versions against each
+other honestly and says nothing at all about NFR-PERF-007's ≥400 MB/s, which has
+never been tested. That is not a small remainder, and it is H1's to close.
+
+### 1. G2 — the staged pipeline
 
 ADR-0029 §1 has the correctness boundary already drawn: read, hash and compress
 may run concurrently; **assign ordinal → encrypt → append → digest** must stay
@@ -244,13 +255,13 @@ single-threaded and the concurrency is in what happens to the bytes it yields.
 tree at 1, 2 and 4, and the concurrency rows in
 [phase-2-benchmarks.md](phase-2-benchmarks.md) stop being noise.
 
-### 3. A kill test with several uploads outstanding
+### 2. A kill test with several uploads outstanding
 
 Architecture 04 §5.1's "durable but unreferenced" state is now reachable *N* at a
 time. The matrix proves it at *N*=1; the case that kills a job mid-upload with
 several blobs in flight is not written.
 
-### 4. The remote binding
+### 3. The remote binding
 
 Topologies 3 and 4, and the two exit criteria they own. Blocked on pairing, which
 reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
