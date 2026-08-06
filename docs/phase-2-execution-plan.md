@@ -258,38 +258,45 @@ machinery, and gated by
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access).
 
-### Watch list
+### Watch list — closed
 
-The intermittent `Hosts.Tests` failure recurred during F1, and this time it has a
-name: **`ServiceTests.A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning`**.
-It failed once in a full-suite run, then passed in isolation and in two
-subsequent full runs — the same pattern as before, and consistent with the
-original suspicion that a timing-sensitive service test is sensitive to load,
-since the suite runs twelve projects in parallel and those tests bind sockets.
+The intermittent `Hosts.Tests` failure recurred during F1, was named
+(`ServiceTests.A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning`),
+diagnosed, and fixed. It was never about F1, and it was not really about the
+test.
 
-It is unrelated to F1: the change touches the blob spool and this test commands a
-backup over the service contract, and the whole suite is green either side of it.
+**The mechanism.** `ProgressHub.WatchAsync` was an `async IAsyncEnumerable`
+iterator that registered its subscriber channel *inside* the iterator body. A C#
+iterator runs none of its body until the first `MoveNextAsync`, so a caller
+holding the enumerable was not yet a subscriber, and `Report` fans out only to
+registered subscribers with no replay. The test started its watcher with
+`Task.Run` and commanded the backup on the next line; with the pool saturated by
+twelve parallel projects, the backup could emit `Scanning` before the watcher
+subscribed, and those events went to nobody.
 
-**Diagnosed by inspection, not yet reproduced under control.** `ProgressHub`
-registers a subscriber's channel *inside* `WatchAsync`'s iterator, so the
-subscription is not established until the first enumeration, and `Report` writes
-only to subscribers already registered — there is no replay. The test starts its
-watcher with `Task.Run` and then commands the backup on the calling thread, so
-when the thread pool is saturated (twelve projects in parallel) the backup can
-emit `Scanning`, and sometimes more, before the watcher has subscribed. Those
-events go to nobody and the `Assert.Contains` lines fail. That is precisely a
-failure that appears only under load.
+**Why it was a product defect and not a test defect.** Every caller had that
+window, unobservably. A UI attaching to a running job would silently miss
+events and have no way to know. So `WatchAsync` now subscribes in a non-iterator
+method and returns a private iterator for the streaming, which makes the
+subscription exist from the call. `LocalServiceClient.WatchAsync` had the same
+shape — it opened its connection inside the iterator — and got the same
+treatment.
 
-The window is not the test's alone: **any** caller of `WatchAsync` has an
-unobservable gap between deciding to watch and being subscribed, which for a UI
-attaching to a running job means silently missing events. `ProgressHub.Latest`
-exists and documents itself as being "for a client that arrives late", and
-nothing reads it.
+**Proven by four tests that fail against the old code**, each by hanging until
+its timeout: a watcher receives what was reported before it enumerated; it
+receives nothing reported before it asked to watch (there is deliberately no
+replay); `Complete` ends a watcher that never enumerated; and every watcher sees
+one event under one sequence number. They are deterministic and thread-free, so
+unlike the test they replace they cannot go quiet under load. Twelve concurrent
+`Hosts.Tests` runs were green afterwards.
 
-So the fix is a product one, not a test one: make subscription happen when the
-watcher is created rather than when it is first enumerated. Replaying `Latest`
-on subscribe is worth doing too, but it does not fix this on its own — a late
-watcher would still miss the intermediate states this test asserts.
+Two things went with it. `ProgressHub.Latest` was written on every report and
+read nowhere, grew one entry per job for ever, and promised in its own doc to
+serve "a client that arrives late" — it is gone, and replay can be designed when
+a front end needs it. And the sequence number was allocated outside the lock that
+delivered it, so two concurrent reports could be delivered in the opposite order
+to their numbers; allocation now happens under the same lock, which makes the
+monotonicity `JobProgressEvent` documents actually true.
 
 ---
 

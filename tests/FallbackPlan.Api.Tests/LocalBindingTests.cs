@@ -90,25 +90,46 @@ public sealed class LocalBindingTests : IDisposable
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(Timeout);
         stopping.CancelAfter(TimeSpan.FromSeconds(20));
 
+        // The list is written by the watching task and read by this one, so
+        // every touch is under the lock. Reading a List<T> while another thread
+        // appends to it is undefined, not merely stale.
         var seen = new List<JobProgressEvent>();
+        int SeenCount()
+        {
+            lock (seen)
+            {
+                return seen.Count;
+            }
+        }
+
+        // Connecting happens on this thread: WatchAsync opens the watch
+        // connection when called, not when first enumerated, so the service is
+        // already streaming to it by the time the emit loop below starts.
+        var progressEvents = client.WatchAsync(stopping.Token);
+
         var watching = Task.Run(
             async () =>
             {
-                await foreach (var progress in client.WatchAsync(stopping.Token))
+                await foreach (var progress in progressEvents)
                 {
-                    seen.Add(progress);
-                    if (seen.Count == 3)
+                    lock (seen)
                     {
-                        return;
+                        seen.Add(progress);
+                        if (seen.Count == 3)
+                        {
+                            return;
+                        }
                     }
                 }
             },
             stopping.Token);
 
-        // The watch takes its own connection, so give it a moment to be
-        // accepted before emitting — otherwise this test races the transport
-        // rather than testing it.
-        while (!watching.IsCompleted && seen.Count < 3)
+        // Emission still repeats. Opening the connection eagerly closes the
+        // window on this side, but the service accepts it asynchronously, so an
+        // event emitted before the accept completes would still be sent to
+        // nobody — a real property of the transport rather than something to
+        // assert away.
+        while (!watching.IsCompleted && SeenCount() < 3)
         {
             service.Emit(new JobProgress("job-1", JobState.Scanning, 10, 4, 1, 0, 4096, 2048));
             await Task.Delay(50, stopping.Token);
@@ -116,9 +137,12 @@ public sealed class LocalBindingTests : IDisposable
 
         await watching;
 
-        Assert.Equal(3, seen.Count);
-        Assert.Equal(JobState.Scanning, seen[0].Progress.State);
-        Assert.True(seen[1].Sequence > seen[0].Sequence, "progress sequence must be monotonic so a client can spot a gap");
+        lock (seen)
+        {
+            Assert.Equal(3, seen.Count);
+            Assert.Equal(JobState.Scanning, seen[0].Progress.State);
+            Assert.True(seen[1].Sequence > seen[0].Sequence, "progress sequence must be monotonic so a client can spot a gap");
+        }
     }
 
     [Fact]

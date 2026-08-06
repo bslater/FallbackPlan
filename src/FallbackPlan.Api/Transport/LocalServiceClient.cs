@@ -137,27 +137,86 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <remarks>
+    /// <para>
+    /// The connection is opened and the watch registered <b>here</b>, at the
+    /// call, rather than in the streaming body below. An
+    /// <c>async IAsyncEnumerable</c> runs none of its body until something
+    /// pulls it, so a caller holding this enumerable would not yet be connected
+    /// and anything the service reported before the first pull would be sent to
+    /// nobody.
+    /// </para>
+    /// <para>
+    /// What this deliberately does <b>not</b> do is report a failure to connect
+    /// at the call. The eager half of a split iterator cannot await, because the
+    /// method must hand back an <see cref="IAsyncEnumerable{T}"/> synchronously
+    /// — the shape <c>ApiShapeTests</c> pins — so a
+    /// <see cref="ServiceConnectionException"/> still surfaces from the
+    /// consumer's first <c>await foreach</c> rather than from this call.
+    /// Answering it here would mean changing the contract's return type, which
+    /// is a decision worth taking on its own rather than as a side effect.
+    /// </para>
+    /// <para>
+    /// A caller that asks to watch and never enumerates leaves the connection
+    /// open until finalisation. That is the accepted cost of connecting when
+    /// asked; the only reason to call this is to enumerate it.
+    /// </para>
+    /// </remarks>
+    public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken)
+    {
+        var opening = OpenWatchAsync(cancellationToken);
+        return StreamAsync(opening, cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens the watch connection and completes its handshake, or returns
+    /// <see langword="null"/> when the service refused it.
+    /// </summary>
+    private async Task<Stream?> OpenWatchAsync(CancellationToken cancellationToken)
     {
         // A watch takes its own connection: a stream and a request/response
         // exchange have different lifetimes, and a client that watches must
         // still be able to issue commands.
         var stream = await OpenAsync(_address, cancellationToken).ConfigureAwait(false);
-        await using var owned = stream.ConfigureAwait(false);
 
-        await FrameCodec.WriteAsync(
-            stream,
-            new HelloFrame(ContractVersion.Current.ToString(), "watch"),
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await FrameCodec.WriteAsync(
+                stream,
+                new HelloFrame(ContractVersion.Current.ToString(), "watch"),
+                cancellationToken).ConfigureAwait(false);
 
-        if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
-            is not HelloAcknowledgementFrame { Accepted: true })
+            if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+                is not HelloAcknowledgementFrame { Accepted: true })
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+                return null;
+            }
+
+            await FrameCodec.WriteAsync(stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+            return stream;
+        }
+        catch
+        {
+            // The stream is this method's until it is handed to the enumerator,
+            // so a handshake that throws closes it here rather than leaving it
+            // to a caller who never received it.
+            await stream.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async IAsyncEnumerable<JobProgressEvent> StreamAsync(
+        Task<Stream?> opening,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var stream = await opening.ConfigureAwait(false);
+        if (stream is null)
         {
             yield break;
         }
 
-        await FrameCodec.WriteAsync(stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+        await using var owned = stream.ConfigureAwait(false);
 
         while (!cancellationToken.IsCancellationRequested)
         {
