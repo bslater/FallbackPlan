@@ -1,6 +1,7 @@
 # Phase 2 benchmarks — throughput, attributed
 
-**Status:** first measurement · **Requirement:** NFR-PERF-007 · **Decision:** [ADR-0029 §6](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** first measurement — **superseded in part: taken before F1 removed the
+per-record `fsync` and checkpoint rewrite, and not yet re-run** · **Requirement:** NFR-PERF-007 · **Decision:** [ADR-0029 §6](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -106,7 +107,12 @@ result: it was worth doing and it was not the problem.
 
 ## Re-run this when
 
-- the spool checkpoint stops being rewritten per record;
+- ~~the spool checkpoint stops being rewritten per record~~ — **this has now
+  happened (F1) and the table below it has not been re-measured.** Every number
+  on this page was taken against code that performed a per-record `fsync` and a
+  per-record sidecar rewrite; neither exists any more. Treat the figures as the
+  *before* half of a comparison whose *after* half is still owed, and take
+  nothing from this page as current until it is re-run on the reference machine.
 - the staged pipeline lands and the concurrency rows start to mean something.
 
 Each of those should move a number in this table, and if it does not, that is the

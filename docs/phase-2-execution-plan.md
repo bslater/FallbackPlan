@@ -103,20 +103,45 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| F1 | The spool checkpoint is written once at create; the resume walk authenticates; `TryResume` gains a production caller | NFR-SEC-003 | An interrupted blob resumes byte-identically, proven by test rather than assumed |
+| F1 ✅ | The spool checkpoint is written once at create; the resume walk authenticates; `TryResume` gains a production caller | NFR-SEC-003 | An interrupted blob resumes byte-identically, proven by test rather than assumed |
 | F2 ✅ | Upload leaves the archive loop, with a drain barrier before the index delta | ADR-0029 §2 | Every blob's covering intent is durable before its own PUT, with several in flight |
 | F3 ✅ | The per-record cipher construction is removed | — | Measured, not assumed: [the benchmark](phase-2-benchmarks.md) shows it is below the noise, which is itself the result |
 
-**F1 is not a smaller change than it looks, and is deliberately not rushed.** The
-checkpoint's watermark is what makes resume safe: records beyond it are discarded
-and their ordinals re-used, so a watermark that lags by *N* records would re-use
-ordinals that were already used with different bytes if the source changed
-between runs — nonce reuse under one `(blob_key, ordinal)`, the failure
-specification 05 §6.1 calls catastrophic. The safe form is a resume walk that
-**authenticates** each record and treats the last authenticating record as the
-resume point, which removes the need for a per-record watermark entirely. That
-touches the checkpoint format and `TryResume`, and it must land with a proof that
-resume is byte-identical — not before one.
+**F1, as built.** The resume walk now authenticates every spooled record, so the
+tags themselves bound the resume and the sidecar is written once at create. The
+per-record `fsync` and the whole-file sidecar rewrite — about 128 of each per
+128 MiB blob, both blocking calls inside `async` methods — are gone.
+
+Two things came out of doing it that the plan had left open.
+
+**The specification does not require a per-record watermark, so no erratum was
+filed.** This was worth checking before touching anything: 05 §6.2's MUST list is
+exactly seven fields — `blob_salt`, `blob_id`, `blob_counter`, `key_generation`,
+segmentation profile and parameters, compression profile and codec version,
+encryption profile — and every one is fixed for the blob's life. The words
+"watermark", "fsync" and "per-record" appear nowhere in 05 §6, and
+`SealedWatermark` was an implementation artefact with no normative counterpart.
+What §6 actually requires is four things: the checkpoint stores sealed bytes
+rather than a recomputable plaintext offset (§6.1), the seven pinned fields are
+compared and any mismatch restarts (§6.2), resume is byte-identical and continues
+at the next ordinal (§6.3), and a partial spool is never uploaded.
+
+**A failed tail restarts; it is not truncated.** The earlier sketch had the walk
+treat the last authenticating record as the resume point and truncate past it.
+That returns the torn record's ordinal to a blob whose salt already covered it,
+which is the one thing 05 §6.1 calls catastrophic. Restarting instead draws a
+fresh salt, so no ordinal is ever re-used under one salt — and it is what 05 §6.2
+already says to do: *"Restart is always the safe failure. A writer in any doubt
+MUST restart."* This is also strictly safer than the watermark it replaces, under
+which a record could be fully durable yet beyond the watermark — the `fsync`
+preceded the checkpoint write — and have its ordinal re-used while intact.
+
+One behaviour changed to make resume reachable at all: a session disposed with a
+blob still open now **abandons** that writer rather than deleting its spool.
+`FlushAsync` seals the open blob on normal completion, so reaching disposal with
+one open is the interrupted case (04 §5.1 row 3). Before this the session's own
+unwinding deleted the very spool resume exists for, and only a true process kill
+could leave one behind.
 
 ### Wave G — Concurrency
 
@@ -177,39 +202,22 @@ restated here with the test that will prove each:
 The next round starts here. Everything below is in priority order, and each item
 says what "done" looks like so it does not have to be re-derived.
 
-### 1. F1 — the spool checkpoint stops being rewritten per record
+F1 is done and off this list; what it decided is recorded under Wave F above.
+The measurement it was aimed at has not been re-run, which is the first item.
 
-**The one to do carefully, and the reason the others are listed above it.**
+### 1. Re-measure, now that the per-record cost is gone
 
-`BlobWriter` currently performs a synchronous `fsync` *and* a full checkpoint
-sidecar rewrite (`File.WriteAllBytes` then `File.Move`) after every record — about
-128 of each per 128 MiB blob, both blocking calls inside `async` methods
-(`BlobWriter.cs`, the `_pinned is not null` branches). `ManifestBuilder` passes no
-pinning and pays neither, which is why metadata is cheap and data is not.
+F1 removed ~128 `fsync`s and ~128 whole-file sidecar rewrites per 128 MiB blob.
+Nothing has yet said what that bought. `ThroughputBenchmarks` exists and
+[phase-2-benchmarks.md](phase-2-benchmarks.md) still carries the pinned-mode rows
+measured before the change, so they now describe code that is gone.
 
-**Why the obvious fix is wrong.** Writing the checkpoint every *N* records looks
-equivalent and is not. The checkpoint's `SealedWatermark` is what bounds resume:
-records beyond it are discarded and their ordinals re-used. If the watermark
-lagged, and the source changed between the crash and the resume, different
-plaintext would be encrypted at an ordinal already used — nonce reuse under one
-`(blob_key, ordinal)`, which [specification 05 §6.1](../specifications/repository-format/05-blob.md)
-calls *"a catastrophic cryptographic failure under ordinary operating
-conditions"*. Per-record watermarking is exactly what makes the current design
-safe.
-
-**The shape that is safe.** Make the resume walk **authenticate** each record and
-treat the last authenticating record as the resume point. A torn or reordered
-tail then fails authentication and is truncated, so no watermark is needed and
-the sidecar can be written once at create — every field it pins (`blob_salt`,
-`blob_id`, `blob_counter`, `key_generation`, and the three profiles) is fixed for
-the blob's life.
-
-**Done means:** `BlobWriter.TryResume` has a production caller — it has **none**
-today, so the per-record cost currently buys literally nothing — and an
-interrupted blob is proven to resume byte-identically (NFR-SEC-003), not assumed
-to. Check the spec text before changing it; if §6.2 turns out to require a
-per-record durable watermark, this becomes a specification erratum rather than a
-silent implementation change.
+**Done means:** the benchmark is re-run on the reference machine — not a
+container — and the pinned-mode rows either show a number or are struck with the
+statement that the cost was below noise, which is itself a result (F3's
+precedent). This is ADR-0029 §6 step 1 applied to its own step 2, and it is what
+[Q20](open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
+needs closing with a number rather than an opinion.
 
 ### 2. G2 — the staged pipeline
 
@@ -252,13 +260,20 @@ machinery, and gated by
 
 ### Watch list
 
-One `Hosts.Tests` failure was seen once during a full-suite run and did not
-reproduce across five subsequent runs (two targeted, three full). It was not
-captured before it vanished, so there is no diagnosis — only a suspicion that a
-timing-sensitive service test is sensitive to load, since the suite runs twelve
-projects in parallel and those tests bind sockets. If it recurs in CI the run log
-will name it. Recorded because an intermittent failure nobody wrote down is one
-that gets rediscovered from scratch.
+The intermittent `Hosts.Tests` failure recurred during F1, and this time it has a
+name: **`ServiceTests.A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning`**.
+It failed once in a full-suite run, then passed in isolation and in two
+subsequent full runs — the same pattern as before, and consistent with the
+original suspicion that a timing-sensitive service test is sensitive to load,
+since the suite runs twelve projects in parallel and those tests bind sockets.
+
+It is unrelated to F1: the change touches the blob spool and this test commands a
+backup over the service contract, and the whole suite is green either side of it.
+
+Still undiagnosed, and now worth diagnosing rather than watching — a test that
+fails under load and passes alone will eventually fail in CI on someone else's
+change and cost them the afternoon. The next step is to run `Hosts.Tests` under
+deliberate load rather than waiting for coincidence.
 
 ---
 

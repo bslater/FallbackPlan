@@ -9,8 +9,9 @@ namespace FallbackPlan.InterruptionTests;
 /// exactly the row's state, a previously committed snapshot stays
 /// restorable through every one of them, and a fresh process completes the
 /// job afterwards. The step-3 row (partial spool, nothing uploaded) is the
-/// C1 spool-checkpoint suite's territory — SpoolCheckpointTests proves
-/// byte-identical resume — and its store-side claim is asserted here.
+/// C1 spool suite's territory — SpoolCheckpointTests proves byte-identical
+/// resume at the unit level and BlobSpoolResumeTests proves it through the
+/// orchestrator — and its store-side claim is asserted here.
 /// </summary>
 public sealed class PublicationInterruptionTests : InterruptionHarness
 {
@@ -183,8 +184,8 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         // The step-3 row's store-side claim: a job that dies before any seal
         // leaves a spool (C1's resumable state) and NOTHING in the store.
-        // Byte-identical resume of that spool is SpoolCheckpointTests'
-        // proven territory.
+        // Byte-identical resume of that spool is proven by SpoolCheckpointTests
+        // and, through the orchestrator, by BlobSpoolResumeTests.
         var store = CreateStore();
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();
