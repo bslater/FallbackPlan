@@ -187,6 +187,27 @@ public sealed class LocalServiceClient : IFallbackPlanClient
         await _stream.DisposeAsync().ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// How long to wait for a Windows named pipe to appear before reporting it
+    /// absent.
+    /// </summary>
+    /// <remarks>
+    /// Windows has no "nothing is listening" error for a pipe: connecting waits
+    /// for one to be created, and with no timeout it waits for as long as the
+    /// caller allows — so a client asking a machine with no service running
+    /// would hang rather than be told, and the stated reason this method exists
+    /// to give would never be reached. A bounded wait is what turns absence
+    /// into an answer, because the timeout surfaces as
+    /// <see cref="TimeoutException"/>. The Unix path needs none: connecting to
+    /// a socket path that does not exist fails immediately.
+    /// <para>
+    /// Two seconds because a local pipe that exists is connectable at once, so
+    /// this bounds only the answer "no", and a person waiting for it should not
+    /// wait long.
+    /// </para>
+    /// </remarks>
+    private const int WindowsConnectTimeoutMilliseconds = 2_000;
+
     private static async ValueTask<Stream> OpenAsync(string address, CancellationToken cancellationToken)
     {
         if (OperatingSystem.IsWindows())
@@ -195,7 +216,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
                 ".", address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try
             {
-                await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                await pipe.ConnectAsync(WindowsConnectTimeoutMilliseconds, cancellationToken).ConfigureAwait(false);
                 return pipe;
             }
             catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException)

@@ -270,10 +270,26 @@ since the suite runs twelve projects in parallel and those tests bind sockets.
 It is unrelated to F1: the change touches the blob spool and this test commands a
 backup over the service contract, and the whole suite is green either side of it.
 
-Still undiagnosed, and now worth diagnosing rather than watching — a test that
-fails under load and passes alone will eventually fail in CI on someone else's
-change and cost them the afternoon. The next step is to run `Hosts.Tests` under
-deliberate load rather than waiting for coincidence.
+**Diagnosed by inspection, not yet reproduced under control.** `ProgressHub`
+registers a subscriber's channel *inside* `WatchAsync`'s iterator, so the
+subscription is not established until the first enumeration, and `Report` writes
+only to subscribers already registered — there is no replay. The test starts its
+watcher with `Task.Run` and then commands the backup on the calling thread, so
+when the thread pool is saturated (twelve projects in parallel) the backup can
+emit `Scanning`, and sometimes more, before the watcher has subscribed. Those
+events go to nobody and the `Assert.Contains` lines fail. That is precisely a
+failure that appears only under load.
+
+The window is not the test's alone: **any** caller of `WatchAsync` has an
+unobservable gap between deciding to watch and being subscribed, which for a UI
+attaching to a running job means silently missing events. `ProgressHub.Latest`
+exists and documents itself as being "for a client that arrives late", and
+nothing reads it.
+
+So the fix is a product one, not a test one: make subscription happen when the
+watcher is created rather than when it is first enumerated. Replaying `Latest`
+on subscribe is worth doing too, but it does not fix this on its own — a late
+watcher would still miss the intermediate states this test asserts.
 
 ---
 
