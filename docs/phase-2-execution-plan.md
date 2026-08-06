@@ -148,8 +148,37 @@ could leave one behind.
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
 | G1 ✅ | `Concurrency` on `CapturePolicy`, validated | NFR-PERF-001, NFR-OPS-004 | A value outside 1..64 is a named defect; the default is 2, below a 4-core laptop's capacity; 1 stays valid and tested |
-| G2 | The staged pipeline with the ordering barrier at ordinal assignment | NFR-PERF-002, ADR-0029 §1 | Read, hash and compress run concurrently; ordinal assignment, encryption, append and digest stay strictly ordered |
-| G3 | Acceptance and interruption proof | NFR-PERF-002 | Restored bytes identical at concurrency 1, 2 and 4; *N* in-flight blobs each independently intent-covered |
+| G2 ✅ | The staged pipeline with the ordering barrier at ordinal assignment | NFR-PERF-002, ADR-0029 §1 | Read, hash and compress run concurrently; ordinal assignment, encryption, append and digest stay strictly ordered |
+| G3 | Acceptance and interruption proof | NFR-PERF-002 | Restored bytes identical at concurrency 1, 2 and 4 ✅; *N* in-flight blobs each independently intent-covered ✅; a kill with several uploads outstanding is still owed |
+
+**G2, as built.** Throughput roughly doubled on fixed-v1 and rose about a third
+on cdc-v1 ([phase-2-benchmarks.md](phase-2-benchmarks.md), fourth run: ten sweeps
+a side in both run orders, with before and after ranges that do not overlap on
+any row). Two things carried it, and only one was expected. Compression left the
+serial path, as ADR-0029 §1 intended — and so did the per-segment SHA-256, which
+is the "second hash" §6 step 2 named and F1 never reached. The pipeline had been
+running two hash passes over every byte on one thread when only the whole-file
+hash has to be there.
+
+The barrier is proven rather than asserted: every blob a publication produces is
+checked for dense ordinals and strictly increasing offsets at concurrency 1, 2
+and 4, and that assertion was verified to fail against a deliberately broken
+barrier before being kept.
+
+Two consequences worth naming. **cdc-v1 gains far less**, because
+`CdcSegmentReader`'s rolling window chains across boundaries and so the reader
+cannot be parallelised at all — under cdc-v1 more of the remaining work sits on
+the one thread that cannot move. And **`Concurrency = 1` is no longer strictly
+serial**: the channel holds `Concurrency + 1`, so one segment is prepared while
+the previous is appended. Everything the barrier protects still holds, but
+NFR-PERF-013's CPU cap should now be measured rather than inferred from the
+setting's name.
+
+Two concurrency defects were fixed on the way in, both predating this work: the
+sealed-blob list was read without the lock its writers hold, which had been a
+live race since upload left the archive loop; and the catalogue lookup behind
+segment reuse runs on a shared SQLite connection that the concurrent stage would
+otherwise have called from several threads.
 
 ### Wave H — Close
 
@@ -230,38 +259,21 @@ container measurement. It compares configurations and versions against each
 other honestly and says nothing at all about NFR-PERF-007's ≥400 MB/s, which has
 never been tested. That is not a small remainder, and it is H1's to close.
 
-### 1. G2 — the staged pipeline
+G2 is done too, and what it decided is under Wave G above.
 
-ADR-0029 §1 has the correctness boundary already drawn: read, hash and compress
-may run concurrently; **assign ordinal → encrypt → append → digest** must stay
-strictly ordered, with a reorder buffer restoring order before the barrier.
-Encryption sits *below* the barrier because it consumes the ordinal it is nonced
-with.
-
-Four pieces of shared state have to move or be rented per work item, all four
-located:
-
-| What | Where | Why |
-|---|---|---|
-| `_segmentBuffer` / `_compressed` | `ArchiveSession.cs` ctor | one rental per session, and `plaintext` aliases the buffer the next read overwrites |
-| `ZstdSegmentCodec` | `ArchiveSession.cs` ctor | stateful, documents itself as not thread-safe |
-| `_writtenThisSession` | `ArchiveSession.cs` | unsynchronised `HashSet`; belongs below the barrier |
-| `CdcSegmentReader`'s Rabin window | `CdcSegmentReader.cs` | persists across segments by design, so the reader stays the single-threaded producer |
-
-`TreeWalkPublisher`'s `Stack<Frame>` DFS is untouched: the walk stays
-single-threaded and the concurrency is in what happens to the bytes it yields.
-
-**Done means:** `ConcurrentUploadTests`'s byte-identical theory extends to a full
-tree at 1, 2 and 4, and the concurrency rows in
-[phase-2-benchmarks.md](phase-2-benchmarks.md) stop being noise.
-
-### 2. A kill test with several uploads outstanding
+### 1. A kill test with several uploads outstanding
 
 Architecture 04 §5.1's "durable but unreferenced" state is now reachable *N* at a
 time. The matrix proves it at *N*=1; the case that kills a job mid-upload with
 several blobs in flight is not written.
 
-### 3. The remote binding
+This is the last piece of G3, and it is now the more interesting half: with the
+staged pipeline there are also *N* segments in flight above the barrier when the
+kill lands, so what the spool holds at that moment is worth asserting rather than
+assuming. `BlobSpoolResumeTests` proves resume at the default concurrency; it has
+not been run with the pipeline full.
+
+### 2. The remote binding
 
 Topologies 3 and 4, and the two exit criteria they own. Blocked on pairing, which
 reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
@@ -269,7 +281,7 @@ machinery, and gated by
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access).
 
-### Watch list — closed
+### Watch list
 
 The intermittent `Hosts.Tests` failure recurred during F1, was named
 (`ServiceTests.A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning`),
@@ -308,6 +320,36 @@ a front end needs it. And the sequence number was allocated outside the lock tha
 delivered it, so two concurrent reports could be delivered in the opposite order
 to their numbers; allocation now happens under the same lock, which makes the
 monotonicity `JobProgressEvent` documents actually true.
+
+**That entry was written as "closed" and it was not.** Under heavier load — four
+full suites in parallel rather than four copies of one project — the same test
+failed again, and the cause was a *second* race in it that the first diagnosis
+missed. Subscribing eagerly guarantees no event is dropped; it does not
+guarantee any event has been read yet. The test waited for the job to reach
+`Complete` and then read what the watching task had collected, which under load
+it had not finished collecting. It now waits for the watcher to see `Complete`,
+which by FIFO means it has seen everything before it. Twelve four-way-parallel
+full-suite runs are clean where three of four failed.
+
+The lesson is the one the watch list exists for: a plausible mechanism that
+explains a flake is not proof it is the only one. The eager-subscription fix was
+right and necessary, and stopping there was the error.
+
+### Watch list — open
+
+`Repository.Tests/EndToEnd/AgentPassTests.A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent`
+fails roughly one run in twelve under four-way parallel full-suite load, on
+`Assert.Contains(jobs.Jobs, … State == JobState.FailedPermanent)` — the pass
+reports two failures as expected, but the permanent one is not yet visible in the
+job-state store when the assertion reads it.
+
+Established as **not** caused by G2: the same load on the commit before the
+staged pipeline fails it at the same rate. It archives nothing — a missing root
+and an unparseable schedule — so it does not touch the pipeline at all. Recorded
+rather than chased, with the shape of the suspicion written down this time: it
+looks like the same class of defect as the progress flake, an assertion reading
+state that a writer has not finished publishing, rather than anything about
+scheduling.
 
 ---
 

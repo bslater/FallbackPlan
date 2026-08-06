@@ -1,6 +1,6 @@
 # Phase 2 benchmarks — throughput, attributed
 
-**Status:** F1 re-measured on a container; the reference-machine run is still owed · **Requirement:** NFR-PERF-007 · **Decision:** [ADR-0029 §6](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** F1 and G2 measured on a container; the reference-machine run is still owed · **Requirement:** NFR-PERF-007 · **Decision:** [ADR-0029 §6](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -155,6 +155,66 @@ these rows see.
 **Still a container, still not the reference machine.** NFR-PERF-007's ≥400 MB/s
 target is stated against that machine and remains untested.
 
+## Fourth run — after G2 staged the pipeline
+
+Same container as the third run, same method: both sides built from one tree with
+`ThroughputBenchmarks` confirmed byte-identical between them, ten sweeps per side,
+five run before-then-after and five after-then-before. Medians of all ten, full
+range in brackets.
+
+| Configuration | before | after | change |
+|---|---|---|---|
+| fixed-v1, concurrency 1 | 140.1 (117–142) | 320.9 (298–357) | **+129%** |
+| fixed-v1, concurrency 2 | 139.4 (121–144) | 360.8 (341–415) | **+159%** |
+| fixed-v1, concurrency 4 | 166.9 (156–186) | 356.9 (310–419) | **+114%** |
+| fixed-v1, concurrency 8 | 186.1 (168–200) | 459.8 (321–535) | **+147%** |
+| cdc-v1, concurrency 1 | 102.2 (96–104) | 137.7 (133–144) | **+35%** |
+| cdc-v1, concurrency 4 | 104.2 (98–106) | 142.5 (127–150) | **+37%** |
+| fixed-v1, no compression | 232.9 (145–242) | 343.6 (328–377) | **+48%** |
+| slow store 200 ms, concurrency 1 | 65.5 (64–66) | 72.1 (69–73) | +10% |
+| slow store 200 ms, concurrency 2 | 87.1 (84–88) | 116.6 (98–120) | **+34%** |
+| slow store 200 ms, concurrency 4 | 87.3 (82–90) | 114.8 (110–121) | **+32%** |
+
+**Unlike the F1 measurement, this one does not need the unanimity argument.**
+There the per-row change sat inside the run-to-run spread and only the direction
+across all rows was safe to report. Here the before and after ranges do not
+overlap on any row — fixed-v1 at concurrency 2 ranges 121–144 before and 341–415
+after — so each figure stands on its own. Ten of ten configurations improved, in
+both run orders, as before.
+
+**fixed-v1 throughput roughly doubled.** Two things did that: compression left
+the serial path, and so did the per-segment SHA-256. That second one is the
+"second hash" ADR-0029 §6 step 2 named and F1 did not reach — the pipeline was
+running two SHA-256 passes over every byte on one thread, the whole-file hash and
+the content id, and only the whole-file hash has to be there.
+
+**cdc-v1 gains much less (+35% against fixed-v1's +129%)**, and the reason is
+structural rather than incidental: `CdcSegmentReader`'s rolling window chains
+across segment boundaries, so the reader cannot be parallelised at all and stays
+the whole serial floor. Segmentation was measured at 6.4 GiB/s in isolation, so
+this is not the Rabin scan being slow — it is that under cdc-v1 more of the
+remaining work is on the one thread that cannot move.
+
+**Raising the setting past 2 buys little on this machine**, which is the honest
+reading of 360.8 at 2 against 356.9 at 4. Four logical cores, with a
+single-threaded reader and a single-threaded barrier both on them, is not many
+spare threads to give the concurrent stage. The default of 2 looks well chosen
+rather than lucky.
+
+### One thing the number hides
+
+**Concurrency 1 improved by 129%, and it is not a serial configuration any
+more.** The channel holds `Concurrency + 1` items, so even at 1 one segment is
+hashed and compressed while the previous is appended. The ordering barrier is
+still one thread and everything it protects still holds — but "1" no longer means
+"one thing at a time", and NFR-PERF-013's CPU cap is stated against a 4-core
+laptop. That should be measured rather than inferred from the setting's name.
+
+**Still a container, still not the reference machine.** NFR-PERF-007's ≥400 MB/s
+is stated against that machine. The fixed-v1 rows here now pass 400 *MiB/s* at
+concurrency 8 on some sweeps, which is a different unit on a different machine
+and is not the same claim.
+
 ## What this does and does not say
 
 **The concurrency rows still mean very little, and the table is left in so that
@@ -190,7 +250,11 @@ result: it was worth doing and it was not the problem.
   tables were taken against the per-record `fsync` and sidecar rewrite, which no
   longer exist; they are kept as the record of what was measured when, not as a
   current description of the engine.
-- the staged pipeline lands and the concurrency rows start to mean something.
+- ~~the staged pipeline lands and the concurrency rows start to mean something~~ —
+  **done, and measured: see the fourth run.** The rows mean something now, and
+  what they mean is that the setting matters much less than staging the pipeline
+  did: doubling throughput came from moving work off the serial thread, not from
+  raising the number.
 - **the reference machine is available.** Everything on this page is container
   measurement, useful for comparing configurations and versions against each
   other and useless against NFR-PERF-007's ≥400 MB/s, which has still never been

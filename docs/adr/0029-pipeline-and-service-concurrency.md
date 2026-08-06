@@ -271,18 +271,47 @@ guarantee that is not tracked.
 
 ## Implementation status (2026-08)
 
-Built: §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested
-value; §4's service-level scheduling — sets serialised, read work in its own
-lane, user-initiated work ahead of scheduled, and cancellation recording
-`JobState.Cancelled`; §5's progress events, with the states beyond `Scanning`
-actually emitted; and §6 step 1, [`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
+**All of it is built.**
 
-Not built: §1's staged pipeline, and §2's upload workers. Nothing consumes
-`Concurrency` yet, and the benchmark reports the settings anyway so that the
-spread across them is visible as noise — a calibration any later concurrency
-result has to beat. The one serial cost removed so far is the per-record `AesGcm`
-construction, which measured below the noise; that is a result, not a
-disappointment.
+§3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested value.
+§4's service-level scheduling — sets serialised, read work in its own lane,
+user-initiated work ahead of scheduled, and cancellation recording
+`JobState.Cancelled`. §5's progress events, with the states beyond `Scanning`
+actually emitted. §6's order of work, all three steps, with results in
+[`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
+
+§2's upload workers: a sealed blob is handed to a bounded worker set and the
+archive loop continues, with the covering intent made durable per blob before
+its own PUT.
+
+§1's staged pipeline: content id, prior-version reuse, object id, the dedup claim
+and compression run concurrently; assign ordinal → encrypt → append → digest stay
+strictly ordered on one thread. Ordering is by construction rather than
+reconstruction — segments enter a bounded channel in reader order and the barrier
+takes them out in it — so the reorder buffer this ADR anticipated is the channel
+itself. The reader stays single-threaded, as §1 requires and `CdcSegmentReader`'s
+rolling window makes mandatory.
+
+Three things the implementation decided that the decision did not.
+
+**The second hash was the bigger serial cost, not the cipher.** §6 step 2 named
+the per-record `AesGcm` construction and "the second hash" together. The cipher
+measured below the noise, which was reported as a result. The second hash — a
+per-segment SHA-256 running on the same thread as the whole-file SHA-256 — moved
+above the barrier with the rest of the concurrent stage, and the combined effect
+more than doubled throughput.
+
+**`Concurrency = 1` is no longer strictly serial**, and this is worth being
+explicit about. The channel holds `Concurrency + 1` items, so at 1 one segment is
+hashed and compressed while the previous one is appended. The barrier is still a
+single thread, so everything §1 protects still holds, and this mirrors what §2's
+upload channel already does for the same reason. But a reader who takes "1" to
+mean "one thing at a time" would be wrong, and NFR-PERF-013's CPU cap should be
+measured against that rather than assumed from the number.
+
+**Alternative "reserve ordinals, encrypt concurrently" stays rejected**, and the
+measurement supports it: with compression moved off the ordered stage, the
+barrier is not the constraint at these rates.
 
 [Q20](../open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
 stays open on its second half. Its first half now has an answer:
