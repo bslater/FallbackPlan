@@ -55,6 +55,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly Channel<SealedBlob> _uploads;
     private readonly Task[] _uploadWorkers;
     private readonly Lock _blobGate = new();
+    private readonly Lock _indexLookupGate = new();
     private readonly Func<ObjectId, bool>? _segmentExists;
     private readonly HashSet<ObjectId> _writtenThisSession = [];
     private BlobWriter? _writer;
@@ -112,7 +113,66 @@ public sealed class ArchiveSession : IAsyncDisposable
     }
 
     /// <summary>Every blob sealed and uploaded by this session so far.</summary>
-    public IReadOnlyList<ArchivedBlob> Blobs => _blobs;
+    /// <remarks>
+    /// A snapshot, not a view. Upload workers append to the underlying list
+    /// while the archive loop runs (ADR-0029 §2), and handing out the live list
+    /// would let a caller enumerate it during a resize.
+    /// </remarks>
+    public IReadOnlyList<ArchivedBlob> Blobs
+    {
+        get
+        {
+            lock (_blobGate)
+            {
+                return [.. _blobs];
+            }
+        }
+    }
+
+    /// <summary>The blobs sealed since <paramref name="sealedBefore"/>, and the count now.</summary>
+    /// <remarks>
+    /// One lock acquisition for both, because taking the count and the tail
+    /// separately would let an upload land between them and attribute a blob to
+    /// the wrong call.
+    /// </remarks>
+    private List<ArchivedBlob> BlobsSealedSince(int sealedBefore)
+    {
+        lock (_blobGate)
+        {
+            return [.. _blobs.Skip(sealedBefore)];
+        }
+    }
+
+    private int SealedBlobCount()
+    {
+        lock (_blobGate)
+        {
+            return _blobs.Count;
+        }
+    }
+
+    /// <summary>Whether the index already locates this segment (09 §6; NFR-PERF-010).</summary>
+    /// <remarks>
+    /// Gated because the delegate reaches <c>Catalogue.HasLocation</c>, which
+    /// issues a command on one shared <c>SqliteConnection</c> and holds no lock
+    /// of its own. That was safe while the ordered stage was the only caller;
+    /// the concurrent stage calls it from several threads, and a connection is
+    /// not safe for concurrent commands. The query is an indexed point lookup on
+    /// a local database, so serialising it costs far less than the compression
+    /// the answer avoids.
+    /// </remarks>
+    private bool SegmentExistsInIndex(ObjectId objectId)
+    {
+        if (_segmentExists is null)
+        {
+            return false;
+        }
+
+        lock (_indexLookupGate)
+        {
+            return _segmentExists(objectId);
+        }
+    }
 
     /// <summary>
     /// Archives one file as a new version, comparing against
@@ -154,7 +214,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
-        var sealedBefore = _blobs.Count;
+        var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         ISegmentReader segmentReader = usesCdc
@@ -212,7 +272,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         return new ArchiveResult(
             references,
             contentIds,
-            _blobs.Skip(sealedBefore).ToList(),
+            BlobsSealedSince(sealedBefore),
             logicalLength,
             hash,
             _policy.SegmentationProfile,
@@ -244,7 +304,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
-        var sealedBefore = _blobs.Count;
+        var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         long position = 0;
@@ -296,7 +356,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         return new ArchiveResult(
             references,
             contentIds,
-            _blobs.Skip(sealedBefore).ToList(),
+            BlobsSealedSince(sealedBefore),
             logicalLength,
             hash,
             _policy.SegmentationProfile,
@@ -440,7 +500,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         // identifier the index already locates — or this session already
         // wrote — needs no new record. Keyed on the object id so the test
         // survives a catalogue rebuild.
-        if (_writtenThisSession.Contains(objectId) || _segmentExists?.Invoke(objectId) == true)
+        if (_writtenThisSession.Contains(objectId) || SegmentExistsInIndex(objectId))
         {
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
             return objectId;
