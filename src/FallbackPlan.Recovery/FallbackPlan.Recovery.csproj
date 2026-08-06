@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- The standalone recovery tool's dependency closure is the smallest
+       that can restore: format, crypto, packing, storage — no engine, no
+       catalogue, no SQLite, no UI (architecture 11 §2; NFR-PORT-001).
+       DependencyRuleTests pins this list. -->
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Repository.Format\FallbackPlan.Repository.Format.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository.Packing\FallbackPlan.Repository.Packing.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+  </ItemGroup>
+
+</Project>

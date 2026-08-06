@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
+    <!-- Prebuilt package from the committed external/packages feed (ADR-0021). -->
+    <PackageReference Include="Bodu.Security.Cryptography" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

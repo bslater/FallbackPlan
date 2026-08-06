@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="FsCheck.Xunit" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.TestSupport\FallbackPlan.TestSupport.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Recovery\FallbackPlan.Recovery.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Agent\FallbackPlan.Agent.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+  </ItemGroup>
+
+</Project>

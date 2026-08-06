@@ -1,0 +1,8 @@
+# Extends the repository root .editorconfig (root is not set here, so the
+# root file still applies). Only test-specific relaxations belong in this file.
+
+[*.cs]
+# ConfigureAwait(false) buys nothing in xunit tests — there is no
+# synchronisation context to deadlock against — and litters assertions with
+# noise. Library code under src/ keeps the analyzer on.
+dotnet_diagnostic.CA2007.severity = none

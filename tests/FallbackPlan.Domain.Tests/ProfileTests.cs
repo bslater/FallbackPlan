@@ -1,0 +1,78 @@
+using FallbackPlan.Domain.Profiles;
+
+namespace FallbackPlan.Domain.Tests;
+
+/// <summary>
+/// Exercises the profile families (specification 00 §3): known values resolve
+/// to their singletons, unassigned values are refused, and the private-use
+/// range is refused because it must not appear in a portable repository.
+/// </summary>
+public sealed class ProfileTests
+{
+    [Fact]
+    public void Known_segmentation_profiles_resolve()
+    {
+        Assert.True(SegmentationProfile.TryFromValue(0x0001, out var fixedV1));
+        Assert.Same(SegmentationProfile.FixedV1, fixedV1);
+        Assert.True(SegmentationProfile.TryFromValue(0x0002, out var cdcV1));
+        Assert.Same(SegmentationProfile.CdcV1, cdcV1);
+    }
+
+    [Fact]
+    public void Known_compression_profiles_resolve()
+    {
+        Assert.True(CompressionProfile.TryFromValue(0x0000, out var none));
+        Assert.Same(CompressionProfile.None, none);
+        Assert.True(CompressionProfile.TryFromValue(0x0001, out var zstd));
+        Assert.Same(CompressionProfile.ZstdV1, zstd);
+    }
+
+    [Fact]
+    public void Known_encryption_profiles_resolve()
+    {
+        Assert.True(EncryptionProfile.TryFromValue(0x0001, out var aes));
+        Assert.Same(EncryptionProfile.Aes256GcmV1, aes);
+        Assert.True(EncryptionProfile.TryFromValue(0x0002, out var xchacha));
+        Assert.Same(EncryptionProfile.XChaCha20Poly1305V1, xchacha);
+    }
+
+    [Fact]
+    public void Known_content_hash_and_kdf_profiles_resolve()
+    {
+        Assert.True(ContentHashProfile.TryFromValue(0x0001, out var sha256));
+        Assert.Same(ContentHashProfile.Sha256V1, sha256);
+        Assert.True(KdfProfile.TryFromValue(0x0001, out var argon2id));
+        Assert.Same(KdfProfile.Argon2id, argon2id);
+    }
+
+    [Theory]
+    [InlineData((ushort)0x0003)]
+    [InlineData((ushort)0x7FFF)]
+    public void Unassigned_values_are_refused(ushort value)
+    {
+        Assert.False(SegmentationProfile.TryFromValue(value, out _));
+        Assert.False(EncryptionProfile.TryFromValue(value, out _));
+        Assert.False(ContentHashProfile.TryFromValue(value, out _));
+        Assert.False(KdfProfile.TryFromValue(value, out _));
+    }
+
+    [Theory]
+    [InlineData((ushort)0x8000)]
+    [InlineData((ushort)0xFFFF)]
+    public void Private_use_range_is_refused_in_a_portable_repository(ushort value)
+    {
+        Assert.False(SegmentationProfile.TryFromValue(value, out _));
+        Assert.False(CompressionProfile.TryFromValue(value, out _));
+        Assert.False(EncryptionProfile.TryFromValue(value, out _));
+        Assert.False(ContentHashProfile.TryFromValue(value, out _));
+        Assert.False(KdfProfile.TryFromValue(value, out _));
+    }
+
+    [Fact]
+    public void Compression_none_is_a_valid_wire_value_but_segmentation_zero_is_not()
+    {
+        Assert.True(CompressionProfile.TryFromValue(0x0000, out _));
+        Assert.False(SegmentationProfile.TryFromValue(0x0000, out _));
+        Assert.False(EncryptionProfile.TryFromValue(0x0000, out _));
+    }
+}

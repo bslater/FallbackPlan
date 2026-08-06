@@ -1,0 +1,67 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- InvariantGlobalization is deliberately NOT set. Specification 03 §2
+         requires NFC-normalising passphrases, and string.Normalize throws for
+         non-ASCII input in invariant mode — a non-ASCII passphrase would crash
+         repository creation, the exact case normalisation exists for. The
+         trade-off is recorded with Q14 in docs/open-questions.md. -->
+  </PropertyGroup>
+
+  <!-- Correctness settings. Warnings-as-errors is deliberate: this is a backup
+       engine, and a warning we habitually ignore is a defect we ship. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningLevel>9999</WarningLevel>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- Reproducible builds. NFR-SUP-003 requires an independent rebuild to
+       produce identical artifacts. -->
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- Supply chain (NFR-SUP-002, NFR-SUP-003).
+
+       NuGetAudit is set explicitly rather than inherited: the "warnings-as-
+       errors caught a vulnerable transitive" story this repository tells
+       depends on audit mode 'all', and an SDK default is not a control — a
+       future SDK could narrow it to direct-only and nothing would notice.
+
+       Lockfiles make restore reproducible, not just compilation: without one,
+       what an "identical rebuild" restores depends on feed state at rebuild
+       time. CI restores in locked mode so a drifted lockfile fails rather
+       than silently regenerating.
+
+       Bodu is consumed as prebuilt packages from the committed
+       external/packages feed (ADR-0021), so every project this file reaches
+       is our own, and the Bodu packages sit inside the audit and lockfile
+       graph like any other package. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>FallbackPlan</Product>
+    <RepositoryUrl>https://github.com/bslater/FallbackPlan</RepositoryUrl>
+    <!-- Code is AGPL-3.0-only, dual-licensed with commercial terms from the
+         maintainer (ADR-0001, LICENSING.md). specifications/ carries
+         Apache-2.0 separately so independent readers stay unencumbered. -->
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>

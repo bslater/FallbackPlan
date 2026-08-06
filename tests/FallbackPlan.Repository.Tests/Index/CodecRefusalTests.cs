@@ -1,0 +1,158 @@
+using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Index;
+
+namespace FallbackPlan.Repository.Tests.Index;
+
+/// <summary>
+/// What the index codecs refuse. A decoder that accepts a malformed delta
+/// is worse than one that crashes: the index is what says where every
+/// object lives, so a silently mis-decoded record becomes a restore that
+/// reads the wrong bytes or reports data as absent.
+/// </summary>
+/// <remarks>
+/// Each case is built by hand rather than by mutating a valid encoding,
+/// because a mutation that happens to stay well-formed proves nothing —
+/// the point is to construct exactly one violation and show it is named.
+/// </remarks>
+public sealed class CodecRefusalTests
+{
+    private static WriterId Writer => WriterId.FromBytes(Enumerable.Repeat((byte)0xA1, 16).ToArray());
+
+    private static byte[] Bytes(byte value, int count = 16) => [.. Enumerable.Repeat(value, count)];
+
+    /// <summary>
+    /// Writes a delta body key by key, so a test can omit a mandatory key,
+    /// add one the specification never assigned, or give one the wrong
+    /// value — none of which a valid encoder can be asked to produce.
+    /// </summary>
+    private static byte[] Delta(
+        bool includeWriter = true,
+        bool includeSequence = true,
+        bool includeGeneration = true,
+        bool includeSignature = true,
+        bool? isVoid = null,
+        uint? unknownKey = null)
+    {
+        var keys = (includeWriter ? 1 : 0) + (includeSequence ? 1 : 0) + (includeGeneration ? 1 : 0)
+            + (includeSignature ? 1 : 0) + (isVoid is null ? 0 : 1) + (unknownKey is null ? 0 : 1)
+            + 2; // keys 6 and 7 are always written
+
+        var writer = new CanonicalCborWriter();
+        writer.WriteStartMap(keys);
+
+        if (includeWriter)
+        {
+            writer.WriteKey(1);
+            writer.WriteByteString(Writer.ToArray());
+        }
+
+        if (includeSequence)
+        {
+            writer.WriteKey(2);
+            writer.WriteUnsignedInteger(1);
+        }
+
+        if (includeGeneration)
+        {
+            writer.WriteKey(4);
+            writer.WriteUnsignedInteger(0);
+        }
+
+        writer.WriteKey(6);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+
+        writer.WriteKey(7);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+
+        if (isVoid is { } voidValue)
+        {
+            writer.WriteKey(8);
+            writer.WriteBoolean(voidValue);
+        }
+
+        if (includeSignature)
+        {
+            writer.WriteKey(9);
+            writer.WriteByteString(Bytes(0x5A, 64));
+        }
+
+        if (unknownKey is { } key)
+        {
+            writer.WriteKey(key);
+            writer.WriteUnsignedInteger(0);
+        }
+
+        writer.WriteEndMap();
+        return writer.Encode();
+    }
+
+    [Fact]
+    public void A_delta_carrying_a_key_the_specification_never_assigned_is_refused()
+    {
+        // Ignoring an unknown key would let a future — or forged — writer
+        // smuggle meaning past a reader that cannot act on it (07 §2).
+        var exception = Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.Decode(Delta(unknownKey: 42)));
+
+        Assert.Contains("unknown key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true)]   // no writer_id
+    [InlineData(true, false, true, true)]   // no sequence
+    [InlineData(true, true, false, true)]   // no generation
+    [InlineData(true, true, true, false)]   // no signature
+    public void A_delta_missing_a_mandatory_key_is_refused(
+        bool writer, bool sequence, bool generation, bool signature)
+    {
+        var exception = Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.Decode(
+            Delta(includeWriter: writer, includeSequence: sequence,
+                  includeGeneration: generation, includeSignature: signature)));
+
+        Assert.Contains("mandatory", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_delta_whose_is_void_is_false_is_refused()
+    {
+        // The key exists to mark a void delta, so present-and-false is a
+        // third state the format does not have: writing it means the
+        // producer misunderstood the flag (07 §2 key 8).
+        var exception = Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.Decode(Delta(isVoid: false)));
+
+        Assert.Contains("is_void", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_void_delta_declared_as_such_is_accepted()
+    {
+        // The other side of the rule: is_void present and true decodes, so
+        // the refusal above is about the value and not about the key.
+        var decoded = IndexDeltaCodec.Decode(Delta(isVoid: true));
+
+        Assert.True(decoded.Delta.IsVoid);
+        Assert.Empty(decoded.Delta.Entries);
+    }
+
+    [Fact]
+    public void Trailing_bytes_after_a_delta_are_refused()
+    {
+        // A decoder that stops at the end of the map would accept a record
+        // with content appended after it — the shape a smuggling attack
+        // takes against a length-prefixed reader.
+        var valid = Delta();
+        var padded = new byte[valid.Length + 1];
+        valid.CopyTo(padded, 0);
+
+        Assert.ThrowsAny<Exception>(() => IndexDeltaCodec.Decode(padded));
+    }
+
+    [Fact]
+    public void Empty_bytes_are_refused()
+    {
+        Assert.ThrowsAny<Exception>(() => IndexDeltaCodec.Decode(ReadOnlyMemory<byte>.Empty));
+    }
+}

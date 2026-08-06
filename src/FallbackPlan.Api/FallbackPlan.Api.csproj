@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Required by the source-generated LibraryImport marshalling that reads
+         peer credentials on macOS. The alternative, DllImport, generates a
+         warning that warnings-as-errors would turn into a build failure — so
+         this is the honest option rather than the quiet one. The unsafe surface
+         is one libc call in PeerCredentials. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Domain and nothing else. This is what makes 11 section 2's rule
+         mechanically enforceable: a front end that references this project
+         cannot reach the engine, the application layer, or a store provider
+         through it, because none of them are here. A UI that could open the
+         repository directly would be a second writer. -->
+    <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

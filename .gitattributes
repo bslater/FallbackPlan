@@ -1,0 +1,21 @@
+# Normalize everything git classifies as text to LF in the repository.
+* text=auto
+
+# The working tree is LF too, matching .editorconfig's end_of_line = lf, so
+# checkouts on Windows do not churn line endings.
+*.cs  text eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf
+
+# Never normalize binary artifacts.
+*.nupkg binary
+*.snk   binary
+*.png   binary
+*.ico   binary
+
+# Committed conformance fixture repositories are frozen bytes (NFR-COMP-004):
+# any transformation — line-ending normalisation included — would corrupt
+# them. The README inside stays text.
+specifications/repository-format/conformance/fixtures/** binary
+specifications/repository-format/conformance/fixtures/**/README.md text eol=lf
+specifications/repository-format/conformance/fixtures/**/kit.txt   text eol=lf

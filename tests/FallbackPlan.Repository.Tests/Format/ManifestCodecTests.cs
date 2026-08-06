@@ -1,0 +1,406 @@
+using System.Security.Cryptography;
+using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
+
+namespace FallbackPlan.Repository.Tests.Format;
+
+/// <summary>
+/// The manifest codecs (specification 06; FR-MAN-003, FR-ARCH-010,
+/// NFR-PORT-003): round-trips are exact, unknown keys are rejected so
+/// physical location has nowhere to hide (exit criteria 2 and 9), the
+/// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the
+/// snapshot signature survives the two-pass construction.
+/// </summary>
+public sealed class ManifestCodecTests
+{
+    private static ObjectId TestObjectId(byte seed)
+    {
+        var bytes = new byte[32];
+        Array.Fill(bytes, seed);
+        return ObjectId.FromBytes(bytes);
+    }
+
+    private static FileVersionManifest SampleFileVersion() => new()
+    {
+        EntryKind = EntryKind.File,
+        Name = "report.docx"u8.ToArray(),
+        NameNormalisation = NameNormalisation.Nfc,
+        LogicalLength = 300_000,
+        SegmentReferences =
+        [
+            new SegmentReference(0, 131_072, TestObjectId(1)),
+            new SegmentReference(131_072, 131_072, TestObjectId(2)),
+            new SegmentReference(262_144, 37_856, TestObjectId(3)),
+        ],
+        WholeFileHash = SHA256.HashData("whole file"u8),
+        SegmentationProfile = 0x0001,
+        Metadata = new EntryMetadata
+        {
+            ModifiedAt = 1_722_600_000_000,
+            PosixMode = 0x1A4, // 0644
+            OwnerName = "ben",
+            ExtendedAttributes = [new ExtendedAttributeEntry("user.origin"u8.ToArray(), "download"u8.ToArray())],
+        },
+    };
+
+    [Fact]
+    public void A_file_version_manifest_round_trips_byte_identically()
+    {
+        var encoded = FileVersionManifestCodec.Encode(SampleFileVersion());
+        var decoded = FileVersionManifestCodec.Decode(encoded);
+
+        Assert.Equal(encoded, FileVersionManifestCodec.Encode(decoded));
+        Assert.Equal(3, decoded.SegmentReferences.Count);
+        Assert.Equal("ben", decoded.Metadata.OwnerName);
+        Assert.Equal((ulong)1_722_600_000_000, decoded.Metadata.ModifiedAt);
+    }
+
+    [Fact]
+    public void An_unknown_manifest_key_is_rejected_not_skipped()
+    {
+        // Hand-build a manifest carrying key 14 — exactly where a physical
+        // hint would smuggle in (06 §3.1; exit criterion 2's teeth).
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(1);
+        writer.WriteKey(14);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteEndMap();
+
+        var exception = Assert.Throws<ManifestValidationException>(() =>
+            FileVersionManifestCodec.Decode(writer.Encode()));
+        Assert.Contains("unknown key", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_four_element_segment_reference_is_rejected()
+    {
+        // A fourth array position is the other place a blob id could hide
+        // (06 §3: "an array of exactly three elements").
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(1);
+        writer.WriteKey(5);
+        writer.WriteStartArray(1);
+        writer.WriteStartArray(4);
+        writer.WriteUnsignedInteger(0);
+        writer.WriteUnsignedInteger(100);
+        writer.WriteByteString(TestObjectId(1).ToArray());
+        writer.WriteUnsignedInteger(7); // the smuggled physical hint
+        writer.WriteEndArray();
+        writer.WriteEndArray();
+        writer.WriteEndMap();
+
+        var exception = Assert.Throws<ManifestValidationException>(() =>
+            FileVersionManifestCodec.Decode(writer.Encode()));
+        Assert.Contains("three elements", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_coverage_gap_is_rejected()
+    {
+        var manifest = SampleFileVersion() with
+        {
+            SegmentReferences =
+            [
+                new SegmentReference(0, 131_072, TestObjectId(1)),
+                // gap: [131072, 262144) uncovered
+                new SegmentReference(262_144, 37_856, TestObjectId(3)),
+            ],
+        };
+
+        var exception = Assert.Throws<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
+        Assert.Contains("Coverage breaks", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Overlapping_references_are_rejected()
+    {
+        var manifest = SampleFileVersion() with
+        {
+            LogicalLength = 200_000,
+            SegmentReferences =
+            [
+                new SegmentReference(0, 131_072, TestObjectId(1)),
+                new SegmentReference(100_000, 100_000, TestObjectId(2)),
+            ],
+        };
+
+        Assert.Throws<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
+    }
+
+    [Fact]
+    public void Sparse_extents_complete_the_coverage()
+    {
+        var manifest = SampleFileVersion() with
+        {
+            LogicalLength = 400_000,
+            SegmentReferences =
+            [
+                new SegmentReference(0, 131_072, TestObjectId(1)),
+                new SegmentReference(300_000, 100_000, TestObjectId(2)),
+            ],
+            SparseExtents = [new SparseExtent(131_072, 168_928)],
+        };
+
+        var decoded = FileVersionManifestCodec.Decode(FileVersionManifestCodec.Encode(manifest));
+
+        Assert.Single(decoded.SparseExtents);
+        Assert.Equal((ulong)168_928, decoded.SparseExtents[0].Length);
+    }
+
+    [Fact]
+    public void A_zero_length_file_has_empty_references_and_the_hash_of_the_empty_string()
+    {
+        var manifest = SampleFileVersion() with
+        {
+            LogicalLength = 0,
+            SegmentReferences = [],
+            WholeFileHash = SHA256.HashData([]),
+        };
+
+        var decoded = FileVersionManifestCodec.Decode(FileVersionManifestCodec.Encode(manifest));
+
+        Assert.Empty(decoded.SegmentReferences);
+        Assert.Equal(SHA256.HashData([]), decoded.WholeFileHash.ToArray());
+    }
+
+    [Fact]
+    public void Tree_entries_out_of_byte_order_are_rejected()
+    {
+        var tree = new TreeManifest
+        {
+            Entries =
+            [
+                new TreeEntry("beta"u8.ToArray(), TestObjectId(1), EntryKind.File),
+                new TreeEntry("alpha"u8.ToArray(), TestObjectId(2), EntryKind.File),
+            ],
+            Name = "docs"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+            Metadata = EntryMetadata.Empty,
+        };
+
+        Assert.Throws<ManifestValidationException>(() => TreeManifestCodec.Encode(tree));
+    }
+
+    [Fact]
+    public void Duplicate_tree_names_are_rejected_but_case_variants_are_legitimate()
+    {
+        var duplicate = new TreeManifest
+        {
+            Entries =
+            [
+                new TreeEntry("same"u8.ToArray(), TestObjectId(1), EntryKind.File),
+                new TreeEntry("same"u8.ToArray(), TestObjectId(2), EntryKind.File),
+            ],
+            Name = "docs"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+        };
+
+        Assert.Throws<ManifestValidationException>(() => TreeManifestCodec.Encode(duplicate));
+
+        // Case variants differ in raw bytes — a legitimate state on a
+        // case-sensitive source (06 §5).
+        var caseVariants = duplicate with
+        {
+            Entries =
+            [
+                new TreeEntry("Same"u8.ToArray(), TestObjectId(1), EntryKind.File),
+                new TreeEntry("same"u8.ToArray(), TestObjectId(2), EntryKind.File),
+            ],
+        };
+
+        var decoded = TreeManifestCodec.Decode(TreeManifestCodec.Encode(caseVariants));
+        Assert.Equal(2, decoded.Entries.Count);
+    }
+
+    [Fact]
+    public void A_tree_chain_validates_and_flattens_in_chain_order()
+    {
+        var head = new TreeManifest
+        {
+            Entries = [new TreeEntry("aaa"u8.ToArray(), TestObjectId(1), EntryKind.File)],
+            Name = "big-directory"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+            Metadata = EntryMetadata.Empty,
+            Continuation = TestObjectId(9),
+        };
+        var tail = new TreeManifest
+        {
+            Entries = [new TreeEntry("bbb"u8.ToArray(), TestObjectId(2), EntryKind.File)],
+        };
+
+        var flattened = TreeChain.ValidateAndFlatten([head, tail]);
+
+        Assert.Equal(2, flattened.Count);
+        Assert.Equal("aaa"u8.ToArray(), flattened[0].Name.ToArray());
+    }
+
+    [Fact]
+    public void A_chain_whose_shards_interleave_is_a_damage_finding()
+    {
+        var head = new TreeManifest
+        {
+            Entries = [new TreeEntry("zzz"u8.ToArray(), TestObjectId(1), EntryKind.File)],
+            Name = "dir"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+            Continuation = TestObjectId(9),
+        };
+        var tail = new TreeManifest
+        {
+            Entries = [new TreeEntry("aaa"u8.ToArray(), TestObjectId(2), EntryKind.File)],
+        };
+
+        // Every entry must sort strictly after every predecessor entry (06 §9).
+        Assert.Throws<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
+    }
+
+    [Fact]
+    public void A_continuation_carrying_head_fields_is_rejected()
+    {
+        var head = new TreeManifest
+        {
+            Entries = [new TreeEntry("aaa"u8.ToArray(), TestObjectId(1), EntryKind.File)],
+            Name = "dir"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+            Continuation = TestObjectId(9),
+        };
+        var tail = new TreeManifest
+        {
+            Entries = [new TreeEntry("bbb"u8.ToArray(), TestObjectId(2), EntryKind.File)],
+            Name = "dir-again"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+        };
+
+        Assert.Throws<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
+    }
+
+    private static SnapshotManifest SampleSnapshot() => new()
+    {
+        SnapshotId = Enumerable.Repeat((byte)0x11, 16).ToArray(),
+        DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+        BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+        CaptureStartedAt = 1_722_600_000_000,
+        CaptureCompletedAt = 1_722_600_100_000,
+        RootTree = TestObjectId(6),
+        ParentSnapshots = [Enumerable.Repeat((byte)0x44, 16).ToArray()],
+        PolicyManifest = TestObjectId(8),
+        ConsistencyMethod = 1,
+        CaptureStatus = 1,
+        SourceFilesystem = new SourceFilesystem(CaseSensitive: true, SupportsSparse: true, Name: "ext4"),
+        PublicationGeneration = 0,
+        ObservedClockSkewMs = -125,
+        ClientVersion = "fallbackplan-tests/1.0",
+        Tags = ["nightly"],
+    };
+
+    [Fact]
+    public void A_signed_snapshot_round_trips_and_verifies_through_the_two_pass_construction()
+    {
+        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+
+        var manifest = SampleSnapshot();
+        var signedBytes = SnapshotManifestCodec.EncodeForSigning(manifest);
+        var stored = SnapshotManifestCodec.Encode(manifest, signer.Sign(signedBytes));
+
+        var decoded = SnapshotManifestCodec.Decode(stored);
+
+        // The verifier re-encodes keys 1-16 — it can never strip a suffix,
+        // because adding key 17 changed the map header's count (06 §6.1).
+        Assert.Equal(signedBytes, decoded.SignedBytes.ToArray());
+        Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        Assert.Equal(manifest.RootTree, decoded.Manifest.RootTree);
+        Assert.Equal(-125, decoded.Manifest.ObservedClockSkewMs);
+    }
+
+    [Fact]
+    public void A_tampered_snapshot_field_fails_verification_as_a_security_finding()
+    {
+        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+
+        var manifest = SampleSnapshot();
+        var stored = SnapshotManifestCodec.Encode(manifest, signer.Sign(SnapshotManifestCodec.EncodeForSigning(manifest)));
+
+        // Re-encode with a substituted root tree but the original signature:
+        // the substitution attack the signature exists to catch.
+        var forged = SnapshotManifestCodec.Encode(
+            manifest with { RootTree = TestObjectId(0xEE) },
+            SnapshotManifestCodec.Decode(stored).Signature.Span);
+
+        var decoded = SnapshotManifestCodec.Decode(forged);
+        Assert.False(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+    }
+
+    [Fact]
+    public void Absent_optional_snapshot_keys_are_omitted_not_nulled()
+    {
+        var manifest = SampleSnapshot() with { ErrorManifest = null, ObservedClockSkewMs = null };
+
+        var decoded = SnapshotManifestCodec.Decode(
+            SnapshotManifestCodec.Encode(manifest, new byte[64]));
+
+        Assert.Null(decoded.Manifest.ErrorManifest);
+        Assert.Null(decoded.Manifest.ObservedClockSkewMs);
+    }
+
+    [Fact]
+    public void A_policy_manifest_round_trips_under_both_segmentation_profiles()
+    {
+        var fixedPolicy = new PolicyManifest
+        {
+            SegmentationProfile = 0x0001,
+            SegmentSizeOrTarget = 1024 * 1024,
+            CompressionProfile = 0x0001,
+            CompressionThresholdPermille = 50,
+            EncryptionProfile = 0x0001,
+            BlobTargetSize = 64 * 1024 * 1024,
+            BlobMaxSize = 256 * 1024 * 1024,
+            BlobMaxRecordCount = 65_536,
+            DedupTrustDomain = 2,
+            ExcludeRules = ["**/.cache/**"],
+        };
+
+        // Compare via re-encoding: record equality would compare the list
+        // properties by reference, and the bytes are the actual contract.
+        var fixedBytes = PolicyManifestCodec.Encode(fixedPolicy);
+        var decodedFixed = PolicyManifestCodec.Decode(fixedBytes);
+        Assert.Equal(fixedBytes, PolicyManifestCodec.Encode(decodedFixed));
+        Assert.Equal(["**/.cache/**"], decodedFixed.ExcludeRules);
+        Assert.Null(decodedFixed.CdcMinSize);
+
+        var cdcPolicy = fixedPolicy with
+        {
+            SegmentationProfile = 0x0002,
+            SegmentSizeOrTarget = 65_536,
+            CdcMinSize = 8_192,
+            CdcMaxSize = 524_288,
+            CdcWindowSize = 64,
+        };
+
+        var cdcBytes = PolicyManifestCodec.Encode(cdcPolicy);
+        var decodedCdc = PolicyManifestCodec.Decode(cdcBytes);
+        Assert.Equal(cdcBytes, PolicyManifestCodec.Encode(decodedCdc));
+        Assert.Equal((ulong)8_192, decodedCdc.CdcMinSize);
+        Assert.Equal((byte)64, decodedCdc.CdcWindowSize);
+    }
+
+    [Fact]
+    public void An_error_manifest_round_trips()
+    {
+        var manifest = new ErrorManifest(
+        [
+            new CaptureFailure(
+                ["home"u8.ToArray(), "locked.db"u8.ToArray()],
+                CaptureFailureReason.ChangedDuringRead,
+                "file changed twice during read"),
+        ]);
+
+        var decoded = ErrorManifestCodec.Decode(ErrorManifestCodec.Encode(manifest));
+
+        Assert.Single(decoded.Failures);
+        Assert.Equal(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
+        Assert.Equal(2, decoded.Failures[0].PathComponents.Count);
+    }
+}
