@@ -104,7 +104,7 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
 | F1 | The spool checkpoint is written once at create; the resume walk authenticates; `TryResume` gains a production caller | NFR-SEC-003 | An interrupted blob resumes byte-identically, proven by test rather than assumed |
-| F2 | Upload leaves the archive loop, with a drain barrier before the index delta | ADR-0029 §2 | Every blob's covering intent is durable before its own PUT, with several in flight |
+| F2 ✅ | Upload leaves the archive loop, with a drain barrier before the index delta | ADR-0029 §2 | Every blob's covering intent is durable before its own PUT, with several in flight |
 | F3 ✅ | The per-record cipher construction is removed | — | Measured, not assumed: [the benchmark](phase-2-benchmarks.md) shows it is below the noise, which is itself the result |
 
 **F1 is not a smaller change than it looks, and is deliberately not rushed.** The
@@ -163,6 +163,10 @@ restated here with the test that will prove each:
 - **Restore, verify and check over the command surface.** The contract carries
   them; this service build answers them with a stated
   "this is a read path, run it directly" rather than a silence.
+- **An interruption case for *N* blobs in flight.** ADR-0029 §2 makes the
+  "durable but unreferenced" state of architecture 04 §5.1 reachable *N* at a
+  time. The existing matrix passes unchanged and covers the state at *N*=1; the
+  case that kills a job with several uploads outstanding is not written.
 
 ---
 

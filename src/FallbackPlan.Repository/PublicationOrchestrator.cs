@@ -187,7 +187,7 @@ public sealed partial class PublicationOrchestrator
             _generation.Value,
             cancellationToken).ConfigureAwait(false);
 
-        var scope = new ExtensionIntentScope(
+        using var scope = new ExtensionIntentScope(
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
@@ -338,23 +338,41 @@ public sealed partial class PublicationOrchestrator
         ulong intentSequence,
         ulong declaredMaxDurationMs,
         ulong nowUnixMilliseconds,
-        uint generation) : IIntentScope
+        uint generation) : IIntentScope, IDisposable
     {
         private readonly HashSet<BlobId> _covered = [];
 
+        // Uploads run concurrently now (ADR-0029 §2), so this is called from
+        // several workers at once. Serialising the whole method rather than
+        // just the set is deliberate: the journal allocates a writer sequence
+        // and PUTs, and one intent extension at a time is both simpler to
+        // reason about and immaterial to throughput next to the blob PUT it
+        // guards.
+        private readonly SemaphoreSlim _gate = new(1, 1);
+
         public async ValueTask EnsureCoveredAsync(BlobId blobId, CancellationToken cancellationToken)
         {
-            if (!_covered.Add(blobId))
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                return;
-            }
+                if (!_covered.Add(blobId))
+                {
+                    return;
+                }
 
-            await journal.PublishAsync(
-                JournalRecordKind.IntentExtension,
-                new JournalPayload.IntentExtension(intentSequence, [blobId], declaredMaxDurationMs),
-                nowUnixMilliseconds,
-                generation,
-                cancellationToken).ConfigureAwait(false);
+                await journal.PublishAsync(
+                    JournalRecordKind.IntentExtension,
+                    new JournalPayload.IntentExtension(intentSequence, [blobId], declaredMaxDurationMs),
+                    nowUnixMilliseconds,
+                    generation,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
+
+        public void Dispose() => _gate.Dispose();
     }
 }

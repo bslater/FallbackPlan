@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Security.Cryptography;
+using System.Threading.Channels;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Configuration;
@@ -45,6 +46,15 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
     private readonly ZstdSegmentCodec? _codec;
     private readonly List<ArchivedBlob> _blobs = [];
+
+    // Upload leaves the archive loop (ADR-0029 §2). A sealed blob is handed to
+    // a bounded set of workers and the loop continues; before this, the whole
+    // pipeline stalled for the duration of every PUT — the largest structural
+    // stall in the design, and worst precisely where it matters most, on a slow
+    // or remote destination.
+    private readonly Channel<SealedBlob> _uploads;
+    private readonly Task[] _uploadWorkers;
+    private readonly Lock _blobGate = new();
     private readonly Func<ObjectId, bool>? _segmentExists;
     private readonly HashSet<ObjectId> _writtenThisSession = [];
     private BlobWriter? _writer;
@@ -80,6 +90,24 @@ public sealed class ArchiveSession : IAsyncDisposable
         _codec = policy.Compression.Profile == CompressionProfile.ZstdV1
             ? new ZstdSegmentCodec(policy.Compression.ZstdLevel, policy.MaximumSegmentBytes)
             : null;
+
+        // Bounded by the one concurrency setting (ADR-0029 §3), so the memory
+        // bound stays statable: blobs in flight are part of what NFR-PERF-001
+        // counts. A full channel back-pressures the archive loop rather than
+        // queueing without limit.
+        // Capacity is concurrency + 1, not concurrency. At 1 they would be in
+        // lock-step — the archive loop blocked handing over while the single
+        // worker uploaded — which measured *slower* than the inline upload it
+        // replaced. One slot of slack is what makes the hand-off a hand-off.
+        // The memory bound stays statable: blobs in flight are bounded, and by
+        // a number the setting still names.
+        _uploads = Channel.CreateBounded<SealedBlob>(new BoundedChannelOptions(policy.Concurrency + 1)
+        {
+            SingleReader = false,
+            SingleWriter = true,
+        });
+
+        _uploadWorkers = [.. Enumerable.Range(0, policy.Concurrency).Select(_ => Task.Run(UploadWorkerAsync))];
     }
 
     /// <summary>Every blob sealed and uploaded by this session so far.</summary>
@@ -309,12 +337,95 @@ public sealed class ArchiveSession : IAsyncDisposable
         return new SingleSegmentRecord(objectId, contentId, (ulong)length);
     }
 
-    /// <summary>Seals and uploads the open blob, if any (specification 05 §5: job completion seals).</summary>
+    /// <summary>
+    /// Seals the open blob, if any, and waits for every queued upload to be
+    /// acknowledged (specification 05 §5: job completion seals).
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the seal.</param>
+    /// <returns>A task that completes when every blob is durable.</returns>
+    /// <remarks>
+    /// This is the drain barrier ADR-0029 §2 requires. Publication step 6 may
+    /// not name a blob in an index delta until that blob is durable, so "every
+    /// upload acknowledged" has to be a point in time — and this is it.
+    /// </remarks>
     public async ValueTask FlushAsync(CancellationToken cancellationToken)
     {
         if (_writer is not null)
         {
-            await SealAndUploadAsync(cancellationToken).ConfigureAwait(false);
+            await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await DrainUploadsAsync().ConfigureAwait(false);
+    }
+
+    private async ValueTask DrainUploadsAsync()
+    {
+        _uploads.Writer.TryComplete();
+        try
+        {
+            await Task.WhenAll(_uploadWorkers).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Task.WhenAll surfaces one exception; the rest are on the tasks.
+            // Rethrowing the first is right here — an upload failure fails the
+            // job, and the others are the same story told twice.
+            throw;
+        }
+    }
+
+    private async Task UploadWorkerAsync()
+    {
+        await foreach (var sealedBlob in _uploads.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            await UploadAsync(sealedBlob).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask UploadAsync(SealedBlob sealedBlob)
+    {
+        await using (sealedBlob.ConfigureAwait(false))
+        {
+            var storeBlobKey = _storeKeyDeriver.Derive(sealedBlob.BlobId);
+            var storeKey = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeBlobKey);
+
+            // 08 §3.1: no blob is uploaded before an unretired intent naming
+            // it is durable. With several uploads in flight this is enforced
+            // per blob rather than per job — which is what ADR-0029 §2 requires
+            // and why the intent scope had to become safe for concurrent use.
+            if (_intentScope is not null)
+            {
+                await _intentScope.EnsureCoveredAsync(sealedBlob.BlobId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            var put = await _store.PutAsync(
+                storeKey, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            if (put.Outcome == PutOutcome.PreconditionFailed)
+            {
+                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
+            }
+
+            EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
+            EngineDiagnostics.BlobFillFraction.Record(
+                sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
+
+            var archived = new ArchivedBlob(
+                sealedBlob.BlobId,
+                storeBlobKey,
+                storeKey,
+                sealedBlob.Digest,
+                sealedBlob.RecordTable.Count,
+                sealedBlob.Length,
+                sealedBlob.RecordTable);
+
+            lock (_blobGate)
+            {
+                // Order here is incidental (ADR-0029 §1): the index entry list
+                // is built from these and validated on content, not sequence.
+                _blobs.Add(archived);
+            }
         }
     }
 
@@ -345,7 +456,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         if (_writer is not null && !_writer.CanAppend(payload.Length))
         {
-            await SealAndUploadAsync(cancellationToken).ConfigureAwait(false);
+            await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
         }
 
         _writer ??= BlobWriter.Create(
@@ -374,51 +485,26 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         if (_writer.ShouldSeal)
         {
-            await SealAndUploadAsync(cancellationToken).ConfigureAwait(false);
+            await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
         }
 
         return objectId;
     }
 
-    private async ValueTask SealAndUploadAsync(CancellationToken cancellationToken)
+    private async ValueTask SealAndQueueAsync(CancellationToken cancellationToken)
     {
         var sealedBlob = await _writer!.SealAsync(cancellationToken).ConfigureAwait(false);
-        await using (sealedBlob.ConfigureAwait(false))
-        {
-            var storeBlobKey = _storeKeyDeriver.Derive(sealedBlob.BlobId);
-            var storeKey = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeBlobKey);
-
-            // 08 §3.1: no blob is uploaded before an unretired intent naming
-            // it is durable.
-            if (_intentScope is not null)
-            {
-                await _intentScope.EnsureCoveredAsync(sealedBlob.BlobId, cancellationToken).ConfigureAwait(false);
-            }
-
-            var put = await _store.PutAsync(storeKey, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (put.Outcome == PutOutcome.PreconditionFailed)
-            {
-                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
-            }
-
-            EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
-            EngineDiagnostics.BlobFillFraction.Record(
-                sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
-
-            _blobs.Add(new ArchivedBlob(
-                sealedBlob.BlobId,
-                storeBlobKey,
-                storeKey,
-                sealedBlob.Digest,
-                sealedBlob.RecordTable.Count,
-                sealedBlob.Length,
-                sealedBlob.RecordTable));
-        }
 
         await _writer.DisposeAsync().ConfigureAwait(false);
         _writer = null;
+
+        // Hand it over and carry on. If a worker has already failed the channel
+        // is complete, and the write fails here rather than losing the blob
+        // silently.
+        if (!_uploads.Writer.TryWrite(sealedBlob))
+        {
+            await _uploads.Writer.WriteAsync(sealedBlob, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static bool HolesAreWellFormed(IReadOnlyList<SparseExtent> holes, long logicalLength)

@@ -30,14 +30,40 @@ is what attribution needs.
 | cdc-v1, concurrency 4 | 59.1 |
 | fixed-v1, no compression | 87.2 |
 
+## Second run — after upload left the archive loop
+
+Same machine and inputs, after ADR-0029 §2 landed.
+
+| Configuration | before | after |
+|---|---|---|
+| fixed-v1, concurrency 1 | 60.6 | 60.1 |
+| fixed-v1, concurrency 2 | 61.3 | 68.3 |
+| fixed-v1, no compression | 87.2 | 71.6 |
+
+**Against this store the change is a wash, and that is the expected result.**
+The benchmark uploads to `NullObjectStore`, which consumes and discards; a PUT
+that costs nothing cannot stall a loop, so removing the stall buys nothing here.
+The change is aimed at the destination that is not free — a spinning disk, a
+LAN peer, an object store — and this bench cannot see that. A slow-store row
+belongs here and is not yet written.
+
+What the run *did* catch is worth more than a number: the first version sized
+the hand-off channel at exactly `Concurrency`, so at 1 the archive loop and the
+single upload worker ran in lock-step and throughput fell to **36.2 MiB/s** —
+materially *worse* than the inline upload it replaced. Capacity is now
+`Concurrency + 1`, which is what makes a hand-off a hand-off rather than a
+rendezvous. The memory bound stays statable; it is bounded by a number the
+setting still names.
+
 ## What this does and does not say
 
-**The concurrency rows mean nothing yet, and the table is left in so that stays
-visible.** `Concurrency` exists as a validated setting (ADR-0029 §3) and the
-staged pipeline that would consume it does not, so every row runs the same
-sequential code. The spread across those rows — 60.6 to 82.1 — is therefore
-*measurement noise plus warm cache*, not a speed-up, and it is a useful
-calibration: any future concurrency result inside that spread has proven nothing.
+**The concurrency rows still mean very little, and the table is left in so that
+stays visible.** `Concurrency` now sizes the upload workers (ADR-0029 §2), but
+the staged pipeline of §1 — the part that would let read, hash and compress run
+concurrently — does not exist, so the stages that dominate this measurement are
+still sequential at every setting. The spread across those rows is therefore
+mostly *measurement noise plus warm cache*, and it is a useful calibration: any
+future concurrency result inside that spread has proven nothing.
 
 **Compression is worth about 30%** on this data (87.2 against 60.6). That is a
 real attribution and it bounds what removing the compressor could ever buy — it
@@ -60,7 +86,8 @@ result: it was worth doing and it was not the problem.
 ## Re-run this when
 
 - the spool checkpoint stops being rewritten per record;
-- upload leaves the archive loop;
+- a slow-store row exists, so deferred upload can be measured against a
+  destination that is not free;
 - the staged pipeline lands and the concurrency rows start to mean something.
 
 Each of those should move a number in this table, and if it does not, that is the

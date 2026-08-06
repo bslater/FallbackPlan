@@ -154,7 +154,7 @@ public sealed partial class PublicationOrchestrator
             _generation.Value,
             cancellationToken).ConfigureAwait(false);
 
-        var scope = new ExtensionIntentScope(
+        using var scope = new ExtensionIntentScope(
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
