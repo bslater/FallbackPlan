@@ -4,17 +4,26 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Format.Compression;
+using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 
 namespace FallbackPlan.Repository.Tests.Packing;
 
 /// <summary>
 /// The C1 acceptance criteria (specification 05 §6; FR-ARCH-011,
-/// NFR-REL-001, NFR-REL-005): resume re-emits the checkpointed sealed bytes
+/// NFR-REL-001, NFR-REL-005): resume re-emits the spooled sealed bytes
 /// verbatim — byte-identical to an uninterrupted run — and <b>any</b> pinned
 /// field mismatch, the codec version above all, forces a restart under a
 /// fresh salt rather than a resume.
 /// </summary>
+/// <remarks>
+/// The resume point comes from authenticating each spooled record, so the
+/// tests below also pin the failures that authentication is what catches: a
+/// torn tail, damage inside a structurally valid record, and a spool from
+/// another repository. Every one of them restarts, because restart is the
+/// safe failure (05 §6.2) and is what keeps an ordinal from being re-used
+/// under a salt that already covered it.
+/// </remarks>
 public sealed class SpoolCheckpointTests : IDisposable
 {
     private static readonly RepositoryId Repo =
@@ -227,15 +236,15 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [Fact]
-    public async Task A_torn_spool_tail_beyond_the_watermark_is_truncated_on_resume()
+    public async Task A_torn_spool_tail_forces_restart_and_discards_the_spool()
     {
         var directory = SpoolDirectory("tail");
         var writer = CreateWriter(directory, Pinned);
         await AppendAsync(writer, 5);
         await writer.AbandonAsync();
 
-        // Simulate a torn write after the last checkpoint: garbage beyond
-        // the watermark that a crash left behind.
+        // A torn write a crash left behind: bytes past the last whole record
+        // that are not themselves a record.
         var spoolPath = Directory.GetFiles(directory, "*.spool").Single();
         using (var spool = new FileStream(spoolPath, FileMode.Append, FileAccess.Write))
         {
@@ -243,10 +252,63 @@ public sealed class SpoolCheckpointTests : IDisposable
         }
 
         var result = Resume(directory, Pinned);
-        var resumed = Assert.IsType<ResumeResult.Resumed>(result);
 
-        Assert.Equal(1, resumed.Writer.RecordCount);
-        await resumed.Writer.DisposeAsync();
+        // Not truncated and resumed: truncating would return the ordinal the
+        // torn bytes already used to the pool, and re-using it under the same
+        // salt is the one mistake 05 §6.1 calls catastrophic. Restart draws a
+        // fresh salt instead, so nothing is reused.
+        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
+        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
+        Assert.Empty(Directory.GetFiles(directory));
+    }
+
+    [Fact]
+    public async Task A_flipped_ciphertext_byte_forces_restart()
+    {
+        var directory = SpoolDirectory("flipped");
+        var writer = CreateWriter(directory, Pinned);
+        await AppendAsync(writer, 6);
+        await AppendAsync(writer, 7);
+        await writer.AbandonAsync();
+
+        // Damage inside an already-written record, where the framing stays
+        // structurally perfect. A walk that trusted a durable watermark could
+        // not see this at all; authenticating every record is what does.
+        var spoolPath = Directory.GetFiles(directory, "*.spool").Single();
+        var bytes = await File.ReadAllBytesAsync(spoolPath);
+        bytes[BlobEnvelope.Length + RecordHeader.Length + 16] ^= 0x01;
+        await File.WriteAllBytesAsync(spoolPath, bytes);
+
+        var result = Resume(directory, Pinned);
+
+        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
+        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
+        Assert.Empty(Directory.GetFiles(directory));
+    }
+
+    [Fact]
+    public async Task A_spool_from_another_repository_forces_restart()
+    {
+        var directory = SpoolDirectory("foreign");
+        var writer = CreateWriter(directory, Pinned);
+        await AppendAsync(writer, 8);
+        await writer.AbandonAsync();
+
+        // The repository identifier is bound into every record's AAD (04 §4),
+        // so it is now checked by the walk rather than carried unverified.
+        var result = BlobWriter.TryResume(
+            directory,
+            RepositoryId.FromBytes(Convert.FromHexString("ffeeddccbbaa99887766554433221100")),
+            Writer,
+            KeyGeneration.Zero,
+            BlobClass.Data,
+            ClassKey,
+            EncryptionProfile.Aes256GcmV1,
+            BlobWriteProfile.LocalDefault,
+            Pinned);
+
+        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
+        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
     }
 
     [Fact]

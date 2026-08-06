@@ -83,11 +83,26 @@ public abstract record ResumeResult
 /// FR-ARCH-011, NFR-REL-005): the spool itself carries the sealed record
 /// bytes — header, ciphertext, tag, exactly as they will appear in the blob
 /// (05 §6.1's load-bearing rule) — and this sidecar carries the pinned
-/// configuration, the envelope's key-derivation selectors, and a durable
-/// watermark bounding how much of the spool the last checkpoint covered.
-/// A trailing SHA-256 makes a torn sidecar detectable; anything detectably
-/// wrong resolves to restart, the always-safe failure.
+/// configuration and the envelope's key-derivation selectors. A trailing
+/// SHA-256 makes a torn sidecar detectable; anything detectably wrong
+/// resolves to restart, the always-safe failure.
 /// </summary>
+/// <remarks>
+/// Every field here is fixed for the blob's life, which is what lets the
+/// sidecar be written once at create rather than rewritten per record. It
+/// carries no watermark: <see cref="BlobWriter.TryResume"/> finds the resume
+/// point by authenticating the spool's records, so the bytes bound
+/// themselves and nothing has to be kept in step with them. 05 §6.2 requires
+/// exactly seven pinned fields and mandates no watermark, no write frequency,
+/// and no per-record durability.
+/// <para>
+/// The layout carries no version of its own and needs none. A sidecar from a
+/// build that still wrote a watermark is eight bytes longer and fails
+/// <see cref="TryParse"/>'s total-length check, which the caller resolves to
+/// a restart — the safe failure, and the same outcome as any other
+/// unreadable sidecar.
+/// </para>
+/// </remarks>
 public sealed class SpoolCheckpoint
 {
     /// <summary>The sidecar magic, <c>"FBPKSPCK"</c>.</summary>
@@ -101,8 +116,7 @@ public sealed class SpoolCheckpoint
         WriterId writerId,
         ulong blobCounter,
         BlobId blobId,
-        SpoolPinnedConfiguration pinned,
-        ulong sealedWatermark)
+        SpoolPinnedConfiguration pinned)
     {
         FormatVersion = formatVersion;
         BlobClass = blobClass;
@@ -112,7 +126,6 @@ public sealed class SpoolCheckpoint
         BlobCounter = blobCounter;
         BlobId = blobId;
         Pinned = pinned;
-        SealedWatermark = sealedWatermark;
     }
 
     /// <summary>The format version the spool was written under.</summary>
@@ -139,12 +152,6 @@ public sealed class SpoolCheckpoint
     /// <summary>The pinned configuration (05 §6.2).</summary>
     public SpoolPinnedConfiguration Pinned { get; }
 
-    /// <summary>
-    /// The spool length in bytes this checkpoint covers. Bytes beyond it are
-    /// a torn tail from the interruption and are truncated on resume.
-    /// </summary>
-    public ulong SealedWatermark { get; }
-
     /// <summary>The sidecar path for a spool path.</summary>
     public static string PathFor(string spoolPath) => spoolPath + ".checkpoint";
 
@@ -155,7 +162,6 @@ public sealed class SpoolCheckpoint
         var length = 8 + 2 + 2 + 4 + 32 + 16 + 8 + 16
             + 2 + 8 + 8 + 8 + 2 + 2
             + 2 + codecVersion.Length
-            + 8
             + 32;
         var buffer = new byte[length];
         var span = buffer.AsSpan();
@@ -192,8 +198,6 @@ public sealed class SpoolCheckpoint
         offset += 2;
         codecVersion.CopyTo(span[offset..]);
         offset += codecVersion.Length;
-        BinaryPrimitives.WriteUInt64BigEndian(span[offset..], SealedWatermark);
-        offset += 8;
 
         SHA256.HashData(span[..offset], span.Slice(offset, 32));
 
@@ -212,13 +216,13 @@ public sealed class SpoolCheckpoint
         // Fixed prefix through the codec-version length field.
         const int FixedPrefix = 8 + 2 + 2 + 4 + 32 + 16 + 8 + 16 + 2 + 8 + 8 + 8 + 2 + 2 + 2;
 
-        if (data.Length < FixedPrefix + 8 + 32 || !data[..8].SequenceEqual(Magic))
+        if (data.Length < FixedPrefix + 32 || !data[..8].SequenceEqual(Magic))
         {
             return false;
         }
 
         var codecLength = BinaryPrimitives.ReadUInt16BigEndian(data[(FixedPrefix - 2)..]);
-        var total = FixedPrefix + codecLength + 8 + 32;
+        var total = FixedPrefix + codecLength + 32;
 
         if (data.Length != total)
         {
@@ -262,8 +266,6 @@ public sealed class SpoolCheckpoint
         offset += 2;
         offset += 2; // codec length, already read
         var codecVersion = Encoding.UTF8.GetString(data.Slice(offset, codecLength));
-        offset += codecLength;
-        var watermark = BinaryPrimitives.ReadUInt64BigEndian(data[offset..]);
 
         checkpoint = new SpoolCheckpoint(
             formatVersion,
@@ -274,8 +276,7 @@ public sealed class SpoolCheckpoint
             counter,
             blobId,
             new SpoolPinnedConfiguration(
-                segProfile, segParameter1, segParameter2, segParameter3, compression, codecVersion, encryption),
-            watermark);
+                segProfile, segParameter1, segParameter2, segParameter3, compression, codecVersion, encryption));
 
         return true;
     }
