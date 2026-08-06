@@ -31,7 +31,19 @@ public class PipelineBenchmarks
     [Params(32 * 1024 * 1024)]
     public int DataLength { get; set; }
 
-    private static CapturePolicy FixedPolicy { get; } = CapturePolicy.Default with
+    /// <summary>
+    /// The concurrency setting (ADR-0029 §3), swept because it now reaches the
+    /// record path rather than only the upload workers.
+    /// </summary>
+    /// <remarks>
+    /// 1 is kept because it is the configuration in which the ordering barrier
+    /// is trivially satisfied, and so the control against which any speedup at
+    /// the other settings is read.
+    /// </remarks>
+    [Params(1, 2, 4)]
+    public int Concurrency { get; set; }
+
+    private static CapturePolicy BasePolicy { get; } = CapturePolicy.Default with
     {
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
@@ -40,7 +52,9 @@ public class PipelineBenchmarks
         },
     };
 
-    private static CapturePolicy CdcPolicy { get; } = FixedPolicy with
+    private CapturePolicy FixedPolicy => BasePolicy with { Concurrency = Concurrency };
+
+    private CapturePolicy CdcPolicy => FixedPolicy with
     {
         SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
         CdcParameters = Domain.CdcParameters.Default,

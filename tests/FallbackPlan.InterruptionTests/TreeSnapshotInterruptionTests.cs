@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
 
@@ -59,6 +60,50 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         PublicationStep.PublishSnapshot,
         PublicationStep.RetireIntent,
     };
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task A_tree_publishes_identically_at_any_concurrency(int concurrency)
+    {
+        var files = BuildSourceTree();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
+
+        var published = await CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency)
+            .PublishAsync(TreeJob(0xC4), CancellationToken.None);
+
+        Assert.Equal(files.Count, published.Files.Count);
+        Assert.Empty(published.Failures);
+
+        // NFR-PERF-002 over the scanner-driven path. The single-stream theory
+        // in ConcurrentUploadTests covers one file; this is the multi-file case,
+        // which is the one where a session's blob continuity, its dedup set and
+        // its ordinal sequence are all shared across files rather than reset.
+        foreach (var file in published.Files)
+        {
+            var archive = file.Archive;
+            Assert.NotNull(archive);
+
+            var content = files[file.RelativePath.Replace('\\', '/')];
+            Assert.Equal(SHA256.HashData(content), archive.WholeFileHash);
+            Assert.Equal(content.Length, archive.LogicalLength);
+
+            // 06 §3.2: the encoded references must ascend by logical offset and
+            // tile the file exactly. Producing segments concurrently is allowed;
+            // emitting them out of order is not.
+            long expectedOffset = 0;
+            foreach (var reference in archive.SegmentReferences)
+            {
+                Assert.Equal(expectedOffset, reference.LogicalOffset);
+                expectedOffset += reference.LogicalLength;
+            }
+
+            Assert.Equal(content.Length, expectedOffset);
+        }
+    }
 
     [Theory]
     [MemberData(nameof(KillPoints))]

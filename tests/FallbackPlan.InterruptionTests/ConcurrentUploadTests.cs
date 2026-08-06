@@ -64,6 +64,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
 
     [Theory]
     [InlineData(1)]
+    [InlineData(2)]
     [InlineData(4)]
     public async Task A_restore_is_byte_identical_whatever_the_concurrency(int concurrency)
     {
@@ -77,10 +78,56 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         using var source = new MemoryStream(content);
         await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x52), TestCancellation);
 
-        // NFR-PERF-002's acceptance criterion, applied to the part of the
-        // concurrency setting that is real today: the upload workers.
+        // NFR-PERF-002's acceptance criterion. Now that ADR-0029 §1's staged
+        // pipeline is built, the setting reaches segmentation, hashing and
+        // compression too — not just the upload workers — so this is the whole
+        // claim rather than the part of it that was real. 2 is included because
+        // it is the shipped default and was the one value never tested.
         var restored = await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x52);
         Assert.Equal(content, restored);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task Every_blob_carries_dense_ascending_ordinals_at_any_concurrency(int concurrency)
+    {
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
+        var store = CreateStore();
+
+        var content = BuildFile(seed: 13, regions: 40);
+        var orchestrator = CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency);
+
+        using var source = new MemoryStream(content);
+        var published = await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x53), TestCancellation);
+
+        Assert.NotEmpty(published.Archive.Blobs);
+
+        // The property the ordering barrier exists for, asserted on blobs a
+        // concurrent pipeline actually produced. Nothing else checks it:
+        // BlobFooterTests feeds hand-built tables to the decoder, and
+        // BlobWriter's own density check runs only on resume. The ordinal is
+        // the AEAD nonce, so a gap or a repeat here is not an ordering blemish
+        // — it is the nonce reuse specification 05 §6.1 calls catastrophic.
+        foreach (var blob in published.Archive.Blobs.Concat(published.MetadataBlobs))
+        {
+            ulong previousEnd = 0;
+
+            for (var i = 0; i < blob.RecordTable.Count; i++)
+            {
+                var entry = blob.RecordTable[i];
+
+                Assert.Equal((uint)i, entry.Ordinal);
+                Assert.True(
+                    entry.PhysicalOffset >= previousEnd,
+                    $"record {i} of blob '{blob.BlobId}' starts at {entry.PhysicalOffset}, inside the record before it "
+                    + "— offsets must strictly increase (specification 05 §3.1).");
+
+                previousEnd = entry.PhysicalOffset + (ulong)entry.StoredLength;
+            }
+        }
     }
 
     private static CancellationToken TestCancellation => CancellationToken.None;

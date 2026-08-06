@@ -93,7 +93,20 @@ public sealed class ServiceTests : IDisposable
             await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token));
         Assert.NotEmpty(accepted.JobId);
 
-        await WaitForAsync(() => runtime.Jobs.Jobs.Any(job => job.State == JobState.Complete));
+        // Wait for the watcher, not for the job. The job reaching Complete says
+        // the engine finished; it says nothing about whether the task draining
+        // the progress channel has caught up, and reading `seen` before it has
+        // is a second race distinct from the subscription one — subscribing
+        // eagerly guarantees no event is missed, not that every event has been
+        // observed yet. The channel is FIFO, so a watcher that has seen
+        // Complete has seen everything before it.
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Complete);
+            }
+        });
 
         // FR-SVC-006 and ADR-0029 §5: before this, eight of fourteen states were
         // written nowhere, and a ten-hour backup announced `Scanning` and then
