@@ -147,7 +147,7 @@ restated here with the test that will prove each:
 | A running job reports states beyond `Scanning` | `Api.Tests` — the progress-event assertion |
 | A service with no front end installed backs up unattended | `Hosts.Tests` |
 | Client and service at incompatible versions refuse with both versions named | `Api.Tests` — the negotiation assertion |
-| Restored bytes identical regardless of concurrency setting | **not yet met** — the setting exists and validates; the staged pipeline that would make it mean something does not |
+| Restored bytes identical regardless of concurrency setting | **partly** — `InterruptionTests/ConcurrentUploadTests` proves it at 1 and 4 for the upload workers, which is the only part of the setting that is real; the staged pipeline is not built |
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
 
 ### What is not met, said plainly
@@ -155,11 +155,11 @@ restated here with the test that will prove each:
 - **An unpaired remote client refused**, and **a restore commanded remotely
   writing on the service's machine.** Both need the remote binding, which needs
   pairing.
-- **Restored bytes identical regardless of concurrency.** `Concurrency` is a
-  validated setting and nothing consumes it yet, so every value runs the same
-  sequential pipeline. The benchmark reports the settings anyway, which makes the
-  spread across them visible as noise — a calibration any future concurrency
-  result has to beat.
+- **Restored bytes identical regardless of concurrency**, in full. `Concurrency`
+  sizes the upload workers and nothing else, so the stages that dominate a
+  backup are still sequential at every value. The benchmark reports the settings
+  anyway, which makes the spread across them visible as noise — a calibration any
+  future concurrency result has to beat.
 - **Restore, verify and check over the command surface.** The contract carries
   them; this service build answers them with a stated
   "this is a read path, run it directly" rather than a silence.
@@ -169,6 +169,96 @@ restated here with the test that will prove each:
   across both. What is still not written is the case that *kills* a job mid-
   upload with several blobs in flight, which is the harder half of architecture
   04 §5.1 at *N* > 1.
+
+---
+
+## Where to pick up
+
+The next round starts here. Everything below is in priority order, and each item
+says what "done" looks like so it does not have to be re-derived.
+
+### 1. F1 — the spool checkpoint stops being rewritten per record
+
+**The one to do carefully, and the reason the others are listed above it.**
+
+`BlobWriter` currently performs a synchronous `fsync` *and* a full checkpoint
+sidecar rewrite (`File.WriteAllBytes` then `File.Move`) after every record — about
+128 of each per 128 MiB blob, both blocking calls inside `async` methods
+(`BlobWriter.cs`, the `_pinned is not null` branches). `ManifestBuilder` passes no
+pinning and pays neither, which is why metadata is cheap and data is not.
+
+**Why the obvious fix is wrong.** Writing the checkpoint every *N* records looks
+equivalent and is not. The checkpoint's `SealedWatermark` is what bounds resume:
+records beyond it are discarded and their ordinals re-used. If the watermark
+lagged, and the source changed between the crash and the resume, different
+plaintext would be encrypted at an ordinal already used — nonce reuse under one
+`(blob_key, ordinal)`, which [specification 05 §6.1](../specifications/repository-format/05-blob.md)
+calls *"a catastrophic cryptographic failure under ordinary operating
+conditions"*. Per-record watermarking is exactly what makes the current design
+safe.
+
+**The shape that is safe.** Make the resume walk **authenticate** each record and
+treat the last authenticating record as the resume point. A torn or reordered
+tail then fails authentication and is truncated, so no watermark is needed and
+the sidecar can be written once at create — every field it pins (`blob_salt`,
+`blob_id`, `blob_counter`, `key_generation`, and the three profiles) is fixed for
+the blob's life.
+
+**Done means:** `BlobWriter.TryResume` has a production caller — it has **none**
+today, so the per-record cost currently buys literally nothing — and an
+interrupted blob is proven to resume byte-identically (NFR-SEC-003), not assumed
+to. Check the spec text before changing it; if §6.2 turns out to require a
+per-record durable watermark, this becomes a specification erratum rather than a
+silent implementation change.
+
+### 2. G2 — the staged pipeline
+
+ADR-0029 §1 has the correctness boundary already drawn: read, hash and compress
+may run concurrently; **assign ordinal → encrypt → append → digest** must stay
+strictly ordered, with a reorder buffer restoring order before the barrier.
+Encryption sits *below* the barrier because it consumes the ordinal it is nonced
+with.
+
+Four pieces of shared state have to move or be rented per work item, all four
+located:
+
+| What | Where | Why |
+|---|---|---|
+| `_segmentBuffer` / `_compressed` | `ArchiveSession.cs` ctor | one rental per session, and `plaintext` aliases the buffer the next read overwrites |
+| `ZstdSegmentCodec` | `ArchiveSession.cs` ctor | stateful, documents itself as not thread-safe |
+| `_writtenThisSession` | `ArchiveSession.cs` | unsynchronised `HashSet`; belongs below the barrier |
+| `CdcSegmentReader`'s Rabin window | `CdcSegmentReader.cs` | persists across segments by design, so the reader stays the single-threaded producer |
+
+`TreeWalkPublisher`'s `Stack<Frame>` DFS is untouched: the walk stays
+single-threaded and the concurrency is in what happens to the bytes it yields.
+
+**Done means:** `ConcurrentUploadTests`'s byte-identical theory extends to a full
+tree at 1, 2 and 4, and the concurrency rows in
+[phase-2-benchmarks.md](phase-2-benchmarks.md) stop being noise.
+
+### 3. A kill test with several uploads outstanding
+
+Architecture 04 §5.1's "durable but unreferenced" state is now reachable *N* at a
+time. The matrix proves it at *N*=1; the case that kills a job mid-upload with
+several blobs in flight is not written.
+
+### 4. The remote binding
+
+Topologies 3 and 4, and the two exit criteria they own. Blocked on pairing, which
+reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
+machinery, and gated by
+[Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
+[Q19](open-questions.md#q19--console-identity-and-multi-operator-access).
+
+### Watch list
+
+One `Hosts.Tests` failure was seen once during a full-suite run and did not
+reproduce across five subsequent runs (two targeted, three full). It was not
+captured before it vanished, so there is no diagnosis — only a suspicion that a
+timing-sensitive service test is sensitive to load, since the suite runs twelve
+projects in parallel and those tests bind sockets. If it recurs in CI the run log
+will name it. Recorded because an intermittent failure nobody wrote down is one
+that gets rediscovered from scratch.
 
 ---
 

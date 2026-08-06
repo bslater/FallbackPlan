@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: Phase 0 implemented; Phase 1 push 1 complete.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md). **Phase 2 is under way** — the service boundary of [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) is built for the local binding ([phase-2 plan](phase-2-execution-plan.md)); throughput attribution is in [phase-2-benchmarks.md](phase-2-benchmarks.md).
+> **Status: Phases 0 and 1 implemented; Phase 2 in progress.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md). **Phase 2 is under way** — the service holds the writer role exclusively, hosts a versioned command contract on a local socket or named pipe, and unlocks itself from the platform keystore ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)); blob upload has left the archive loop ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §2). What is built, what is not, and **where to pick up next** are in the [phase-2 plan](phase-2-execution-plan.md#where-to-pick-up); measurements are in [phase-2-benchmarks.md](phase-2-benchmarks.md).
 
 ---
 
@@ -16,6 +16,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
+| Pick up where the last round stopped | [Phase 2 plan — where to pick up](phase-2-execution-plan.md#where-to-pick-up) |
 | Start building | [Phase 2 execution plan](phase-2-execution-plan.md) (in progress) · [Phase 1 execution plan](phase-1-execution-plan.md) · [Phase 0 execution plan](phase-0-execution-plan.md) (implemented) · [format specification](../specifications/repository-format/README.md) |
 
 ## Architecture
