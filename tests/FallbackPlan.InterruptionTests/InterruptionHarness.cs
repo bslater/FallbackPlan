@@ -133,6 +133,27 @@ public abstract class InterruptionHarness : IDisposable
         throw new InvalidOperationException($"Snapshot {snapshotSeed:x2} was not found.");
     }
 
+    /// <summary>Every blob in the store, paired with the id inside its envelope.</summary>
+    /// <remarks>
+    /// Nothing can map a store key back to a blob id — that is the point of
+    /// keyed store keys — so the id comes from the envelope, exactly as a real
+    /// collector must read it (08 §8).
+    /// </remarks>
+    protected static async Task<List<(ObjectKey Key, BlobId BlobId)>> ReadStoredBlobsAsync(IObjectStore store)
+    {
+        var blobs = new List<(ObjectKey, BlobId)>();
+
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(entry.Key, new ObjectRange(0, BlobEnvelope.Length), CancellationToken.None);
+            var envelopeBytes = new byte[BlobEnvelope.Length];
+            await read.Content!.ReadExactlyAsync(envelopeBytes);
+            blobs.Add((entry.Key, BlobEnvelope.Parse(envelopeBytes).BlobId));
+        }
+
+        return blobs;
+    }
+
     protected int CountUnder(string prefix)
     {
         var path = Path.Combine(StoreRoot, prefix.Replace('/', Path.DirectorySeparatorChar));
