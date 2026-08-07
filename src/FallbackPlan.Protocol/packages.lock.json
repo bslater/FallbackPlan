@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "Bodu.Security.Cryptography": {
+        "type": "Direct",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
+        "dependencies": {
+          "Bodu.Core": "0.2.0"
+        }
+      },
+      "fallbackplan.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Text.Encoding": "[0.2.0, )"
+        }
+      },
+      "Bodu.Core": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+      },
+      "Bodu.Text.Encoding": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "dependencies": {
+          "Bodu.Core": "0.2.0"
+        }
+      }
+    }
+  }
+}

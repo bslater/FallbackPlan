@@ -89,6 +89,20 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 - The warnings-as-errors gate is **scoped to exclude `/external/`**. Vendored code is held to its own repository's standards, not ours; a submodule bump must not be able to fail our build on a style rule. Our own code remains at zero warnings, and the gate would still fail on a warning from `src/` or `tests/`.
 - `eng/check-links.py` excludes `/external/` for the same reason: the submodule carries its own documentation conventions.
 
+## Amendment 2 — a second contained exception, for the peer protocol
+
+[ADR-0030](0030-peer-identity-and-pairing.md) needs Ed25519 and X25519. The platform supplies neither — .NET 10 has no standalone Ed25519 API (the `Ed25519` it names is a composite ML-DSA algorithm identifier) and no X25519 at all — so gate 1 of §2 holds for both, exactly as it holds for Argon2id.
+
+§3's remedy therefore applies again, and this record extends it rather than restating it: the primitives are named, contained, and compensated for. **They are confined to `FallbackPlan.Protocol`, and may not be referenced from any other project except `Repository.Crypto`.**
+
+**Why a second home rather than the first one.** §1 classifies dependencies by blast radius. `Repository.Crypto` is format-critical: a defect there is already in the user's stored bytes, possibly for years, possibly on media they no longer control. The peer protocol is operational: its primitives authenticate a session and pin a peer, and a defect costs a re-pairing rather than a repository. Merging the two would drag the format-critical crypto assembly into every destination deployment — including devices that only hold blobs they cannot read — and would blur the one distinction §1 exists to draw.
+
+**Why an allowlist of two rather than a tier.** `ArchitectureTests` now permits the two named projects and no others. The rule could have been rewritten as "operational projects may use vetted cryptography", and that would have been easier to satisfy next time — which is the argument against it. This rule has held because widening it requires an amendment like this one, and a tier-shaped rule would admit the next project without anybody having to make a case.
+
+**What is unchanged.** Argon2id and XChaCha20-Poly1305 remain confined to `Repository.Crypto`. `Protocol` does not use them, and `Repository.Crypto` does not use Ed25519 or X25519 for peer purposes. Where the platform supplies a primitive the protocol needs — HKDF, SHA-256 — gate 1 applies unchanged and the platform's implementation is used.
+
+**Still owed.** §3's last bullet requires the pre-beta cryptographic review to cover the named exceptions specifically; that review must now cover Ed25519 and X25519 as used by the pairing ceremony, not only the two format-critical primitives.
+
 ## Consequences
 
 **Positive**

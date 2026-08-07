@@ -61,6 +61,9 @@ public sealed class DependencyRuleTests
     /// <summary>The platform keystores (ADR-0028 §9).</summary>
     private static Assembly Keystore => Assembly.Load("FallbackPlan.Keystore");
 
+    /// <summary>The peer protocol (ADR-0030).</summary>
+    private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -69,7 +72,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Cli, Recovery, Agent];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -260,9 +263,21 @@ public sealed class DependencyRuleTests
     /// has already failed (NFR-PORT-001).
     /// </summary>
     [Fact]
-    public void Only_Repository_Crypto_may_reference_third_party_cryptography()
+    public void Third_party_cryptography_stays_on_its_allowlist()
     {
-        foreach (var assembly in AllSourceAssemblies.Where(a => a != Crypto))
+        // An allowlist of two, not a tier. ADR-0019 §1 classifies dependencies by
+        // blast radius: Repository.Crypto is format-critical, because a defect
+        // there is already in the user's stored bytes and cannot be recalled.
+        // Protocol is operational — its output authenticates a session and pins a
+        // peer, and a defect costs a re-pairing rather than a repository.
+        //
+        // Naming the two rather than admitting "operational projects may" is
+        // deliberate: the reason this rule has held is that adding to it requires
+        // an argument, and a tier-shaped rule would let the next project in
+        // without one.
+        var permitted = new[] { Crypto, Protocol };
+
+        foreach (var assembly in AllSourceAssemblies.Where(a => !permitted.Contains(a)))
         {
             AssertPasses(
                 Types.InAssembly(assembly)
@@ -270,7 +285,8 @@ public sealed class DependencyRuleTests
                     .HaveDependencyOn("Bodu.Security.Cryptography")
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference third-party cryptography. " +
-                "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto (ADR-0019).");
+                "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto; Ed25519 and " +
+                "X25519 to Protocol (ADR-0019 §3, §5).");
         }
     }
 

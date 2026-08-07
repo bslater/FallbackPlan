@@ -1,6 +1,6 @@
 # FallbackPlan peer protocol — specification
 
-**Protocol version:** 1 (draft) · **Status:** incomplete — pairing and session only; see [Documents](#documents)
+**Protocol version:** 1 (draft) · **Status:** incomplete — pairing and session only; see [Documents](#documents) · **Implemented:** 01's identity and pairing derivation, in `FallbackPlan.Protocol`
 
 ---
 
@@ -32,11 +32,13 @@ This set is **incomplete, and the table says which parts**. A missing document i
 | # | Document | Covers | Status |
 |---|----------|--------|--------|
 | — | [Conventions](00-conventions.md) | What is inherited from the repository format, and what differs | Written |
-| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony, pinning, grants and terms | Written |
+| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony, pinning, grants and terms | Written; §1–§2 implemented |
 | 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written |
 | 03 | Replication | The object exchange: filters, missing-object discovery, ranged transfer, resumption | **Not written** |
 | 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |
 | 05 | Quotas | Exhaustion, disk-full, and their distinct reporting | **Not written** |
+
+What is implemented so far is the part that has to be right before anything reaches a wire: the keypair, the transcript, the short authentication string, and the confirmation signature — in `FallbackPlan.Protocol`, with `FallbackPlan.Protocol.Tests` covering what the string is bound to. Grants (01 §3), terms (01 §4) and the whole of 02 are specified and unimplemented.
 
 Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)'s remote binding was blocked on: a console pairs and opens a session by the same rules a peer does, and carries a different payload over it. They were written first for that reason.
 

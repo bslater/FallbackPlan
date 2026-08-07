@@ -40,6 +40,7 @@
          including the executable. Cli has no AssemblyMarker; it is loaded by
          name from the test output directory. -->
     <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Protocol\FallbackPlan.Protocol.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Recovery\FallbackPlan.Recovery.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Agent\FallbackPlan.Agent.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
