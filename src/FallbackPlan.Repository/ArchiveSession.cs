@@ -781,9 +781,28 @@ public sealed class ArchiveSession : IAsyncDisposable
 
     private async Task UploadWorkerAsync()
     {
-        await foreach (var sealedBlob in _uploads.Reader.ReadAllAsync().ConfigureAwait(false))
+        try
         {
-            await UploadAsync(sealedBlob).ConfigureAwait(false);
+            await foreach (var sealedBlob in _uploads.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                await UploadAsync(sealedBlob).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // A dead worker must not leave the producer parked. Without this the
+            // failing worker simply stops reading: once every worker has gone the
+            // same way and the bounded channel is full, SealAndQueueAsync blocks
+            // in WriteAsync for ever, because nothing left alive will ever
+            // complete the channel it is waiting on.
+            //
+            // Completing without an error is deliberate. Completing *with* one
+            // makes every healthy sibling throw ChannelClosedException wrapping
+            // it, and then the drain reports whichever wrapper it reaches first
+            // instead of the upload that actually broke. The cause stays on this
+            // task, which is where DrainUploadsAsync looks for it.
+            _uploads.Writer.TryComplete();
+            throw;
         }
     }
 
@@ -1004,9 +1023,22 @@ public sealed class ArchiveSession : IAsyncDisposable
         // Hand it over and carry on. If a worker has already failed the channel
         // is complete, and the write fails here rather than losing the blob
         // silently.
-        if (!_uploads.Writer.TryWrite(sealedBlob))
+        try
         {
-            await _uploads.Writer.WriteAsync(sealedBlob, cancellationToken).ConfigureAwait(false);
+            if (!_uploads.Writer.TryWrite(sealedBlob))
+            {
+                await _uploads.Writer.WriteAsync(sealedBlob, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (ChannelClosedException)
+        {
+            await sealedBlob.DisposeAsync().ConfigureAwait(false);
+
+            // The queue is closed because a worker died. Draining reports what
+            // actually went wrong; a bare ChannelClosedException would name the
+            // plumbing that noticed rather than the upload that failed.
+            await DrainUploadsAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
