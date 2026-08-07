@@ -37,7 +37,7 @@ public sealed record PeerGrant(
 /// </summary>
 /// <remarks>
 /// <para>
-/// Durable local state, and <see href="https://github.com/">NFR-REL-007</see>
+/// Durable local state, and NFR-REL-007
 /// names it explicitly alongside the device keypair: not rebuildable from the
 /// repository, so it is stored apart from the disposable catalogue and lost only
 /// with the device's identity.

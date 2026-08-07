@@ -204,7 +204,8 @@
         "dependencies": {
           "Bodu.Security.Cryptography": "[0.2.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
-          "FallbackPlan.Domain": "[1.0.0, )"
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )"
         }
       },
       "fallbackplan.recovery": {

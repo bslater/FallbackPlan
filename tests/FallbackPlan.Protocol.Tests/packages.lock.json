@@ -111,7 +111,8 @@
         "dependencies": {
           "Bodu.Security.Cryptography": "[0.2.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
-          "FallbackPlan.Domain": "[1.0.0, )"
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )"
         }
       },
       "Bodu.Core": {
@@ -146,6 +147,12 @@
         "dependencies": {
           "Bodu.Core": "0.2.0"
         }
+      },
+      "System.Formats.Cbor": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "V8XZBZsORS+NMhM5hc7doU0wKgDe0lJaaUkZGlAgpbYqN5Pd11I3pxwoRQgEyUVbDri/+qm7YCp49gCTYcbqJQ=="
       }
     }
   }

@@ -28,11 +28,14 @@ After the TLS handshake completes and pinning is verified:
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| 1 | `u16` | Protocol version offered |
-| 2 | `array of text` | Feature identifiers offered, ≤ 256 ([00 §2.3](00-conventions.md#23-limits-are-the-protocols-own)) |
-| 3 | `array of text` | Feature identifiers **required** of the peer |
-| 4 | `text` | Agent version, for display and diagnostics only |
-| 5 | `map` | Terms, per [01 §4](01-identity-and-pairing.md#4-terms) — present when this side is the destination |
+| 1 | `u16` | Lowest protocol version supported |
+| 2 | `u16` | Highest protocol version supported |
+| 3 | `array of text` | Feature identifiers offered, ≤ 256 ([00 §2.3](00-conventions.md#23-limits-are-the-protocols-own)) |
+| 4 | `array of text` | Feature identifiers **required** of the peer |
+| 5 | `text` | Agent version, for display and diagnostics only |
+| 6 | `map` | Terms, per [01 §4](01-identity-and-pairing.md#4-terms) — present when this side is the destination |
+
+Keys 1 and 2 are a **closed range**, and key 2 MUST NOT be below key 1. A hello violating that is `malformed`.
 
 **`SessionAccept`**
 
@@ -41,19 +44,25 @@ After the TLS handshake completes and pinning is verified:
 | 1 | `u16` | Protocol version selected |
 | 2 | `array of text` | Features in effect — the intersection, per §4 |
 
-The agent version in key 4 is **informational**. A conforming implementation MUST NOT branch on it. Behaviour is decided by negotiated features and by nothing else, because version-sniffing is how a protocol acquires undocumented compatibility rules that no specification can then describe.
+The agent version in key 5 is **informational**. A conforming implementation MUST NOT branch on it. Behaviour is decided by negotiated features and by nothing else, because version-sniffing is how a protocol acquires undocumented compatibility rules that no specification can then describe.
 
 ## 3 Protocol version
 
 The protocol version is a `u16`, independent of the repository format version ([00 §2.1](00-conventions.md#21-versioning-is-separate)).
 
-The selected version MUST be the highest both sides speak. A side that cannot speak any version the other offers MUST refuse with `version_unsupported`, **naming both its own range and the range it was offered**. → FR-REP-004, NFR-COMP-006
+Each side declares the closed range of versions it supports. The selected version MUST be the highest both sides speak — the lower of the two maxima, provided it is not below the higher of the two minima. Where the ranges do not overlap, a side MUST refuse with `version_unsupported`, **naming both its own range and the range it was offered**. → FR-REP-004, NFR-COMP-006
+
+A range rather than a single version is what makes that refusal message possible, and what lets an old and a new agent meet in the middle without either having to guess what the other can do. A hello carrying one version could only ever say "this or nothing".
 
 ## 4 Feature negotiation
 
-Features are lower-case ASCII identifiers. Each side offers what it supports and separately states what it **requires** of the other.
+A feature identifier is a non-empty string of `a`–`z`, `0`–`9`, `-`, `_` and `.`. A reader MUST refuse an identifier containing anything else as `malformed`, and MUST NOT case-fold one to make it fit: an identifier two implementations spell differently and one of them silently normalises is a negotiation that disagrees with itself while both sides believe they agree.
 
-The features in effect are the intersection of the two offered sets. A side MUST refuse the session when any feature it requires is absent from the other's offered set, with reason `feature_unsupported` naming the missing feature.
+Each side offers what it supports and separately states what it **requires** of the other.
+
+The features in effect are the intersection of the two offered sets, and MUST be written in the accept sorted by byte value. A side MUST refuse the session when any feature it requires is absent from the other's offered set, with reason `feature_unsupported` naming the missing feature.
+
+Both sides compute the intersection alone, from the same two hellos, and exchange no further message about it. A set has no order of its own, so without a stated one the two sides could write different accepts while both were correct.
 
 A side MUST NOT use a feature that is not in the intersection, and MUST NOT infer support from any other signal.
 

@@ -1,0 +1,269 @@
+using System.Buffers.Binary;
+using System.Formats.Cbor;
+
+namespace FallbackPlan.Protocol;
+
+/// <summary>The message types this protocol defines (specification peer-protocol 02 §5).</summary>
+public enum PeerMessageType : ushort
+{
+    /// <summary>Pairing offer (01 §2.2).</summary>
+    PairOffer = 1,
+
+    /// <summary>Pairing acceptance (01 §2.2).</summary>
+    PairAccept = 2,
+
+    /// <summary>Pairing confirmation (01 §2.2).</summary>
+    PairConfirm = 3,
+
+    /// <summary>Pairing refusal (01 §2.2).</summary>
+    PairRefuse = 4,
+
+    /// <summary>Session hello (02 §2).</summary>
+    SessionHello = 5,
+
+    /// <summary>Session acceptance (02 §2).</summary>
+    SessionAccept = 6,
+
+    /// <summary>Session refusal (02 §6).</summary>
+    SessionRefuse = 7,
+}
+
+/// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>
+public enum PeerRefusalReason : ushort
+{
+    /// <summary>The presented key is not the pinned key.</summary>
+    IdentityChanged = 1,
+
+    /// <summary>No grant exists for the presented identity.</summary>
+    NotPaired = 2,
+
+    /// <summary>A grant existed and was revoked.</summary>
+    Revoked = 3,
+
+    /// <summary>No common protocol version.</summary>
+    VersionUnsupported = 4,
+
+    /// <summary>A required feature is absent.</summary>
+    FeatureUnsupported = 5,
+
+    /// <summary>An unrecognised message type.</summary>
+    MessageUnknown = 6,
+
+    /// <summary>A frame or body that violates the specification.</summary>
+    Malformed = 7,
+
+    /// <summary>The offered terms are unacceptable.</summary>
+    TermsRefused = 8,
+
+    /// <summary>The peer cannot serve a session now.</summary>
+    Busy = 9,
+
+    /// <summary>A human declined the pairing.</summary>
+    PairingDeclined = 10,
+}
+
+/// <summary>Raised when a peer sends something this protocol does not permit.</summary>
+public sealed class PeerProtocolException : Exception
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="reason">The code to send back.</param>
+    /// <param name="message">What to tell a human.</param>
+    public PeerProtocolException(PeerRefusalReason reason, string message)
+        : base(message) => Reason = reason;
+
+    /// <summary>Creates the exception with a cause.</summary>
+    /// <param name="reason">The code to send back.</param>
+    /// <param name="message">What to tell a human.</param>
+    /// <param name="innerException">The cause.</param>
+    public PeerProtocolException(PeerRefusalReason reason, string message, Exception innerException)
+        : base(message, innerException) => Reason = reason;
+
+    /// <summary>Creates the exception with no reason — present for the framework's benefit.</summary>
+    public PeerProtocolException() => Reason = PeerRefusalReason.Malformed;
+
+    /// <summary>Creates the exception with a message only.</summary>
+    /// <param name="message">What to tell a human.</param>
+    public PeerProtocolException(string message)
+        : base(message) => Reason = PeerRefusalReason.Malformed;
+
+    /// <summary>Creates the exception with a message and a cause.</summary>
+    /// <param name="message">What to tell a human.</param>
+    /// <param name="innerException">The cause.</param>
+    public PeerProtocolException(string message, Exception innerException)
+        : base(message, innerException) => Reason = PeerRefusalReason.Malformed;
+
+    /// <summary>The closed-set code a peer branches on (02 §6).</summary>
+    public PeerRefusalReason Reason { get; }
+}
+
+/// <summary>
+/// One message on the wire (specification peer-protocol 02 §5).
+/// </summary>
+/// <remarks>
+/// <para>
+/// A <c>u32</c> length prefix, then a deterministic CBOR map whose key 0 is the
+/// message type. The length prefix sits outside any transport framing on
+/// purpose: it bounds the allocation <b>before</b> any CBOR is parsed, and it
+/// keeps the frame boundary a property of this protocol rather than of the
+/// transport, which is what lets QUIC substitute for TCP without changing
+/// anything above.
+/// </para>
+/// <para>
+/// The bound is checked against the declared length, not against what arrived.
+/// A parser that allocates from an unvalidated length read from an untrusted
+/// peer is the standard shape of a denial-of-service bug, and this wire carries
+/// input from parties the design explicitly does not trust (threat model T-7).
+/// </para>
+/// </remarks>
+public static class PeerFrame
+{
+    /// <summary>The largest payload a frame may declare (00 §2.3).</summary>
+    public const int MaximumPayloadBytes = 16 * 1024 * 1024;
+
+    /// <summary>The CBOR map key carrying the message type.</summary>
+    public const int MessageTypeKey = 0;
+
+    /// <summary>Writes one frame.</summary>
+    /// <param name="stream">Where to write.</param>
+    /// <param name="message">The message to send.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the frame is written.</returns>
+    /// <remarks>
+    /// The map is written definite-length, which is why a message must declare
+    /// its entry count rather than just writing entries. Deterministic encoding
+    /// admits no indefinite-length item, so there is no shape here that lets a
+    /// writer discover the count as it goes.
+    /// </remarks>
+    public static async ValueTask WriteAsync(
+        Stream stream,
+        IPeerMessage message,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(message);
+
+        var payload = Encode(message);
+        var prefix = new byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32BigEndian(prefix, (uint)payload.Length);
+
+        await stream.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reads one frame, or null when the peer closed cleanly.</summary>
+    /// <param name="stream">Where to read from.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The type and a reader positioned after the type entry, or null.</returns>
+    /// <exception cref="PeerProtocolException">The frame violates this specification.</exception>
+    public static async ValueTask<(PeerMessageType Type, CborReader Body)?> ReadAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var prefix = new byte[sizeof(uint)];
+        if (!await ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var declared = BinaryPrimitives.ReadUInt32BigEndian(prefix);
+
+        // Before the allocation, not after it.
+        if (declared > MaximumPayloadBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"The peer declared a frame of {declared} bytes, over the {MaximumPayloadBytes}-byte limit.");
+        }
+
+        var payload = new byte[declared];
+        if (!await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "The peer closed the connection part-way through a frame.");
+        }
+
+        return Decode(payload);
+    }
+
+    /// <summary>Encodes a message to the bytes a frame carries, without the length prefix.</summary>
+    /// <param name="message">The message to encode.</param>
+    /// <returns>The deterministic CBOR body.</returns>
+    /// <exception cref="PeerProtocolException">The encoding exceeds the frame limit.</exception>
+    public static byte[] Encode(IPeerMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        var writer = new CborWriter(CborConformanceMode.Canonical);
+        writer.WriteStartMap(message.BodyEntryCount + 1);
+        writer.WriteInt32(MessageTypeKey);
+        writer.WriteUInt32((uint)message.Type);
+        message.WriteBody(writer);
+        writer.WriteEndMap();
+
+        var payload = writer.Encode();
+        if (payload.Length > MaximumPayloadBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A frame of {payload.Length} bytes exceeds the {MaximumPayloadBytes}-byte limit.");
+        }
+
+        return payload;
+    }
+
+    /// <summary>Reads a frame body already in memory — the read path without a stream.</summary>
+    /// <param name="payload">The frame body.</param>
+    /// <returns>The type and a reader positioned after the type entry.</returns>
+    /// <exception cref="PeerProtocolException">The body violates this specification.</exception>
+    public static (PeerMessageType Type, CborReader Body) Decode(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        var reader = new CborReader(payload, CborConformanceMode.Canonical);
+
+        try
+        {
+            reader.ReadStartMap();
+            if (reader.ReadInt32() != MessageTypeKey)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "A frame's first map key is not the message type.");
+            }
+
+            return ((PeerMessageType)reader.ReadUInt32(), reader);
+        }
+        catch (CborContentException exception)
+        {
+            // Non-deterministic or malformed CBOR is refused rather than read
+            // leniently: two encodings of one message is exactly the ambiguity
+            // canonical encoding exists to remove.
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A frame's body is not canonical CBOR.", exception);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A frame's body does not have the shape this protocol defines.", exception);
+        }
+    }
+
+    private static async ValueTask<bool> ReadExactlyAsync(
+        Stream stream, byte[] buffer, CancellationToken cancellationToken)
+    {
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var got = await stream.ReadAsync(buffer.AsMemory(read), cancellationToken).ConfigureAwait(false);
+            if (got == 0)
+            {
+                return false;
+            }
+
+            read += got;
+        }
+
+        return true;
+    }
+}
