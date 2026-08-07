@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §1–§4, §27
 
+**Built:** Vision and scope — describes intent throughout, not a component — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. What FallbackPlan is

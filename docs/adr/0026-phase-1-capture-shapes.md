@@ -137,15 +137,40 @@ disposition.
 ### 10 Restore receipt and exportable plan are versioned JSON
 
 Client-domain documents, **not** repository format surface: JSON with a
-`"schema"` version field, UTF-8, stable lower-snake-case keys.
-The **receipt** accounts for every planned file — path, outcome
-(`restored | skipped | failed | degraded`), bytes, whole-file hash
-verified, and for `degraded` the attribute-level detail the 06 §3 matrix
-requires. The **plan** carries the selection, resolved file set, conflict
-list with per-file resolutions, size estimates, and a resume cursor.
-Full field lists live with the wave-R implementation and its tests;
-this decision pins the medium, the versioning, and the
+`schema_version` field, UTF-8, stable lower-snake-case keys.
+The **receipt** accounts for every planned file — path, per-item outcome,
+bytes, whole-file hash verified — and reports what the restore **as a
+whole** achieved. The **plan** carries the selection, resolved file set,
+conflict list with per-file resolutions, size estimates, and a resume
+cursor. Full field lists live with the wave-R implementation and its
+tests; this decision pins the medium, the versioning, and the
 receipt-accounts-for-everything obligation (FR-RST-004).
+
+#### Amendment (2026-08): what the receipt actually says
+
+Two details drifted from what shipped, and one was a defect rather than a
+naming slip.
+
+The version field is `schema_version`, not `schema`. The per-item
+vocabulary is `restored | skipped | failed` — there is no `degraded`
+outcome, because a degradation is a property of an *attribute* on a file
+that was restored, not a third fate for the file. The 06 §3 matrix
+detail the original wording asked for is carried by the plan's
+degradation list, which is declared before any byte moves.
+
+The defect: the receipt carried a `complete` boolean computed as "nothing
+failed", so a restore that skipped every symlink and special file
+reported itself complete — against architecture 08 §3's absolute rule
+that a restore of 9 999 of 10 000 files is a failed restore. Schema 2
+replaces it with an `outcome` of `complete | partial | failed |
+cancelled`; a skipped required item makes the restore partial. The
+boolean is not carried alongside, because a reader that understood it
+would still read `true` for a partial restore.
+
+The quarantine ledger is now `displaced`, and names what it holds: files
+that were already at a destination and were moved aside. It is not
+architecture 08 §3.1's quarantine control, which is about where restored
+content lands — see that section for why the two are kept apart.
 
 ## Consequences
 

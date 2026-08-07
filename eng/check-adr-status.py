@@ -12,7 +12,9 @@ So this refuses a build where:
      that does not exist;
   2. a row's state is not one of the four the legend defines;
   3. a code citation in the "Where it is" column names a project, directory or
-     type that is not on disk.
+     type that is not on disk; or
+  4. an architecture document does not say whether the code does what it
+     describes.
 
 Check 3 is the one that matters. A row may still be generous about what "built"
 means — that is a reading, and no script settles it — but it can no longer cite
@@ -34,6 +36,7 @@ STATES = {"Built", "Partly built", "Specified only", "Applied"}
 
 ROW = re.compile(r"^\|\s*\[(\d{4})\]\([^)]+\)\s*\|(.+)$")
 CODE = re.compile(r"`([^`]+)`")
+BUILT = re.compile(r"^\*\*Built:\*\* .+$", re.M)
 
 # Paths that are prose or documentation rather than a code citation. Documented
 # links are already resolved by check-links.py, so they are skipped here.
@@ -138,9 +141,17 @@ def main() -> int:
     if not ABANDONED_DOC.is_file():
         failures.append("docs/decisions-abandoned.md is missing")
 
+    # An architecture document describes a design. Whether the code does it is
+    # a separate question, and one a reader will otherwise answer by assuming.
+    architecture = sorted((ROOT / "docs" / "architecture").glob("*.md"))
+    for path in architecture:
+        if not BUILT.search(path.read_text(encoding="utf-8")):
+            failures.append(f"{path.name} has no **Built:** line saying whether the code does this")
+
     print(f"ADRs on disk        : {len(on_disk)}")
     print(f"rows in the table   : {len(rows)}")
     print(f"citations resolved  : {sum(len(CODE.findall(c)) for _, _, c in rows)}")
+    print(f"architecture docs   : {len(architecture)}, each saying whether it is built")
 
     if failures:
         print()

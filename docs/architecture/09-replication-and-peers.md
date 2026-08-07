@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
+**Built:** Identity, pairing and the session layer built; no transport, no replication — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. What replication moves

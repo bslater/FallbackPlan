@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §10 · **Resolves:** [M3](../review/2026-08-architecture-review.md#m3--cross-platform-metadata-semantics-are-named-but-never-resolved)
 
+**Built:** Yes, except the no-follow handle-relative traversal §4.1 owes — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Scanner
@@ -14,7 +16,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - detect sparse extents and record them as logical zero extents rather than reading zeroes;
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
 - use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create;
-- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued.
+- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued. *The identity half of this is not built* — revalidation currently compares size and mtime only, which detects an ordinary edit and not a deliberate substitution ([§4.1](#41-links-are-classified-before-they-are-traversed)).
 
 ## 2. Path handling
 

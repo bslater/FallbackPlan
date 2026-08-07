@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §15, §22 · **Resolves:** [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
+**Built:** Describes the tree as it stands — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Layout

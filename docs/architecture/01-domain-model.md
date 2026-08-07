@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §5 · **Resolves:** [M1](../review/2026-08-architecture-review.md#m1--terminology-drifts-between-synonyms), [M8](../review/2026-08-architecture-review.md#m8--malformed-glossary-table)
 
+**Built:** Normative vocabulary — in force wherever the code names these things — see [implementation status](../implementation-status.md).
+
 ---
 
 This document is **normative for terminology**. Where any other document, code identifier, log message, or user-facing string names one of these concepts, it uses the term defined here. The original proposal used two names for several concepts; that is a defect for a format intended to be implemented by third parties, and it is closed here.

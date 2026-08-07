@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §11 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
+**Built:** **No.** No collector, no mark, no sweep, no compaction — nothing reclaims space — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Retention selects; collection deletes

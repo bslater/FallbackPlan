@@ -2,6 +2,8 @@
 
 **Status:** draft · **Explanatory, not normative** — see the note below
 
+**Built:** Yes — every step here is code you can run — see [implementation status](../implementation-status.md).
+
 ---
 
 > **This document defines nothing.** Every rule it mentions is stated authoritatively in one of the numbered documents, and this one links there rather than restating it. Where the two disagree, **the numbered document wins** and this one is wrong.

@@ -134,11 +134,31 @@ Stated plainly so no other document implies otherwise:
 - **Loss of all recovery material** makes the repository permanently unreadable. This is by design, and it is why the recovery-kit workflow is mandatory and drills are prompted.
 - **A malicious administrator** with access to every device and to retention controls can destroy data. Audit records make it attributable, not impossible.
 - **Hardware faults across every replica** are undetectable without verification, which is why verification coverage is a first-class status.
-- **Malware already present in a historical snapshot** will be faithfully restored. Restore defaults to quarantine for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)).
+- **Malware already present in a historical snapshot** will be faithfully restored. Restore is *designed* to default to a quarantine path for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)) — **and does not yet do so**: the executor writes wherever its caller points it. FR-RST-006 is unmet and the traceability matrix says so. Until it is built, restoring an old snapshot over a live tree reintroduces whatever was in it.
 
 ## Controls summary
 
-OS-authenticated local command surface · paired device identity for remote clients, off by default · key material confined to the service account and never crossing the command surface · content withheld from remote clients unless separately enabled · Mutual device authentication · least-privilege repository grants · separate read/append/retention/administrative permissions · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state · dedup trust domains · keyed verification challenges · bounded parsers · type-based secret redaction · pinned dependencies and vulnerability scanning · signed reproducible releases · rollback-protected auto-update · repository-server rate limits and quotas · signed audit trail for destructive operations · quarantine-by-default restore.
+**This is the design's control set, and roughly half of it is built.** The distinction is drawn here rather than left to be inferred, because a threat model is read by people deciding whether to trust a system, and a designed control read as a deployed one is worse than no entry at all. Per-decision detail is in [implementation status](implementation-status.md).
+
+**In force** — implemented, with tests holding them:
+
+OS-authenticated local command surface · key material confined to the service account and never crossing the command surface (NFR-SEC-009) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · dedup trust domains, `repository` mode · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
+
+**Designed, not built** — each waits on a phase, not on a decision:
+
+| Control | Waiting on |
+|---------|-----------|
+| Paired device identity for remote clients, off by default | The protocol is built; nothing carries it over a socket ([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)) |
+| Mutual device authentication | The same — the construction exists and has never spoken to another machine |
+| Content withheld from remote clients unless separately enabled | [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) |
+| Least-privilege repository grants; separate read/append/retention/administrative permissions | Phase 2–3 |
+| Keyed verification challenges | Replication (architecture 09 §5) |
+| Repository-server rate limits and quotas | Phase 3 |
+| Signed audit trail for destructive operations | Retention and GC, which are not built at all |
+| Quarantine-by-default restore (FR-RST-006) | The executor writes where its caller points it; nothing defaults that destination |
+| Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
+
+**Dedup trust domains** deserve a note: the mechanism is built and the `repository` domain is the default and is exercised. The `device` domain and verify-on-reuse need a second device to deduplicate against, so they are specified and unexercised.
 
 ## Review obligations
 

@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
+**Built:** Contract and local provider built; cloud providers are phase 3 — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Principles
