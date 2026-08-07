@@ -146,7 +146,30 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_read_path_the_service_does_not_serve_is_named_not_silently_missing()
+    public async Task The_service_verifies_the_blobs_it_holds()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        // This used to answer "read path, run it directly". The refusal was
+        // honest while it stood, but a service that cannot verify its own
+        // repository is a service a console cannot ask the only question that
+        // matters after a backup.
+        var verified = Assert.IsType<VerificationResult>(
+            await handler.ExecuteAsync(new VerifyCommand("records"), _timeout.Token));
+
+        Assert.True(verified.ObjectsChecked > 0, "the repository holds blobs, so the sweep must have examined some");
+        Assert.Equal(0, verified.Failures);
+        Assert.Equal("records", verified.Level);
+    }
+
+    [Fact]
+    public async Task An_unknown_verify_level_is_refused_with_the_vocabulary()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -155,10 +178,105 @@ public sealed class ServiceTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
         var error = Assert.IsType<ServiceError>(
-            await handler.ExecuteAsync(new VerifyCommand("digest"), _timeout.Token));
+            await handler.ExecuteAsync(new VerifyCommand("paranoid"), _timeout.Token));
 
-        Assert.Equal(ServiceErrorReason.Unavailable, error.Reason);
-        Assert.Contains("read path", error.Message, StringComparison.Ordinal);
+        Assert.Equal(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("locator | digest | records", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_healthy_repository_checks_clean()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var check = Assert.IsType<CheckResult>(
+            await handler.ExecuteAsync(new CheckCommand("digest"), _timeout.Token));
+
+        // Findings only, so empty means "nothing is wrong" rather than
+        // "nothing ran" — the counts of what was healthy are not findings.
+        Assert.Empty(check.Findings);
+    }
+
+    [Fact]
+    public async Task A_restore_plan_says_what_it_would_write_before_anything_moves()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var snapshots = Assert.IsType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token));
+        var snapshot = Assert.Single(snapshots.Snapshots);
+
+        var plan = Assert.IsType<RestorePlanResult>(
+            await handler.ExecuteAsync(new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token));
+
+        Assert.Equal(2, plan.Files);
+        Assert.True(plan.Bytes > 0);
+        Assert.Empty(plan.MissingObjects);
+    }
+
+    [Fact]
+    public async Task A_restore_commanded_through_the_contract_writes_on_the_service_machine()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var snapshots = Assert.IsType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token));
+        var snapshot = Assert.Single(snapshots.Snapshots);
+
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+
+        var restored = Assert.IsType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token));
+
+        // ADR-0028 §6: the output directory is a path on the machine running the
+        // service. A caller is told what happened and never sent the files, so
+        // the proof of a restore is on this disk rather than in the result.
+        Assert.Equal(2, restored.Restored);
+        Assert.Equal(0, restored.Failed);
+        Assert.Equal(destination, restored.OutputDirectory);
+        Assert.Equal("hello", await File.ReadAllTextAsync(Path.Combine(destination, "notes.txt"), _timeout.Token));
+        Assert.Equal(
+            "deeper",
+            await File.ReadAllTextAsync(Path.Combine(destination, "nested", "deeper.txt"), _timeout.Token));
+    }
+
+    [Fact]
+    public async Task A_restore_of_a_snapshot_nobody_has_is_not_found_rather_than_empty()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var error = Assert.IsType<ServiceError>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(new string('a', 32), null), _timeout.Token));
+
+        // An empty plan and an absent snapshot are different answers, and a
+        // caller that cannot tell them apart cannot report either honestly.
+        Assert.Equal(ServiceErrorReason.NotFound, error.Reason);
     }
 
     [Fact]
