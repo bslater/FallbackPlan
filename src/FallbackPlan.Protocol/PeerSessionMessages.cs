@@ -23,7 +23,154 @@ public interface IPeerMessage
 }
 
 /// <summary>
-/// What each side says first (specification peer-protocol 02 §2).
+/// What each side sends the moment TLS completes, without waiting for the
+/// peer's (specification peer-protocol 02 §3.1).
+/// </summary>
+/// <remarks>
+/// This carries a claim, not a proof. Nothing may act on the identity here
+/// until <see cref="SessionAuthProof"/> has been verified against the
+/// channel-bound transcript — the whole point of 02 §2's state machine is that
+/// there is a state in which a peer has said who it is and has not yet shown it.
+/// </remarks>
+/// <param name="Identity">This side's permanent peer identity.</param>
+/// <param name="Nonce">Fresh random bytes for this connection.</param>
+public sealed record SessionAuth(PeerIdentity Identity, ReadOnlyMemory<byte> Nonce) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.SessionAuth;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <summary>Builds this side's message with a fresh nonce.</summary>
+    /// <param name="identity">This device's peer identity.</param>
+    /// <returns>The message to send.</returns>
+    public static SessionAuth Create(PeerIdentity identity) => new(identity, SessionBinding.Nonce());
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(Identity.PublicKey);
+        writer.WriteInt32(2);
+        writer.WriteByteString(Nonce.Span);
+    }
+
+    /// <summary>Reads the message from a body positioned after the message type.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The message.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 02 §3.1.</exception>
+    public static SessionAuth Read(CborReader reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+
+        byte[]? identity = null;
+        byte[]? nonce = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    identity = reader.ReadByteString();
+                    break;
+                case 2:
+                    nonce = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (identity is null || identity.Length != PeerIdentity.KeyLength
+            || nonce is null || nonce.Length != SessionBinding.NonceLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An authentication message is not the shape 02 §3.1 defines.");
+        }
+
+        return new SessionAuth(PeerIdentity.FromPublicKey(identity), nonce);
+    }
+
+    /// <summary>Whether two messages carry the same claim.</summary>
+    /// <param name="other">The message to compare.</param>
+    /// <returns><see langword="true"/> when identity and nonce match.</returns>
+    public bool Equals(SessionAuth? other) =>
+        other is not null && Identity == other.Identity && Nonce.Span.SequenceEqual(other.Nonce.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Identity, Nonce.Length);
+}
+
+/// <summary>
+/// The signature that turns <see cref="SessionAuth"/>'s claim into a proof
+/// (specification peer-protocol 02 §3.1).
+/// </summary>
+/// <param name="Signature">Ed25519 over the role-bound transcript of 02 §3.2.</param>
+public sealed record SessionAuthProof(ReadOnlyMemory<byte> Signature) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.SessionAuthProof;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(Signature.Span);
+    }
+
+    /// <summary>Reads the proof from a body positioned after the message type.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The proof.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 02 §3.1.</exception>
+    public static SessionAuthProof Read(CborReader reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+
+        byte[]? signature = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            if (key == 1)
+            {
+                signature = reader.ReadByteString();
+            }
+            else
+            {
+                reader.SkipValue();
+            }
+        });
+
+        if (signature is null || signature.Length != PeerKeypair.SignatureLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"An authentication proof is {PeerKeypair.SignatureLength} bytes.");
+        }
+
+        return new SessionAuthProof(signature);
+    }
+
+    /// <summary>Whether two proofs are the same bytes.</summary>
+    /// <param name="other">The proof to compare.</param>
+    /// <returns><see langword="true"/> when the signatures match.</returns>
+    public bool Equals(SessionAuthProof? other) =>
+        other is not null && Signature.Span.SequenceEqual(other.Signature.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => Signature.Length;
+}
+
+/// <summary>
+/// What each side says first (specification peer-protocol 02 §4).
 /// </summary>
 /// <param name="MinimumVersion">Lowest protocol version this side speaks.</param>
 /// <param name="MaximumVersion">Highest protocol version this side speaks.</param>

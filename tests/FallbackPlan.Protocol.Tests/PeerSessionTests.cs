@@ -276,6 +276,70 @@ public sealed class PeerSessionMessageTests
     }
 
     [Fact]
+    public void An_authentication_claim_round_trips()
+    {
+        using var keypair = PeerKeypair.Generate();
+        var auth = SessionAuth.Create(keypair.Identity);
+
+        var (type, body) = PeerFrame.Decode(PeerFrame.Encode(auth));
+
+        Assert.Equal(PeerMessageType.SessionAuth, type);
+        Assert.Equal(auth, SessionAuth.Read(body));
+    }
+
+    [Fact]
+    public void An_authentication_proof_round_trips()
+    {
+        var proof = new SessionAuthProof(Enumerable.Range(0, 64).Select(i => (byte)i).ToArray());
+
+        var (type, body) = PeerFrame.Decode(PeerFrame.Encode(proof));
+
+        Assert.Equal(PeerMessageType.SessionAuthProof, type);
+        Assert.Equal(proof, SessionAuthProof.Read(body));
+    }
+
+    [Theory]
+    [InlineData(31)]
+    [InlineData(33)]
+    public void An_identity_that_is_not_thirty_two_bytes_is_refused(int length)
+    {
+        var writer = new CborWriter(CborConformanceMode.Canonical);
+        writer.WriteStartMap(3);
+        writer.WriteInt32(PeerFrame.MessageTypeKey);
+        writer.WriteUInt32((uint)PeerMessageType.SessionAuth);
+        writer.WriteInt32(1);
+        writer.WriteByteString(new byte[length]);
+        writer.WriteInt32(2);
+        writer.WriteByteString(new byte[SessionBinding.NonceLength]);
+        writer.WriteEndMap();
+
+        // Length-checked before it reaches the identity type, so a short key
+        // cannot become an ArgumentException surfacing as a crash rather than
+        // a refusal.
+        var refused = Assert.Throws<PeerProtocolException>(
+            () => SessionAuth.Read(PeerFrame.Decode(writer.Encode()).Body));
+
+        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+    }
+
+    [Fact]
+    public void A_proof_that_is_not_a_signature_length_is_refused()
+    {
+        var writer = new CborWriter(CborConformanceMode.Canonical);
+        writer.WriteStartMap(2);
+        writer.WriteInt32(PeerFrame.MessageTypeKey);
+        writer.WriteUInt32((uint)PeerMessageType.SessionAuthProof);
+        writer.WriteInt32(1);
+        writer.WriteByteString(new byte[16]);
+        writer.WriteEndMap();
+
+        var refused = Assert.Throws<PeerProtocolException>(
+            () => SessionAuthProof.Read(PeerFrame.Decode(writer.Encode()).Body));
+
+        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+    }
+
+    [Fact]
     public void A_refusal_carries_the_code_a_client_branches_on()
     {
         var refusal = SessionRefuse.From(

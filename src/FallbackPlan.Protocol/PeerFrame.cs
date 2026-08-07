@@ -24,8 +24,14 @@ public enum PeerMessageType : ushort
     /// <summary>Session acceptance (02 §2).</summary>
     SessionAccept = 6,
 
-    /// <summary>Session refusal (02 §6).</summary>
+    /// <summary>Session refusal (02 §8).</summary>
     SessionRefuse = 7,
+
+    /// <summary>Identity and nonce, sent without waiting (02 §3.1).</summary>
+    SessionAuth = 8,
+
+    /// <summary>The channel-bound signature (02 §3.1).</summary>
+    SessionAuthProof = 9,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>
@@ -60,6 +66,34 @@ public enum PeerRefusalReason : ushort
 
     /// <summary>A human declined the pairing.</summary>
     PairingDeclined = 10,
+
+    /// <summary>The peer did not prove possession of the identity it presented (02 §3.3).</summary>
+    AuthenticationFailed = 11,
+}
+
+/// <summary>
+/// How far a session has got (specification peer-protocol 02 §2).
+/// </summary>
+/// <remarks>
+/// Named and enforced rather than left implicit because
+/// <see cref="Encrypted"/> is the state that looks finished and is not. An
+/// implementation that treats a completed TLS handshake as an authenticated
+/// session has a stranger inside the protocol, and every check after that point
+/// is being applied to input it has no reason to believe.
+/// </remarks>
+public enum PeerSessionState
+{
+    /// <summary>Transport connected; nothing but a TLS handshake is permitted.</summary>
+    Connected = 0,
+
+    /// <summary>TLS complete. Encrypted, and authenticating nobody.</summary>
+    Encrypted = 1,
+
+    /// <summary>02 §3 satisfied in both directions.</summary>
+    Authenticated = 2,
+
+    /// <summary>02 §4 complete. The payload documents apply.</summary>
+    Open = 3,
 }
 
 /// <summary>Raised when a peer sends something this protocol does not permit.</summary>

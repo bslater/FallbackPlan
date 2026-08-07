@@ -35,7 +35,7 @@ The side that initiates is the **offerer**; the side that accepts is the **respo
 
 ### 2.2 Messages
 
-Each message is a CBOR map carried in one frame ([02 §5](02-session.md#5-framing)), bounded by the pairing-message limit of [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own).
+Each message is a CBOR map carried in one frame ([02 §7](02-session.md#7-framing)), bounded by the pairing-message limit of [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own).
 
 **`PairOffer`** (offerer → responder)
 
@@ -68,7 +68,7 @@ Each message is a CBOR map carried in one frame ([02 §5](02-session.md#5-framin
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| 1 | `u16` | Reason code ([02 §6](02-session.md#6-errors-and-refusal)) |
+| 1 | `u16` | Reason code ([02 §8](02-session.md#8-errors-and-refusal)) |
 | 2 | `text` | Reason, for a human |
 
 ### 2.3 Deriving the short authentication string

@@ -59,9 +59,11 @@ Quota, storage path, schedule window and retention floor are set by the destinat
 
 This is a property of who owns the disk, not a negotiation. The person lending space decides how much.
 
-### 4. The transport authenticates the pinned key directly
+### 4. The pinned key authenticates the channel
 
-Sessions run over TLS 1.3 with raw public keys ([RFC 7250](https://www.rfc-editor.org/rfc/rfc7250)) rather than X.509. There is no certificate authority in this design and no name to validate — the pinned key *is* the expected identity, so a certificate would be a container for a check that is already exact.
+Sessions run over TLS 1.3. There is no certificate authority in this design and no name to validate — the pinned key *is* the expected identity, so a certificate is a container for a check that is already exact.
+
+This was first written as TLS 1.3 with raw public keys ([RFC 7250](https://www.rfc-editor.org/rfc/rfc7250)) and X.509 prohibited. See **Amendment 1** — the mechanism changed, the guarantee did not.
 
 Protocol feature negotiation happens after the handshake and is separate from repository format negotiation, because the two version independently ([ADR-0014](0014-format-versioning-and-stability.md), FR-REP-004, NFR-COMP-006).
 
@@ -88,8 +90,29 @@ What it does **not** settle is what a paired console may then *do*. [Q18](../ope
 
 **A shared secret typed on both machines.** Simple to explain, and no key exchange to get wrong. Rejected because a human-chosen shared secret becomes the weakest part of the system, and because it gives no way to pin an identity for later sessions — the second connection has the same problem as the first.
 
+## Amendment 1 (2026-08) — authentication moves out of TLS
+
+**§4's mechanism is not implementable on the reference platform, and is replaced. Its guarantee is unchanged.**
+
+RFC 7250 raw public keys are not reachable from .NET: `SslStream`'s authentication surface is certificate-shaped throughout, with no way to supply or validate a bare key. The usual second choice — completing the handshake and binding the application protocol to a keying-material exporter ([RFC 5705](https://www.rfc-editor.org/rfc/rfc5705)) — is also unavailable, as `SslStream` exposes no exporter. Carrying the Ed25519 identity inside a self-signed certificate fails independently: .NET has no Ed25519 certificate support to build or read one with (which is why [ADR-0019 Amendment 2](0019-third-party-dependency-policy.md) vendors the primitive at all), and Schannel does not accept such certificates.
+
+Replacing the platform TLS stack with OpenSSL, BoringSSL, Botan or Bouncy Castle would work and is refused. It means owning a TLS state machine, certificate parsing, native dependencies, cross-platform packaging and a vulnerability-response obligation — a tier-1 blast radius under ADR-0019 for a component whose entire purpose is to be boring.
+
+**So the objective is restated.** It is not to implement RFC 7250; it is to preserve what RFC 7250 was chosen for. TLS becomes an encrypted, *unauthenticated* channel using a self-signed P-256 certificate generated per connection and discarded with it. No trust decision happens during the handshake. Authentication moves into the protocol: each side signs, with its permanent Ed25519 identity, a role-separated transcript binding both peer identities, both nonces, and the SHA-256 of both sides' TLS `SubjectPublicKeyInfo`. A man in the middle terminates TLS with its own certificates, so the transcript it would need to produce is not the one either genuine peer signed, and it holds neither private key. Both sides refuse.
+
+The normative invariant:
+
+> A session MUST NOT enter the authenticated state until the peer has demonstrated possession of the expected Ed25519 private key by signing a fresh, role-bound transcript that cryptographically binds that permanent identity to the current TLS connection.
+
+Two things this buys beyond restoring the guarantee. Trust becomes a property of the protocol rather than of a platform TLS feature, so a future .NET that gains raw public keys or an exporter can strengthen the binding without changing what a session *means*. And the session's states become explicit — `Connected`, `Encrypted`, `Authenticated`, `Open` — because `Encrypted` is the state that looks finished and is not, and an implementation that mistakes a completed handshake for an authenticated peer has a stranger inside the protocol.
+
+The cost is honest and small: two message types, one round trip that overlaps in both directions, and an ECDSA P-256 keypair per connection that authenticates nothing. The pairing ceremony is untouched — its short authentication string is computed over the X25519 agreement, so a man in the middle runs two different exchanges and the two humans read different strings, exactly as before.
+
+Specified in [peer-protocol 02 §1–§3](../../specifications/peer-protocol/02-session.md#1-transport).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the peer-protocol specification's pairing and session documents; nothing implemented yet |
+| 2026-08 | Amended | Amendment 1: RFC 7250 found unreachable on the reference platform; authentication moved from TLS into the protocol, guarantee preserved |
