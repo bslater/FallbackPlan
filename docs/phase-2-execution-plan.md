@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** in progress · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on the local binding; the remote binding is blocked on pairing · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -61,36 +61,36 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| A1 | This plan | — | Every wave has an acceptance criterion before code exists |
-| A2 | `JobState`, `ProtectionState`, `VerificationDetail`, `BackupSetStatus` move to Domain; `JobProgress` and `IJobProgressReporter` added | ADR-0029 §5 | The engine can emit job states and the contract can carry them without either referencing the application layer |
-| A3 | `StateDirectoryLock` — an OS advisory lock on the state directory, with an informational owner file | FR-SVC-002, ADR-0028 §4 | A second caller is refused **naming the holder**; killing the holder releases the role with no stale-lock heuristic |
-| A4 | `AtomicFile`; `state.json`, `jobs.json` and `config.json` replaced atomically | — | A crash mid-write cannot leave a truncated state file |
+| A1 | ✅ This plan | — | Every wave has an acceptance criterion before code exists |
+| A2 | ✅ `JobState`, `ProtectionState`, `VerificationDetail`, `BackupSetStatus` move to Domain; `JobProgress` and `IJobProgressReporter` added | ADR-0029 §5 | The engine can emit job states and the contract can carry them without either referencing the application layer |
+| A3 | ✅ `StateDirectoryLock` — an OS advisory lock on the state directory, with an informational owner file | FR-SVC-002, ADR-0028 §4 | A second caller is refused **naming the holder**; killing the holder releases the role with no stale-lock heuristic |
+| A4 | ✅ `AtomicFile`; `state.json`, `jobs.json` and `config.json` replaced atomically | — | A crash mid-write cannot leave a truncated state file |
 
 ### Wave B — The command contract
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| B1 | `FallbackPlan.Api` — commands, results, events, client and service interfaces, status roll-up | FR-SVC-001, NFR-OPS-006 | The project references Domain and nothing else, so "UIs depend on the contract, never the engine" is mechanically enforceable |
-| B2 | The local binding — Unix domain socket or named pipe, authenticated by the operating system | FR-SVC-003, [T-16](threat-model.md) | No password, no token file, no port; the caller is identified by peer credentials |
-| B3 | The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port, and enabling the remote binding without pairing is refused with a stated reason |
-| B4 | Contract-version negotiation | FR-SVC-007 | Incompatible versions refuse **naming both**, per service rather than wholesale |
+| B1 | ✅ `FallbackPlan.Api` — commands, results, events, client and service interfaces, status roll-up | FR-SVC-001, NFR-OPS-006 | The project references Domain and nothing else, so "UIs depend on the contract, never the engine" is mechanically enforceable |
+| B2 | ✅ The local binding — Unix domain socket or named pipe, authenticated by the operating system | FR-SVC-003, [T-16](threat-model.md) | No password, no token file, no port; the caller is identified by peer credentials |
+| B3 | ✅ The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port, and enabling the remote binding without pairing is refused with a stated reason |
+| B4 | ✅ Contract-version negotiation | FR-SVC-007 | Incompatible versions refuse **naming both**, per service rather than wholesale |
 
 ### Wave C — The service
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| C1 | The Agent becomes long-lived: opens the repository once, holds the writer role, hosts the endpoint | FR-SVC-001, FR-SVC-008 | Argon2id runs once per service lifetime rather than once per poll; a service with no front end installed backs up unattended |
-| C2 | The job queue — sets serialised, restore and verify alongside, user work outranks scheduled work, cancellation | ADR-0029 §4 | A cancelled job records `Cancelled` and its sequences become void-delta obligations the next publication discharges |
-| C3 | Progress events threaded through the engine | FR-SVC-006 | A running job reports states beyond `Scanning`; a client distinguishes a working job from a stalled one without reading engine files |
-| C4 | Keystore unlock — DPAPI, Keychain, and the Linux equivalent | NFR-SEC-009, ADR-0028 §9 | Scheduled backup runs with no passphrase in the environment; key export still takes a passphrase per invocation |
+| C1 | ✅ The Agent becomes long-lived: opens the repository once, holds the writer role, hosts the endpoint | FR-SVC-001, FR-SVC-008 | Argon2id runs once per service lifetime rather than once per poll; a service with no front end installed backs up unattended |
+| C2 | ✅ The job queue — sets serialised, restore and verify alongside, user work outranks scheduled work, cancellation | ADR-0029 §4 | A cancelled job records `Cancelled` and its sequences become void-delta obligations the next publication discharges |
+| C3 | ✅ Progress events threaded through the engine | FR-SVC-006 | A running job reports states beyond `Scanning`; a client distinguishes a working job from a stalled one without reading engine files |
+| C4 | ✅ Keystore unlock — DPAPI, Keychain, and the Linux equivalent | NFR-SEC-009, ADR-0028 §9 | Scheduled backup runs with no passphrase in the environment; key export still takes a passphrase per invocation |
 
 ### Wave D — The clients
 
 | # | Item | Resolves | Acceptance |
 |---|------|----------|-----------|
-| D1 | `IOperationGateway` with service and direct implementations; mode resolution and reporting | FR-SVC-001, ADR-0028 §3 | The CLI says which mode it used; with a service running, `--direct` is refused naming the holder |
-| D2 | Verbs routed through the contract; engineering verbs stay direct and say so | FR-SVC-001 | The same operation performs identically through either path |
-| D3 | The 11 §2 dependency rules and `ApiShapeTests` | NFR-PORT-004 | Rules that were written but unenforced become tests; every public contract operation is async, cancellable, and returns a result |
+| D1 | ✅ `IOperationGateway` with service and direct implementations; mode resolution and reporting | FR-SVC-001, ADR-0028 §3 | The CLI says which mode it used; with a service running, `--direct` is refused naming the holder |
+| D2 | ✅ Verbs routed through the contract; engineering verbs stay direct and say so | FR-SVC-001 | The same operation performs identically through either path |
+| D3 | ✅ The 11 §2 dependency rules and `ApiShapeTests` | NFR-PORT-004 | Rules that were written but unenforced become tests; every public contract operation is async, cancellable, and returns a result |
 
 ### Wave E — Measure
 
@@ -149,7 +149,7 @@ could leave one behind.
 |---|------|----------|-----------|
 | G1 ✅ | `Concurrency` on `CapturePolicy`, validated | NFR-PERF-001, NFR-OPS-004 | A value outside 1..64 is a named defect; the default is 2, below a 4-core laptop's capacity; 1 stays valid and tested |
 | G2 ✅ | The staged pipeline with the ordering barrier at ordinal assignment | NFR-PERF-002, ADR-0029 §1 | Read, hash and compress run concurrently; ordinal assignment, encryption, append and digest stay strictly ordered |
-| G3 | Acceptance and interruption proof | NFR-PERF-002 | Restored bytes identical at concurrency 1, 2 and 4 ✅; *N* in-flight blobs each independently intent-covered ✅; a kill with several uploads outstanding is still owed |
+| G3 | ✅ Acceptance and interruption proof | NFR-PERF-002 | Restored bytes identical at concurrency 1, 2 and 4 ✅; *N* in-flight blobs each independently intent-covered ✅; a kill with several uploads outstanding ✅ |
 
 **G2, as built.** Throughput roughly doubled on fixed-v1 and rose about a third
 on cdc-v1 ([phase-2-benchmarks.md](phase-2-benchmarks.md), fourth run: ten sweeps
@@ -184,8 +184,8 @@ otherwise have called from several threads.
 
 | # | Item | Acceptance |
 |---|------|-----------|
-| H1 | ADR-0028 and ADR-0029 accepted, with amendments recording what implementation and measurement decided | [Q20](open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement) closed with a number, not an opinion |
-| H2 | Traceability, roadmap, and 11 §1 updated | No requirement points at a test that does not exist; the roadmap says what the remote binding still owes |
+| H1 | ✅ ADR-0028 and ADR-0029 accepted, with amendments recording what implementation and measurement decided | [Q20](open-questions.md#closed) closed with a number, not an opinion |
+| H2 | ✅ Traceability, roadmap, and 11 §1 updated | No requirement points at a test that does not exist; the roadmap says what the remote binding still owes |
 
 ---
 
@@ -201,7 +201,7 @@ restated here with the test that will prove each:
 | A running job reports states beyond `Scanning` | `Api.Tests` — the progress-event assertion |
 | A service with no front end installed backs up unattended | `Hosts.Tests` |
 | Client and service at incompatible versions refuse with both versions named | `Api.Tests` — the negotiation assertion |
-| Restored bytes identical regardless of concurrency setting | **partly** — `InterruptionTests/ConcurrentUploadTests` proves it at 1 and 4 for the upload workers, which is the only part of the setting that is real; the staged pipeline is not built |
+| Restored bytes identical regardless of concurrency setting | `InterruptionTests/ConcurrentUploadTests` at 1, 2 and 4 — the whole setting now, not the upload workers alone, because ADR-0029 §1's staged pipeline carries it into segmentation, hashing and compression |
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
 
 ### What is not met, said plainly
@@ -209,20 +209,13 @@ restated here with the test that will prove each:
 - **An unpaired remote client refused**, and **a restore commanded remotely
   writing on the service's machine.** Both need the remote binding, which needs
   pairing.
-- **Restored bytes identical regardless of concurrency**, in full. `Concurrency`
-  sizes the upload workers and nothing else, so the stages that dominate a
-  backup are still sequential at every value. The benchmark reports the settings
-  anyway, which makes the spread across them visible as noise — a calibration any
-  future concurrency result has to beat.
 - **Restore, verify and check over the command surface.** The contract carries
   them; this service build answers them with a stated
   "this is a read path, run it directly" rather than a silence.
-- **A kill test with several uploads outstanding.** `ConcurrentUploadTests` now
-  proves the per-blob invariant — every blob's covering intent is durable before
-  its own PUT, at concurrency 1 and 4 — and that restores are byte-identical
-  across both. What is still not written is the case that *kills* a job mid-
-  upload with several blobs in flight, which is the harder half of architecture
-  04 §5.1 at *N* > 1.
+- **NFR-PERF-007's ≥400 MB/s on the reference machine.** Every number on the
+  benchmarks page is container measurement. It compares configurations and
+  versions against each other honestly and says nothing about the requirement,
+  which has never been tested on the machine it is stated against.
 
 ---
 
@@ -248,38 +241,50 @@ predictable*, some from a 40% spread to under 10%, which is what removing an
 variance.
 
 **So pinning survives measurement**, which is half of what
-[Q20](open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
-asks — resumability now costs one `fsync` and one sidecar write per blob instead
-of one of each per record, and the question of whether it was worth its price
-does not arise at that price. Q20's other half, where the concurrency default
-sits, still needs G2 before it means anything.
+[Q20](open-questions.md#closed) asks — resumability now costs one `fsync` and one
+sidecar write per blob instead of one of each per record, and the question of
+whether it was worth its price does not arise at that price. G2 answered the
+other half: 360.8 MiB/s at concurrency 2 against 356.9 at 4, so the default of 2
+is measured rather than merely reasoned. **Q20 is closed on both halves.**
 
 **Still owed: the reference machine.** Everything on the benchmarks page is
 container measurement. It compares configurations and versions against each
 other honestly and says nothing at all about NFR-PERF-007's ≥400 MB/s, which has
 never been tested. That is not a small remainder, and it is H1's to close.
 
-G2 is done too, and what it decided is under Wave G above.
+G2 is done too, and what it decided is under Wave G above. So are G3, D1, D2 and
+H1–H2; what each decided is recorded with its wave.
 
-### 1. A kill test with several uploads outstanding
+**G3 found a deadlock rather than only closing a gap.** Standing several blobs in
+row 4's state needed a store that holds blob puts open, and reaching for it
+showed that an upload worker which threw left the channel uncompleted — so once
+every worker had died and the bounded channel filled, the producer blocked in
+`WriteAsync` with nothing alive to drain it and the job neither finished nor
+failed. The files under test had never sealed more blobs than the channel holds,
+which is the only reason it had not been seen.
 
-Architecture 04 §5.1's "durable but unreferenced" state is now reachable *N* at a
-time. The matrix proves it at *N*=1; the case that kills a job mid-upload with
-several blobs in flight is not written.
+**D2 is narrower than its title suggests, and deliberately so.** Exactly one verb
+both writes and has a service equivalent, so exactly one routes: `backup`. The
+contract's restore, verify and check are answered "read path, run it directly",
+which stays true; `archive` and `rebuild-index` have no service equivalent at all
+and now say so by name. A service can only run a configured set, so an ad-hoc
+root is refused with what to do instead rather than quietly run against state the
+service owns.
 
-This is the last piece of G3, and it is now the more interesting half: with the
-staged pipeline there are also *N* segments in flight above the barrier when the
-kill lands, so what the spool holds at that moment is worth asserting rather than
-assuming. `BlobSpoolResumeTests` proves resume at the default concurrency; it has
-not been run with the pipeline full.
-
-### 2. The remote binding
+### 1. The remote binding
 
 Topologies 3 and 4, and the two exit criteria they own. Blocked on pairing, which
 reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
 machinery, and gated by
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access).
+
+### 2. NFR-PERF-007 on the reference machine
+
+The one exit criterion no amount of container measurement can close. Everything
+on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
+versions against each other; the ≥400 MB/s figure is stated against a machine
+none of it ran on.
 
 ### Watch list
 
@@ -334,6 +339,13 @@ full-suite runs are clean where three of four failed.
 The lesson is the one the watch list exists for: a plausible mechanism that
 explains a flake is not proof it is the only one. The eager-subscription fix was
 right and necessary, and stopping there was the error.
+
+### 2. NFR-PERF-007 on the reference machine
+
+The one exit criterion no amount of container measurement can close. Everything
+on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
+versions against each other; the ≥400 MB/s figure is stated against a machine
+none of it ran on.
 
 ### Watch list — open
 

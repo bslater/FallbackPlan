@@ -9,10 +9,19 @@ Checks:
      C# source file under src/ or tests/ actually exists. Code comments cite
      requirement IDs as authority for design rules, and a citation of an ID
      nobody defined is authority borrowed from nothing.
+  4. Every Test cell in the traceability matrix resolves: a class that exists
+     in the project it names, a 'Project/*' wildcard whose project exists, or
+     an explicit untested marker.
 
 The third check is the one that earns its keep: a requirement reference that
 looks authoritative but names an ID nobody defined is worse than no reference,
 because it implies a guarantee that is not tracked anywhere.
+
+The fourth exists because the same thing happened in the other direction. The
+Test column was written as *planned* class names, and by the time anyone
+resolved them 73 of 86 named nothing at all — the matrix read as coverage and
+was mostly fiction. Naming a test that does not exist is a claim, so the column
+is now checked like one; a requirement genuinely without a test says so.
 
 Exits non-zero on any failure. Run from anywhere.
 """
@@ -54,6 +63,59 @@ def traced_ids(text: str) -> set[str]:
     for match in re.finditer(r"((?:FR|NFR)-[A-Z]+)-(\d{3})((?:,\s*\d{3})+)", text):
         found |= {f"{match.group(1)}-{n}" for n in re.findall(r"\d{3}", match.group(3))}
     return found
+
+
+TEST_ROOT = ROOT / "tests"
+ROW_PATTERN = re.compile(
+    r"^\|\s*((?:FR|NFR)-[A-Z]+-\d{3}(?:\.\.\d{3}|(?:,\s*\d{3})+)?)\s*\|(.*)$"
+)
+CLASS_PATTERN = re.compile(
+    r"\b(?:public|internal)\s+(?:sealed\s+|abstract\s+|static\s+|partial\s+)*class\s+(\w+)"
+)
+UNTESTED_PATTERN = re.compile(r"\((?:untested|not a test);")
+
+
+def test_classes() -> dict[str, set[str]]:
+    """Class names declared in each test project, keyed by project short name."""
+    found: dict[str, set[str]] = collections.defaultdict(set)
+    for path in TEST_ROOT.glob("*/**/*.cs"):
+        relative = path.relative_to(ROOT).as_posix()
+        if "/bin/" in relative or "/obj/" in relative:
+            continue
+        project = relative.split("/")[1].removeprefix("FallbackPlan.")
+        found[project] |= set(CLASS_PATTERN.findall(path.read_text(encoding="utf-8")))
+    return found
+
+
+def unresolved_tests(traceability: str) -> list[str]:
+    """Test cells naming a class or project that does not exist."""
+    projects = test_classes()
+    problems: list[str] = []
+
+    for line in traceability.splitlines():
+        match = ROW_PATTERN.match(line)
+        if not match:
+            continue
+
+        cells = [cell.strip() for cell in match.group(2).split("|")]
+        cell = cells[2] if len(cells) > 2 else ""
+        citations = re.findall(r"`([^`]+)`", cell)
+
+        if not citations:
+            # No class named at all: only an explicit marker is acceptable,
+            # because a blank cell is indistinguishable from an oversight.
+            if not UNTESTED_PATTERN.search(cell):
+                problems.append(f"{match.group(1)}: Test cell is neither a class nor an untested marker")
+            continue
+
+        for citation in citations:
+            project, _, name = citation.rpartition("/")
+            if project not in projects:
+                problems.append(f"{match.group(1)}: no test project '{project}' (cited as '{citation}')")
+            elif name != "*" and name not in projects[project]:
+                problems.append(f"{match.group(1)}: '{project}' declares no class '{name}'")
+
+    return problems
 
 
 def main() -> int:
@@ -100,7 +162,17 @@ def main() -> int:
     if dangling:
         failures.append(f"references to undefined requirement IDs: {sorted(dangling)}")
 
+    if unresolved := unresolved_tests(traceability):
+        failures.append("traceability Test column does not resolve:\n       " + "\n       ".join(unresolved))
+
+    tested = sum(
+        1
+        for line in traceability.splitlines()
+        if ROW_PATTERN.match(line) and "`" in line.split("|")[4]
+    )
+
     print(f"requirements defined : {len(defined)}")
+    print(f"traceability tested  : {tested}/{len(defined_set)}")
     print(f"traceability coverage: {len(defined_set & traced_ids(traceability))}/{len(defined_set)}")
     print(f"files scanned        : {scanned}")
 

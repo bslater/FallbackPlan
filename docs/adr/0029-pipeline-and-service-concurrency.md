@@ -313,11 +313,15 @@ measured against that rather than assumed from the number.
 measurement supports it: with compression moved off the ordered stage, the
 barrier is not the constraint at these rates.
 
-[Q20](../open-questions.md#q20--where-the-concurrency-default-sits-and-whether-pinning-survives-measurement)
-stays open on its second half. Its first half now has an answer:
-**`Concurrency` defaults to 2**, below a 4-core laptop's capacity, because a
-backup that makes the machine unpleasant to use gets switched off and a
-switched-off backup protects nothing.
+**Q20 is [closed](../open-questions.md#closed)**, and by measurement rather than
+opinion on both halves. **`Concurrency` stays at 2**: it was chosen below a
+4-core laptop's capacity because a backup that makes the machine unpleasant to
+use gets switched off, and a switched-off backup protects nothing — and 360.8
+MiB/s at 2 against 356.9 at 4 says the reasoning cost nothing, because with a
+single-threaded reader and a single-threaded barrier there is little left to give
+the concurrent stage anyway. **Pinning survives** too, at one `fsync` and one
+sidecar write per blob rather than per record; at that price whether it earns its
+cost is no longer a question worth asking.
 
 ## Status history
 
@@ -325,3 +329,4 @@ switched-off backup protects nothing.
 |------|--------|------|
 | 2026-08 | Proposed | Written alongside ADR-0028, after benchmarks showed the gap is serial cost rather than thread count |
 | 2026-08 | Accepted | The shape is settled; §6's sequence is under way and its status is recorded above |
+| 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |

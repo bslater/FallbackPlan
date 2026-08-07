@@ -42,24 +42,25 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Relay/
 │   ├── FallbackPlan.Discovery.Server/
 │   └── FallbackPlan.Repository.Server/
-├── tests/
-│   ├── FallbackPlan.Domain.Tests/
-│   ├── FallbackPlan.Repository.Tests/
-│   ├── FallbackPlan.Repository.ConformanceTests/
-│   ├── FallbackPlan.Repository.FuzzTests/
+├── tests/                         ✓ = exists today; the rest arrive with their phase
+│   ├── FallbackPlan.Domain.Tests/            ✓
+│   ├── FallbackPlan.Application.Tests/       ✓
+│   ├── FallbackPlan.Api.Tests/               ✓ command contract and local binding
+│   ├── FallbackPlan.Repository.Tests/        ✓ also holds the end-to-end suites
+│   ├── FallbackPlan.Repository.ConformanceTests/ ✓
+│   ├── FallbackPlan.Repository.FuzzTests/    ✓
+│   ├── FallbackPlan.Filesystem.Tests/        ✓
 │   ├── FallbackPlan.Restore.Tests/
 │   ├── FallbackPlan.Retention.Tests/
 │   ├── FallbackPlan.Protocol.Tests/
-│   ├── FallbackPlan.Storage.ContractTests/
+│   ├── FallbackPlan.Storage.ContractTests/   ✓
 │   ├── FallbackPlan.Import.CrashPlan.Tests/
-│   ├── FallbackPlan.ArchitectureTests/       enforces §2
-│   ├── FallbackPlan.IntegrationTests/
-│   ├── FallbackPlan.InterruptionTests/
-│   ├── FallbackPlan.PerformanceTests/
-│   ├── FallbackPlan.TestSupport/            platform gating, shared by test projects
-│   ├── FallbackPlan.Cli.Tests/              drives real commands in process
-│   ├── FallbackPlan.Hosts.Tests/            drives the Agent and Recovery hosts
-│   └── FallbackPlan.EndToEndTests/
+│   ├── FallbackPlan.ArchitectureTests/       ✓ enforces §2
+│   ├── FallbackPlan.InterruptionTests/       ✓
+│   ├── FallbackPlan.PerformanceTests/        ✓
+│   ├── FallbackPlan.TestSupport/             ✓ platform gating, shared by test projects
+│   ├── FallbackPlan.Cli.Tests/               ✓ drives real commands in process
+│   └── FallbackPlan.Hosts.Tests/             ✓ drives the Agent and Recovery hosts
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
 ├── specifications/                repository-format, peer-protocol, discovery-protocol,
@@ -73,6 +74,8 @@ FallbackPlan.slnx
 Two changes from the original list. `Repository.Segmentation` and `Repository.Catalogue` are separated out because both are pluggable along axes the design explicitly anticipates: segmentation profiles ([`02-repository-format.md` §3.1](02-repository-format.md#31-profiles)) and the catalogue engine ([ADR-0010](../adr/0010-local-store-separation.md)). Hiding either inside a larger project makes the boundary a convention rather than something the compiler enforces.
 
 Projects are created when the phase that needs them arrives, not up front. Empty placeholder projects make the boundary map look complete while enforcing nothing.
+
+That policy needs the map to say which half is which, and for a while it did not. The `tests/` tree was read as a statement of fact by [`requirements/traceability.md`](../requirements/traceability.md), which named test classes inside projects this list had merely promised — and 73 of its 86 citations ended up naming nothing at all. Hence the ✓ marks: they cost a character each and they are the difference between a plan and a claim. Two entries dropped rather than gained a mark. `IntegrationTests` and `EndToEndTests` were never built as separate projects because the suites that would have filled them live in `Repository.Tests/EndToEnd/`, next to the engine they exercise; splitting them out now would move code to satisfy a diagram.
 
 ## 2. Dependency rules
 

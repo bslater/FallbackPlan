@@ -194,14 +194,6 @@ A console pairs with each service it manages, and pairing is revocable at the se
 
 ---
 
-## Q20 — Where the concurrency default sits, and whether pinning survives measurement
-
-**Owner:** maintainer · **Blocks:** the throughput work in [ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6
-
-Two numbers cannot be chosen from the armchair. **The first is now answered:** `CapturePolicy.Concurrency` defaults to **2**, deliberately below a 4-core laptop's capacity, because a backup that makes the machine unpleasant to use gets switched off and a switched-off backup protects nothing. It is validated to 1..64 and nothing consumes it yet, so the number will be revisited when the staged pipeline makes it mean something. The second is whether per-record spool pinning — an `fsync` plus a checkpoint rewrite per record, currently unconditional for data blobs — earns its cost once measured; it buys resumability of an interrupted blob, and `BlobWriter.TryResume` has no production caller today, so the benefit is currently unrealised while the cost is paid on every record.
-
----
-
 ## Q17 — Lease, tombstone, and audit-period object formats
 
 **Owner:** engineering · **Blocks:** garbage collection implementation (post-phase-0) · **Gates:** Phase 4 retention/GC — Phase 1's retention selection without physical pruning is unaffected · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md)
@@ -229,3 +221,4 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 | Is the local database disposable? | The catalogue is; device identity and pairings are not ([ADR-0010](adr/0010-local-store-separation.md)) |
 | Can compaction relocate records byte-identically? | No — compaction decrypts and re-seals; the AAD and its ordinal are unchanged ([ADR-0025](adr/0025-compaction-reseals-records.md)) |
 | What licence does the project carry? | Dual: code AGPL-3.0-only + commercial licences from the maintainer; `specifications/` Apache-2.0 so independent readers stay unencumbered ([ADR-0001](adr/0001-licence-and-contribution-model.md)) |
+| Where does the concurrency default sit, and does per-record spool pinning survive measurement? | Both answered by measurement, not opinion. `Concurrency` stays at **2**: 360.8 MiB/s at 2 against 356.9 at 4, because a single-threaded reader and a single-threaded ordering barrier leave four logical cores little to spare. Pinning **survives**, moved from per record to per blob — one `fsync` and one sidecar write per blob, at which price the question of whether it earns its cost does not arise ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6, [phase-2 benchmarks](phase-2-benchmarks.md)) |
