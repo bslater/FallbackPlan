@@ -89,7 +89,7 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);
         await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, Path.Combine(SpoolDirectory, "restored"),
-            new RestoreExecutionOptions { NowUnixMilliseconds = 1_722_600_000_001 }, CancellationToken.None);
+            new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_600_000_001 }, CancellationToken.None);
 
         listener.Dispose();
 

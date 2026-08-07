@@ -14,6 +14,8 @@ That marker is a statement about *traceable* coverage, not proof of its absence:
 
 Two markers survived that audit for reasons worth keeping distinct from "nobody wrote a test". A **manual harness** is not a test: `PerformanceTests/MemoryBoundProof` will demonstrate FR-ARCH-002 to anyone who runs it, and nothing runs it. A **benchmark is not an assertion**: NFR-PERF-007 is measured by `ThroughputBenchmarks` and still unmet, because every figure is container measurement and the requirement is stated against a reference machine. Both cells name the thing that falls short, so the shortfall is legible instead of implied.
 
+A test may also need to **name a requirement in order to disclaim it**, which happens when a cell used to claim coverage it did not have. A doc comment saying *"this class does not establish FR-…"* would otherwise reinstate the very claim it withdraws, and `--drift` would report the file as proving what it just denied. The phrase `does not establish` is honoured by the extractor for that reason, and is fixed so it can be grepped.
+
 **Legend:** *Arch* = architecture section · *ADR* = decision record · *Test* = the test classes citing this requirement, or an explicit untested marker · *Phase* = [roadmap](../roadmap.md) phase that must satisfy it.
 
 ---
@@ -91,7 +93,7 @@ Two markers survived that audit for reasons worth keeping distinct from "nobody 
 | FR-RST-003 | [08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-004 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-005 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/ArchiveCorruptionTests` | 1 |
-| FR-RST-006 | [08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default) | — | `Repository.Tests/RestorePlanTests` | 1 |
+| FR-RST-006 | [08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default) | — | — *(unmet; the executor writes where the caller points it and nothing defaults that destination to a quarantine path — the cell previously cited a test of displaced-file preservation, which is a different control)* | 1 |
 | FR-KIT-001..006 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-kit) | [0013](../adr/0013-recovery-kit.md) | `Cli.Tests/CommandTests`, `Hosts.Tests/RecoveryHostTests`, `Repository.ConformanceTests/RecoveryKitConformanceTests` | 1 |
 
 ### Replication and verification

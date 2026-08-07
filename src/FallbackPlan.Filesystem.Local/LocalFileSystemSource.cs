@@ -255,8 +255,14 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         ReadOnlyMemory<byte>? linkTarget = null;
         if (kind == ScanEntryKind.Symlink)
         {
-            var target = new FileInfo(fullPath).LinkTarget;
-            if (target is not null)
+            // A directory junction is a link too, and its target lives on
+            // DirectoryInfo rather than FileInfo. Reading it through the wrong
+            // one returns null, which would record a link with no target.
+            FileSystemInfo info = Directory.Exists(fullPath)
+                ? new DirectoryInfo(fullPath)
+                : new FileInfo(fullPath);
+
+            if (info.LinkTarget is { } target)
             {
                 linkTarget = Encoding.UTF8.GetBytes(target);
             }
@@ -361,9 +367,16 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         }
 
         var attributes = info.Attributes;
-        var mode = (attributes & FileAttributes.Directory) != 0
-            ? 0x4000u
-            : (attributes & FileAttributes.ReparsePoint) != 0 ? 0xA000u : 0x8000u;
+
+        // The reparse bit is tested FIRST, and the order is the whole point.
+        // A directory junction or a directory symlink carries both bits, so
+        // testing Directory first classified it as an ordinary directory and
+        // the scanner would descend through it — out of the approved root,
+        // which architecture 06 §2 forbids. A link is a link whatever it
+        // points at.
+        var mode = (attributes & FileAttributes.ReparsePoint) != 0
+            ? 0xA000u
+            : (attributes & FileAttributes.Directory) != 0 ? 0x4000u : 0x8000u;
 
         result = new StatResult(
             Device: device,

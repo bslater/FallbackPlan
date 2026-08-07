@@ -70,6 +70,12 @@ A periodic reconciliation scan is **mandatory** regardless. Event streams overfl
 
 The reconciliation interval is configurable; a full scan is also forced after any detected journal discontinuity.
 
+### 4.1 Links are classified before they are traversed
+
+A link is a link whatever it points at. An object carrying both a directory marker and a link marker — an NTFS directory junction, a directory symlink — **MUST** be classified as a link, and the scanner MUST NOT descend through it. Testing the directory marker first classifies a junction as an ordinary directory and walks out of the approved root, and junctions need no privilege to create, so that is the shape an unprivileged attacker on the source machine actually has.
+
+**What this does not yet close.** The scanner classifies from a path-based stat and re-opens the object by pathname to read it, so an object can be replaced between the two — the ordinary time-of-check-to-time-of-use gap. Closing it needs no-follow, handle-relative operations: open the object without following a link, take its stable identity from the opened handle, stream from that handle, and compare the identity again after the read rather than comparing size and modification time alone. Revalidation currently compares size and modification time, which detects an ordinary edit and not a deliberate substitution. This is owed and is not claimed.
+
 ## 5. Consistency
 
 | Method | Platform | Guarantee |

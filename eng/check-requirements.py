@@ -87,6 +87,13 @@ CLASS_PATTERN = re.compile(
 )
 UNTESTED_PATTERN = re.compile(r"\((?:untested|not a test|unmet);")
 
+# A test file may need to NAME a requirement in order to say it does not
+# establish it - which is the most useful thing a doc comment can say when a
+# cell used to claim otherwise. Without this, the explanation reinstates the
+# claim it exists to withdraw, and --drift reports the file as proving the
+# requirement it just disclaimed. The phrase is fixed so it is greppable.
+DISCLAIMER_PATTERN = re.compile(r"does not establish[^.]*", re.IGNORECASE)
+
 
 def test_classes() -> dict[str, set[str]]:
     """Class names declared in each test project, keyed by project short name."""
@@ -144,8 +151,14 @@ def covering_classes() -> dict[str, set[str]]:
         if not names or not re.search(r"\[(?:Fact|Theory)\b", text):
             continue
 
+        disclaimed = {
+            rid
+            for span in DISCLAIMER_PATTERN.findall(text)
+            for rid in ID_PATTERN.findall(span)
+        }
+
         project = relative.split("/")[1].removeprefix("FallbackPlan.")
-        for rid in traced_ids(text):
+        for rid in traced_ids(text) - disclaimed:
             covers[rid] |= {f"{project}/{name}" for name in names}
     return covers
 

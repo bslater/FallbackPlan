@@ -247,6 +247,9 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             command.OutputDirectory,
             new RestoreExecutionOptions
             {
+                // The job identifier, so a displaced file can be traced back to
+                // the run that moved it.
+                RunId = Convert.ToHexString(plan.SnapshotId.Span)[..16].ToLowerInvariant(),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
             cancellationToken).ConfigureAwait(false);

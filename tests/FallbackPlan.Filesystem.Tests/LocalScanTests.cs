@@ -286,6 +286,33 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.False(string.IsNullOrEmpty(entry.Metadata.OwnerName));
     }
 
+    [PlatformFact(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task A_directory_junction_is_a_link_and_is_not_descended()
+    {
+        Write("target/secret.txt");
+
+        // A junction carries BOTH the Directory and ReparsePoint attributes.
+        // Testing Directory first classified it as an ordinary directory, and
+        // the scanner descended through it — out of the approved root, which
+        // architecture 06 §2 forbids. Junctions need no privilege to create,
+        // so this is the shape an unprivileged attacker actually has.
+        var junction = Path.Combine(_root, "junction");
+        Directory.CreateSymbolicLink(junction, Path.Combine(_root, "target"));
+
+        var events = await ScanAsync();
+        var link = events.OfType<ScanEvent.Leaf>()
+            .Single(leaf => leaf.Entry.RelativePath == "junction").Entry;
+
+        Assert.Equal(ScanEntryKind.Symlink, link.Kind);
+        Assert.NotNull(link.LinkTarget);
+
+        // Followed content would appear twice; it must appear exactly once.
+        Assert.Single(
+            events.OfType<ScanEvent.Leaf>(),
+            leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
+    }
+
     [PlatformFact(TestPlatforms.Windows, "reserved device names (CON, NUL) and case-insensitive-by-default volumes are Windows filesystem shapes")]
     [PlatformTrait(TestPlatforms.Windows)]
     public void Probe_reports_the_windows_filesystem_shape()
