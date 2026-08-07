@@ -160,6 +160,18 @@ decision 9 makes re-verification after rebuild a real, accepted cost;
 decision 7 commits to a reader-visible format addition mid-phase, which is
 only cheap because the format is pre-freeze.
 
+## Alternatives considered
+
+**Let the scanner invent each shape as it meets it.** The default, and the reason this record exists. Rejected: ten shapes decided under implementation pressure, one at a time, is ten chances to write a byte into a pre-freeze format because it was convenient that afternoon. Deciding them together made the interactions visible — decision 5's alternate-stream cap and decision 9's re-verification cost were only obviously acceptable once both were on the same page.
+
+**Derive `hardlink_group` from the source inode number.** The obvious construction, and it leaks: an inode number is a stable identifier for a file on a specific filesystem, visible to a destination that holds only ciphertext everywhere else. Rejected for the keyed derivation of decision 1, which groups the same links without naming them.
+
+**Capture special files (`entry_kind = 4`) by content.** A FIFO or a socket has no content to capture, a device node's "content" is the device, and a backup tool that opens one can block forever or read something it must not. Rejected in favour of recording the kind and metadata and restoring the node, which is what a restore actually needs.
+
+**Store alternate streams as a manifest of their own.** More general than decision 5's one-segment cap, and unnecessary: real NTFS streams are near-universally tiny, and a second manifest type is format surface that must then be specified, versioned and read by every implementation. Rejected as a v1 limitation worth taking, revisitable as a format addition rather than a format correction.
+
+**A free-text note instead of decision 2's `key: value` diagnostics.** Easier to write and impossible to consume: a restore planner deciding whether a file was captured inconsistently, or a UI explaining a degradation, would be pattern-matching English. Rejected in favour of one machine-parseable fact per string, following the convention import provenance had already set.
+
 ## Status history
 
 | Date | Status | Note |

@@ -20,7 +20,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.Catalogue/    ✓ disposable local catalogue
 │   ├── FallbackPlan.Filesystem/              ✓ scanner contracts
 │   ├── FallbackPlan.Filesystem.Local/        ✓ local scanner, per-platform interop inside
-│   ├── FallbackPlan.Protocol/                ✓ peer identity and pairing (ADR-0030)
+│   ├── FallbackPlan.Protocol/                ✓ peer identity, pairing, session, authentication (ADR-0030)
 │   ├── FallbackPlan.Protocol.Grpc/
 │   ├── FallbackPlan.Discovery/
 │   ├── FallbackPlan.Replication/
@@ -52,7 +52,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Filesystem.Tests/        ✓
 │   ├── FallbackPlan.Restore.Tests/
 │   ├── FallbackPlan.Retention.Tests/
-│   ├── FallbackPlan.Protocol.Tests/          ✓ pairing ceremony and peer identity
+│   ├── FallbackPlan.Protocol.Tests/          ✓ pairing, grants, framing, negotiation, channel binding
 │   ├── FallbackPlan.Storage.ContractTests/   ✓
 │   ├── FallbackPlan.Import.CrashPlan.Tests/
 │   ├── FallbackPlan.ArchitectureTests/       ✓ enforces §2

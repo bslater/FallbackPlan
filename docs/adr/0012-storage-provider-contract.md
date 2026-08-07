@@ -1,6 +1,6 @@
 # ADR-0012 — Storage provider contract
 
-**Status:** Proposed
+**Status:** Proposed · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001
 **Review finding:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)

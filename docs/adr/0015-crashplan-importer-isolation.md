@@ -1,6 +1,6 @@
 # ADR-0015 — CrashPlan importer isolation and licensing gate
 
-**Status:** Proposed
+**Status:** Proposed · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-CP-001..006, NFR-PORT-002
 **Related:** [ADR-0001](0001-licence-and-contribution-model.md), [`../open-questions.md#q2`](../open-questions.md#q2--plan-c-licence-and-reuse-posture)

@@ -15,6 +15,8 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | Know what a word means | [Domain model](architecture/01-domain-model.md) — normative glossary |
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
+| Know what is actually built | [Implementation status](implementation-status.md) |
+| Know why something *isn't* the design | [Abandoned choices](decisions-abandoned.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
 | Pick up where the last round stopped | [Phase 2 plan — where to pick up](phase-2-execution-plan.md#where-to-pick-up) |
 | Start building | [Phase 2 execution plan](phase-2-execution-plan.md) (in progress) · [Phase 1 execution plan](phase-1-execution-plan.md) · [Phase 0 execution plan](phase-0-execution-plan.md) (implemented) · [format specification](../specifications/repository-format/README.md) |
@@ -46,7 +48,12 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 are **Accepted** on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0030 is `Proposed`, written ahead of any implementation; the rest remain `Proposed`.
+Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 are **Accepted** on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0030 is `Proposed`, amended once when RFC 7250 proved unreachable on the platform; the rest remain `Proposed`.
+
+**A decision's status is not its implementation state**, and the two are tracked separately on purpose: `Status:` says whether the decision was accepted, and [implementation status](implementation-status.md) says whether the code does it. Nine records still marked `Proposed` are built and tested, and their status lines say so; several are `Proposed` precisely because they are deliberately provisional until the format freeze gate.
+
+- **[Implementation status](implementation-status.md)** — every ADR mapped to the code and tests that establish it, with the partly-built ones saying which half is missing
+- **[Abandoned choices](decisions-abandoned.md)** — what was rejected and why, and separately, what was *the plan* and was given up
 
 | ADR | Decision |
 |-----|----------|

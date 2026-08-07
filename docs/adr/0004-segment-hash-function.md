@@ -1,6 +1,6 @@
 # ADR-0004 — Segment hash function
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-ARCH-003, NFR-PERF-007, NFR-PORT-001
 

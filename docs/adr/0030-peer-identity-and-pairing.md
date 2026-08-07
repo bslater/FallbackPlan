@@ -1,6 +1,6 @@
 # ADR-0030 — Peer identity and pairing: a transport keypair the repository knows nothing about
 
-**Status:** Proposed
+**Status:** Proposed (amended 2026-08) · Partly implemented — see [implementation status](../implementation-status.md#0030--everything-above-the-socket-nothing-at-it)
 **Date:** 2026-08
 **Requirements:** FR-REP-001, FR-REP-004, NFR-SEC-001, NFR-SEC-004, NFR-COMP-006, NFR-REL-007
 **Related:** [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [architecture 09 §3](../architecture/09-replication-and-peers.md#3-pairing), [specification: peer protocol](../../specifications/peer-protocol/README.md)

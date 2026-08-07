@@ -287,7 +287,23 @@ authentication string both humans confirm, and a pinned identity whose change is
 a hard failure. Those two documents were written first precisely because the
 console is blocked on them.
 
-What is blocked is narrower than it was.
+**Nor on the protocol itself any more.** `FallbackPlan.Protocol` implements
+everything both documents define: identity and fingerprints, the pairing key
+agreement and its transcript, the grant store, the destination's terms, framing,
+version and feature negotiation, and the channel-bound authentication that
+replaced RFC 7250 when it proved unreachable on the platform
+([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)).
+
+**What is left is the socket, and it is the whole of what is left.** Nothing
+opens a TCP or QUIC connection, negotiates TLS, presents the ephemeral
+certificate, or drives the session state machine over a network; no command
+shows a pairing string to a human, so the ceremony has never been performed by
+two people. Every test constructs both sides in one process, which proves the
+constructions agree with each other and proves nothing about a wire. That is the
+next piece of work, and it is now plumbing rather than design
+([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)).
+
+What remains blocked is narrower still.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access) gate
 what a paired console may *do* — whether restored content may stream to it, and

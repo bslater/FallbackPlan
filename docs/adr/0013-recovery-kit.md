@@ -1,6 +1,6 @@
 # ADR-0013 — Recovery kit contents and format
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-KIT-001..006, NFR-OPS-005, NFR-SEC-006
 **Review finding:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified)

@@ -194,7 +194,7 @@ Remote clients are **paired, not passworded**, reusing the machinery
 architecture 09 §3 already defines for peers rather than inventing a second
 credential system:
 
-- Both sides display short authentication words and a QR code, and both approve.
+- Both sides display the same short authentication string and a QR code, and both approve. (Written here as "words"; [peer-protocol 01 §2.3](../../specifications/peer-protocol/01-identity-and-pairing.md) settled it as six base32 characters, for the reasons recorded there.)
 - The identity is **pinned on approval**; a changed identity is a hard failure
   requiring explicit re-approval, never a prompt that can be clicked through.
 - Approval is revocable at the service, which is the party at risk.

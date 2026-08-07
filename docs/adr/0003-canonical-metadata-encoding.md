@@ -1,6 +1,6 @@
 # ADR-0003 — Canonical metadata encoding
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-COMP-004, NFR-PORT-003, FR-MAN-004
 

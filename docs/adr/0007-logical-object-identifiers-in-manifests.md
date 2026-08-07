@@ -1,6 +1,6 @@
 # ADR-0007 — Manifests reference logical object identifiers only
 
-**Status:** Proposed — *core decision confirmed; one open question, see [Q11](../open-questions.md#q11--physical-hints-in-segment-references)*
+**Status:** Proposed — *core decision confirmed; one open question, see [Q11](../open-questions.md#q11--physical-hints-in-segment-references)* · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-ARCH-010, FR-MAN-003, FR-MAN-007, FR-GC-004
 **Review finding:** [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)

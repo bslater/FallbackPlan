@@ -57,6 +57,7 @@ Bodu — the library supplying Argon2id, one of two primitives .NET does not pro
 python3 eng/check-links.py                                              # links and anchors
 python3 eng/check-requirements.py                                       # requirement IDs, incl. citations in C# comments
 python3 eng/check-solution.py                                           # every csproj is in the solution
+python3 eng/check-adr-status.py                                         # implementation status cites code that exists
 python3 specifications/repository-format/conformance/generate.py --check # vectors reproducible
 ```
 

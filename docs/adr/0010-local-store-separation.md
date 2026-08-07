@@ -1,6 +1,6 @@
 # ADR-0010 — Local store separation
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-REL-002, NFR-REL-007, NFR-OPS-003, FR-MAN-002
 **Review finding:** [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
