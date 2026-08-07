@@ -201,24 +201,100 @@ public sealed class ClientModeTests : IDisposable
         });
     }
 
+    [Fact]
+    public async Task A_read_verb_is_answered_by_the_service_when_one_is_listening()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        // With nothing listening the CLI reads the repository itself.
+        var direct = await RunCliAsync("check");
+        Assert.Equal(0, direct.ExitCode);
+        Assert.Contains("mode: direct", direct.All, StringComparison.Ordinal);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        // With one listening it asks. A read path never takes the writer role,
+        // so this is a choice about who does the reading rather than about who
+        // is permitted to — which is why it can fall back without apology.
+        var routed = await RunCliAsync("check");
+        Assert.Equal(0, routed.ExitCode);
+        Assert.Contains("mode: service", routed.All, StringComparison.Ordinal);
+        Assert.Contains("check: OK", routed.All, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_restore_routed_through_the_service_writes_the_files()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var snapshots = Assert.IsType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token));
+        var destination = Path.Combine(_harness.WorkPath, "routed-restore");
+
+        var result = await RunCliAsync(
+            "restore", snapshots.Snapshots[0].SnapshotId, "--output", destination);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+
+        // The service wrote them, on its own machine (ADR-0028 §6) — which on
+        // the local binding is this one, so the files are here to read.
+        Assert.Equal("hello", await File.ReadAllTextAsync(Path.Combine(destination, "notes.txt"), _timeout.Token));
+    }
+
+    [Fact]
+    public async Task Verifying_one_file_version_stays_direct_and_says_why()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        // The contract's verify takes a level and sweeps the store; there is no
+        // way to name one manifest. Rather than pretend the flag routes, this
+        // branch stays direct and says so.
+        var result = await RunCliAsync("verify", "--file", new string('0', 64));
+
+        Assert.Contains("has no service equivalent", result.All, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         _timeout.Dispose();
         _harness.Dispose();
     }
 
-    /// <summary>Runs <c>backup</c> against this harness with the given extra arguments.</summary>
-    private Task<HostHarness.Invocation> RunBackupAsync(params string[] extra) =>
+    /// <summary>Runs any CLI verb against this harness.</summary>
+    private Task<HostHarness.Invocation> RunCliAsync(params string[] verbAndArguments) =>
         HostHarness.RunAsync(
             (a, o, e, c) => Cli.CliApplication.RunAsync(
                 a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
             [
-                "backup",
-                .. extra,
+                .. verbAndArguments,
                 "--repo", _harness.RepositoryPath,
                 "--passphrase-env", _harness.PassphraseVariable,
                 "--state", _harness.StateDirectory,
             ]);
+
+    /// <summary>Runs <c>backup</c> against this harness with the given extra arguments.</summary>
+    private Task<HostHarness.Invocation> RunBackupAsync(params string[] extra) =>
+        RunCliAsync(["backup", .. extra]);
 
     private async Task<ServiceRuntime> StartServiceAsync()
     {

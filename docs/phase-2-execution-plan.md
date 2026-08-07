@@ -209,9 +209,6 @@ restated here with the test that will prove each:
 - **An unpaired remote client refused**, and **a restore commanded remotely
   writing on the service's machine.** Both need the remote binding, which needs
   pairing.
-- **Restore, verify and check over the command surface.** The contract carries
-  them; this service build answers them with a stated
-  "this is a read path, run it directly" rather than a silence.
 - **NFR-PERF-007's ≥400 MB/s on the reference machine.** Every number on the
   benchmarks page is container measurement. It compares configurations and
   versions against each other honestly and says nothing about the requirement,
@@ -263,11 +260,16 @@ every worker had died and the bounded channel filled, the producer blocked in
 failed. The files under test had never sealed more blobs than the channel holds,
 which is the only reason it had not been seen.
 
-**D2 is narrower than its title suggests, and deliberately so.** Exactly one verb
-both writes and has a service equivalent, so exactly one routes: `backup`. The
-contract's restore, verify and check are answered "read path, run it directly",
-which stays true; `archive` and `rebuild-index` have no service equivalent at all
-and now say so by name. A service can only run a configured set, so an ad-hoc
+**D2 landed in two steps.** The first routed the one verb that both writes and
+had a service equivalent: `backup`. The second made restore, verify and check
+service equivalents too — they had been answered "read path, run it directly",
+which was honest but meant a console could ask the service to make a backup and
+not to check one. They run on the queue's reader lane, which ADR-0029 §4
+described and nothing had used, so a restore runs alongside a scheduled backup
+rather than behind it.
+
+`archive`, `rebuild-index` and `verify --file` have no service equivalent at all
+and say so by name. A service can only run a configured set, so an ad-hoc backup
 root is refused with what to do instead rather than quietly run against state the
 service owns.
 

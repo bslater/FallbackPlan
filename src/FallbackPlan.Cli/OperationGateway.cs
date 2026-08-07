@@ -8,6 +8,11 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
+using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Packing;
+using FallbackPlan.Storage.Abstractions;
+using RestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Cli;
 
@@ -35,15 +40,15 @@ public sealed record BackupRequest
     public bool Full { get; init; }
 }
 
-/// <summary>What a backup did, and what to tell the operator about it.</summary>
-/// <param name="Complete">Whether it finished with everything captured.</param>
-/// <param name="Report">
+/// <summary>What an operation did, and what to tell the operator about it.</summary>
+/// <param name="Ok">Whether it succeeded outright; false sets a non-zero exit code.</param>
+/// <param name="Lines">
 /// The lines to print. The two gateways genuinely know different things — direct
-/// mode holds the published snapshot in hand, a client holds a job the service
-/// ran — so each renders what it observed rather than padding a shared shape
-/// with values it would have to invent.
+/// mode holds the published snapshot or the failing blob in hand, a client holds
+/// what the contract carries back — so each renders what it observed rather than
+/// padding a shared shape with values it would have to invent.
 /// </param>
-public sealed record BackupReport(bool Complete, IReadOnlyList<string> Report);
+public sealed record OperationReport(bool Ok, IReadOnlyList<string> Lines);
 
 /// <summary>
 /// Where a write command's work happens (ADR-0028 §3): a running service, or
@@ -65,8 +70,35 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>What happened.</returns>
     /// <exception cref="CliFailureException">The request is not one this gateway can serve.</exception>
-    ValueTask<BackupReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken);
+    ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken);
+
+    /// <summary>Verifies stored blobs at the given level.</summary>
+    /// <param name="level">One of <c>locator</c>, <c>digest</c>, <c>records</c>.</param>
+    /// <param name="cancellationToken">Cancels the sweep.</param>
+    /// <returns>What it found.</returns>
+    ValueTask<OperationReport> VerifyAsync(string level, CancellationToken cancellationToken);
+
+    /// <summary>Reports repository health at the given verification level.</summary>
+    /// <param name="level">One of <c>locator</c>, <c>digest</c>, <c>records</c>.</param>
+    /// <param name="cancellationToken">Cancels the check.</param>
+    /// <returns>What it found.</returns>
+    ValueTask<OperationReport> CheckAsync(string level, CancellationToken cancellationToken);
+
+    /// <summary>Restores a snapshot, or a path within it.</summary>
+    /// <param name="request">What to restore and where.</param>
+    /// <param name="cancellationToken">Cancels the restore.</param>
+    /// <returns>What it wrote.</returns>
+    ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken);
 }
+
+/// <summary>What a restore was asked to write, and where.</summary>
+/// <param name="SnapshotId">The snapshot, hex-encoded.</param>
+/// <param name="Path">The subtree to restore, or null for the whole snapshot.</param>
+/// <param name="OutputDirectory">
+/// Where to write. In service mode this is a path on the machine running the
+/// service (ADR-0028 §6) — the same machine, on the local binding.
+/// </param>
+public sealed record RestoreRequest(string SnapshotId, string? Path, string OutputDirectory);
 
 /// <summary>Resolves which gateway a command gets.</summary>
 public static class OperationGateway
@@ -133,6 +165,66 @@ public static class OperationGateway
             throw;
         }
     }
+
+    /// <summary>
+    /// Opens the gateway a read command needs: the service when one is
+    /// listening, this process otherwise — and without the writer role either
+    /// way.
+    /// </summary>
+    /// <param name="repoPath">The repository.</param>
+    /// <param name="passphraseEnvironmentVariable">The variable naming the passphrase.</param>
+    /// <param name="stateDirectory">The state directory, or null for the default.</param>
+    /// <param name="forceDirect">Whether <c>--direct</c> was given.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <returns>The gateway; dispose to release whatever it holds.</returns>
+    /// <remarks>
+    /// A read path never takes the writer role, so unlike the write gateway
+    /// this one is never refused for holding it. Routing to a running service
+    /// is still worth doing — one process then owns the reads, against one
+    /// catalogue connection, bounded by the queue rather than by luck — but
+    /// falling back to reading directly is correct rather than a concession.
+    /// </remarks>
+    public static async ValueTask<IOperationGateway> OpenForReadAsync(
+        string repoPath,
+        string passphraseEnvironmentVariable,
+        string? stateDirectory,
+        bool forceDirect,
+        CancellationToken cancellationToken)
+    {
+        var session = await CliSession.OpenAsync(
+            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!forceDirect)
+            {
+                LocalServiceClient? client = null;
+                try
+                {
+                    client = await LocalServiceClient.ConnectAsync(
+                        session.StateDirectory, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+                }
+                catch (ServiceConnectionException)
+                {
+                    // Nothing listening; read it here.
+                }
+
+                if (client is not null)
+                {
+                    var address = session.StateDirectory;
+                    session.Dispose();
+                    return new ServiceGateway(client, address);
+                }
+            }
+
+            return new DirectGateway(session);
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
+    }
 }
 
 /// <summary>The gateway that sends work to a running service.</summary>
@@ -152,7 +244,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
         $"mode: service — the service holding the writer role for '{stateDirectory}' will run this.";
 
     /// <inheritdoc/>
-    public async ValueTask<BackupReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
+    public async ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -192,11 +284,71 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
             report.Add($"detail         {finished.Detail}");
         }
 
-        return new BackupReport(finished.State == JobState.Complete, report);
+        return new OperationReport(finished.State == JobState.Complete, report);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> VerifyAsync(string level, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<VerificationResult>(
+            new VerifyCommand(level), "a verification", cancellationToken).ConfigureAwait(false);
+
+        return new OperationReport(
+            result.Failures == 0,
+            [
+                string.Create(CultureInfo.InvariantCulture,
+                    $"verified {result.ObjectsChecked} blob(s) at level {result.Level}; {result.Failures} failure(s)"),
+            ]);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> CheckAsync(string level, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<CheckResult>(
+            new CheckCommand(level), "a check", cancellationToken).ConfigureAwait(false);
+
+        List<string> lines = [.. result.Findings.Select(finding => $"finding: {finding}")];
+        lines.Add(result.Findings.Count == 0
+            ? "check: OK"
+            : string.Create(CultureInfo.InvariantCulture, $"check: {result.Findings.Count} problem(s)"));
+
+        return new OperationReport(result.Findings.Count == 0, lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var result = await SendAsync<RestoreResult>(
+            new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory),
+            "a restore",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OperationReport(
+            result.Failed == 0,
+            [
+                string.Create(CultureInfo.InvariantCulture,
+                    $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
+            ]);
     }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => client.DisposeAsync();
+
+    /// <summary>Sends one command and insists on the result type it should answer with.</summary>
+    private async ValueTask<T> SendAsync<T>(ServiceCommand command, string what, CancellationToken cancellationToken)
+        where T : ServiceResult
+    {
+        var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+
+        return result switch
+        {
+            T expected => expected,
+            ServiceError error => throw new CliFailureException($"The service refused {what}: {error.Message}"),
+            _ => throw new CliFailureException($"The service answered {what} with {result.GetType().Name}."),
+        };
+    }
 
     private static string Describe(JobState state) => state switch
     {
@@ -251,7 +403,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     public string Mode => $"mode: direct — this command holds the writer role for '{session.StateDirectory}'.";
 
     /// <inheritdoc/>
-    public async ValueTask<BackupReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
+    public async ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -354,7 +506,198 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             ? "status         complete"
             : "status         PARTIAL — see the error manifest");
 
-        return new BackupReport(published.ErrorManifestObjectId is null, report);
+        return new OperationReport(published.ErrorManifestObjectId is null, report);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> VerifyAsync(string level, CancellationToken cancellationToken)
+    {
+        var parsed = ParseLevel(level);
+
+        using var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+        var blobs = 0;
+        var failures = 0;
+        List<string> lines = [];
+
+        await foreach (var entry in session.Store
+            .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+        {
+            blobs++;
+            var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, parsed, cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.Ok)
+            {
+                failures++;
+                lines.Add($"FAILED {entry.Key.Value}: {result.Detail}");
+            }
+        }
+
+        // Direct mode names the blob that failed. The contract carries only a
+        // count, so this is one of the places the two paths legitimately differ
+        // in what they can say.
+        lines.Add(string.Create(CultureInfo.InvariantCulture,
+            $"verified {blobs} blob(s) at level {parsed}; {failures} failure(s)"));
+
+        return new OperationReport(failures == 0, lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> CheckAsync(string level, CancellationToken cancellationToken)
+    {
+        var parsed = ParseLevel(level);
+        var problems = 0;
+        List<string> lines = [];
+
+        using (var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store))
+        {
+            var blobs = 0;
+            await foreach (var entry in session.Store
+                .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+            {
+                blobs++;
+                var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, parsed, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!result.Ok)
+                {
+                    problems++;
+                    lines.Add($"blob FAILED  {entry.Key.Value}: {result.Detail}");
+                }
+            }
+
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"blobs      {blobs} verified at {parsed}"));
+        }
+
+        using (var journalReader = new JournalReader(
+            session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy))
+        {
+            var (records, unparseable, journalFindings) = await journalReader
+                .LoadAsync(session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
+            problems += unparseable + journalFindings.Count;
+
+            var survey = IntentSurveyor.Survey(
+                records, unparseable, session.CurrentGeneration.Value,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
+
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"journal    {records.Count} record(s), {unparseable} unparseable, {survey.LiveIntents.Count} live intent(s)"));
+            lines.AddRange(journalFindings.Select(finding => $"journal    {finding.Kind}: {finding.Detail}"));
+        }
+
+        if (File.Exists(session.CataloguePath))
+        {
+            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+            var findings = catalogue.Findings();
+            problems += findings.Count;
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"catalogue  {findings.Count} damage finding(s)"));
+            lines.AddRange(findings.Select(finding => $"catalogue  {finding.Kind}: {finding.Detail}"));
+        }
+        else
+        {
+            lines.Add("catalogue  absent (rebuildable cache — run `rebuild-index` to materialise it)");
+        }
+
+        lines.Add(problems == 0
+            ? "check: OK"
+            : string.Create(CultureInfo.InvariantCulture, $"check: {problems} problem(s)"));
+
+        return new OperationReport(problems == 0, lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        var snapshotId = Convert.FromHexString(request.SnapshotId);
+
+        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        var engine = new RestoreEngine(reader);
+
+        var restored = 0;
+        var failed = 0;
+        List<string> lines = [];
+
+        async ValueTask RestoreEntryAsync(CatalogueTreeEntry entry)
+        {
+            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
+            {
+                Directory.CreateDirectory(
+                    Path.Combine(request.OutputDirectory, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+                foreach (var child in catalogue.ListDirectory(snapshotId, entry.Path))
+                {
+                    await RestoreEntryAsync(child).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            var read = await reader.ReadSegmentAsync(entry.ObjectId, cancellationToken).ConfigureAwait(false);
+            if (read.Outcome != RecordReadOutcome.Ok)
+            {
+                lines.Add($"FAILED {entry.Path}: manifest read {read.Outcome}");
+                failed++;
+                return;
+            }
+
+            var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+            if (manifest.EntryKind != EntryKind.File)
+            {
+                // Symlinks and specials materialise in wave R's planner;
+                // reported, never silently dropped.
+                lines.Add($"skipped {entry.Path}: {manifest.EntryKind} restore lands with the restore planner");
+                return;
+            }
+
+            var destinationPath = Path.Combine(
+                request.OutputDirectory, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+
+            Repository.RestoreResult result;
+            var destination = File.Create(destinationPath);
+            await using (destination.ConfigureAwait(false))
+            {
+                result = await engine.RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!result.Success)
+            {
+                File.Delete(destinationPath);
+                lines.Add($"FAILED {entry.Path}: {result.FailureDetail}");
+                failed++;
+                return;
+            }
+
+            restored++;
+        }
+
+        if (request.Path is { Length: > 0 } wanted)
+        {
+            var entry = catalogue.LookupPath(snapshotId, wanted)
+                ?? throw new CliFailureException(
+                    $"'{wanted}' does not exist in snapshot {request.SnapshotId} — or the catalogue is stale; run `rebuild-index`.");
+            await RestoreEntryAsync(entry).ConfigureAwait(false);
+        }
+        else
+        {
+            var roots = catalogue.ListDirectory(snapshotId, string.Empty);
+            if (roots.Count == 0)
+            {
+                throw new CliFailureException(
+                    $"The catalogue knows nothing under snapshot {request.SnapshotId} — run `rebuild-index` first.");
+            }
+
+            foreach (var entry in roots)
+            {
+                await RestoreEntryAsync(entry).ConfigureAwait(false);
+            }
+        }
+
+        lines.Add(string.Create(CultureInfo.InvariantCulture,
+            $"restored {restored} file(s) to {request.OutputDirectory}; {failed} failure(s)"));
+
+        return new OperationReport(failed == 0, lines);
     }
 
     /// <inheritdoc/>
@@ -363,6 +706,14 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         session.Dispose();
         return ValueTask.CompletedTask;
     }
+
+    private static VerifyLevel ParseLevel(string level) => level switch
+    {
+        "locator" => VerifyLevel.LocatorAndFooter,
+        "digest" => VerifyLevel.FooterAndDigest,
+        "records" => VerifyLevel.EveryRecord,
+        _ => throw new CliFailureException($"'{level}' is not a verify level (locator | digest | records)."),
+    };
 
     private static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
 }
