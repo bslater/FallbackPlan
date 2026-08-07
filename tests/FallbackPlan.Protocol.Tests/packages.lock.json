@@ -93,6 +93,13 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "fallbackplan.application": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Globalization.Recurrence": "[0.2.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
@@ -103,6 +110,7 @@
         "type": "Project",
         "dependencies": {
           "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
@@ -111,6 +119,15 @@
         "requested": "[0.2.0, )",
         "resolved": "0.2.0",
         "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+      },
+      "Bodu.Globalization.Recurrence": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "qclb18XDJXwMpRn/60TheOGO6qgEH2hQoZnEJ8XmMDyOtZMxBK3Om3umc8UB6lk+XWJJV1oE4hI3hMWmc8bbaQ==",
+        "dependencies": {
+          "Bodu.Core": "0.2.0"
+        }
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",

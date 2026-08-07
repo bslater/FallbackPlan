@@ -203,6 +203,7 @@
         "type": "Project",
         "dependencies": {
           "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },

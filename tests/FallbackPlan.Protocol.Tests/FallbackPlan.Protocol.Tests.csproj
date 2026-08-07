@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\FallbackPlan.Application\FallbackPlan.Application.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Protocol\FallbackPlan.Protocol.csproj" />
   </ItemGroup>
 
