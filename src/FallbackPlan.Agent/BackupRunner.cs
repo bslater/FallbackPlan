@@ -107,10 +107,16 @@ public static class BackupRunner
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            // The pass's clock, not the wall clock. This transition writes the
+            // anchor the scheduler reads back as "last completed", so reading it
+            // from UtcNow while due-ness is judged against the caller's `now`
+            // compares two different clocks — and the answer is only right while
+            // they happen to agree. A caller that injects a clock got a job
+            // stamped in its own future and its next run never came due.
             jobs.Transition(
                 jobId,
                 JobState.Complete,
-                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                nowMs,
                 detail: published.ErrorManifestObjectId is null ? null : $"partial: {published.Failures.Count} failure(s)",
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
             progress.Enter(JobState.Complete);
@@ -127,8 +133,7 @@ public static class BackupRunner
             // sequences it had allocated stayed pending, which is correct: the
             // next publication discharges them as void deltas, exactly as it
             // would after a crash.
-            jobs.Transition(
-                jobId, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "cancelled by request");
+            jobs.Transition(jobId, JobState.Cancelled, nowMs, "cancelled by request");
             progress.Enter(JobState.Cancelled);
             return new BackupOutcome(set.Name, "cancelled", "cancelled by request");
         }
