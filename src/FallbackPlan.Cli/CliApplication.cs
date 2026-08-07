@@ -64,6 +64,10 @@ public static class CliApplication
         {
             Description = "Client-local state directory (writer identity, sequence, catalogue, spool). Defaults per repository under the user profile.",
         };
+        var directOption = new Option<bool>("--direct")
+        {
+            Description = "Do the work in this process even if a service is running. Refused if the service holds the writer role.",
+        };
 
         var root = new RootCommand("FallbackPlan low-level repository tooling (phase 0)");
 
@@ -79,12 +83,14 @@ public static class CliApplication
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             parse.GetValue(repoOption)!, parse.GetValue(passphraseEnvOption)!, parse.GetValue(stateOption), cancellationToken);
 
-        // A command that writes takes the device's writer role for its duration
-        // and says so. Direct mode is never a fallback that happens silently
-        // (ADR-0028 §3): "did my backup run against the same state the service
-        // uses" is a question an operator must not have to guess at, and if a
-        // service holds the role this refuses naming the holder.
-        async ValueTask<CliSession> OpenWritingSessionAsync(ParseResult parse, CancellationToken cancellationToken)
+        // An engineering verb — one the service contract carries no command for
+        // — takes the device's writer role for its duration and says so. Direct
+        // mode is never a fallback that happens silently (ADR-0028 §3): "did my
+        // backup run against the same state the service uses" is a question an
+        // operator must not have to guess at, and if a service holds the role
+        // this refuses naming the holder rather than proceeding anyway.
+        async ValueTask<CliSession> OpenWritingSessionAsync(
+            ParseResult parse, string verb, CancellationToken cancellationToken)
         {
             var session = await CliSession.OpenAsync(
                 parse.GetValue(repoOption)!,
@@ -93,7 +99,9 @@ public static class CliApplication
                 writerRole: true,
                 cancellationToken).ConfigureAwait(false);
 
-            error.WriteLine($"mode: direct — this command holds the writer role for '{session.StateDirectory}'.");
+            error.WriteLine(
+                $"mode: direct — '{verb}' has no service equivalent, so this command holds the writer role for "
+                + $"'{session.StateDirectory}' itself.");
             return session;
         }
 
@@ -186,7 +194,7 @@ public static class CliApplication
                     throw new CliFailureException($"'{filePath}' does not exist.");
                 }
 
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, "archive", cancellationToken).ConfigureAwait(false);
                 var policy = parse.GetValue(cdcOption)
                     ? CapturePolicy.Default with
                     {
@@ -387,7 +395,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, "rebuild-index", cancellationToken).ConfigureAwait(false);
                 var cataloguePath = parse.GetValue(catalogueOption) ?? session.CataloguePath;
                 using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId);
 
@@ -624,108 +632,43 @@ public static class CliApplication
             command.Options.Add(includeOption);
             command.Options.Add(excludeOption);
             command.Options.Add(fullOption);
+            command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-
-                string rootPath;
-                IReadOnlyList<string> include, exclude;
-                byte[] backupSetId;
-
-                if (parse.GetValue(setOption) is { } setName)
-                {
-                    var configuration = ClientConfiguration.Load(session.ConfigurationPath);
-                    var set = configuration.FindSet(setName)
-                        ?? throw new CliFailureException($"No backup set named '{setName}' exists in {session.ConfigurationPath}.");
-                    rootPath = set.Root;
-                    include = set.IncludeRules;
-                    exclude = set.ExcludeRules;
-                    backupSetId = Convert.FromHexString(set.Id);
-                }
-                else
-                {
-                    rootPath = parse.GetValue(rootArgument)
-                        ?? throw new CliFailureException("Pass a root directory or --set <name>.");
-                    include = parse.GetValue(includeOption) ?? [];
-                    exclude = parse.GetValue(excludeOption) ?? [];
-                    backupSetId = session.BackupSetId;
-                }
-
-                if (!Directory.Exists(rootPath))
-                {
-                    throw new CliFailureException($"'{rootPath}' is not a directory.");
-                }
-
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
-
-                // Incremental against the newest snapshot of the same set the
-                // catalogue knows — unless --full asks for a re-read.
-                var prior = parse.GetValue(fullOption)
-                    ? null
-                    : catalogue.EnumerateSnapshots()
-                        .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
-
-                var orchestrator = new PublicationOrchestrator(
-                    CapturePolicy.Default,
-                    session.Repository.RepositoryId,
-                    session.Writer,
-                    session.CurrentGeneration,
-                    session.Repository.Keys,
-                    session.Repository.Hierarchy,
-                    session.Store,
-                    session.CreateSequence(),
-                    session.SpoolDirectory,
-                    observer: null,
-                    catalogue);
-
-                var snapshotId = RandomNumberGenerator.GetBytes(16);
-                var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                var published = await orchestrator.PublishAsync(
-                    new SnapshotJob
-                    {
-                        Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
-                        RootPath = rootPath,
-                        IncludeRules = include,
-                        ExcludeRules = exclude,
-                        DeviceId = session.DeviceId,
-                        BackupSetId = backupSetId,
-                        SnapshotId = snapshotId,
-                        ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
-                        PriorSnapshotId = prior?.SnapshotId,
-                        NowUnixMilliseconds = now,
-                        DeclaredMaxDurationMs = 3_600_000,
-                        ExpiryGeneration = session.CurrentGeneration.Value + 2,
-                        ClientVersion = "fallbackplan-cli/0.1",
-                    },
+                // The one verb that both writes and has a service equivalent, so
+                // the one whose side has to be resolved rather than assumed
+                // (ADR-0028 §3). Everything the two sides do differently lives
+                // behind the gateway; what is left here is the same either way.
+                var gateway = await OperationGateway.OpenForWriteAsync(
+                    parse.GetValue(repoOption)!,
+                    parse.GetValue(passphraseEnvOption)!,
+                    parse.GetValue(stateOption),
+                    parse.GetValue(directOption),
                     cancellationToken).ConfigureAwait(false);
 
-                session.State.RecordJob(new JobHistoryEntry
+                await using (gateway.ConfigureAwait(false))
                 {
-                    SnapshotId = Hex(snapshotId),
-                    BackupSetId = Hex(backupSetId),
-                    StartedAt = now,
-                    CaptureStatus = (byte)(published.ErrorManifestObjectId is null ? 1 : 2),
-                    Files = published.Files.Count,
-                    Failures = published.Failures.Count,
-                });
+                    error.WriteLine(gateway.Mode);
 
-                var reused = published.Files.Count(file => file.Reused);
-                output.WriteLine($"snapshot id    {Hex(snapshotId)}");
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"files          {published.Files.Count} ({reused} unchanged, {published.Failures.Count} failed)"));
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"data blobs     {published.ContentBlobs.Count} new"));
-                if (prior is not null)
-                {
-                    output.WriteLine($"incremental    against {Hex(prior.SnapshotId)}");
+                    var outcome = await gateway.RunBackupAsync(
+                        new BackupRequest
+                        {
+                            SetName = parse.GetValue(setOption),
+                            Root = parse.GetValue(rootArgument),
+                            IncludeRules = parse.GetValue(includeOption) ?? [],
+                            ExcludeRules = parse.GetValue(excludeOption) ?? [],
+                            Full = parse.GetValue(fullOption),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    foreach (var line in outcome.Report)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return outcome.Complete ? 0 : 2;
                 }
-
-                output.WriteLine(published.ErrorManifestObjectId is null
-                    ? "status         complete"
-                    : "status         PARTIAL — see the error manifest");
-                return published.ErrorManifestObjectId is null ? 0 : 2;
             }));
         }
 

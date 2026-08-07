@@ -39,7 +39,7 @@ public sealed class CliFailureException : Exception
 /// </summary>
 public sealed class CliSession : IDisposable
 {
-    private readonly StateDirectoryLock? _writerRole;
+    private StateDirectoryLock? _writerRole;
 
     private CliSession(
         LocalFileSystemObjectStore store,
@@ -167,6 +167,35 @@ public sealed class CliSession : IDisposable
         }
 
         return new CliSession(store, repository, state, role);
+    }
+
+    /// <summary>
+    /// Takes the writer role on a session that was opened without it (ADR-0028
+    /// §4), or refuses naming the holder.
+    /// </summary>
+    /// <remarks>
+    /// Mode resolution needs the state directory before it can decide anything,
+    /// and the default one is derived from the repository id — so the session
+    /// has to be open before the question "is a service listening here" can even
+    /// be asked. This is how the answer "no" turns into direct mode without
+    /// opening the repository a second time.
+    /// </remarks>
+    /// <exception cref="CliFailureException">Another process holds the role.</exception>
+    public void TakeWriterRole()
+    {
+        if (_writerRole is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            _writerRole = StateDirectoryLock.Acquire(StateDirectory, StateDirectoryLock.DirectRole);
+        }
+        catch (ClientStateException exception)
+        {
+            throw new CliFailureException(exception.Message, exception);
+        }
     }
 
     private static string DefaultStateDirectory(RepositoryId repositoryId) => Path.Combine(

@@ -93,6 +93,12 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "fallbackplan.api": {
+        "type": "Project",
+        "dependencies": {
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
@@ -103,6 +109,7 @@
       "fallbackplan.cli": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
