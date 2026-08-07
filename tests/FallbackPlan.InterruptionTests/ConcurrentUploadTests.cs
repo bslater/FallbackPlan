@@ -12,7 +12,7 @@ namespace FallbackPlan.InterruptionTests;
 /// The rest of this suite proves that state at <i>N</i>=1. Deferring uploads
 /// makes it reachable <i>N</i> at a time, and the invariant that has to survive
 /// is per blob rather than per job: <b>the covering write intent is durable
-/// before that blob's own PUT</b> (specification 08 §3.1). If it were not, a
+/// before that blob's own PUT</b> (specification 08 §3.1; FR-SNP-004). If it were not, a
 /// collector could delete a blob a job is still using — which is [C4], the
 /// finding the whole intent journal exists to answer.
 /// </remarks>

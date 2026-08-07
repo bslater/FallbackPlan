@@ -3,9 +3,14 @@ using FallbackPlan.Domain.Profiles;
 namespace FallbackPlan.Domain.Tests;
 
 /// <summary>
-/// Exercises the profile families (specification 00 §3): known values resolve
-/// to their singletons, unassigned values are refused, and the private-use
-/// range is refused because it must not appear in a portable repository.
+/// Exercises the profile families (specification 00 §3; NFR-SEC-002): known
+/// values resolve to their singletons, unassigned values are refused, and the
+/// private-use range is refused because it must not appear in a portable
+/// repository.
+///
+/// Refusing the unassigned and private-use ranges is what NFR-SEC-002 asks for
+/// concretely: an unreviewed suite has no way into a repository, because there
+/// is no accepted encoding for one.
 /// </summary>
 public sealed class ProfileTests
 {

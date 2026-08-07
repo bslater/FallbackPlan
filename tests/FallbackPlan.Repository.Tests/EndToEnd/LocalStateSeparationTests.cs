@@ -3,7 +3,8 @@ using FallbackPlan.Application;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The three-way local state separation (architecture 11 §3): configuration,
+/// The three-way local state separation (architecture 11 §3; NFR-REL-007,
+/// NFR-SEC-006): configuration,
 /// durable local state, and the catalogue are separate files with separate
 /// lifecycles — deleting one never harms another, the configuration carries
 /// no secret or identity, and losing durable state loses exactly the

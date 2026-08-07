@@ -78,6 +78,11 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         return node;
     }
 
+    /// <summary>Drops an entry — the user deleted the file between two backups.</summary>
+    /// <param name="relativePath">The path that is gone.</param>
+    /// <returns><see langword="true"/> when it was there to remove.</returns>
+    public bool Remove(string relativePath) => _nodes.Remove(relativePath);
+
     public SourceFilesystemInfo Probe(string rootPath) => Info;
 
     public RevalidationProbe? Revalidate(ScanEntry entry)

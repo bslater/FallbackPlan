@@ -12,9 +12,11 @@ using System.Runtime.Versioning;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The restore planner and executor (phase-1 wave R; FR-RST-004/005):
-/// conflicts and degradations surface at PLAN time, execution quarantines
-/// what it would replace, applies metadata after content, and the receipt
+/// The restore planner and executor (phase-1 wave R;
+/// FR-RST-003/004/005/006): conflicts and degradations surface at PLAN time —
+/// which is FR-RST-003's whole claim, that the plan exists before any byte
+/// moves — execution quarantines what it would replace rather than overwriting
+/// in place (FR-RST-006), applies metadata after content, and the receipt
 /// accounts for every planned item — plus the partial-rebuild drill: a
 /// targeted forensic rebuild resolves one snapshot's graph and restore
 /// works from it without the rest of the repository.

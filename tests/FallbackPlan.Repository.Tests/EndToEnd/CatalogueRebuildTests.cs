@@ -9,10 +9,15 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 
 /// <summary>
-/// E1 — the exit-criterion-7 shape: the catalogue is deleted outright,
-/// rebuilt from checkpoint plus deltas, and a restore succeeds — with the
-/// rebuilt catalogue proving itself by locating a record's blob without any
-/// repository scan (the NFR-PERF-004 path).
+/// E1 — the exit-criterion-7 shape (FR-MAN-001, NFR-REL-002): the catalogue is
+/// deleted outright, rebuilt from checkpoint plus deltas, and a restore
+/// succeeds — with the rebuilt catalogue proving itself by locating a record's
+/// blob without any repository scan (the NFR-PERF-004 path).
+///
+/// Deleting it and still restoring is what makes the catalogue a cache rather
+/// than a second source of truth, which is the pair of claims FR-MAN-001 (no
+/// local database is required to interpret a committed snapshot) and
+/// NFR-REL-002 (losing it costs no repository data) each make from one side.
 /// </summary>
 public sealed class CatalogueRebuildTests : ArchiveTestHarness
 {

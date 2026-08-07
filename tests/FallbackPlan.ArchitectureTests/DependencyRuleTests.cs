@@ -6,20 +6,23 @@ using Xunit;
 namespace FallbackPlan.ArchitectureTests;
 
 /// <summary>
-/// Enforces the dependency rules in docs/architecture/11-solution-structure.md section 2.
+/// Enforces the dependency rules in docs/architecture/11-solution-structure.md
+/// section 2 (NFR-PORT-002).
 ///
 /// These are tests rather than documentation because a rule that is only written
 /// down is a rule that erodes. Each test names the rule it enforces and why the
 /// rule exists, so a future reader deciding whether to relax one knows what they
 /// would be giving up.
 ///
-/// An honest caveat, stated here rather than discovered: the IL-level rules in
-/// this file are currently VACUOUS. Every src assembly contains only an
-/// AssemblyMarker, so an assertion that empty assembly X does not reference Y
-/// cannot fail under any circumstances today. The rules exist so that the first
-/// real code lands under enforcement rather than before it — but green here
-/// does not yet mean "verified", and the two project-file canary tests at the
-/// bottom are the only assertions in this file with teeth right now.
+/// This file used to carry a caveat saying the IL-level rules were VACUOUS,
+/// because every src assembly then held nothing but an AssemblyMarker and an
+/// assertion that an empty assembly references nothing cannot fail. That has not
+/// been true for a long time: the assemblies these rules scan are full, so the
+/// rules now fail when they are broken, which is what lets NFR-PORT-002 —
+/// storage, cryptography, compression, segmentation, catalogue and legacy import
+/// separated behind tested interfaces — cite this file as proof rather than as
+/// intent. The caveat is recorded here rather than silently deleted, because a
+/// test whose strength changed is worth saying so once.
 /// </summary>
 public sealed class DependencyRuleTests
 {

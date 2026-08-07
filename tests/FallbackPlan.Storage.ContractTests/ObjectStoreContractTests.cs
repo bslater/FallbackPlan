@@ -6,7 +6,7 @@ namespace FallbackPlan.Storage.ContractTests;
 
 /// <summary>
 /// The reusable provider contract suite (docs/architecture/05-storage-providers.md
-/// §2; FR-REP-002, NFR-PORT-004): every <see cref="IObjectStore"/>
+/// §2; FR-REP-002, NFR-PORT-002, NFR-PORT-004): every <see cref="IObjectStore"/>
 /// implementation inherits this and must pass unchanged. Expected outcomes are
 /// asserted as results, never as exceptions; the content factory is asserted
 /// as re-invocable, which is what makes retry possible at all.

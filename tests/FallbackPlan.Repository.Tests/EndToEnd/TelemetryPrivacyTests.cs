@@ -11,7 +11,8 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The NFR-PRIV-002 assertion ADR-0027 §3 promises: a listener captures
+/// The NFR-PRIV-002 assertion ADR-0027 §3 promises, and NFR-SEC-006's
+/// telemetry half: a listener captures
 /// every measurement the engine emits through a full publish + restore,
 /// and every attribute is checked against the exhaustive allowlist — no
 /// path, filename, or identifier can ride telemetry, by test rather than

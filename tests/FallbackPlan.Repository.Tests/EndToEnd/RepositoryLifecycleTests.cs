@@ -7,7 +7,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// Create-then-open bootstrap (specification 01 §3, §6; FR-REP-002,
-/// FR-ARCH-008): a repository created against a real store opens with the
+/// FR-ARCH-008, NFR-COMP-007): a repository created against a real store opens with the
 /// right passphrase through the 01 §6 discovery order, refuses the wrong
 /// passphrase indistinguishably from tampering, and surfaces the mandated
 /// unstable-format warning.

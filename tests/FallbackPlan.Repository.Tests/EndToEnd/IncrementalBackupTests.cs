@@ -2,7 +2,10 @@ using FallbackPlan.Domain;
 using FallbackPlan.Repository.Catalogue;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
@@ -12,9 +15,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// catalogue learns each publication, an unchanged file short-circuits on
 /// identity + size + mtime without its content being read (NFR-PERF-003),
 /// a changed file re-archives but stores only the segments the index does
-/// not already locate (09 §6), and a rebuilt catalogue answers the same
+/// not already locate (09 §6; FR-MAN-006), and a rebuilt catalogue answers the same
 /// queries — with the short-circuit conservatively disabled because
-/// identities are not durable (02 §2).
+/// identities are not durable (02 §2) — and a deleted file leaves the earlier
+/// snapshot whole, because a deletion is new snapshot state rather than a
+/// removal (FR-SNP-002).
 /// </summary>
 public sealed class IncrementalBackupTests : ArchiveTestHarness
 {
@@ -110,6 +115,64 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // Case-insensitive resolution folds through the ADR-0026 §8 key.
         Assert.NotNull(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN", caseInsensitive: true));
         Assert.Null(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN"));
+    }
+
+    [Fact]
+    public async Task A_deleted_file_leaves_the_earlier_snapshot_whole_and_still_restorable()
+    {
+        var source = BuildSource();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xD1), CancellationToken.None);
+
+        var blobsBefore = Directory.EnumerateFiles(
+            Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories).Count();
+
+        Assert.True(source.Remove("docs/small.txt"));
+
+        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xD2, now: 1_722_600_060_000), CancellationToken.None);
+
+        var before = Enumerable.Repeat((byte)0xD1, 16).ToArray();
+        var after = Enumerable.Repeat((byte)0xD2, 16).ToArray();
+
+        // The deletion is recorded as new snapshot state — the later snapshot
+        // simply does not name the path.
+        Assert.Null(catalogue.LookupPath(after, "docs/small.txt"));
+        Assert.Equal(["docs/big.bin"], catalogue.ListDirectory(after, "docs").Select(entry => entry.Path));
+
+        // And the earlier snapshot is untouched by it.
+        var deleted = catalogue.LookupPath(before, "docs/small.txt");
+        Assert.NotNull(deleted);
+        Assert.Equal(
+            ["docs/big.bin", "docs/small.txt"],
+            catalogue.ListDirectory(before, "docs").Select(entry => entry.Path));
+
+        // FR-SNP-002's load-bearing half: deleting a file deletes no older file
+        // version and no segment record. Nothing proves that like restoring the
+        // deleted file's content from the earlier snapshot, cold, afterwards.
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var read = await reader.ReadSegmentAsync(deleted!.ObjectId, CancellationToken.None);
+        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+
+        using var restored = new MemoryStream();
+        var result = await new RestoreEngine(reader).RestoreFileAsync(
+            FileVersionManifestCodec.Decode(read.Plaintext!), restored, CancellationToken.None);
+
+        Assert.True(result.Success, result.FailureDetail);
+        Assert.Equal(Deterministic(500, 5), restored.ToArray());
+
+        // Belt and braces: the store only ever grew.
+        Assert.True(
+            Directory.EnumerateFiles(Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories).Count()
+                >= blobsBefore,
+            "a deletion removed something from the store — snapshots are new state, never a delete (FR-SNP-002).");
     }
 
     [Fact]

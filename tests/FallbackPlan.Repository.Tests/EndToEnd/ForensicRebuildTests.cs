@@ -10,8 +10,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 
 /// <summary>
-/// E2/E3/E4 (specification 07 §10, 05 §8, 06 §4.2; FR-MAN-009/010/011/014,
-/// FR-RST-002; NFR-PERF-015): forensic rebuild succeeds with every index
+/// E2/E3/E4 (specification 07 §10, 05 §8, 06 §4.2; FR-MAN-009/010/011/012/014,
+/// FR-RST-002; NFR-PERF-015, NFR-REL-003/006): forensic rebuild succeeds with every index
 /// object deleted, a targeted recovery stops without a whole-repository
 /// scan, the scan leaves every store byte identical, and the whole-file
 /// hash catches assembly corruption that per-record verification cannot.

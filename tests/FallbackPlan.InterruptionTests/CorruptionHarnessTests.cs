@@ -6,7 +6,7 @@ namespace FallbackPlan.InterruptionTests;
 
 /// <summary>
 /// The F2 corruption harness (specification 04 §7, 05 §3–§5;
-/// NFR-REL-004, FR-MAN-011): a bit flipped in each region class of the
+/// NFR-REL-004, NFR-SEC-005, FR-MAN-011): a bit flipped in each region class of the
 /// stored bytes is detected, classified, and scoped — and a snapshot whose
 /// objects were not touched stays restorable through every case.
 /// </summary>

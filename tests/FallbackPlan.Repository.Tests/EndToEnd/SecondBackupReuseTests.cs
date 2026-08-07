@@ -5,10 +5,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// The B3 acceptance criterion, verbatim (specification 09 §5–§6;
-/// FR-ARCH-004): changing one segment of an <em>n</em>-segment file writes
-/// exactly one record. Positional comparison against the prior version's
+/// FR-ARCH-004, FR-MAN-006): changing one segment of an <em>n</em>-segment file
+/// writes exactly one record. Positional comparison against the prior version's
 /// in-memory content identifiers decides reuse; mismatched segmentation
-/// parameters forbid it.
+/// parameters forbid it — which is FR-MAN-006's requirement that a reusable
+/// segment is only resolved <em>within</em> its segmentation profile.
 /// </summary>
 public sealed class SecondBackupReuseTests : ArchiveTestHarness
 {

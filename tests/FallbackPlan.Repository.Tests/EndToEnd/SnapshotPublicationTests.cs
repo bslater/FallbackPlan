@@ -13,7 +13,7 @@ using FallbackPlan.Storage.Abstractions;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Multi-file publication end to end (phase-1 wave T1): the scanner event
+/// Multi-file publication end to end (phase-1 wave T1; FR-MAN-004): the scanner event
 /// stream becomes a full manifest graph — bottom-up trees, per-kind file
 /// versions with the ADR-0026 shapes, populated policy and error manifests,
 /// the probed source filesystem — and everything restores from a cold
