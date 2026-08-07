@@ -89,7 +89,9 @@ sas_key = HKDF-SHA-256(
 sas = first 30 bits of sas_key
 ```
 
-The 30 bits are rendered as **six words** from a fixed 1 024-word list (10 bits per word, three words per side is not enough — see §2.6), and equivalently as a QR code carrying the transcript hash for devices that can scan.
+The 30 bits are rendered as **six lowercase base32 characters** ([00 §6](../repository-format/00-conventions.md#6-object-identifiers-in-paths)) — six characters carry exactly 30 bits, with no padding and no remainder — displayed in two groups of three. A QR code carrying the transcript hash MAY be offered alongside, for devices that can scan.
+
+Architecture [09 §3](../../docs/architecture/09-replication-and-peers.md#3-pairing) describes this as "short authentication words". A word rendering is **deferred**, and deliberately: words are easier for two people to read aloud, but a word list only helps if both implementations use the *same* list, which means this specification would have to carry 1 024 words normatively. That is a large thing to mandate for a display convenience, and getting it wrong — near-homophones, shared prefixes — makes comparison worse rather than better. Base32 is already required of every implementer for identifiers, so it costs nothing to obtain and is unambiguous under case folding.
 
 Both long-lived identities and both nonces are inside the derivation, so two concurrent sessions relayed by an attacker produce different strings on each side. **The comparison is what defeats the relay**; the ceremony exists to make a human actually perform it.
 
@@ -112,9 +114,11 @@ A conforming implementation MUST NOT offer a control that accepts the new key in
 
 This is the one place this specification constrains a user interface, and it does so because "your friend's key changed — continue?" is a question no user has ever answered correctly under time pressure.
 
-### 2.6 Why six words
+### 2.6 Why thirty bits
 
-Thirty bits gives an attacker attempting to force a collision between two relayed sessions a success probability of 2⁻³⁰ per attempt, and an attempt costs a full ceremony with two humans watching. Twenty bits — three words — is within reach of an attacker who can retry, and retrying is cheap when the humans blame the failure on flaky software and try again.
+An attacker relaying between two sessions must make both strings match, and cannot influence the derivation except by choosing its own ephemeral share and nonce. Thirty bits puts that at 2⁻³⁰ per attempt, and an attempt costs a full ceremony with two humans watching it fail.
+
+The number is chosen against *retries*, not against a single attempt. Twenty bits would still be 2⁻²⁰ once — but a failed pairing looks exactly like flaky software, so the humans try again, and an attacker who can provoke enough retries gets enough attempts. Thirty bits keeps that out of reach while staying short enough that someone will actually compare all six characters rather than the first two and the last one.
 
 ## 3 Grants
 
