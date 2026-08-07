@@ -275,11 +275,28 @@ service owns.
 
 ### 1. The remote binding
 
-Topologies 3 and 4, and the two exit criteria they own. Blocked on pairing, which
-reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
-machinery, and gated by
+Topologies 3 and 4, and the two exit criteria they own.
+
+**No longer blocked on a design.** Pairing reuses
+[architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
+machinery, and that is now settled by
+[ADR-0030](adr/0030-peer-identity-and-pairing.md) and specified in
+[`specifications/peer-protocol/`](../specifications/peer-protocol/README.md)
+documents 01 and 02 — a peer keypair unrelated to the repository, a short
+authentication string both humans confirm, and a pinned identity whose change is
+a hard failure. Those two documents were written first precisely because the
+console is blocked on them.
+
+What is blocked is narrower than it was.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
-[Q19](open-questions.md#q19--console-identity-and-multi-operator-access).
+[Q19](open-questions.md#q19--console-identity-and-multi-operator-access) gate
+what a paired console may *do* — whether restored content may stream to it, and
+whether its actions are attributable to a person. Neither gates who it is, so
+the identity and session layers can be built while they stay open.
+
+Still owed before peer-to-peer replication itself: peer-protocol documents 03
+(replication), 04 (verification) and 05 (quotas). Their behaviour is fixed in
+architecture 09 §1, §5 and §6; what is missing is the wire encoding.
 
 ### 2. NFR-PERF-007 on the reference machine
 

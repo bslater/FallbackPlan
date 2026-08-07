@@ -22,6 +22,8 @@ Steps 3–6 are ordered so the cheapest discovery happens first: a filter exchan
 
 ## 2. Transport
 
+Specified in [`specifications/peer-protocol/02`](../../specifications/peer-protocol/02-session.md).
+
 Direct QUIC or TLS · mutually authenticated peer identity · relay fallback where the relay cannot decrypt · restart from verified ranges · dynamic concurrency · bandwidth schedules · source selection across multiple replicas · end-to-end content verification · optional local-network preference · fairness between backup sets.
 
 Fairness matters more than it sounds: without it, one large backup set starves every other set on the same link indefinitely, and the user sees a set that has simply stopped making progress with no explanation.
@@ -33,6 +35,8 @@ Paired peers may run different agent versions. The protocol negotiates a common 
 Repository format compatibility is negotiated separately from protocol compatibility, because they version independently ([ADR-0014](../adr/0014-format-versioning-and-stability.md)).
 
 ## 3. Pairing
+
+Specified in [`specifications/peer-protocol/01`](../../specifications/peer-protocol/01-identity-and-pairing.md); the decisions behind it in [ADR-0030](../adr/0030-peer-identity-and-pairing.md). The properties this section fixes are the ones that specification is written to satisfy:
 
 - Both sides see short authentication words and a QR code, and both must approve.
 - Identity is pinned on approval; a changed identity is a hard failure requiring explicit re-approval, not a prompt that can be clicked through.
