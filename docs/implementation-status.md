@@ -102,7 +102,9 @@ Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-
 
 ### 0030 — everything above the socket, nothing at it
 
-Built, in `FallbackPlan.Protocol` with 78 tests: peer identity and fingerprints; the pairing ceremony's key agreement, transcript, short authentication string and confirmation signatures; the grant store, its pinning and revocation, and the destination's terms; frame encoding and refusal; session hello, accept and refuse; version selection and feature negotiation; and — after [Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls) — the channel-bound authentication that replaced RFC 7250, with a test that runs the man-in-the-middle it defeats.
+Built, in `FallbackPlan.Protocol`: peer identity and fingerprints; the pairing ceremony's key agreement, transcript, short authentication string and confirmation signatures, **and the four messages that carry them**; the grant store, its pinning and revocation, and the destination's terms; frame encoding and refusal; session hello, accept and refuse; version selection and feature negotiation; and — after [Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls) — the channel-bound authentication that replaced RFC 7250, with a test that runs the man-in-the-middle it defeats.
+
+The pairing messages were missing until an audit went looking: 01 §2.2 defined four of them with full key tables and `PeerFrame` carried only their type codes, so the ceremony could be computed and not sent. A test now drives a whole ceremony through encoded frames, touching nothing but what came off the wire, so the two cannot drift apart again.
 
 Not built: **the transport that carries any of it.** Nothing opens a TCP or QUIC connection, negotiates TLS, presents the ephemeral certificate, or drives the state machine over a real socket. Nor is there a user-facing pairing flow — no command shows a short authentication string to a human, and the ceremony has never been performed by two people.
 
