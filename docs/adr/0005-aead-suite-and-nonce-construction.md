@@ -104,9 +104,23 @@ These are requirements on the suite, not aspirations:
 
 A specification review found that the key object's fixed 12-byte `wrap_nonce` field cannot represent `xchacha20-poly1305-v1`, whose nonce is 24 bytes — the layout admitted a profile it could not encode. Format v1 therefore fixes `kek_profile` to `aes-256-gcm-v1`.
 
-The wrap happens once per repository open, so the hardware-acceleration argument that justifies offering both suites for records does not apply; and the extended-nonce profile's own future is open ([Q12](../open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against)). The record-level suite choice is unchanged.
+The wrap happens once per repository open, so the hardware-acceleration argument for offering a second suite does not apply here.
 
-*Rejected alternative:* a variable-length nonce field sized by `kek_profile`. It makes every subsequent offset in a fixed-layout header depend on a profile lookup, for the benefit of a profile that may not survive the freeze.
+*Rejected alternative:* a variable-length nonce field sized by `kek_profile`. It makes every subsequent offset in a fixed-layout header depend on a profile lookup, for the benefit of a profile that did not survive the freeze (Amendment 4).
+
+## Amendment 4 — the extended-nonce profile is withdrawn
+
+**Format version 1 admits one record AEAD, `aes-256-gcm-v1`.** Value `0x0002` is reserved and MUST NOT be assigned to another suite.
+
+Amendment 3 found that the key object could not *wrap* under the extended-nonce profile. That was the smaller half. The deciding one is that no second independent implementation of XChaCha20-Poly1305 was available to cross-verify against, and cross-verification is the condition on which this project admits a third-party cryptographic primitive at all — it is how the Argon2id empty-passphrase gap was found.
+
+An unverified KDF makes keys weaker. An unverified AEAD can make ciphertext forgeable or, with a nonce-handling error, plaintext recoverable — and the discovery happens inside bytes the user already stored. Shipping it flagged was therefore the option that aged worst: a format version can add a profile later, but it cannot un-admit one that written repositories depend on.
+
+The cost is accepted and named: on hardware without AES acceleration, a ChaCha-family suite would be faster. Nothing had written the profile, so withdrawing costs that and nothing else. A future version MAY admit such a suite under a new value, with a second implementation to check it against as the condition of entry.
+
+The value stays reserved rather than freed. Draft repositories and draft readers understood `0x0002` as XChaCha20-Poly1305, and a value meaning one thing in a draft and another in the frozen format is precisely what a version number cannot repair. → [Q12](../open-questions.md#closed), [specification 03 §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)
+
+*Rejected alternative:* take a third-party XChaCha20-Poly1305 and ship it unverified with a warning. Rejected on the asymmetry above — the warning does not travel with the bytes.
 
 ## Status history
 
@@ -115,3 +129,4 @@ The wrap happens once per repository open, so the hardware-acceleration argument
 | 2026-08 | Proposed | Requires external cryptographic review before format v1 freeze |
 | 2026-08 | Accepted (amended) | Construction unchanged. Amendment 1 binds writer identity into derivation (PT-13); Amendment 2 makes the spool checkpoint store sealed bytes (PT-1, critical). External cryptographic review still required before freeze, and must cover AES-GCM key commitment (PT-15). |
 | 2026-08 | Accepted (amended) | Amendment 3 fixes KEK wrapping to `aes-256-gcm-v1` — the 12-byte `wrap_nonce` field cannot carry the extended-nonce profile. |
+| 2026-08 | Accepted (amended) | Amendment 4 withdraws `xchacha20-poly1305-v1` before the freeze: no second implementation existed to cross-verify it, and an unverified AEAD cannot be un-admitted once repositories depend on it. Format v1 has one record AEAD; `0x0002` is reserved. Closes [Q12](../open-questions.md#closed). |

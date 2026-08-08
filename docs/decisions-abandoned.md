@@ -71,12 +71,14 @@ Grouped by what they would have changed. One line each; the reasoning is at the 
 | Random 96-bit nonces under a shared key | Needs a birthday-bound budget tracked across all writers and all time, and nobody will track it | [0005](adr/0005-aead-suite-and-nonce-construction.md#alternatives-considered) |
 | A nonce counter partitioned by writer ID | Needs durable per-writer counter state surviving crashes and clones; a cloned device reuses its partition | [0005](adr/0005-aead-suite-and-nonce-construction.md#alternatives-considered) |
 | XChaCha20-Poly1305 with random nonces throughout | Viable, but AES-GCM is much faster with AES-NI, and per-blob derivation makes both suites safe uniformly | [0005](adr/0005-aead-suite-and-nonce-construction.md#alternatives-considered) |
+| The `xchacha20-poly1305-v1` **profile itself**, as a second record AEAD | Withdrawn at the freeze gate: no second implementation existed to cross-verify against, and an unverified AEAD cannot be un-admitted once repositories depend on it. Value `0x0002` stays reserved. Costs the non-AES-hardware performance case | [0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md#amendment-4--the-extended-nonce-profile-is-withdrawn) |
+| Shipping that profile unverified with a warning | The warning does not travel with the bytes; the defect would be found inside data the user had already stored | [0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md#amendment-4--the-extended-nonce-profile-is-withdrawn) |
 | Per-device content-ID keys | Makes cross-device dedup impossible rather than optional, with no security gain over the `device` domain | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md#alternatives-considered) |
 | Signed segment records attributing each to its writer | Attribution without prevention: it names who corrupted the data after the fact | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md#alternatives-considered) |
 | Raw-scalar Ed25519 seed interpretation | No mainstream API consumes it, manual clamping is an error magnet, and nothing is gained | [0020](adr/0020-ed25519-signing-key-semantics.md#alternatives-considered) |
 | Per-device signing keys with a public-key registry | The honest long-term answer for attribution; rejected for v1 as an object type, an enrolment flow, revocation semantics and a registry needing its own integrity story — see [Q13](open-questions.md#q13--device-level-signature-attribution) | [0020](adr/0020-ed25519-signing-key-semantics.md#alternatives-considered) |
 | Drop signatures from v1 entirely | AEAD tags do not travel with the object graph; the snapshot signature is what binds it | [0020](adr/0020-ed25519-signing-key-semantics.md#alternatives-considered) |
-| Write Argon2id and XChaCha20-Poly1305 ourselves | Forbidden by specification 03 §1, and it is the defect class this project cannot recover from | [0019](adr/0019-third-party-dependency-policy.md#alternatives-considered) |
+| Write Argon2id or an AEAD ourselves | Forbidden by specification 03 §1, and it is the defect class this project cannot recover from | [0019](adr/0019-third-party-dependency-policy.md#alternatives-considered) |
 | A bare master key in the recovery kit | Single-factor, and a printed kit becomes as sensitive as the data — which no user will treat it as | [0013](adr/0013-recovery-kit.md#alternatives-considered) |
 | A recovery kit including store credentials | A printout in a drawer would grant access to a cloud account | [0013](adr/0013-recovery-kit.md#alternatives-considered) |
 | Shamir-split recovery kits | Deferred, not rejected — useful for high-value repositories, unjustified complexity for the consumer default | [0013](adr/0013-recovery-kit.md#alternatives-considered) |
@@ -177,7 +179,6 @@ Worth separating, because a deferred option is a decision someone still has to m
 |--------|-----------|
 | BLAKE3 as the segment hash | Evidence that hashing is the binding constraint, plus a trimmable implementation | 
 | CDC as the segmentation default | The benchmark at the [format freeze gate](adr/0002-segmentation-strategy.md) |
-| Dropping `xchacha20-poly1305-v1` from the format | The freeze gate; it costs nothing while unused |
 | Shamir-split recovery kits | A kit format version, if high-value repositories justify it |
 | Per-device signing keys | [Q13](open-questions.md#q13--device-level-signature-attribution) — whether device-level attribution should exist at all |
 | A blob writer per worker | Measurement showing the barrier is the bound ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md)) |

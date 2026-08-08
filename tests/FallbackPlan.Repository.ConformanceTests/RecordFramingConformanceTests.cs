@@ -34,10 +34,6 @@ public sealed class RecordFramingConformanceTests
             RecordNonce.Write(ordinal, aesNonce);
             Assert.Equal(vectorCase.GetProperty("nonce_aes_gcm").GetString(), Convert.ToHexStringLower(aesNonce));
 
-            var xchachaNonce = new byte[24];
-            RecordNonce.Write(ordinal, xchachaNonce);
-            Assert.Equal(vectorCase.GetProperty("nonce_xchacha").GetString(), Convert.ToHexStringLower(xchachaNonce));
-
             var aad = new byte[RecordAad.Length];
             RecordAad.Write(repositoryId, formatVersion, objectType, objectId, ordinal, aad);
             Assert.Equal(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));

@@ -125,7 +125,7 @@ public sealed class BlobWriter : IAsyncDisposable
         if (encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
             throw new ArgumentException(
-                "Only aes-256-gcm-v1 is implemented; xchacha20-poly1305-v1 has no platform primitive (open question Q12) and is refused, not guessed.",
+                "Format version 1 admits one record AEAD, aes-256-gcm-v1 (specification 03 §6); any other profile is refused, not guessed.",
                 nameof(encryptionProfile));
         }
 

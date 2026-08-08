@@ -37,8 +37,14 @@ public sealed class ProfileTests
     {
         Assert.True(EncryptionProfile.TryFromValue(0x0001, out var aes));
         Assert.Same(EncryptionProfile.Aes256GcmV1, aes);
-        Assert.True(EncryptionProfile.TryFromValue(0x0002, out var xchacha));
-        Assert.Same(EncryptionProfile.XChaCha20Poly1305V1, xchacha);
+
+        // 0x0002 is reserved and never assigned: a draft admitted
+        // xchacha20-poly1305-v1 there, and it was withdrawn before the freeze
+        // because nothing existed to cross-verify it against (03 §6.1). The
+        // value must resolve to nothing rather than to a suite, and it must
+        // not be handed to some later one.
+        Assert.False(EncryptionProfile.TryFromValue(EncryptionProfile.ReservedWithdrawnValue, out var reserved));
+        Assert.Null(reserved);
     }
 
     [Fact]

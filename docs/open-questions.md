@@ -100,28 +100,6 @@ The hint is a separate optional object per snapshot instead. Emergency recovery 
 
 ---
 
-## Q12 — XChaCha20-Poly1305 has no second implementation to check against
-
-**Owner:** engineering, with security review · **Blocks:** format v1 freeze · **ADR:** [0019](adr/0019-third-party-dependency-policy.md) · **Specification:** [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)
-
-The format admits two AEAD profiles. `aes-256-gcm-v1` uses a platform primitive. `xchacha20-poly1305-v1` cannot: .NET provides `ChaCha20Poly1305` (RFC 8439, 12-byte nonce) and **not** the 24-byte extended-nonce variant, so that profile requires a third-party implementation.
-
-Argon2id is in the same position and is handled: it is cross-verified against a second independent implementation on every CI run, which is how the empty-passphrase gap in [03 §2.1](../specifications/repository-format/03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) was found. **XChaCha20-Poly1305 has no such check**, because no second implementation was available to check against.
-
-An unverified AEAD is worse than an unverified KDF. A KDF defect makes keys weaker; an AEAD defect can make ciphertext forgeable or, with a nonce-handling bug, make plaintext recoverable — and by the time anyone notices, it is in the user's stored bytes.
-
-| Option | Trade |
-|--------|-------|
-| **Find a second implementation and cross-verify** | Matches the Argon2id posture. Depends on one existing and being maintained. |
-| **Drop the profile before freeze** | `aes-256-gcm-v1` alone is sufficient and 03 §6.1 already lets an implementer omit the extended-nonce profile. Costs the non-AES-hardware performance case. |
-| **Ship it unverified, flagged** | Cheapest now, and the option that ages worst — an unverified primitive is hardest to remove after repositories exist that use it. |
-
-**Recommendation:** decide at the freeze gate, and prefer dropping the profile over shipping it unverified. It costs nothing while unused, but a format version cannot un-admit a profile once written repositories depend on it.
-
-**Not decided.**
-
----
-
 ## Q13 — Device-level signature attribution
 
 **Owner:** engineering, with security review · **Blocks:** nothing in v1 · **ADR:** [0020](adr/0020-ed25519-signing-key-semantics.md) · **Finding:** the signing key derives from the shared master key, so signatures cannot attribute anything to a single device
@@ -197,6 +175,7 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
 | Q21 — the source-identity hint grew with the repository, not with the change | Resolved by keying it on the **source key** rather than the snapshot: `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, one small object per file version created, found by listing one prefix whose entries are chronological. The per-snapshot map it replaced described the whole tree every run, at a measured ~52 bytes per file; a one-file change to a 1 024-file tree now adds 7 386 bytes to the store against ~57 200 before. The accepted price is object count — one store object, and on a metered store one request, per changed file — which is the per-object overhead blobs exist to amortise, and it is the cheaper side from the second capture onward ([ADR-0007 Amendment 2](adr/0007-logical-object-identifiers-in-manifests.md), [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) |
+| Q12 — should `xchacha20-poly1305-v1` ship while unverified? | No — the profile is **withdrawn** and `0x0002` is reserved, never to be assigned to another suite. Cross-verification against a second independent implementation is the condition on which a third-party primitive is admitted here, and none existed for XChaCha20-Poly1305. An unverified AEAD is a different order of risk from an unverified KDF, and it would be discovered inside bytes the user had already stored; a format version can add a profile but cannot un-admit one that written repositories depend on. The cost — slower on hardware without AES acceleration — is accepted ([ADR-0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md), [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)) |
 | Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |

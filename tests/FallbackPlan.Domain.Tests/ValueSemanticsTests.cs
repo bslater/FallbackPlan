@@ -151,7 +151,7 @@ public sealed class ValueSemanticsTests
     public void Profiles_honour_the_value_contract()
     {
         AssertValueSemantics(SegmentationProfile.FixedV1, SegmentationProfile.FixedV1, SegmentationProfile.CdcV1);
-        AssertValueSemantics(EncryptionProfile.Aes256GcmV1, EncryptionProfile.Aes256GcmV1, EncryptionProfile.XChaCha20Poly1305V1);
+        AssertValueSemantics(CompressionProfile.None, CompressionProfile.None, CompressionProfile.ZstdV1);
         AssertValueSemantics(CompressionProfile.None, CompressionProfile.None, CompressionProfile.ZstdV1);
     }
 

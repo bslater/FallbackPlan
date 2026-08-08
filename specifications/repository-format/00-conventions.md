@@ -30,7 +30,7 @@ Several behaviours are selected by a **profile** — a small integer naming a fi
 |----------------|--------|------------|
 | Segmentation | `fixed-v1`, `cdc-v1` | [09](09-segmentation.md) |
 | Compression | `none`, `zstd-v1` | [10](10-compression.md) |
-| Encryption | `aes-256-gcm-v1`, `xchacha20-poly1305-v1` | [04](04-record.md) |
+| Encryption | `aes-256-gcm-v1` (`0x0002` reserved, withdrawn — [03 §6.1](03-keys.md#61-where-each-primitive-comes-from)) | [04](04-record.md) |
 | Content hash | `sha-256-v1` | [02](02-identifiers.md) |
 
 A profile identifier is a `u16`. Values `0x0000`–`0x7FFF` are reserved for this specification; `0x8000`–`0xFFFF` are available for private use and MUST NOT appear in a repository intended to be portable.

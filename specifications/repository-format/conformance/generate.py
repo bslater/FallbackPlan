@@ -481,7 +481,6 @@ def aad_vectors() -> dict:
             {
                 "ordinal": ordinal,
                 "nonce_aes_gcm": ordinal.to_bytes(12, "big").hex(),
-                "nonce_xchacha": (b"\x00" * 12 + ordinal.to_bytes(12, "big")).hex(),
                 "aad": aad.hex(),
                 "aad_length": len(aad),
             }

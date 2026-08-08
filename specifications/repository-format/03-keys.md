@@ -68,7 +68,7 @@ offset  size   field
   44+N     16  wrap_tag       AEAD authentication tag
 ```
 
-`kek_profile` MUST be `aes-256-gcm-v1` (`0x0001`) in format version 1. The 12-byte `wrap_nonce` field is sized for it exactly; `xchacha20-poly1305-v1` takes a 24-byte nonce and cannot be represented in this layout. Restricting the wrap rather than varying the layout costs nothing — wrapping happens once per repository open, so hardware acceleration is irrelevant — and keeps a fixed-offset header fixed. The record-level profile choice in §6 is unaffected. → [ADR-0005](../../docs/adr/0005-aead-suite-and-nonce-construction.md)
+`kek_profile` MUST be `aes-256-gcm-v1` (`0x0001`) in format version 1. The 12-byte `wrap_nonce` field is sized for it exactly, and a 24-byte-nonce suite could not be represented in this layout at all — which is one reason the extended-nonce profile was withdrawn rather than accommodated (§6.1). Restricting the wrap costs nothing: wrapping happens once per repository open, so hardware acceleration is irrelevant, and a fixed-offset header stays fixed. → [ADR-0005](../../docs/adr/0005-aead-suite-and-nonce-construction.md)
 
 Unwrapping uses:
 
@@ -153,9 +153,11 @@ A blob key MUST NOT be stored. It is derived when the blob is written and re-der
 | Profile | Value | Suite | Key | Nonce | Tag | Implementation |
 |---------|-------|-------|-----|-------|-----|----------------|
 | `aes-256-gcm-v1` | `0x0001` | AES-256-GCM | 32 | 12 | 16 | Platform (`System.Security.Cryptography.AesGcm`) |
-| `xchacha20-poly1305-v1` | `0x0002` | XChaCha20-Poly1305 | 32 | 24 | 16 | **Third-party** — see §6.1 |
+| *Reserved* | `0x0002` | — | — | — | — | Withdrawn before freeze (§6.1). MUST NOT be assigned to another suite |
 
-A writer SHOULD select `aes-256-gcm-v1` where hardware AES is available and `xchacha20-poly1305-v1` otherwise. Both are permitted for records; the profile is recorded per record. This table governs **records only** — key wrapping is fixed to `aes-256-gcm-v1` in format version 1 (§3).
+**Format version 1 admits exactly one record AEAD.** A writer MUST use `aes-256-gcm-v1`; a reader MUST refuse any other profile value, including `0x0002`. This table governs **records only** — key wrapping is fixed to the same suite (§3).
+
+`0x0002` stays reserved rather than being freed for reuse. Draft repositories and draft readers exist that understood it as XChaCha20-Poly1305, and a value that means one thing in a draft and another in the frozen format is the kind of ambiguity a version number cannot repair.
 
 ### 6.1 Where each primitive comes from
 
@@ -168,19 +170,19 @@ Rule 1 in §1 says to use audited platform primitives and write none ourselves. 
 | HKDF-Expand | Platform (`HKDF`) | Audited, in-box |
 | AES-256-GCM | Platform (`AesGcm`) | Audited, in-box |
 | **Argon2id** | **Third-party** | No platform implementation exists |
-| **XChaCha20-Poly1305** | **Third-party** | No platform implementation exists |
 
-.NET provides `ChaCha20Poly1305` — RFC 8439, with a **12-byte** nonce. It does **not** provide the extended-nonce XChaCha20 variant, which takes 24 bytes. The two are not interchangeable, and an implementer who substitutes one for the other will produce a repository nothing else can read.
+**Why `xchacha20-poly1305-v1` was withdrawn.** .NET provides `ChaCha20Poly1305` — RFC 8439, with a **12-byte** nonce. It does **not** provide the extended-nonce XChaCha20 variant, which takes 24 bytes. The two are not interchangeable, and an implementer who substitutes one for the other produces a repository nothing else can read. An earlier revision of this document listed the profile as approved without noting that, which made it unimplementable as specified.
 
-An earlier revision of this document listed `xchacha20-poly1305-v1` as an approved profile without noting that the platform cannot supply it, which made the profile unimplementable as specified. That was a defect in this specification, found while evaluating candidate libraries.
+That could have been repaired by taking a third-party XChaCha20-Poly1305. It was not, and the reason is the one thing this format cannot fix later: no second independent implementation was available to cross-verify against, and an unverified AEAD is a different order of risk from an unverified KDF. A KDF defect makes keys weaker; an AEAD defect can make ciphertext forgeable or, with a nonce-handling error, make plaintext recoverable — and it would be discovered inside bytes the user already stored. A format version can add a profile; it cannot un-admit one that written repositories depend on. → [Q12](../../docs/open-questions.md#closed), [ADR-0005](../../docs/adr/0005-aead-suite-and-nonce-construction.md)
+
+The cost is accepted and named: on hardware without AES acceleration, AES-256-GCM is slower than a ChaCha-family suite would be. A future format version MAY admit one under a new profile value, with a second implementation to check it against as the condition of entry.
 
 **Consequences an implementer must accept:**
 
-- The two third-party primitives are **not** covered by the platform's audit posture. They carry the same risk any third-party cryptographic implementation carries, and the external cryptographic review required before the first beta MUST cover them specifically.
-- Where a second independent implementation exists, the conformance suite cross-verifies against it. Argon2id is checked against a second implementation on every CI run; XChaCha20-Poly1305 currently is not, because no second implementation is available — that gap is recorded in [`conformance/README.md`](conformance/README.md).
-- An implementer targeting a platform where a vetted XChaCha20-Poly1305 is unavailable MAY omit the profile entirely and use `aes-256-gcm-v1` only. Nothing in the format requires both.
+- **Argon2id** is the one third-party primitive left in the format-critical path, and it is **not** covered by the platform's audit posture. The external cryptographic review required before the first beta MUST cover it specifically.
+- It is cross-verified against a second independent implementation on every CI run, which is how the empty-passphrase gap in §2.1 was found. That check is the condition on which a third-party primitive is admitted at all.
 
-The reference implementation takes Argon2id from `Bodu.Security.Cryptography` and confines it, and every other third-party primitive, to a single project. The policy governing what may enter the format-critical path is [ADR-0019](../../docs/adr/0019-third-party-dependency-policy.md); whether the XChaCha20-Poly1305 profile should ship at all while unverified is [Q12](../../docs/open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against).
+The reference implementation takes Argon2id from `Bodu.Security.Cryptography` and confines it, and every other third-party primitive, to a single project. The policy governing what may enter the format-critical path is [ADR-0019](../../docs/adr/0019-third-party-dependency-policy.md).
 
 No other suite is permitted. A writer MUST reject an unapproved suite at configuration time, not at write time — discovering an unusable configuration during a backup is a failure mode the user cannot act on. Insecure selection MUST NOT be available as a compatibility switch.
 
