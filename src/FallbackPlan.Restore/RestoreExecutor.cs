@@ -31,6 +31,27 @@ public enum RestoreOutcome
     Cancelled = 3,
 }
 
+/// <summary>
+/// Where restored historical content lands (FR-RST-006; architecture 08 §3.1).
+/// </summary>
+/// <remarks>
+/// A snapshot may contain malware that was present when it was captured, and
+/// restoring it is what the user asked for. Restoring it *into the live tree
+/// by default* is not — that is a decision a person should make deliberately,
+/// not one that happens because they pressed Enter.
+/// </remarks>
+public enum RestoreDestinationMode
+{
+    /// <summary>
+    /// Under a quarantine directory inside the chosen output, so nothing
+    /// unscanned lands where the system will run it. The default.
+    /// </summary>
+    Quarantine = 0,
+
+    /// <summary>Directly into the chosen output — the operator asked for this explicitly.</summary>
+    InPlace = 1,
+}
+
 /// <summary>What to do about a file already sitting at a restore destination.</summary>
 /// <remarks>
 /// <b>This is not architecture 08 §3.1's quarantine control</b>, and the two
@@ -107,6 +128,19 @@ public sealed record RestoreReceipt
     [JsonPropertyName("displaced")]
     public required IReadOnlyList<string> Displaced { get; init; }
 
+    /// <summary>
+    /// Where content was actually written — the quarantine directory, or the
+    /// operator's chosen output when they asked for in place.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because "restored to /home/ana/recovered" and "restored to
+    /// /home/ana/recovered/.fbp-quarantine/&lt;run&gt;" are different claims,
+    /// and a receipt that cannot tell them apart cannot answer the only
+    /// question that matters after a restore: where are my files.
+    /// </remarks>
+    [JsonPropertyName("written_to")]
+    public required string WrittenTo { get; init; }
+
     /// <summary>What the restore as a whole achieved.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<RestoreOutcome>))]
     [JsonPropertyName("outcome")]
@@ -119,6 +153,18 @@ public sealed record RestoreReceipt
 /// <summary>Executor switches.</summary>
 public sealed record RestoreExecutionOptions
 {
+    /// <summary>Where restored content lands (FR-RST-006).</summary>
+    /// <remarks>
+    /// Defaults to <see cref="RestoreDestinationMode.Quarantine"/>. This is a
+    /// different control from <see cref="ExistingDestination"/> and the two
+    /// were once conflated: this one is about where the restored file goes,
+    /// that one is about what happens to a file already there.
+    /// </remarks>
+    public RestoreDestinationMode DestinationMode { get; init; } = RestoreDestinationMode.Quarantine;
+
+    /// <summary>The quarantine directory, relative to the chosen output.</summary>
+    public string QuarantineDirectory { get; init; } = ".fbp-quarantine";
+
     /// <summary>What to do about a file already at a destination.</summary>
     /// <remarks>
     /// Defaults to <see cref="ExistingDestinationPolicy.Preserve"/>: restore
@@ -174,8 +220,19 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
         // treats other participants and historical data as adversarial, so a
         // manifest naming "../../.ssh/authorized_keys" must be refused by
         // construction rather than by whoever wrote the store.
-        var root = new DirectoryInfo(outputDirectory).FullName;
-        var displacedRoot = Path.Combine(root, options.DisplacedDirectory, options.RunId);
+        var chosen = new DirectoryInfo(outputDirectory).FullName;
+
+        // Quarantine by default (08 §3.1): restored historical content lands
+        // under a directory of its own rather than directly where the operator
+        // pointed, unless they said in place. Displaced files stay beside the
+        // chosen output, not inside the quarantine — they are the user's
+        // current files and were never in question.
+        var root = options.DestinationMode == RestoreDestinationMode.Quarantine
+            ? Path.Combine(chosen, options.QuarantineDirectory, options.RunId)
+            : chosen;
+
+        Directory.CreateDirectory(root);
+        var displacedRoot = Path.Combine(chosen, options.DisplacedDirectory, options.RunId);
         var engine = new RestoreEngine(reader);
         var items = new List<ReceiptItem>();
         var displaced = new List<string>();
@@ -321,6 +378,7 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             CompletedAt = options.NowUnixMilliseconds,
             Items = items,
             Displaced = displaced,
+            WrittenTo = root,
             Outcome = Aggregate(items, plan.Items.Count),
         };
     }

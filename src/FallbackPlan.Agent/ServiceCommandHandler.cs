@@ -266,7 +266,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         return new RestoreResult(
             receipt.Items.Count(item => item.Outcome == "restored" && !directories.Contains(item.Path)),
             receipt.Items.Count(item => item.Outcome == "failed"),
-            command.OutputDirectory);
+            // Where the files actually are, not where the caller pointed.
+            // Historical content quarantines by default (FR-RST-006), so the
+            // two differ, and a caller told the wrong one cannot find its data.
+            receipt.WrittenTo);
     }
 
     /// <summary>Verifies every stored blob at the requested level.</summary>

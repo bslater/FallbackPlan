@@ -250,8 +250,12 @@ public sealed class ClientModeTests : IDisposable
         Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
 
         // The service wrote them, on its own machine (ADR-0028 §6) — which on
-        // the local binding is this one, so the files are here to read.
-        Assert.Equal("hello", await File.ReadAllTextAsync(Path.Combine(destination, "notes.txt"), _timeout.Token));
+        // the local binding is this one, so the files are here to read. Under
+        // the quarantine directory, per FR-RST-006, which is why the CLI has
+        // to print where they went rather than echo what was asked for.
+        var written = Directory.EnumerateFiles(destination, "notes.txt", SearchOption.AllDirectories).Single();
+        Assert.Equal("hello", await File.ReadAllTextAsync(written, _timeout.Token));
+        Assert.Contains(Path.GetDirectoryName(written)!, result.All, StringComparison.Ordinal);
     }
 
     [Fact]

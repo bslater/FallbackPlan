@@ -13,7 +13,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// The restore planner and executor (phase-1 wave R;
-/// FR-RST-003/004/005): conflicts and degradations surface at PLAN time —
+/// FR-RST-003/004/005/006): conflicts and degradations surface at PLAN time —
 /// which is FR-RST-003's whole claim, that the plan exists before any byte
 /// moves — execution displaces what it would replace rather than overwriting
 /// in place, applies metadata after content, and the receipt accounts for
@@ -24,14 +24,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// that does not name plain components under the root is refused.
 /// </summary>
 /// <remarks>
-/// <b>This class does not establish FR-RST-006</b>, and used to claim it.
-/// That requirement is "restore of historical content shall default to a
-/// quarantine path rather than the original location" — a control over where
-/// unscanned old content lands. What is tested here is what happens to a file
-/// already sitting at a destination the caller chose, which is a different
-/// question. Conflating them cost the requirement its only citation and left
-/// the matrix reporting a malware control as covered by a test of something
-/// else.
+/// FR-RST-006 — historical content defaulting to a quarantine path — is
+/// established by one named test and by nothing else here. It once had its
+/// citation from a test of displaced-file preservation, which is a different
+/// control: where restored content lands, versus what happens to a file
+/// already sitting where it lands. Both are tested; they are not the same
+/// test and must not share a citation again.
 /// </remarks>
 public sealed class RestorePlanTests : ArchiveTestHarness
 {
@@ -142,7 +140,16 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
-            plan, output, new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                // In place, because displacing an existing file is only
+                // possible where the restore lands on top of one.
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "test",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
 
         Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
         Assert.Equal(plan.Items.Count, receipt.Items.Count);
@@ -195,7 +202,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
         Assert.Equal(
             UnixFileMode.UserRead | UnixFileMode.UserWrite,
-            File.GetUnixFileMode(Path.Combine(output, "data", "file.bin"))
+            File.GetUnixFileMode(Path.Combine(receipt.WrittenTo, "data", "file.bin"))
                 & (UnixFileMode.UserRead | UnixFileMode.UserWrite));
     }
 
@@ -242,7 +249,11 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             plan, output, new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
 
         Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.Equal(firstContent, File.ReadAllBytes(Path.Combine(output, "wanted", "data.bin")));
+        Assert.Equal(firstContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "wanted", "data.bin")));
+
+        // Quarantine by default (FR-RST-006): under the chosen output, not in it.
+        Assert.StartsWith(output, receipt.WrittenTo, StringComparison.Ordinal);
+        Assert.NotEqual(output, receipt.WrittenTo);
     }
 
     [Theory]
@@ -365,8 +376,55 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             async Task Restore(string runId) =>
                 await new RestoreExecutor(reader, target).ExecuteAsync(
                     plan, output,
-                    new RestoreExecutionOptions { RunId = runId, NowUnixMilliseconds = 1_722_700_000_000 },
+                    new RestoreExecutionOptions
+                    {
+                        DestinationMode = RestoreDestinationMode.InPlace,
+                        RunId = runId,
+                        NowUnixMilliseconds = 1_722_700_000_000,
+                    },
                     CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Historical_content_lands_in_quarantine_unless_in_place_is_asked_for()
+    {
+        var (plan, target, reader, keys) = await OneRealItemAsync(0xD4);
+
+        using (keys)
+        using (reader)
+        {
+            var output = Path.Combine(SpoolDirectory, "fr-rst-006");
+
+            var quarantined = await new RestoreExecutor(reader, target).ExecuteAsync(
+                plan, output,
+                new RestoreExecutionOptions { RunId = "run", NowUnixMilliseconds = 1_722_700_000_000 },
+                CancellationToken.None);
+
+            // FR-RST-006. A snapshot may hold malware that was present when it
+            // was captured; restoring it is what the user asked for, and
+            // restoring it into the live tree *by default* is not.
+            Assert.Equal(RestoreOutcome.Complete, quarantined.Outcome);
+            Assert.NotEqual(output, quarantined.WrittenTo);
+            Assert.StartsWith(
+                Path.Combine(output, ".fbp-quarantine"), quarantined.WrittenTo, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(quarantined.WrittenTo, "data", "file.bin")));
+            Assert.False(File.Exists(Path.Combine(output, "data", "file.bin")));
+
+            // In place is available and is a deliberate choice, not the thing
+            // that happens when the operator presses Enter.
+            var inPlace = await new RestoreExecutor(reader, target).ExecuteAsync(
+                plan, Path.Combine(SpoolDirectory, "fr-rst-006-live"),
+                new RestoreExecutionOptions
+                {
+                    DestinationMode = RestoreDestinationMode.InPlace,
+                    RunId = "run",
+                    NowUnixMilliseconds = 1_722_700_000_000,
+                },
+                CancellationToken.None);
+
+            Assert.Equal(Path.Combine(SpoolDirectory, "fr-rst-006-live"), inPlace.WrittenTo);
+            Assert.True(File.Exists(Path.Combine(inPlace.WrittenTo, "data", "file.bin")));
         }
     }
 

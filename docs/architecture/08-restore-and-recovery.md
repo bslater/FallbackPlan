@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §12 · **Resolves:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified), [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
-**Built:** Yes, except FR-RST-006's quarantine destination default (§3.1) — see [implementation status](../implementation-status.md).
+**Built:** Yes — see [implementation status](../implementation-status.md).
 
 ---
 

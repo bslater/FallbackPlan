@@ -138,7 +138,7 @@ Stated plainly so no other document implies otherwise:
 - **Loss of all recovery material** makes the repository permanently unreadable. This is by design, and it is why the recovery-kit workflow is mandatory and drills are prompted.
 - **A malicious administrator** with access to every device and to retention controls can destroy data. Audit records make it attributable, not impossible.
 - **Hardware faults across every replica** are undetectable without verification, which is why verification coverage is a first-class status.
-- **Malware already present in a historical snapshot** will be faithfully restored. Restore is *designed* to default to a quarantine path for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)) — **and does not yet do so**: the executor writes wherever its caller points it. FR-RST-006 is unmet and the traceability matrix says so. Until it is built, restoring an old snapshot over a live tree reintroduces whatever was in it.
+- **Malware already present in a historical snapshot** will be faithfully restored. Restore defaults to a quarantine path for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)): content lands under a directory of its own and reaching the live tree is a deliberate choice. FR-RST-006.
 
 ## Controls summary
 
@@ -159,7 +159,6 @@ OS-authenticated local command surface · key material confined to the service a
 | Keyed verification challenges | Replication (architecture 09 §5) |
 | Repository-server rate limits and quotas | Phase 3 |
 | Signed audit trail for destructive operations | Retention and GC, which are not built at all |
-| Quarantine-by-default restore (FR-RST-006) | The executor writes where its caller points it; nothing defaults that destination |
 | Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
 
 **Dedup trust domains are not in either list above, and that is the point.** An earlier version of this page put them under *in force* with a note that the `device` domain was "specified and unexercised". That was wrong in the direction that matters: **verify-on-reuse is not implemented at all**, including for `repository`, which is the default. Reuse is decided by index presence alone. See T-10 above, and treat the control as absent rather than partial.

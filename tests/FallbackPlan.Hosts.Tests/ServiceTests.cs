@@ -254,11 +254,20 @@ public sealed class ServiceTests : IDisposable
         // the proof of a restore is on this disk rather than in the result.
         Assert.Equal(2, restored.Restored);
         Assert.Equal(0, restored.Failed);
-        Assert.Equal(destination, restored.OutputDirectory);
-        Assert.Equal("hello", await File.ReadAllTextAsync(Path.Combine(destination, "notes.txt"), _timeout.Token));
+
+        // Quarantine by default (FR-RST-006): the content lands under the
+        // commanded directory rather than directly in it, and the result says
+        // where — a caller told the commanded path could not find its files.
+        Assert.StartsWith(destination, restored.OutputDirectory, StringComparison.Ordinal);
+        Assert.NotEqual(destination, restored.OutputDirectory);
+
+        Assert.Equal(
+            "hello",
+            await File.ReadAllTextAsync(Path.Combine(restored.OutputDirectory, "notes.txt"), _timeout.Token));
         Assert.Equal(
             "deeper",
-            await File.ReadAllTextAsync(Path.Combine(destination, "nested", "deeper.txt"), _timeout.Token));
+            await File.ReadAllTextAsync(
+                Path.Combine(restored.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
     }
 
     [Fact]

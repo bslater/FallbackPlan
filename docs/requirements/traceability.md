@@ -93,7 +93,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-RST-003 | [08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-004 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-005 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/ArchiveCorruptionTests` | 1 |
-| FR-RST-006 | [08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default) | — | — *(unmet; the executor writes where the caller points it and nothing defaults that destination to a quarantine path — the cell previously cited a test of displaced-file preservation, which is a different control)* | 1 |
+| FR-RST-006 | [08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-KIT-001..006 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-kit) | [0013](../adr/0013-recovery-kit.md) | `Cli.Tests/CommandTests`, `Hosts.Tests/RecoveryHostTests`, `Repository.ConformanceTests/RecoveryKitConformanceTests` | 1 |
 
 ### Replication and verification
