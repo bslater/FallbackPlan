@@ -17,6 +17,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | Know what is still undecided | [Open questions](open-questions.md) |
 | Know what is actually built | [Implementation status](implementation-status.md) |
 | Know why something *isn't* the design | [Abandoned choices](decisions-abandoned.md) |
+| See the calls the format freeze forced | [Freeze-gate decisions](freeze-gate-decisions-2026-08.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
 | Pick up where the last round stopped | [Phase 2 plan — where to pick up](phase-2-execution-plan.md#where-to-pick-up) |
 | Start building | [Phase 2 execution plan](phase-2-execution-plan.md) (in progress) · [Phase 1 execution plan](phase-1-execution-plan.md) · [Phase 0 execution plan](phase-0-execution-plan.md) (implemented) · [format specification](../specifications/repository-format/README.md) |
@@ -56,6 +57,7 @@ Status per record. **Twenty-five of the thirty are Accepted.** 0005, 0006, 0008,
 
 - **[Implementation status](implementation-status.md)** — every ADR mapped to the code and tests that establish it, with the partly-built ones saying which half is missing
 - **[Abandoned choices](decisions-abandoned.md)** — what was rejected and why, and separately, what was *the plan* and was given up
+- **[Freeze-gate decisions](freeze-gate-decisions-2026-08.md)** — two calls that had to be made before v1 froze rather than when the code reached them: where verify-on-reuse outcomes live, and how a filename with no valid decoding is rendered
 
 | ADR | Decision |
 |-----|----------|
