@@ -24,6 +24,8 @@ Paths are the most common source of silent cross-platform data loss, so the rule
 
 **Storage.** Store the **original path bytes** exactly as the source filesystem reported them, plus the observed Unicode normalisation form. Never normalise destructively on capture — a filesystem that permits both NFC and NFD forms of the same name as distinct files has two distinct files, and rewriting either loses one.
 
+**Get the bytes from the filesystem, not from a string.** A POSIX filename is any byte sequence without NUL or `/`, and the host runtime decodes an invalid-UTF-8 name to U+FFFD irreversibly. Re-encoding that string yields bytes that are not the ones on disk *and* a path that does not open the file — so an entry captured that way is stored under a name it does not have, with content that was never read. Names therefore come from `readdir`, and an entry whose name the host cannot represent is recorded in the error manifest with reason 8 rather than captured under a substitute. → [repository format 06 §4.3](../../specifications/repository-format/06-manifests.md)
+
 **Indexing.** Index by a **casefold key** derived from the NFC form. This is what makes lookup work when the source is case-sensitive and the restore target is not.
 
 **Collision detection.** Detect collisions at **restore-plan** time ([`08-restore-and-recovery.md` §2](08-restore-and-recovery.md#2-restore-planning)), never mid-restore. `README.md` and `readme.md` captured from ext4 and restored to APFS is a conflict the user must be told about *before* files start landing, not after one has overwritten the other.

@@ -121,10 +121,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         ScanFailure? listingFailure = null;
         try
         {
-            children = Directory.EnumerateFileSystemEntries(directory)
-                .Select(path => (Name: Path.GetFileName(path), Path: path))
-                .Select(child => (child.Name, Encoding.UTF8.GetBytes(child.Name), child.Path))
-                .ToList();
+            children = ListChildren(directory);
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
@@ -149,6 +146,21 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             cancellationToken.ThrowIfCancellationRequested();
 
             var relativePath = relativePrefix.Length == 0 ? name : relativePrefix + "/" + name;
+
+            // The name the host gave us back is not the name on disk. Storing
+            // it would put a file in the repository under a name it does not
+            // have — and on POSIX the substituted path does not open the file
+            // either, so the entry would look captured while its content was
+            // never read. Reported, not guessed at (06 §4.3).
+            if (!RoundTrips(nameBytes))
+            {
+                yield return new ScanEvent.Failure(new ScanFailure(
+                    relativePath,
+                    CaptureFailureReason.NameNotRepresentable,
+                    "The entry's name is not valid UTF-8 and cannot be represented by this host's string form."));
+                continue;
+            }
+
             var rulesSubject = relativePath.Normalize(NormalizationForm.FormC);
 
             if (options.Rules?.IsExcluded(rulesSubject) == true)
@@ -219,6 +231,42 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             }
         }
     }
+
+    /// <summary>
+    /// Lists one directory's children, taking each name's bytes from the
+    /// filesystem rather than from a decoded string (06 §4.3).
+    /// </summary>
+    /// <remarks>
+    /// On POSIX this is <c>readdir</c>. The managed enumeration hands back
+    /// <see cref="string"/>, and a name that is not valid UTF-8 has already
+    /// been destroyed by the time it arrives — decoded to U+FFFD, and
+    /// re-encoding gives bytes that are not the ones on disk and do not open
+    /// the file. On Windows a name is UTF-16 and its UTF-8 encoding is exact,
+    /// so the managed enumeration is the source there.
+    /// </remarks>
+    private static List<(string Name, byte[] NameBytes, string FullPath)> ListChildren(string directory)
+    {
+        if (PosixDirectory.IsSupported && PosixDirectory.TryReadNames(directory, out var rawNames))
+        {
+            return rawNames
+                .Select(bytes => (
+                    Name: Encoding.UTF8.GetString(bytes),
+                    NameBytes: bytes,
+                    FullPath: Path.Combine(directory, Encoding.UTF8.GetString(bytes))))
+                .ToList();
+        }
+
+        return Directory.EnumerateFileSystemEntries(directory)
+            .Select(path => (Name: Path.GetFileName(path), Path: path))
+            .Select(child => (child.Name, Encoding.UTF8.GetBytes(child.Name), child.Path))
+            .ToList();
+    }
+
+    /// <summary>Whether a name survives the host's string form unchanged.</summary>
+    /// <param name="nameBytes">The name as the filesystem reported it.</param>
+    /// <returns><see langword="true"/> when decoding and re-encoding is lossless.</returns>
+    private static bool RoundTrips(ReadOnlySpan<byte> nameBytes) =>
+        Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(nameBytes)).AsSpan().SequenceEqual(nameBytes);
 
     private static ScanEntry BuildEntry(
         string fullPath, string relativePath, byte[] nameBytes, StatResult stat, ScanOptions options)

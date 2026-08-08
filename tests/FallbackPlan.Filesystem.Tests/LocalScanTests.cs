@@ -286,6 +286,104 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.False(string.IsNullOrEmpty(entry.Metadata.OwnerName));
     }
 
+    [PlatformFact(TestPlatforms.Posix, "the readdir ABI and non-UTF-8 filenames are POSIX shapes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Names_come_from_the_filesystem_not_from_a_decoded_string()
+    {
+        // Names chosen to exercise the decode: ASCII, multi-byte UTF-8, and a
+        // combining sequence that is a different byte string from its composed
+        // form. All three are valid UTF-8, so the managed enumeration agrees —
+        // which is the point. If the dirent name offset were wrong, this fails
+        // loudly rather than silently mangling every filename in the tree.
+        Write("plain.txt");
+        Write("naïve-café.txt");
+        Write("résumé.txt");
+
+        var events = await ScanAsync();
+        var scanned = events.OfType<ScanEvent.Leaf>()
+            .Select(leaf => Encoding.UTF8.GetString(leaf.Entry.NameBytes.Span))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        var expected = Directory.EnumerateFileSystemEntries(_root)
+            .Select(path => Path.GetFileName(path)!)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(expected, scanned);
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "a filename that is not valid UTF-8 is only expressible on POSIX")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task A_name_that_is_not_valid_utf8_is_reported_rather_than_mangled()
+    {
+        // 0xFF 0xFE is not a valid UTF-8 sequence and is a perfectly legal
+        // POSIX filename. Created through the syscall directly, because the
+        // managed API cannot express it either.
+        byte[] raw = [.. "bad"u8, (byte)0xFF, (byte)0xFE, .. "name.txt"u8];
+
+        var path = RawPath(_root, raw);
+        Assert.True(CreateFileWithRawName(path), "could not create a file with a non-UTF-8 name");
+
+        try
+        {
+            var events = await ScanAsync();
+
+        // Before this, the name decoded to U+FFFD, re-encoded to different
+        // bytes, and the path built from it did not open the file — so the
+        // entry was captured under a name it did not have, with content that
+        // had never been read.
+        var failure = Assert.Single(
+            events.OfType<ScanEvent.Failure>(),
+            f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable);
+        Assert.Contains("not valid UTF-8", failure.Detail.Detail, StringComparison.Ordinal);
+
+            // And it is not also captured under a substituted name.
+            Assert.DoesNotContain(
+                events.OfType<ScanEvent.Leaf>(),
+                leaf => leaf.Entry.NameBytes.Span.StartsWith("bad"u8));
+        }
+        finally
+        {
+            // Directory.Delete cannot remove it either — the same defect, from
+            // the other end. The harness would otherwise fail on teardown.
+            NativeUnlink(path);
+        }
+    }
+
+    /// <summary>Builds a NUL-terminated path from a directory and raw name bytes.</summary>
+    private static byte[] RawPath(string directory, byte[] nameBytes)
+    {
+        var path = new byte[Encoding.UTF8.GetByteCount(directory) + 1 + nameBytes.Length + 1];
+        var written = Encoding.UTF8.GetBytes(directory, path);
+        path[written++] = (byte)'/';
+        nameBytes.CopyTo(path, written);
+        path[written + nameBytes.Length] = 0;
+        return path;
+    }
+
+    /// <summary>Creates a file whose name the managed API cannot express.</summary>
+    private static bool CreateFileWithRawName(byte[] path)
+    {
+        var handle = NativeOpen(path, 0x40 | 0x1 /* O_CREAT | O_WRONLY */, 0x1A4 /* 0644 */);
+        if (handle < 0)
+        {
+            return false;
+        }
+
+        NativeClose(handle);
+        return true;
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "unlink", SetLastError = true)]
+    private static partial int NativeUnlink(byte[] pathname);
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static partial int NativeOpen(byte[] pathname, int flags, uint mode);
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static partial int NativeClose(int fd);
+
     [PlatformFact(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
     [PlatformTrait(TestPlatforms.Windows)]
     public async Task A_directory_junction_is_a_link_and_is_not_descended()

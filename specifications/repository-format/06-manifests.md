@@ -114,6 +114,20 @@ Absent keys mean the source did not provide the value. They do not mean zero.
 
 It is verified after reassembly during restore. Per-segment verification already proves each part is authentic and truthfully identified; the whole-file hash proves they were *assembled correctly* — right order, no gaps, no duplication. The two check different things and both are required. → FR-RST-002
 
+### 4.3 What `name` must contain
+
+`name` is the entry name **as the source filesystem reported it**, and this section says what that means on each host so that "raw bytes" is a rule an implementer can follow rather than an aspiration.
+
+**POSIX.** A filename is a byte sequence containing neither NUL nor `/`. It carries no encoding guarantee. A conforming implementation MUST obtain it from the directory-reading syscall (`readdir` and its relatives) and store those bytes unchanged. It MUST NOT obtain the name through a host string type that decodes it, because that decoding is lossy for any name that is not valid UTF-8, and re-encoding the decoded string produces different bytes from the ones on disk.
+
+**Windows.** A filename is a UTF-16 code-unit sequence. The repository encoding is **UTF-8 of that sequence**. A name containing an unpaired surrogate has no UTF-8 encoding; a conforming implementation MUST refuse such an entry with error-manifest reason 8 rather than substituting a replacement character. Substitution would store a name that is not the file's name, under a format field that promises it is.
+
+**Both.** Where the host cannot hand the implementation the true bytes, the entry MUST be recorded in the error manifest with reason 8. It MUST NOT be captured under a substituted name.
+
+That last rule exists because the failure it prevents is silent. An entry stored under a replacement-character name looks captured, appears in listings, and restores as a file the user did not have — and where the substitution also breaks the implementation's ability to open the source, the content behind that plausible-looking entry was never read at all.
+
+> **Implementation status (2026-08).** The POSIX rule is enforced: names come from `readdir` and non-representable entries are refused with reason 8. What is **not** yet built is capturing those entries anyway, which needs the byte-native open path that [architecture 06 §4.1](../../docs/architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) also owes for its own reasons. Until then a non-UTF-8 name is reported and skipped rather than backed up.
+
 ## 5 Tree manifest
 
 Object type `0x03`.
@@ -284,7 +298,7 @@ Object type `0x06`. Present only when something could not be captured.
 | Key | Type | Value |
 |-----|------|-------|
 | 1 | array | `path_components` — array of raw byte strings |
-| 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit |
+| 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit, 8 name not representable (§4.2) |
 | 3 | text | `detail` |
 
 A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules (§7.1). Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
