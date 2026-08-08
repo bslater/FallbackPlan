@@ -98,6 +98,7 @@ Grouped by what they would have changed. One line each; the reasoning is at the 
 | Forbid compaction, keep physical locations | Compaction is how space is reclaimed; without it the repository grows monotonically and retention becomes advisory | [0007](adr/0007-logical-object-identifiers-in-manifests.md#alternatives-considered), [0017](adr/0017-index-entry-supersession.md#alternatives-considered) |
 | Rewrite manifests on compaction | Abandons immutability, invalidates snapshot signatures, and makes maintenance proportional to history | [0007](adr/0007-logical-object-identifiers-in-manifests.md#alternatives-considered) |
 | An indirection object between manifest and blob | Redundant — the index already is that indirection | [0007](adr/0007-logical-object-identifiers-in-manifests.md#alternatives-considered) |
+| A `last_known_blob` hint inside the segment reference | It makes a manifest device-specific, and manifests are identified by their bytes — identical content on two devices would stop deriving one object id, disabling cross-device dedup silently. The hint moved to its own object instead | [0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md) |
 | Deterministic per-writer delta identifiers | Leaks writer identity into the store namespace, which the format forbids | [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md#alternatives-considered) |
 | Wrap standalone objects in a one-record blob | ~200 bytes of framing whose fields are meaningless at one record, and index objects would enumerate as blobs | [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md#alternatives-considered) |
 | Parallelise across files rather than within one | Puts concurrent callers straight onto the non-re-entrant append path — the catastrophic race | [0029](adr/0029-pipeline-and-service-concurrency.md#alternatives-considered) |
@@ -180,7 +181,6 @@ Worth separating, because a deferred option is a decision someone still has to m
 | Shamir-split recovery kits | A kit format version, if high-value repositories justify it |
 | Per-device signing keys | [Q13](open-questions.md#q13--device-level-signature-attribution) — whether device-level attribution should exist at all |
 | A blob writer per worker | Measurement showing the barrier is the bound ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md)) |
-| Physical hints in segment references | [Q11](open-questions.md#q11--physical-hints-in-segment-references), reopened by the pressure test |
 | RFC 7250, TLS exporters, Ed25519 certificates | Platform support; the protocol-layer proof stays authoritative either way ([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)) |
 
 ---

@@ -48,7 +48,9 @@ Blob compaction reclaims space by reading still-live records out of mostly-dead 
 
 Keeping manifests purely logical means compaction republishes index entries and touches no manifest, no tree, and no snapshot. → [ADR-0007](../../docs/adr/0007-logical-object-identifiers-in-manifests.md), [C1](../../docs/review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-The cost is one index lookup per segment on the restore path, and a slower path to the first byte when the index has been lost entirely. Both are recorded in [PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan); whether to add an advisory non-authoritative location hint is open as [Q11](../../docs/open-questions.md#q11--physical-hints-in-segment-references).
+The cost is one index lookup per segment on the restore path, and a slower path to the first byte when the index has been lost entirely. Both are recorded in [PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan).
+
+**[Q11](../../docs/open-questions.md#closed) is closed, and not by adding a field here.** A hint inside a manifest would have made the same file version encode differently on two devices, because the manifest's own object identifier is derived from its bytes ([02 §3](02-identifiers.md#3-object-identifier)) — and that identity across devices is what makes cross-device deduplication work. Neither the question nor ADR-0007 recorded that cost. The hint lives in a separate object instead — §10.
 
 ### 3.2 Ordering and coverage
 
@@ -315,6 +317,36 @@ Chain rules:
 - The `entries` of the whole chain, concatenated in chain order, form one logical entry list; §5's sorting and duplicate rules apply to that **logical** list, not to each shard independently — every entry in a manifest MUST sort strictly after every entry in its predecessor.
 - `metadata`, `name`, and `name_normalisation` are carried by the **first** manifest of the chain and MUST be absent from continuations.
 - A reader MUST follow the chain to its end before treating the directory as read, and MUST treat a cycle or a missing continuation target as a damage finding, not an empty remainder — a truncated directory that reads as complete is silent data loss.
+
+## 10 Placement hint
+
+**Optional, advisory, and authoritative for nothing.** A writer MAY publish one placement hint per snapshot at `/hints/placement/<snapshot-id>`, recording which blob each object it newly created was written into.
+
+It exists for one scenario: single-file recovery when the index is gone. Without it, finding one segment means fetching blob footers until the object identifier turns up — hours at scale **M** for one document, and that is the emergency path, so it is the worst place to be slow ([PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
+
+```text
+placement_hint = {
+    1: u16       schema version, 1
+    2: bytes[16] snapshot_id
+    3: array     placements
+}
+
+placement = [ object_id[32], blob_id[16] ]
+```
+
+Placements MUST be sorted by `object_id` ascending. The object is a standalone metadata record ([04 §7](04-record.md)) like any other, and is sealed and encrypted the same way — it names object and blob identifiers, which [01 §2.1](01-object-layout.md#21-what-keys-must-not-reveal) keeps out of store keys and this keeps out of plaintext.
+
+### 10.1 What a reader may do with it
+
+A reader MAY consult the hint to choose which blob to fetch first. It MUST then verify that the record it finds carries the object identifier it wanted, exactly as it would have without the hint, and MUST fall back to the index or to a footer scan when the hint is absent, unreadable, or wrong.
+
+**A hint is never evidence.** It is not consulted to decide whether an object exists, is not repaired when it goes stale, and is not part of any reachability or liveness calculation. Compaction moves records and does not update it — that is expected, and is why "detectably stale" is the design rather than a defect. → [ADR-0007](../../docs/adr/0007-logical-object-identifiers-in-manifests.md)
+
+### 10.2 Why it is a separate object
+
+The obvious design puts a `last_known_blob` beside each segment reference. It was rejected: a manifest's object identifier is derived from its bytes ([02 §3](02-identifiers.md#3-object-identifier)), so a physical hint inside one makes the same file version encode differently on two devices — and identical encoding across devices is precisely what makes cross-device deduplication work. The hint would have bought faster emergency recovery by quietly disabling a core property.
+
+A separate object has neither problem, and gains one: absence is the normal case a reader must already handle, so there is no path on which an implementation can come to depend on the hint being there.
 
 ---
 

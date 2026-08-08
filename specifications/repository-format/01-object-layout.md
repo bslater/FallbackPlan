@@ -24,6 +24,7 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /leases/<scope>/<lease-id>
 /tombstones/<object-type>/<object-id>
 /audit/<period>/<record-id>
+/hints/placement/<snapshot-id>
 ```
 
 `<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).

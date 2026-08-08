@@ -92,24 +92,11 @@ Repository-server mode is described as an ownership model but its administrative
 
 ## Q11 — Physical hints in segment references
 
-**Owner:** project maintainer · **Blocks:** format v1 freeze · **ADR:** [0007](adr/0007-logical-object-identifiers-in-manifests.md) · **Finding:** [PT-10](review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)
+**Closed (2026-08): a hint exists, and it is not in the manifest.** See [ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md) and [specification 06 §10](../specifications/repository-format/06-manifests.md).
 
-Manifests carry logical object identifiers only, and that decision is confirmed. What is open is whether a segment reference should *also* carry a non-authoritative `last_known_blob` hint.
+The question assumed the only place to put a hint was beside the segment reference, and neither it nor ADR-0007 recorded what that would cost. A manifest is identified by its own bytes, and the specification states that identical bytes for identical content across devices is what makes cross-device deduplication possible — so a device-specific hint inside a manifest would have disabled that quietly, in a way no single-device test could catch.
 
-**Why it matters.** With no index, recovering a single file means scanning blob footers — hours at scale **M** for one document, against roughly one fetch if a hint were present. That is the emergency-recovery path, so it is the worst place to be slow.
-
-**Why the original rejection does not hold.** ADR-0007 dismissed hints as "a correctness question dressed up as an optimisation". Record headers are independently authenticated and carry the object identifier, so a reader following a stale hint **detects** it and falls back to the index. Detectably stale is not silently wrong.
-
-**What still argues against it.** It partially re-couples manifests to physical layout, and invites implementations that trust the hint without validating. The mitigation is a mandatory stale-hint conformance fixture.
-
-Either answer preserves the core decision: because the hint may go stale, compaction still touches no manifest.
-
-| Option | Trade |
-|--------|-------|
-| **Add the hint** | O(1) first-byte recovery with no index; a few bytes per segment reference; a stale-hint fixture becomes mandatory |
-| **No hint** | Manifests stay purely logical; emergency single-file recovery relies on prioritised footer scanning (NFR-PERF-015) |
-
-**Recommendation:** add it, with mandatory validation and a conformance fixture. The cost is small and bounded; the benefit lands exactly when the user is in the worst position.
+The hint is a separate optional object per snapshot instead. Emergency recovery gets its fast path, manifests stay byte-identical across devices, and absence is the normal case a reader already handles.
 
 ---
 
@@ -209,6 +196,7 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 | Question | Resolution |
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
+| Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |
 | How does GC avoid deleting in-flight blobs? | Write-intent journal records; leases are advisory ([ADR-0009](adr/0009-garbage-collection-safety.md)) |
