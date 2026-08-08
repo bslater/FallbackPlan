@@ -152,12 +152,13 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             // have — and on POSIX the substituted path does not open the file
             // either, so the entry would look captured while its content was
             // never read. Reported, not guessed at (06 §4.3).
-            if (!RoundTrips(nameBytes))
+            if (!RoundTrips(name, nameBytes))
             {
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath,
                     CaptureFailureReason.NameNotRepresentable,
-                    "The entry's name is not valid UTF-8 and cannot be represented by this host's string form."));
+                    "The entry's name has no faithful representation in both the host's string form "
+                    + "and UTF-8, so capturing it would store a name the file does not have."));
                 continue;
             }
 
@@ -241,8 +242,15 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// <see cref="string"/>, and a name that is not valid UTF-8 has already
     /// been destroyed by the time it arrives — decoded to U+FFFD, and
     /// re-encoding gives bytes that are not the ones on disk and do not open
-    /// the file. On Windows a name is UTF-16 and its UTF-8 encoding is exact,
-    /// so the managed enumeration is the source there.
+    /// the file.
+    /// </remarks>
+    /// <remarks>
+    /// On Windows a name is UTF-16, so the managed enumeration is the source
+    /// there. Its UTF-8 encoding is exact for every name **except** one
+    /// containing an unpaired surrogate, which has no UTF-8 encoding at all —
+    /// <see cref="RoundTrips"/> is what catches those, and it has to look at
+    /// the string rather than the bytes, because the substitution happens
+    /// during the encode.
     /// </remarks>
     private static List<(string Name, byte[] NameBytes, string FullPath)> ListChildren(string directory)
     {
@@ -262,11 +270,24 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             .ToList();
     }
 
-    /// <summary>Whether a name survives the host's string form unchanged.</summary>
-    /// <param name="nameBytes">The name as the filesystem reported it.</param>
-    /// <returns><see langword="true"/> when decoding and re-encoding is lossless.</returns>
-    private static bool RoundTrips(ReadOnlySpan<byte> nameBytes) =>
-        Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(nameBytes)).AsSpan().SequenceEqual(nameBytes);
+    /// <summary>Whether a name survives conversion between the two forms unchanged.</summary>
+    /// <param name="name">The name as a host string.</param>
+    /// <param name="nameBytes">The name as bytes.</param>
+    /// <returns><see langword="true"/> when neither conversion loses anything.</returns>
+    /// <remarks>
+    /// <b>Both directions are checked, and each catches a different platform.</b>
+    /// On POSIX the bytes are authoritative and the string is derived, so the
+    /// bytes-first check is the one that bites: an invalid UTF-8 sequence
+    /// decodes to U+FFFD and re-encodes to something else. On Windows the
+    /// string is authoritative and the bytes are derived, so that check is
+    /// trivially true and would have passed an unpaired surrogate straight
+    /// through — the substitution has already happened by the time the bytes
+    /// exist. The string-first check is what refuses it (06 §4.3).
+    /// </remarks>
+    private static bool RoundTrips(string name, ReadOnlySpan<byte> nameBytes) =>
+        Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(nameBytes)).AsSpan().SequenceEqual(nameBytes)
+        && string.Equals(
+            Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(name)), name, StringComparison.Ordinal);
 
     private static ScanEntry BuildEntry(
         string fullPath, string relativePath, byte[] nameBytes, StatResult stat, ScanOptions options)

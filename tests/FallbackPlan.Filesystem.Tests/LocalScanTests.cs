@@ -336,7 +336,7 @@ public sealed partial class LocalScanTests : IDisposable
         var failure = Assert.Single(
             events.OfType<ScanEvent.Failure>(),
             f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable);
-        Assert.Contains("not valid UTF-8", failure.Detail.Detail, StringComparison.Ordinal);
+        Assert.Contains("a name the file does not have", failure.Detail.Detail, StringComparison.Ordinal);
 
             // And it is not also captured under a substituted name.
             Assert.DoesNotContain(
@@ -383,6 +383,40 @@ public sealed partial class LocalScanTests : IDisposable
 
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
     private static partial int NativeClose(int fd);
+
+    [PlatformFact(TestPlatforms.Windows, "an unpaired surrogate is a UTF-16 filename shape; POSIX names are bytes")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task A_name_with_an_unpaired_surrogate_is_reported_rather_than_substituted()
+    {
+        // U+D800 with nothing after it. Legal in an NTFS name, and it has no
+        // UTF-8 encoding at all — Encoding.UTF8.GetBytes replaces it with
+        // U+FFFD, which is why a bytes-only round-trip check cannot see it:
+        // by the time the bytes exist, the substitution has happened.
+        var lone = Path.Combine(_root, "bad\uD800name.txt");
+
+        try
+        {
+            File.WriteAllText(lone, "content");
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException)
+        {
+            return; // the platform refused to create it — nothing to assert
+        }
+
+        var events = await ScanAsync();
+
+        var failure = Assert.Single(
+            events.OfType<ScanEvent.Failure>(),
+            f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable);
+        Assert.Contains("a name the file does not have", failure.Detail.Detail, StringComparison.Ordinal);
+
+        // 06 §4.3 forbids the substitute specifically: an entry stored as
+        // "bad�name.txt" looks captured, lists, and restores as a file
+        // the user never had.
+        Assert.DoesNotContain(
+            events.OfType<ScanEvent.Leaf>(),
+            leaf => Encoding.UTF8.GetString(leaf.Entry.NameBytes.Span).Contains('�'));
+    }
 
     [PlatformFact(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
     [PlatformTrait(TestPlatforms.Windows)]

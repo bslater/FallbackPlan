@@ -128,7 +128,9 @@ It is verified after reassembly during restore. Per-segment verification already
 
 That last rule exists because the failure it prevents is silent. An entry stored under a replacement-character name looks captured, appears in listings, and restores as a file the user did not have — and where the substitution also breaks the implementation's ability to open the source, the content behind that plausible-looking entry was never read at all.
 
-> **Implementation status (2026-08).** The POSIX rule is enforced: names come from `readdir` and non-representable entries are refused with reason 8. What is **not** yet built is capturing those entries anyway, which needs the byte-native open path that [architecture 06 §4.1](../../docs/architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) also owes for its own reasons. Until then a non-UTF-8 name is reported and skipped rather than backed up.
+> **Implementation status (2026-08).** Both rules are enforced. Names come from `readdir` on POSIX, and a name that does not survive conversion in **either** direction is refused with reason 8 — which is what catches the Windows case, since an unpaired surrogate is already substituted by the time bytes exist and a bytes-only check cannot see it. Two different lone surrogates encode to the same replacement bytes, so the substitution also collapsed distinct filenames into one.
+>
+> What is **not** yet built is capturing a refused entry anyway. That needs the byte-native open path [architecture 06 §4.1](../../docs/architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) also owes for its own reasons. Until then a name the host cannot represent is reported and skipped rather than backed up.
 
 ## 5 Tree manifest
 
