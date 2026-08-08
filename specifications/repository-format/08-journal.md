@@ -138,6 +138,8 @@ Leases are not load-bearing because four things independently break them: clock 
 
 An intent has none of those properties — it is durable, self-describing, names its blobs explicitly, and its retirement is an event. → [`04-concurrency-and-publication.md` §4.3](../../docs/architecture/04-concurrency-and-publication.md#43-why-leases-are-not-enough)
 
+The lease **object format** is [11 §2](11-lifecycle-objects.md#2-lease), alongside the two other namespaces the collector owns.
+
 ## 10 Publication order
 
 For reference, the full order a snapshot becomes visible in ([`04-concurrency-and-publication.md` §5](../../docs/architecture/04-concurrency-and-publication.md#5-publication-order)):

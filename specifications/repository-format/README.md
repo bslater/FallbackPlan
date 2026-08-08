@@ -35,6 +35,7 @@ Where this specification and an architecture document disagree about **format**,
 | 08 | [Journal](08-journal.md) | Write intents, retirement, expiry, audit records |
 | 09 | [Segmentation](09-segmentation.md) | `fixed-v1` and `cdc-v1` profiles |
 | 10 | [Compression](10-compression.md) | Zstandard profile and the storage threshold |
+| 11 | [Lifecycle objects](11-lifecycle-objects.md) | Leases, tombstones and audit-period records — the collector's namespaces |
 
 Conformance material is in [`conformance/`](conformance/README.md).
 

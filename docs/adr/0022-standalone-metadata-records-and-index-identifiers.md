@@ -123,7 +123,7 @@ The following maps and enums have no key assignments in the specification. Phase
 
 **Checkpoint key 5 `shard_hashes`** (07 §5): `shard_hashes[i]` is **SHA-256 over the deterministic CBOR encoding of the array of shard `shard_set[i]`'s post-precedence entries, each in §2.1 six-element form, sorted by `object_id` bytes ascending**. Deterministic and reader-recomputable from the checkpoint's own `entries`, which is what makes it usable as a cross-replica comparison.
 
-**Out of phase-0 scope entirely:** the lease record format (08 §9), `/tombstones/…`, and `/audit/<period>/…` object formats. Recorded in [open questions Q17](../open-questions.md#q17--lease-tombstone-and-audit-period-object-formats).
+**Out of phase-0 scope entirely:** the lease record format (08 §9), `/tombstones/…`, and `/audit/<period>/…` object formats. Recorded in [open questions Q17](../open-questions.md#closed).
 
 ## Decision 7 — Sequence accounting across the shared space
 

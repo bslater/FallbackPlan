@@ -94,7 +94,7 @@ These are public. The salt is not a secret; publishing the parameters is what al
 
 ## 4 Object immutability
 
-Every object in the namespace except `/leases/…` is **immutable once written**. A writer MUST NOT overwrite an existing key with different content.
+Every object in the namespace except `/leases/…` ([11 §2](11-lifecycle-objects.md#2-lease)) is **immutable once written**. A writer MUST NOT overwrite an existing key with different content.
 
 Where a store offers conditional create, a writer SHOULD use it. Where it does not, uniqueness of the final identifier is what prevents collision — which is why the format is designed not to require conditional create for correctness.
 
@@ -104,7 +104,7 @@ Re-writing an object with byte-identical content is permitted, and is the expect
 
 Only two processes delete objects: garbage collection ([`07-retention-and-gc.md`](../../docs/architecture/07-retention-and-gc.md)) and index-delta retirement ([07](07-index.md)).
 
-Both proceed by tombstone, grace period, and revalidation before the delete. A reader that encounters a missing object referenced by a live object MUST report it as a damage finding, and MUST NOT infer that the reference was invalid.
+Both proceed by tombstone, grace period, and revalidation before the delete — the tombstone object and the rules a collector must satisfy before deleting are [11 §3](11-lifecycle-objects.md#3-tombstone). A reader that encounters a missing object referenced by a live object MUST report it as a damage finding, and MUST NOT infer that the reference was invalid.
 
 ## 6 Discovery order
 
