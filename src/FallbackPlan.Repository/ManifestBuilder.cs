@@ -31,6 +31,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly byte[] _metadataClassKey;
     private readonly List<ArchivedBlob> _blobs = [];
     private readonly IIntentScope? _intentScope;
+    private readonly Func<ObjectId, bool>? _isAlreadyStored;
     private BlobWriter? _writer;
 
     /// <summary>Creates a builder writing metadata blobs under <paramref name="blobProfile"/>.</summary>
@@ -43,7 +44,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         IBlobCounterAllocator counters,
         string spoolDirectory,
         BlobWriteProfile blobProfile,
-        IIntentScope? intentScope = null)
+        IIntentScope? intentScope = null,
+        Func<ObjectId, bool>? isAlreadyStored = null)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(store);
@@ -60,6 +62,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _blobProfile = blobProfile;
         _intentScope = intentScope;
+        _isAlreadyStored = isAlreadyStored;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         _metadataClassKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
@@ -105,6 +108,16 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// specification 02 §3). Blobs rotate at the profile's targets exactly
     /// as data blobs do.
     /// </summary>
+    /// <remarks>
+    /// A manifest whose object the index already locates is **not** written
+    /// again; its identifier is returned and the reference resolves to what
+    /// is already there. This is the same reuse the segment path performs,
+    /// and it is what keeps metadata growth incremental (NFR-PERF-005): a
+    /// directory whose contents did not change encodes to the same bytes and
+    /// therefore the same object, so re-emitting it would make every
+    /// snapshot rewrite every tree in the repository — a cost proportional
+    /// to the whole repository for a backup that changed one file.
+    /// </remarks>
     public async ValueTask<ObjectId> AppendManifestAsync(
         ObjectType objectType,
         ReadOnlyMemory<byte> encodedManifest,
@@ -112,6 +125,11 @@ public sealed class ManifestBuilder : IAsyncDisposable
     {
         var contentId = ContentHasher.Hash(encodedManifest.Span);
         var objectId = _objectIdDeriver.Derive(objectType, contentId);
+
+        if (_isAlreadyStored?.Invoke(objectId) == true)
+        {
+            return objectId;
+        }
 
         if (_writer is not null && !_writer.CanAppend(encodedManifest.Length))
         {

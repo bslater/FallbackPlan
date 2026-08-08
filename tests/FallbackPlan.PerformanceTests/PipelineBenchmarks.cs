@@ -4,6 +4,8 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.PerformanceTests;
 
 /// <summary>
@@ -88,7 +90,7 @@ public class PipelineBenchmarks
 
     private async Task<int> ArchiveAsync(CapturePolicy policy)
     {
-        var store = new NullObjectStore();
+        var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, _keys, store,
             new MonotonicBlobCounterAllocator(_counter), _spool);

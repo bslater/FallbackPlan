@@ -161,12 +161,12 @@ public sealed partial class PublicationOrchestrator
 
         var archiver = new FileArchiver(
             _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+        var dedup = _catalogue is { } dedupCatalogue ? dedupCatalogue.HasLocation : (Func<ObjectId, bool>?)null;
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope);
+            _policy.BlobWriteProfile, scope, dedup);
 
-        var session = archiver.OpenSession(
-            _catalogue is { } dedupCatalogue ? dedupCatalogue.HasLocation : null);
+        var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))
         await using (session.ConfigureAwait(false))
         {

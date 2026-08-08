@@ -390,6 +390,10 @@ A reader MAY use it to locate a prior version whose path has changed. It MUST st
 
 Absence is ordinary. A writer that publishes no map, or a reader that cannot find one, falls back to matching by path — which is correct and merely misses renames.
 
+### 11.4 What it costs
+
+A complete map costs roughly 52 bytes per file **per snapshot**, and that is proportional to the repository rather than to what changed — the growth [NFR-PERF-005](../../docs/requirements/non-functional.md) exists to prevent. Completeness is what makes it work, because a file renamed today may not have been modified for a hundred snapshots, so a map holding only this snapshot's new versions would not name it. The trade is open as [Q21](../../docs/open-questions.md#q21--the-source-identity-hint-is-per-snapshot-and-whole-tree); a writer that finds the cost unacceptable publishes no map, which this section already permits.
+
 ---
 
 **Previous:** [05 — Blobs](05-blob.md) · **Next:** [07 — Index](07-index.md)

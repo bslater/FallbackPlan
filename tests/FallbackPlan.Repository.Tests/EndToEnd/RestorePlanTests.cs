@@ -13,7 +13,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// The restore planner and executor (phase-1 wave R;
-/// FR-RST-003/004/005/006): conflicts and degradations surface at PLAN time —
+/// FR-RST-001, FR-RST-003, FR-RST-004, FR-RST-005, FR-RST-006): conflicts and degradations surface at PLAN time —
 /// which is FR-RST-003's whole claim, that the plan exists before any byte
 /// moves — execution displaces what it would replace rather than overwriting
 /// in place, applies metadata after content, and the receipt accounts for
@@ -21,7 +21,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the partial-rebuild drill: a targeted forensic rebuild resolves one
 /// snapshot's graph and restore works from it without the rest of the
 /// repository. Repository path text is treated as untrusted, so a manifest
-/// that does not name plain components under the root is refused.
+/// that does not name plain components under the root is refused. The three
+/// selectors that exist — snapshot, path, destination — are exercised end to
+/// end; device, time and file-version selection is phase-2 work that has not
+/// been built, so FR-RST-001 is covered in part and says so.
 /// </summary>
 /// <remarks>
 /// FR-RST-006 — historical content defaulting to a quarantine path — is
@@ -426,6 +429,68 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             Assert.Equal(Path.Combine(SpoolDirectory, "fr-rst-006-live"), inPlace.WrittenTo);
             Assert.True(File.Exists(Path.Combine(inPlace.WrittenTo, "data", "file.bin")));
         }
+    }
+
+    [Fact]
+    public async Task Restore_selects_by_snapshot_by_path_and_by_destination()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("keep/wanted.bin", Deterministic(3_000, 11));
+        source.AddFile("keep/nested/also.bin", Deterministic(1_500, 12));
+        source.AddFile("skip/unwanted.bin", Deterministic(2_000, 13));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("catalogue-selectors.db");
+
+        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xE7), CancellationToken.None);
+
+        // A second snapshot the selector must not reach into: same paths,
+        // different content, so choosing the wrong one restores wrong bytes
+        // rather than merely failing.
+        source.AddFile("keep/wanted.bin", Deterministic(3_000, 99));
+        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xE8), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        // Snapshot selector: the earlier one, by identifier.
+        // Path selector: a subtree, not the whole snapshot.
+        var plan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xE7, 16).ToArray(), "keep", target);
+
+        Assert.Contains(plan.Items, item => item.Path == "keep/wanted.bin");
+        Assert.Contains(plan.Items, item => item.Path == "keep/nested/also.bin");
+        Assert.DoesNotContain(plan.Items, item => item.Path.StartsWith("skip", StringComparison.Ordinal));
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        // Destination selector: an alternate root, not the original location.
+        var destination = Path.Combine(SpoolDirectory, "fr-rst-001-elsewhere");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, destination,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "selectors",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.Equal(destination, receipt.WrittenTo);
+
+        // The bytes are the selected snapshot's, not the later one's — which
+        // is the only thing that distinguishes a working snapshot selector
+        // from one that quietly restores the newest version.
+        Assert.Equal(
+            Deterministic(3_000, 11),
+            await File.ReadAllBytesAsync(Path.Combine(destination, "keep", "wanted.bin")));
+        Assert.True(File.Exists(Path.Combine(destination, "keep", "nested", "also.bin")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "skip")));
     }
 
     /// <summary>Publishes one file and returns a plan that restores it.</summary>

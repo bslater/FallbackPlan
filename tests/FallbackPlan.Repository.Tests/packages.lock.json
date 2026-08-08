@@ -282,6 +282,7 @@
       "fallbackplan.testsupport": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "xunit": "[2.9.3, )"
         }
       },

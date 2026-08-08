@@ -1,14 +1,15 @@
 using FallbackPlan.Storage.Abstractions;
 
-namespace FallbackPlan.PerformanceTests;
+namespace FallbackPlan.TestSupport;
 
 /// <summary>
-/// A store that consumes and discards every put: the benchmarks measure the
-/// pipeline — segmentation, hashing, compression, encryption, packing — not
-/// the disk behind it (NFR-PERF-001's shape). Reads and listings answer
+/// A store that consumes and discards every put: the benchmarks and the
+/// bounded-memory proof measure the pipeline — segmentation, hashing,
+/// compression, encryption, packing — not the disk behind it, and neither
+/// can afford to retain what it wrote. Reads and listings answer
 /// "nothing here".
 /// </summary>
-public sealed class NullObjectStore : IObjectStore
+public sealed class DiscardingObjectStore : IObjectStore
 {
     private long _bytesConsumed;
     private int _puts;

@@ -532,6 +532,59 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.Null(manifest.ParentVersion);
     }
 
+
+    [Fact]
+    public async Task A_snapshot_rewrites_metadata_for_what_changed_and_not_for_the_repository()
+    {
+        // 1 024 files across 32 directories: enough that "proportional to the
+        // repository" and "proportional to the change" are far apart.
+        var source = new FakeFileSystemSource();
+        for (var directory = 0; directory < 32; directory++)
+        {
+            for (var file = 0; file < 32; file++)
+            {
+                source.AddFile($"d{directory:d2}/f{file:d2}.bin", Deterministic(2_000, (byte)(directory * 31 + file)));
+            }
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xB1), CancellationToken.None);
+
+        var changed = source.AddFile("d00/f00.bin", Deterministic(2_100, 99));
+        changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
+
+        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        // One file changed, so one file-version manifest is new, and so are
+        // the trees on the path to it — its own directory, the root — because
+        // a tree names its children by identifier and those identifiers moved.
+        // Every other directory encodes to the bytes it encoded to last time,
+        // is therefore the same object, and is not written again.
+        Assert.Equal(4, second.MetadataBlobs.Sum(blob => blob.RecordCount));
+
+        var before = first.MetadataBlobs.Sum(blob => blob.Length);
+        var after = second.MetadataBlobs.Sum(blob => blob.Length);
+
+        // The shape NFR-PERF-005 is about: a one-file backup of a 1 024-file
+        // tree costs a few per cent of a full one, not most of it. Without
+        // manifest reuse this was 18 % and rising with the file count, since
+        // every directory in the repository was rewritten every run.
+        Assert.True(
+            after * 20 < before,
+            $"The second snapshot rewrote {after} bytes of metadata against the first's {before}.");
+    }
+
     /// <summary>Reads a published file-version manifest back out of the store.</summary>
     private static async Task<FileVersionManifest> ReadManifestAsync(
         IObjectStore store, RepositoryKeySet keys, CatalogueDb catalogue, ObjectId objectId)
