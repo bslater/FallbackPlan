@@ -32,18 +32,6 @@ This is a flag rather than a legal opinion. It should be assessed alongside Q2 �
 
 ---
 
-## Q4 — Canonical metadata encoding
-
-**Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0003](adr/0003-canonical-metadata-encoding.md)
-
-**Narrowed (2026-08).** The decision is [Accepted](adr/0003-canonical-metadata-encoding.md): canonical CBOR is the encoding, and the choice is no longer in question. What remains open is confirmation, and only part of it.
-
-The cross-language half is met inside the project: `conformance/generate.py` builds the format's objects with its own CBOR encoder, in another language, and the committed vectors are byte-identical on every run. That is a second implementation agreeing, not an independent one — the same author wrote both, which is exactly what freeze-gate item 2 exists to remedy.
-
-Still owed: the **encoding-size benchmark on realistic manifests**, and an **independent reader** written from the published specification by someone who did not write the format. Neither can change the choice; both bound what it costs and whether the specification is sufficient to implement from.
-
----
-
 ## Q5 — Segmentation default
 
 **Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0002](adr/0002-segmentation-strategy.md)
@@ -160,6 +148,7 @@ A console pairs with each service it manages, and pairing is revocable at the se
 | Q12 — should `xchacha20-poly1305-v1` ship while unverified? | No — the profile is **withdrawn** and `0x0002` is reserved, never to be assigned to another suite. Cross-verification against a second independent implementation is the condition on which a third-party primitive is admitted here, and none existed for XChaCha20-Poly1305. An unverified AEAD is a different order of risk from an unverified KDF, and it would be discovered inside bytes the user had already stored; a format version can add a profile but cannot un-admit one that written repositories depend on. The cost — slower on hardware without AES acceleration — is accepted ([ADR-0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md), [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)) |
 | Q16 — where does the blob digest live? | On the index delta, as `covered_blob_digests` — an optional array parallel to `covered_blob_ids`, inside the signature ([07 §2.2](../specifications/repository-format/07-index.md#22-covered-blob-digests)). A replication receipt has to be checkable by the participant receiving the blob, and the catalogue is device-local, so it stays as a cache and this is the durable copy. Optional because the format's integrity rests on per-record AEAD tags; a **present** digest that does not match is a damage finding, and absence is not |
 | Q17 — what shape are leases, tombstones and audit-period records? | Specified as [11 — Lifecycle objects](../specifications/repository-format/11-lifecycle-objects.md), with types `0x0D`, `0x0E`, `0x0F`. Only the **tombstone** is signed, because only it authorises anything; its grace is counted in index generations rather than wall time, since the format has no trusted clock. A lease authorises nothing and may be ignored. An audit-period record carries counts and keyed identifiers and no path, name or content hash, because it is the object most likely to be exported in a diagnostic bundle |
+| Q4 — is canonical CBOR the right metadata encoding, and what does it cost? | Yes, and the cost is measured: **8.6 %** over a floor computed to flatter a bespoke binary format, and **1.50× cheaper** than canonical JSON ([benchmark](metadata-encoding-benchmark.md)). [ADR-0003](adr/0003-canonical-metadata-encoding.md) is Accepted. The benchmark also corrected the ADR's own reasoning: JSON's size penalty is real but modest, and determinism — not size — is what disqualifies it, because object identifiers derive from encoded bytes. The remaining confirmation, an independent reader from the published specification, is [freeze-gate item 2](roadmap.md#format-v1-freeze-gate) rather than a separate question |
 | Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |

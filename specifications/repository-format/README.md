@@ -70,7 +70,7 @@ The conditions for freezing are listed in the [freeze gate](../../docs/roadmap.m
 
 | Question | Effect if answered differently |
 |----------|-------------------------------|
-| [Q4 — canonical encoding](../../docs/open-questions.md#q4--canonical-metadata-encoding) | Canonical CBOR is used throughout §06–§08; a different encoding changes every metadata object |
+| ~~Q4 — canonical encoding~~ | **Closed.** Canonical CBOR is Accepted and [measured](../../docs/metadata-encoding-benchmark.md): 8.6 % over a bespoke floor, 1.50× cheaper than JSON. The remaining confirmation is an independent reader, which is [freeze-gate item 2](../../docs/roadmap.md#format-v1-freeze-gate) |
 | [Q5 — segmentation default](../../docs/open-questions.md#q5--segmentation-default) | Both profiles are specified; only which is *default* is open |
 | [Q6 — segment hash](../../docs/open-questions.md#q6--segment-hash-function) | SHA-256 is the v1 profile; the profile field permits another |
 | [Q11 — physical hints](../../docs/open-questions.md#q11--physical-hints-in-segment-references) | Would add an optional non-authoritative field to segment references (§06) |

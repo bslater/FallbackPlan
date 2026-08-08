@@ -75,11 +75,13 @@ Restore CrashPlan-style computer-to-computer backup, and make the engine a servi
 Not a phase — a gate that must pass before the format is declared stable. Until it does, [ADR-0014](adr/0014-format-versioning-and-stability.md) applies and repositories carry **no** forward-compatibility guarantee.
 
 1. **Segmentation benchmark published.** `fixed-v1` versus `cdc-v1` on a representative corpus, reporting deduplication ratio, storage growth, and CPU cost. If CDC wins decisively, the default changes here — while it is still free to change ([`architecture/02-repository-format.md` §3.3](architecture/02-repository-format.md#33-the-freeze-gate)). *First round published:* [`segmentation-benchmark.md`](segmentation-benchmark.md) — cdc-v1 wins decisively on shifted content (4–6×) and is recommended as the gate-time default; a real-corpus run on reference hardware must still settle the target size before the item closes.
-2. **Independent reader.** A reader written from the published specification alone, by an author who did not write the format, in a different language, passes the conformance fixtures. This is the real test of NFR-COMP-004.
+2. **Independent reader.** A reader written from the published specification alone, by an author who did not write the format, in a different language, passes the conformance fixtures. This is the real test of NFR-COMP-004 — and it is what [Q4](open-questions.md#closed) handed over when it closed: `conformance/generate.py` already reproduces every object byte for byte with its own encoder in another language, but the same author wrote both, which is exactly the limitation this item removes.
 3. **Specification and fixtures public** under `specifications/`.
 4. **External format review** completed.
 5. **Threat model reviewed** against the frozen format.
 6. **Licence decided** — [ADR-0001](adr/0001-licence-and-contribution-model.md) Accepted, `LICENSE` present. *Done:* dual AGPL-3.0-only + commercial for code, Apache-2.0 for `specifications/` — the permissive spec carve-out is what keeps item 2's independent reader unencumbered.
+
+Supporting measurements published against the gate: [segmentation](segmentation-benchmark.md) for item 1, and [metadata encoding size](metadata-encoding-benchmark.md), which closed [Q4](open-questions.md#closed) and handed its residue to item 2.
 
 ---
 

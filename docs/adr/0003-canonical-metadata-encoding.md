@@ -46,13 +46,16 @@ CBOR gives us a self-describing binary encoding with a *specified* deterministic
 
 **Protocol Buffers.** Rejected for repository objects: proto3 serialisation is explicitly *not* canonical — field ordering and default handling vary across implementations and versions — so identical logical input can produce different bytes. Fine for wire protocols where identifiers are not derived from bytes; unusable where they are.
 
-**A bespoke binary format.** Rejected. Full control over canonicality, but every independent implementer must reimplement it from our prose with no existing library, which works directly against NFR-COMP-004.
+**A bespoke binary format.** Rejected. Full control over canonicality, but every independent implementer must reimplement it from our prose with no existing library, which works directly against NFR-COMP-004. **Measured since:** canonical CBOR costs **8.6 %** over a floor computed to flatter a bespoke encoding — 3.2 % on a tree manifest, 14.9 % on the worst case, a single-segment file version ([benchmark](../metadata-encoding-benchmark.md)). Eight per cent does not buy a parser written from prose.
 
-**JSON / JCS.** Rejected. Canonicalisation is specified, but number handling is a persistent source of cross-language disagreement and the size cost at scale **L** is unacceptable for metadata.
+**JSON / JCS.** Rejected, and this record ranked its own reasons wrongly. It gave two: cross-language disagreement over number handling, and "the size cost at scale **L** is unacceptable for metadata". **The size claim is overstated.** Measured, JSON costs 1.50× canonical CBOR — 26 GiB more at scale L, against a 50 TB logical repository, which is 0.05 % of the data it describes. Formats ship with worse ratios.
+
+**The determinism argument is the one that decides it, and it decides it alone.** This format derives object identifiers from encoded bytes, so an encoder two implementations disagree about is an encoder that silently breaks deduplication and verification — a correctness failure, not a cost. The size argument was never needed and should not have been leaned on. → [benchmark](../metadata-encoding-benchmark.md)
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Confirm via cross-language determinism tests and size benchmark before format v1 freeze |
-| 2026-08 | Accepted | The decision stands: canonical CBOR is the encoding. The cross-language half of the confirmation is met — `conformance/generate.py` builds the same objects with its own CBOR encoder, in another language, and the committed vectors are byte-identical on every run. The encoding-size benchmark on realistic manifests and the fully independent reader are freeze-gate items 1 and 2, and remain open as [Q4](../open-questions.md#q4--canonical-metadata-encoding); neither can change the choice, only its measured cost. |
+| 2026-08 | Accepted | The decision stands: canonical CBOR is the encoding. The cross-language half of the confirmation is met — `conformance/generate.py` builds the same objects with its own CBOR encoder, in another language, and the committed vectors are byte-identical on every run. The encoding-size benchmark on realistic manifests and the fully independent reader remained open at the time; neither could change the choice, only its measured cost. |
+| 2026-08 | Accepted (unchanged) | The encoding-size half of the confirmation is [published](../metadata-encoding-benchmark.md): 8.6 % over a bespoke floor, 1.50× cheaper than JSON. It changes nothing about the choice and corrects one of the reasons above — JSON loses on determinism, not on size. |

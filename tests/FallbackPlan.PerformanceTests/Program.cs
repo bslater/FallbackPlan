@@ -28,5 +28,12 @@ if (args.Length > 0 && string.Equals(args[0], "pathlookup", StringComparison.Ord
     return PathLookupBenchmark.Run();
 }
 
+if (args.Length > 0 && string.Equals(args[0], "metadata-size", StringComparison.OrdinalIgnoreCase))
+{
+    // Q4's encoding-size half: what canonical CBOR costs against the two
+    // alternatives ADR-0003 rejected partly on size.
+    return MetadataEncodingBenchmark.Run();
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(MemoryBoundProof).Assembly).Run(args);
 return 0;
