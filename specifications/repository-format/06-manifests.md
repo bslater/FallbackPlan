@@ -336,7 +336,7 @@ placement_hint = {
 placement = [ object_id[32], blob_id[16] ]
 ```
 
-Placements MUST be sorted by `object_id` ascending. The object is a standalone metadata record ([04 §7](04-record.md)) like any other, and is sealed and encrypted the same way — it names object and blob identifiers, which [01 §2.1](01-object-layout.md#21-what-keys-must-not-reveal) keeps out of store keys and this keeps out of plaintext.
+Placements MUST be sorted by `object_id` ascending. The object is a standalone metadata record of type `0x0B` ([02 §3.1](02-identifiers.md#31-object-types)) like any other, and is sealed and encrypted the same way — it names object and blob identifiers, which [01 §2.1](01-object-layout.md#21-what-keys-must-not-reveal) keeps out of store keys and this keeps out of plaintext.
 
 ### 10.1 What a reader may do with it
 
@@ -349,6 +349,46 @@ A reader MAY consult the hint to choose which blob to fetch first. It MUST then 
 The obvious design puts a `last_known_blob` beside each segment reference. It was rejected: a manifest's object identifier is derived from its bytes ([02 §3](02-identifiers.md#3-object-identifier)), so a physical hint inside one makes the same file version encode differently on two devices — and identical encoding across devices is precisely what makes cross-device deduplication work. The hint would have bought faster emergency recovery by quietly disabling a core property.
 
 A separate object has neither problem, and gains one: absence is the normal case a reader must already handle, so there is no path on which an implementation can come to depend on the hint being there.
+
+## 11 Source identity
+
+**Optional, and load-bearing for one thing.** A writer MAY publish one source-identity map per snapshot at `/hints/identity/<snapshot-id>`, recording the stable filesystem identity of each file version it captured.
+
+```text
+source_identity = {
+    1: u16       schema version, 1
+    2: bytes[16] snapshot_id
+    3: array     identities
+}
+
+identity = [ object_id[32], source_key[16] ]
+```
+
+`source_key` is derived exactly as `hardlink_group` is ([06 §4](#4-file-version-manifest) key 12, [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 1) but under the label `"fbp/identity/v1"`:
+
+```text
+source_key = HMAC-SHA-256(content_id_key, "fbp/identity/v1" ‖ device_id ‖ u64(file_identity))[0..16]
+```
+
+Keyed, so the store learns nothing about the source's inode space. Identities MUST be sorted by `object_id` ascending, and an `object_id` MUST NOT appear twice — a reader that finds a duplicate MUST refuse the object rather than pick one, because the two entries disagree about which file this version came from. Like the placement hint, this is a standalone metadata record — type `0x0C` ([02 §3.1](02-identifiers.md#31-object-types)) — and is sealed and encrypted the same way.
+
+### 11.1 What it is for
+
+Finding the prior version of a file **by identity rather than by path**, which is what makes a rename or a move recognisable as the same file rather than a delete plus a create ([architecture 06 §4.2](../../docs/architecture/06-filesystem-capture.md)).
+
+That matters beyond speed. A file version whose `parent_version` is absent claims to be the first version of that file. Writing that about a file the user merely renamed severs its history — permanently, because the manifest is immutable — and the cause would be that a device-local cache happened to be cold at the wrong moment.
+
+### 11.2 Why it is not in the manifest
+
+The same reason as §10.2, and it is worth stating twice because the pull towards putting it in the manifest is strong: a source identity is device-specific, and a manifest is identified by its own bytes ([02 §3](02-identifiers.md#3-object-identifier)). A `source_key` field on a file version would make the same file version encode differently on every device that captured it, and identical encoding across devices is what makes cross-device deduplication work.
+
+`hardlink_group` already carries a device-specific value in the manifest, which is a real and accepted exception: it is present only when a file has multiple links, it is what makes hardlink reconstruction possible at all, and there is nowhere else it can live. Generalising it to every file — the obvious way to get identity durably — would extend that exception from a small minority of files to all of them.
+
+### 11.3 What a reader may do with it
+
+A reader MAY use it to locate a prior version whose path has changed. It MUST still check size and modification time before reusing content, exactly as it would for a path match: an inode is reused after its file is deleted, so identity alone never establishes that two versions are the same file.
+
+Absence is ordinary. A writer that publishes no map, or a reader that cannot find one, falls back to matching by path — which is correct and merely misses renames.
 
 ---
 

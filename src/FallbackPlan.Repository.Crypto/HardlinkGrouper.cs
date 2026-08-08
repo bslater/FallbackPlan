@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -38,22 +37,8 @@ public sealed class HardlinkGrouper : IDisposable
     /// big-endian per specification 00 §2.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="deviceId"/> is not exactly 16 bytes.</exception>
-    public byte[] Derive(ReadOnlySpan<byte> deviceId, ulong fileIdentity)
-    {
-        if (deviceId.Length != 16)
-        {
-            throw new ArgumentException("The device identifier is exactly 16 bytes.", nameof(deviceId));
-        }
-
-        Span<byte> message = stackalloc byte[Label.Length + 16 + 8];
-        Label.CopyTo(message);
-        deviceId.CopyTo(message[Label.Length..]);
-        BinaryPrimitives.WriteUInt64BigEndian(message[(Label.Length + 16)..], fileIdentity);
-
-        Span<byte> mac = stackalloc byte[32];
-        HMACSHA256.HashData(_contentIdKey, message, mac);
-        return mac[..16].ToArray();
-    }
+    public byte[] Derive(ReadOnlySpan<byte> deviceId, ulong fileIdentity) =>
+        KeyedFileIdentity.Derive(Label, _contentIdKey, deviceId, fileIdentity);
 
     /// <inheritdoc />
     public void Dispose() => CryptographicOperations.ZeroMemory(_contentIdKey);

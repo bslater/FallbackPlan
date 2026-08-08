@@ -418,6 +418,120 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
     }
 
+    [Fact]
+    public async Task A_rename_keeps_its_ancestry_after_the_catalogue_has_been_rebuilt()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        PublishedFileVersion original;
+        using (var live = OpenCatalogue())
+        {
+            var first = await CreateOrchestrator(store, keys, hierarchy, live)
+                .PublishAsync(Job(source, 0xE1), CancellationToken.None);
+            original = first.Files.Single(file => file.RelativePath == "docs/before.bin");
+        }
+
+        // The catalogue is a cache, and it is gone.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+
+        using var rebuilt = OpenCatalogue();
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+
+        using (var reader = new RepositoryReader(Repo, keys, store))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            await CatalogueProjector.ProjectAsync(
+                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+        }
+
+        // The premise: a rebuild recovers paths but not identities, so the
+        // catalogue can no longer say which file an inode belongs to.
+        var priorSnapshotId = Enumerable.Repeat((byte)0xE1, 16).ToArray();
+        Assert.Null(rebuilt.LookupIdentity(priorSnapshotId, original.IdentityDevice!.Value, 4_242));
+
+        // The same file, moved, in exactly that window.
+        Assert.True(source.Remove("docs/before.bin"));
+        source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+            .PublishAsync(
+                Job(source, 0xE2, now: 1_722_700_000_001) with { PriorSnapshotId = priorSnapshotId },
+                CancellationToken.None);
+
+        // The snapshot's own source-identity map answers what the cache no
+        // longer can (06 §11). Without it this file would claim to be the
+        // first of its line — durably, in an immutable manifest, because a
+        // local database happened to be cold.
+        var after = second.Files.Single(file => file.RelativePath == "archive/after.bin");
+        var manifest = await ReadManifestAsync(store, keys, rebuilt, after.ObjectId);
+        Assert.Equal(original.ObjectId, manifest.ParentVersion);
+    }
+
+    [Fact]
+    public async Task The_source_identity_map_is_advisory_and_its_absence_costs_only_the_rename()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        using (var live = OpenCatalogue())
+        {
+            await CreateOrchestrator(store, keys, hierarchy, live)
+                .PublishAsync(Job(source, 0xF1), CancellationToken.None);
+        }
+
+        var priorSnapshotId = Enumerable.Repeat((byte)0xF1, 16).ToArray();
+        var hintKey = MetadataStoreKeys.SourceIdentity(priorSnapshotId);
+
+        // It was published, and it is only a hint: deleting it must leave a
+        // publication that still succeeds.
+        Assert.Equal(
+            OpenReadOutcome.Found,
+            (await store.OpenReadAsync(hintKey, range: null, CancellationToken.None)).Outcome);
+        await store.DeleteAsync(hintKey, DeleteConditions.None, CancellationToken.None);
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+
+        using var rebuilt = OpenCatalogue();
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+
+        using (var reader = new RepositoryReader(Repo, keys, store))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            await CatalogueProjector.ProjectAsync(
+                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+        }
+
+        Assert.True(source.Remove("docs/before.bin"));
+        source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+            .PublishAsync(
+                Job(source, 0xF2, now: 1_722_700_000_001) with { PriorSnapshotId = priorSnapshotId },
+                CancellationToken.None);
+
+        var after = second.Files.Single(file => file.RelativePath == "archive/after.bin");
+        var manifest = await ReadManifestAsync(store, keys, rebuilt, after.ObjectId);
+
+        // The file captures, and the only thing lost is the link to what it
+        // used to be — which is what "advisory" costs when it is missing.
+        Assert.Null(manifest.ParentVersion);
+    }
+
     /// <summary>Reads a published file-version manifest back out of the store.</summary>
     private static async Task<FileVersionManifest> ReadManifestAsync(
         IObjectStore store, RepositoryKeySet keys, CatalogueDb catalogue, ObjectId objectId)

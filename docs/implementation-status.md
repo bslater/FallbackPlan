@@ -31,7 +31,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0004](adr/0004-segment-hash-function.md) | Segment hash function | **Built** | `Repository.Crypto/ContentHasher`, `Domain/Profiles/ContentHashProfile` · `Repository.ConformanceTests/IdentifierConformanceTests` |
 | [0005](adr/0005-aead-suite-and-nonce-construction.md) | AEAD suite and nonce construction | **Built** | `Repository.Crypto/RecordCipher`, `Repository.Crypto/BlobKeyDeriver` · six requirements, all traced |
 | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Partly built** | `Repository.Crypto/ObjectIdDeriver` · [notes](#0006--the-identifiers-are-built-the-integrity-guard-is-not) |
-| [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*` · `Repository.Tests/Index/IndexPrecedenceTests` · [Q11](open-questions.md#q11--physical-hints-in-segment-references) still open |
+| [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*`, `Repository.Format/Manifests/SourceIdentityMap`, `Repository/SourceIdentityLookup` · `Repository.Tests/Index/IndexPrecedenceTests`, `Repository.Tests/Format/SourceIdentityMapCodecTests` · [notes](#0007--device-specific-facts-live-outside-the-manifest-and-one-of-the-two-is-built) |
 | [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence` |
 | [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Partly built** | `Repository.Index/Journal/IntentLifecycle` · [notes](#0009--the-intents-are-written-nothing-collects-yet) |
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` |
@@ -71,6 +71,14 @@ An earlier version of this section said the `device` domain was "specified and u
 **This is [C3](review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s remedy, absent.** One of the six critical review findings was that cross-device deduplication had no integrity guard; trust domains with verify-on-reuse were the answer; the answer is decided, specified, recorded as resolved, and missing from the code. [T-10](threat-model.md) is unmitigated in any repository with a second writer, and is unreachable today only because nothing else writes to a repository yet.
 
 `FR-DED-002` is therefore an **implementation** gap, not the test gap its matrix cell used to describe. See [ADR-0006's implementation status](adr/0006-object-identifiers-and-dedup-trust-domains.md) for what closing it involves.
+
+### 0007 — device-specific facts live outside the manifest, and one of the two is built
+
+ADR-0007's rule is that a manifest carries logical identifiers only, and its [amendment](adr/0007-logical-object-identifiers-in-manifests.md) settled what happens to the device-specific facts that rule excludes: they become separate optional objects per snapshot, so a manifest's bytes stay identical across devices and cross-device deduplication keeps working.
+
+Two such objects are specified. The **source-identity map** ([06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) is built — written by `PublicationOrchestrator`, read by `SourceIdentityLookup`, and consulted when the catalogue cannot say which prior version an inode belongs to. That is the case a catalogue rebuild produces, and without the map a file renamed in that window would record no `parent_version` at all, losing its history permanently because a disposable cache was cold. Two end-to-end tests hold both halves: the rename keeps its ancestry across a rebuild, and deleting the map costs exactly that ancestry and nothing else.
+
+The **placement hint** ([06 §10](../specifications/repository-format/06-manifests.md#10-placement-hint)) is specified and not built. It is a `MAY`, and the thing it accelerates — single-file emergency recovery without an index — has no implementation to accelerate yet; it is worth writing alongside that path rather than before it.
 
 ### 0009 — the intents are written; nothing collects yet
 

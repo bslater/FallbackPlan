@@ -25,6 +25,14 @@ public static class MetadataStoreKeys
             $"snapshots/{Base32.Encode(deviceId.ToArray())}/{Base32.Encode(backupSetId.ToArray())}/{Base32.Encode(snapshotId.ToArray())}");
     }
 
+    /// <summary>The source-identity map's key: <c>hints/identity/&lt;snapshot&gt;</c> (specification 06 §11).</summary>
+    public static ObjectKey SourceIdentity(ReadOnlySpan<byte> snapshotId)
+    {
+        Require16(snapshotId, nameof(snapshotId));
+
+        return ObjectKey.Parse($"hints/identity/{Base32.Encode(snapshotId.ToArray())}");
+    }
+
     /// <summary>An index delta's key: <c>index/delta/&lt;generation&gt;/&lt;delta-id&gt;</c> (specification 07 §2).</summary>
     public static ObjectKey IndexDelta(ulong generation, DeltaId deltaId) =>
         ObjectKey.Parse($"index/delta/{Decimal16(generation)}/{deltaId.ToBase32()}");

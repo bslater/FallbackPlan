@@ -197,6 +197,51 @@ public sealed class ManifestBuilder : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Writes the snapshot's source-identity map at
+    /// <c>/hints/identity/&lt;snapshot&gt;</c> (specification 06 §11), sealed
+    /// under the same standalone framing as the snapshot object.
+    /// </summary>
+    /// <remarks>
+    /// Advisory, so a store that refuses the put is not a publication
+    /// failure — a later reader simply falls back to matching by path and
+    /// misses renames. It is written <em>before</em> the snapshot object for
+    /// the ordinary reason: a hint that becomes visible after the snapshot
+    /// that needs it is a hint that is missing exactly when it is wanted.
+    /// </remarks>
+    public async ValueTask WriteSourceIdentityMapAsync(
+        SourceIdentityMap map,
+        ulong counter,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+
+        if (map.Identities.Count == 0)
+        {
+            return;
+        }
+
+        var encoded = SourceIdentityMapCodec.Encode(map);
+        var contentId = ContentHasher.Hash(encoded);
+        var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityMap, contentId);
+
+        var sealedObject = StandaloneRecordCipher.Seal(
+            _repositoryId,
+            _metadataClassKey,
+            _generation,
+            _writerId,
+            counter,
+            ObjectType.SourceIdentityMap,
+            objectId,
+            encoded);
+
+        await _store.PutAsync(
+            MetadataStoreKeys.SourceIdentity(map.SnapshotId.Span),
+            _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+            PutConditions.IfNotExists,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async ValueTask SealAndUploadAsync(CancellationToken cancellationToken)
     {
         var sealedBlob = await _writer!.SealAsync(cancellationToken).ConfigureAwait(false);

@@ -171,8 +171,19 @@ public sealed partial class PublicationOrchestrator
         await using (session.ConfigureAwait(false))
         {
             using var grouper = new HardlinkGrouper(_keys.ContentIdKey);
+            using var sourceKeys = new SourceIdentityKeyDeriver(_keys.ContentIdKey);
 
-            var walker = new TreeWalkPublisher(job, options, session, builder, grouper, _catalogue);
+            // The durable half of rename detection (06 §11). Loaded once per
+            // publication and consulted only when the catalogue cannot answer
+            // — which, after a rebuild, is every file.
+            var priorIdentities = job.PriorSnapshotId is { } priorForIdentity
+                ? await SourceIdentityLookup
+                    .TryLoadAsync(_store, _repositoryId, _keys, priorForIdentity, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+
+            var walker = new TreeWalkPublisher(
+                job, options, session, builder, grouper, _catalogue, sourceKeys, priorIdentities);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -299,7 +310,15 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value, covered, entries, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
-            // Step 7: the snapshot's discoverable standalone copy.
+            // Step 7: the snapshot's discoverable standalone copy — preceded
+            // by the advisory source-identity map, so a hint the next
+            // publication wants is never published after the snapshot that
+            // makes it findable (06 §11).
+            await builder.WriteSourceIdentityMapAsync(
+                SourceIdentityMap.Create(job.SnapshotId, walker.SourceIdentities),
+                _sequence.AllocateNext(),
+                cancellationToken).ConfigureAwait(false);
+
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, _sequence.AllocateNext(), cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
@@ -431,7 +450,9 @@ public sealed partial class PublicationOrchestrator
         ArchiveSession session,
         ManifestBuilder builder,
         HardlinkGrouper grouper,
-        Catalogue.Catalogue? catalogue)
+        Catalogue.Catalogue? catalogue,
+        SourceIdentityKeyDeriver sourceKeys,
+        SourceIdentityLookup? priorIdentities)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -439,6 +460,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
+        private readonly List<SourceIdentity> _sourceIdentities = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -450,6 +472,14 @@ public sealed partial class PublicationOrchestrator
 
         /// <summary>Every published subdirectory (path, head tree id); the root is the snapshot's own row.</summary>
         public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
+
+        /// <summary>
+        /// The keyed source identity of every file version this snapshot
+        /// names, for the 06 §11 map. Reused versions are included: the map
+        /// describes what the snapshot contains, and a file that was
+        /// short-circuited this time may be the one that gets renamed next.
+        /// </summary>
+        public IReadOnlyList<SourceIdentity> SourceIdentities => _sourceIdentities;
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
         {
@@ -534,6 +564,7 @@ public sealed partial class PublicationOrchestrator
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
                     priorModified, priorDevice, priorFileId, Reused: true));
+                RecordSourceIdentity(entry, prior.ObjectId);
                 return;
             }
 
@@ -557,9 +588,10 @@ public sealed partial class PublicationOrchestrator
                 // so about the fourth edit of a document, or about a file the
                 // user merely renamed, is the history loss FR-MAN-003 exists
                 // to prevent.
-                var withParent = prior is null
-                    ? manifest
-                    : manifest with { ParentVersion = prior.ObjectId };
+                var ancestor = prior?.ObjectId ?? FindPriorVersionByHint(entry);
+                var withParent = ancestor is { } parentVersion
+                    ? manifest with { ParentVersion = parentVersion }
+                    : manifest;
 
                 var objectId = await builder.AppendManifestAsync(
                     ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(withParent), cancellationToken)
@@ -571,6 +603,7 @@ public sealed partial class PublicationOrchestrator
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId));
+                RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -608,6 +641,42 @@ public sealed partial class PublicationOrchestrator
             return entry.Identity is { } identity
                 ? catalogue.LookupIdentity(priorSnapshot.Span, identity.Device, identity.FileId)
                 : null;
+        }
+
+        /// <summary>
+        /// The prior version named by the previous snapshot's source-identity
+        /// map (specification 06 §11), when the catalogue could not answer.
+        /// </summary>
+        /// <remarks>
+        /// This is the case a rebuilt catalogue produces: paths survive a
+        /// forensic rebuild, identities do not, so a file that was renamed
+        /// since the last snapshot matches neither index. Without the map its
+        /// new version would claim to be the file's first — a durable loss
+        /// caused by a transient cache state. It yields <b>ancestry only</b>;
+        /// the content short-circuit above still needs size and modification
+        /// time, which the map does not carry.
+        /// </remarks>
+        private ObjectId? FindPriorVersionByHint(ScanEntry entry)
+        {
+            if (priorIdentities is null || entry.Identity is not { } identity)
+            {
+                return null;
+            }
+
+            return priorIdentities.Find(sourceKeys.Derive(job.DeviceId.Span, identity.FileId));
+        }
+
+        /// <summary>
+        /// Records this snapshot's own identity for <paramref name="objectId"/>,
+        /// so the next publication can find it after a catalogue rebuild.
+        /// </summary>
+        private void RecordSourceIdentity(ScanEntry entry, ObjectId objectId)
+        {
+            if (entry.Identity is { } identity)
+            {
+                _sourceIdentities.Add(
+                    new SourceIdentity(objectId, sourceKeys.Derive(job.DeviceId.Span, identity.FileId)));
+            }
         }
 
         private ArchiveResult? LastArchive { get; set; }

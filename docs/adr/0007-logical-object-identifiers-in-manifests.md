@@ -83,6 +83,33 @@ decision is preserved exactly as it was.
 **The core decision is unchanged: manifests are not authoritative for physical
 location.** This amendment only says where the non-authoritative part lives.
 
+## Amendment 2 (2026-08) — the same rule, applied to source identity
+
+The amendment above settled physical location. A second device-specific fact
+turned out to want the same treatment, and it is recorded here because the
+reasoning is identical and should not have to be rediscovered a third time.
+
+Finding a renamed file's prior version needs its **source identity** — the
+inode or `FileId` it was captured from. That is device-specific, so putting it
+on a file version would have made the same version encode differently on every
+device, for exactly the reason set out above. It became a second optional
+object per snapshot instead:
+[specification 06 §11](../../specifications/repository-format/06-manifests.md#11-source-identity),
+at `/hints/identity/<snapshot-id>`, keyed under the content-ID key so the store
+learns nothing about the source's inode space.
+
+What made this worth doing rather than leaving to the local catalogue: the
+catalogue is a disposable cache, and a rename captured while it was cold would
+write a file version with no `parent_version` — severing that file's history
+**permanently**, in an immutable object, because of a transient local state.
+Speed degrading with a cold cache is acceptable; correctness degrading is not.
+
+`hardlink_group` remains the one device-specific value inside a manifest. That
+exception is narrow and accepted — it is present only for files with multiple
+links, and there is nowhere else it can live if hardlinks are to be
+reconstructed at all. Generalising it to every file would have extended the
+exception from a small minority to all of them.
+
 ## Superseded — the open question as it stood
 
 This ADR rejected physical hints as "a correctness question dressed up as an optimisation". That rejection does not survive scrutiny and is reopened.
