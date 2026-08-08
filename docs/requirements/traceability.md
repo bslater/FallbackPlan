@@ -68,7 +68,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
 | FR-DED-001 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(untested; phase 2)* | 2 |
-| FR-DED-002 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(untested; the repository domain is the default and is validated, but nothing asserts the two domains agree in a single-writer repository — phase 2)* | 0 |
+| FR-DED-002 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(unmet; verify-on-reuse is implemented for no domain — reuse is decided by index presence alone and the configured trust domain is never consulted, so the domains do not differ. C3's remedy, absent — see [ADR-0006 implementation status](../adr/0006-object-identifiers-and-dedup-trust-domains.md))* | 0 |
 | FR-DED-003 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md), [0026 §9](../adr/0026-phase-1-capture-shapes.md) — outcome durability explicitly deferred: v1 re-verifies after a catalogue rebuild | — *(untested; phase 2)* | 2 |
 | FR-DED-004 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(untested; phase 2)* | 2 |
 

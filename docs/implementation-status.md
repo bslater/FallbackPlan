@@ -30,7 +30,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0003](adr/0003-canonical-metadata-encoding.md) | Canonical metadata encoding | **Built** | `Repository.Format/Cbor/CanonicalCbor*` · `Repository.FuzzTests/ParserFuzzTests` |
 | [0004](adr/0004-segment-hash-function.md) | Segment hash function | **Built** | `Repository.Crypto/ContentHasher`, `Domain/Profiles/ContentHashProfile` · `Repository.ConformanceTests/IdentifierConformanceTests` |
 | [0005](adr/0005-aead-suite-and-nonce-construction.md) | AEAD suite and nonce construction | **Built** | `Repository.Crypto/RecordCipher`, `Repository.Crypto/BlobKeyDeriver` · six requirements, all traced |
-| [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Partly built** | `Repository.Crypto/ObjectIdDeriver` · [notes](#0006--dedup-domains-exist-the-cross-device-domain-has-nothing-to-cross) |
+| [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Partly built** | `Repository.Crypto/ObjectIdDeriver` · [notes](#0006--the-identifiers-are-built-the-integrity-guard-is-not) |
 | [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*` · `Repository.Tests/Index/IndexPrecedenceTests` · [Q11](open-questions.md#q11--physical-hints-in-segment-references) still open |
 | [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence` |
 | [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Partly built** | `Repository.Index/Journal/IntentLifecycle` · [notes](#0009--the-intents-are-written-nothing-collects-yet) |
@@ -60,9 +60,17 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 
 ## Where "partly" is doing work
 
-### 0006 — dedup domains exist; the cross-device domain has nothing to cross
+### 0006 — the identifiers are built; the integrity guard is not
 
-Object identifiers, the keyed derivation behind them, and the `repository` trust domain are built and traced. The `device` domain and verify-on-reuse are specified and unexercised, because cross-device deduplication needs a second device to deduplicate against, and replication is not built. `FR-DED-001` through `FR-DED-004` read untested in the matrix for that reason, and correctly so.
+Object identifiers, the keyed derivation behind them, and the domain enumeration are built and traced.
+
+**Verify-on-reuse is not, and it is the default domain's defining property.** Reuse is decided by `Catalogue.HasLocation` — presence of an entry in the local index, with no fetch, no decrypt and no confirmation of the content identifier. `DedupTrustDomain` reaches the policy manifest and is consulted nowhere, so choosing the hardened `device` domain silently produces the behaviour of not choosing it.
+
+An earlier version of this section said the `device` domain was "specified and unexercised" and implied `repository` was working. That was too generous in the direction that matters: the domains do not differ because neither is implemented.
+
+**This is [C3](review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s remedy, absent.** One of the six critical review findings was that cross-device deduplication had no integrity guard; trust domains with verify-on-reuse were the answer; the answer is decided, specified, recorded as resolved, and missing from the code. [T-10](threat-model.md) is unmitigated in any repository with a second writer, and is unreachable today only because nothing else writes to a repository yet.
+
+`FR-DED-002` is therefore an **implementation** gap, not the test gap its matrix cell used to describe. See [ADR-0006's implementation status](adr/0006-object-identifiers-and-dedup-trust-domains.md) for what closing it involves.
 
 ### 0009 — the intents are written; nothing collects yet
 

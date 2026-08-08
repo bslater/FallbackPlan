@@ -86,6 +86,39 @@ In any domain other than `device`, a member can determine whether another member
 
 **Always verify on reuse, no domains.** Rejected — it removes the hardened option for users who do not want their device reading another member's data at all, and it forecloses `repository-unverified` for uniformly trusted fleets. Note that with `repository` as the default, this is now close to the shipped behaviour; what the domains add is the two ends of the range, not the middle.
 
+## Implementation status (2026-08)
+
+**The decision stands. Verify-on-reuse does not exist, and neither does domain
+gating.**
+
+Object identifiers, the keyed derivation behind them, and the domain enumeration
+are built. What is not built is the part this record was written for.
+
+Reuse is decided by `Catalogue.HasLocation(objectId)` — whether the local index
+has an entry for the object. There is no fetch, no decrypt, and no confirmation
+of the content identifier before another writer's segment is referenced.
+`DedupTrustDomain` is carried into the policy manifest and consulted nowhere, so
+choosing the hardened `device` domain produces exactly the behaviour of not
+choosing it, silently.
+
+**That means [C3](../review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s
+remedy is absent.** C3 was "cross-device deduplication has no integrity guard";
+this record is the answer; the answer is decided, specified, recorded as
+resolved, and not in the code. [T-10](../threat-model.md) is unmitigated in any
+repository with a second writer.
+
+It has not yet bitten because no second writer exists — a property of the
+roadmap, not of the design, and one that stops holding the moment replication
+lands.
+
+Closing it is not small. It needs the domain consulted at the reuse decision;
+`repository` fetching, decrypting and confirming the content identifier before
+referencing; `device` tracking which segments this device wrote; and the
+catalogue-recovery story [PT-12](../review/2026-08-fix-pressure-test.md#pt-12--device-attribution-and-verify-on-reuse-state-live-only-in-a-disposable-cache)
+already says both owe, since both are disposable-cache state. It also costs a
+fetch and a decrypt on every dedup hit, which meets the NFR-PERF-003 fast path
+head-on and wants measuring rather than assuming.
+
 ## Status history
 
 | Date | Status | Note |

@@ -70,7 +70,11 @@ A destination claims to hold data it has discarded.
 
 ### T-10 Malicious repository member poisons deduplication
 A device holding repository keys publishes a segment record whose claimed content identifier does not match its plaintext. Other devices deduplicate against it and silently back up corrupt data, discovered only at restore — after the source is gone.
-**Mitigation:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). The default `repository` verifies on reuse — it fetches, decrypts, and confirms the content identifier before referencing another writer's segment — so a mismatched record is never referenced and the mismatch is reported. `device` avoids cross-writer reuse entirely. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
+**Mitigation, as designed:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). The default `repository` verifies on reuse — it fetches, decrypts, and confirms the content identifier before referencing another writer's segment — so a mismatched record is never referenced and the mismatch is reported. `device` avoids cross-writer reuse entirely. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
+
+> **Not built (2026-08).** **There is currently no mitigation for T-10.** Reuse is decided by the presence of an entry in the local index (`Catalogue.HasLocation`) — no fetch, no decrypt, no confirmation — and the configured domain is written into the policy manifest and consulted nowhere, so selecting `device` yields the same behaviour as not selecting it.
+>
+> This is [C3](review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s remedy, and it is decided, specified, recorded as resolved, and absent from the code. The threat is presently unmitigated in any repository with a second writer. It is not reachable today only because nothing else writes to a repository yet — which is a property of the roadmap, not of the design. → [implementation status](implementation-status.md#0006--the-identifiers-are-built-the-integrity-guard-is-not)
 
 ### T-11 Metadata side channels
 An honest-but-curious store learns from what it is legitimately given:
@@ -142,7 +146,7 @@ Stated plainly so no other document implies otherwise:
 
 **In force** — implemented, with tests holding them:
 
-OS-authenticated local command surface · key material confined to the service account and never crossing the command surface (NFR-SEC-009) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · dedup trust domains, `repository` mode · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
+OS-authenticated local command surface · key material confined to the service account and never crossing the command surface (NFR-SEC-009) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
 
 **Designed, not built** — each waits on a phase, not on a decision:
 
@@ -158,7 +162,7 @@ OS-authenticated local command surface · key material confined to the service a
 | Quarantine-by-default restore (FR-RST-006) | The executor writes where its caller points it; nothing defaults that destination |
 | Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
 
-**Dedup trust domains** deserve a note: the mechanism is built and the `repository` domain is the default and is exercised. The `device` domain and verify-on-reuse need a second device to deduplicate against, so they are specified and unexercised.
+**Dedup trust domains are not in either list above, and that is the point.** An earlier version of this page put them under *in force* with a note that the `device` domain was "specified and unexercised". That was wrong in the direction that matters: **verify-on-reuse is not implemented at all**, including for `repository`, which is the default. Reuse is decided by index presence alone. See T-10 above, and treat the control as absent rather than partial.
 
 ## Review obligations
 
