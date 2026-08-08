@@ -69,8 +69,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly Channel<SealedBlob> _uploads;
     private readonly Task[] _uploadWorkers;
     private readonly Lock _blobGate = new();
-    private readonly Lock _indexLookupGate = new();
-    private readonly Func<ObjectId, bool>? _segmentExists;
+    private readonly ReusePredicate? _mayReuseSegment;
 
     // A reservation set, not a record of what was written. The concurrent stage
     // claims an object id before compressing it, so a duplicate segment loses
@@ -92,9 +91,9 @@ public sealed class ArchiveSession : IAsyncDisposable
         string spoolDirectory,
         SpoolPinnedConfiguration pinned,
         IIntentScope? intentScope,
-        Func<ObjectId, bool>? segmentExists)
+        ReusePredicate? mayReuseSegment)
     {
-        _segmentExists = segmentExists;
+        _mayReuseSegment = mayReuseSegment;
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -166,28 +165,23 @@ public sealed class ArchiveSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Whether the index already locates this segment (09 §6; NFR-PERF-010).</summary>
+    /// <summary>
+    /// Whether an existing segment record may be referenced instead of written
+    /// again (09 §5–§6; NFR-PERF-010; FR-DED-002).
+    /// </summary>
     /// <remarks>
-    /// Gated because the delegate reaches <c>Catalogue.HasLocation</c>, which
-    /// issues a command on one shared <c>SqliteConnection</c> and holds no lock
-    /// of its own. That was safe while the ordered stage was the only caller;
-    /// the concurrent stage calls it from several threads, and a connection is
-    /// not safe for concurrent commands. The query is an indexed point lookup on
-    /// a local database, so serialising it costs far less than the compression
-    /// the answer avoids.
+    /// The predicate answers with the index <em>and</em> the configured trust
+    /// domain, so under the default it may perform a read before saying yes
+    /// (<see cref="DedupTrustGate"/>). It is called from the concurrent stage
+    /// on several threads at once and owns whatever serialisation its state
+    /// needs — the session no longer holds a lock across it, because a lock
+    /// held across a verification fetch would serialise the pipeline behind
+    /// the network.
     /// </remarks>
-    private bool SegmentExistsInIndex(ObjectId objectId)
-    {
-        if (_segmentExists is null)
-        {
-            return false;
-        }
-
-        lock (_indexLookupGate)
-        {
-            return _segmentExists(objectId);
-        }
-    }
+    private ValueTask<bool> MayReuseSegmentAsync(ObjectId objectId, CancellationToken cancellationToken) =>
+        _mayReuseSegment is null
+            ? ValueTask.FromResult(false)
+            : _mayReuseSegment(objectId, cancellationToken);
 
     /// <summary>
     /// Archives one file as a new version, comparing against
@@ -295,7 +289,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 wholeFile.AppendData(plaintext.AsSpan(0, segment.Length));
 
                 await prepared.Writer.WriteAsync(
-                    PrepareSegmentAsync(segment, plaintext, reuse),
+                    PrepareSegmentAsync(segment, plaintext, reuse, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -359,7 +353,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// compression. Everything here may run on any thread and in any order.
     /// </summary>
     private async Task<PreparedSegment> PrepareSegmentAsync(
-        SegmentDescriptor segment, byte[] plaintext, ReuseContext reuse)
+        SegmentDescriptor segment, byte[] plaintext, ReuseContext reuse, CancellationToken cancellationToken)
     {
         // Yield first so the producer is not the thread that does this work —
         // otherwise the pipeline is a channel with a serial loop behind it.
@@ -396,7 +390,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             // record, and anyone else with the same content is reused. Claiming
             // before compressing is what keeps the record count deterministic
             // when two identical segments are in flight at once.
-            if (SegmentExistsInIndex(objectId) || !_writtenThisSession.TryAdd(objectId, 0))
+            if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
+                !_writtenThisSession.TryAdd(objectId, 0))
             {
                 return Reused(segment, plaintext, contentId, objectId);
             }
@@ -869,7 +864,8 @@ public sealed class ArchiveSession : IAsyncDisposable
         // identifier the index already locates — or this session already
         // claimed — needs no new record. Keyed on the object id so the test
         // survives a catalogue rebuild.
-        if (SegmentExistsInIndex(objectId) || !_writtenThisSession.TryAdd(objectId, 0))
+        if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
+            !_writtenThisSession.TryAdd(objectId, 0))
         {
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
             return objectId;

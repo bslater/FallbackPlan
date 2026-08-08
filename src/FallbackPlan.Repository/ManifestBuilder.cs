@@ -31,7 +31,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly byte[] _metadataClassKey;
     private readonly List<ArchivedBlob> _blobs = [];
     private readonly IIntentScope? _intentScope;
-    private readonly Func<ObjectId, bool>? _isAlreadyStored;
+    private readonly ReusePredicate? _mayReuse;
     private BlobWriter? _writer;
 
     /// <summary>Creates a builder writing metadata blobs under <paramref name="blobProfile"/>.</summary>
@@ -45,7 +45,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         string spoolDirectory,
         BlobWriteProfile blobProfile,
         IIntentScope? intentScope = null,
-        Func<ObjectId, bool>? isAlreadyStored = null)
+        ReusePredicate? mayReuse = null)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(store);
@@ -62,7 +62,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _blobProfile = blobProfile;
         _intentScope = intentScope;
-        _isAlreadyStored = isAlreadyStored;
+        _mayReuse = mayReuse;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         _metadataClassKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
@@ -117,6 +117,13 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// therefore the same object, so re-emitting it would make every
     /// snapshot rewrite every tree in the repository — a cost proportional
     /// to the whole repository for a backup that changed one file.
+    /// <para>
+    /// It is the same gate too, not merely the same idea: referencing another
+    /// writer's manifest is the trust question referencing their segment is
+    /// (ADR-0006), so the configured domain decides both. Under the default a
+    /// manifest this writer did not store is confirmed before it is
+    /// referenced, and under <c>device</c> it is written again.
+    /// </para>
     /// </remarks>
     public async ValueTask<ObjectId> AppendManifestAsync(
         ObjectType objectType,
@@ -126,7 +133,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         var contentId = ContentHasher.Hash(encodedManifest.Span);
         var objectId = _objectIdDeriver.Derive(objectType, contentId);
 
-        if (_isAlreadyStored?.Invoke(objectId) == true)
+        if (_mayReuse is not null &&
+            await _mayReuse(objectId, cancellationToken).ConfigureAwait(false))
         {
             return objectId;
         }

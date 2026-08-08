@@ -258,6 +258,8 @@ Writer attribution is in fact recoverable — index deltas carry `writer_id` —
 
 **Required change.** State that writer attribution is recovered from delta `writer_id` during rebuild, and add it to the dedup lookup key in FR-MAN-006. Record verification outcomes durably enough to survive a rebuild — either as a repository object, or accept the re-verification cost explicitly and say so.
 
+> **Resolved (2026-08).** Attribution is recovered from delta `writer_id` and is what `DedupTrustGate` reads first. Verification outcomes take the **second** option: they live in the catalogue's `verified_objects` and a rebuild re-imposes the read, once. A durable repository object was rejected for now as format surface frozen into v1 before anything consumes it — the cost it avoids exists only in a multi-writer repository, and adding the object later is a minor-version change. [ADR-0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md#what-is-deliberately-not-solved) carries the reasoning; the catalogue schema carries the warning where an implementer will meet it.
+
 ---
 
 ### PT-13 — Blob salt uniqueness rests entirely on CSPRNG quality, and VM cloning defeats that

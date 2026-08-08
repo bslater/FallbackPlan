@@ -170,7 +170,23 @@ public sealed partial class PublicationOrchestrator
 
         var archiver = new FileArchiver(
             _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
-        var dedup = _catalogue is { } dedupCatalogue ? dedupCatalogue.HasLocation : (Func<ObjectId, bool>?)null;
+
+        // One targeted reader serves both things this publication reads back:
+        // a renamed file's prior manifest (architecture 06 §4.2) and the
+        // verify-on-reuse confirmation (ADR-0006). Both want the same blob
+        // cache, and neither exists without a catalogue to resolve a location.
+        using var reader = _catalogue is { } readerCatalogue
+            ? new TargetedRecordReader(_store, _repositoryId, _keys, readerCatalogue)
+            : null;
+
+        // The reuse decision, trust domain included (09 §5; FR-DED-002).
+        // Without a catalogue there is no index to reuse from at all, so the
+        // question never arises and the gate is absent rather than permissive.
+        using var trust = _catalogue is { } trustCatalogue
+            ? new DedupTrustGate(_policy.DedupTrustDomain, _writerId, trustCatalogue, reader!)
+            : null;
+        var dedup = trust is null ? null : (ReusePredicate)trust.MayReuseAsync;
+
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
             _policy.BlobWriteProfile, scope, dedup);
@@ -191,19 +207,10 @@ public sealed partial class PublicationOrchestrator
                 ? identityCatalogue.LookupSnapshotCaptureTime(priorForIdentity.Span)
                 : null;
 
-            // The read side of the rename path: a file that only moved needs a
-            // new manifest but not a new read, so the publisher can fetch the
-            // prior one (architecture 06 §4.2). Only where there is a
-            // catalogue to resolve a location with — without one there is no
-            // prior version to find in the first place.
-            using var manifests = _catalogue is { } manifestCatalogue
-                ? new PriorManifestSource(_store, _repositoryId, _keys, manifestCatalogue)
-                : null;
-
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, _catalogue, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
-                manifests);
+                reader);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -486,7 +493,7 @@ public sealed partial class PublicationOrchestrator
         Catalogue.Catalogue? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
         HintSource? hints,
-        PriorManifestSource? manifests)
+        TargetedRecordReader? manifests)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -688,7 +695,7 @@ public sealed partial class PublicationOrchestrator
             ObjectId objectId, CancellationToken cancellationToken) =>
             manifests is null
                 ? ValueTask.FromResult<FileVersionManifest?>(null)
-                : manifests.TryReadAsync(objectId, cancellationToken);
+                : manifests.TryReadFileVersionAsync(objectId, cancellationToken);
 
         /// <summary>
         /// Publishes a moved file by rewriting its prior manifest under the

@@ -35,14 +35,21 @@ public sealed record CatalogueTreeEntry(
     ulong? IdentityDevice,
     ulong? IdentityFileId);
 
+/// <summary>
+/// What the reuse decision needs to know about an object the index already
+/// locates ([ADR-0006](../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)):
+/// who wrote the winning entry, and whether this device has already confirmed
+/// its content.
+/// </summary>
+public sealed record ReuseCandidate(WriterId WriterId, bool Verified);
+
 /// <summary>A resolved physical location: everything a targeted read needs to open one blob and one record.</summary>
 /// <remarks>
-/// <see cref="StoreBlobKey"/>, <see cref="BlobClass"/> and
-/// <see cref="BlobLength"/> come from the blob row rather than the location
-/// row and are null when no blob row exists — an index delta names locations
-/// whether or not this catalogue has seen the blob that holds them. All three
-/// are needed to address the object: the key and class give the store key,
-/// the length gives the recovery footer's locator.
+/// <see cref="StoreBlobKey"/> comes from the blob row rather than the location
+/// row and is null when no blob row exists — an index delta names locations
+/// whether or not this catalogue has seen the blob that holds them, which is
+/// the ordinary state of a rebuilt catalogue. A reader that needs to address
+/// the blob derives its store key from <see cref="BlobId"/> instead.
 /// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
@@ -53,9 +60,7 @@ public sealed record ResolvedLocation(
     ushort EncryptionProfileValue,
     ulong Generation,
     WriterId WriterId,
-    ulong Sequence,
-    BlobClass? BlobClass = null,
-    long? BlobLength = null);
+    ulong Sequence);
 
 /// <summary>
 /// The local catalogue (architecture 02 §7; FR-MAN-002, FR-MAN-005;
@@ -650,6 +655,59 @@ public sealed class Catalogue : IDisposable
         return exists;
     }
 
+    /// <summary>
+    /// The reuse candidate for <paramref name="objectId"/>, or
+    /// <see langword="null"/> when no live index entry locates it — the
+    /// trust-domain-aware form of <see cref="HasLocation"/> (ADR-0006;
+    /// specification 09 §5).
+    /// </summary>
+    /// <remarks>
+    /// The winner is chosen by the 07 §3 precedence order, the same order
+    /// <see cref="ResolveLocation"/> uses, so the writer reported here is the
+    /// writer of the entry a read would resolve to. One query rather than
+    /// <see cref="ResolveLocation"/>'s two, and no damage finding: this runs
+    /// once per segment on the NFR-PERF-010 path.
+    /// </remarks>
+    public ReuseCandidate? FindReuseCandidate(ObjectId objectId)
+    {
+        var started = Stopwatch.GetTimestamp();
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT l.writer_id,
+                   EXISTS (SELECT 1 FROM verified_objects v WHERE v.object_id = l.object_id)
+            FROM object_locations l
+            LEFT JOIN blobs b ON b.blob_id = l.blob_id
+            WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3
+            ORDER BY l.generation DESC, l.writer_id DESC, l.sequence DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+
+        using var reader = command.ExecuteReader();
+        var candidate = reader.Read()
+            ? new ReuseCandidate(WriterId.FromBytes((byte[])reader.GetValue(0)), reader.GetInt64(1) > 0)
+            : null;
+
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return candidate;
+    }
+
+    /// <summary>
+    /// Remembers that <paramref name="objectId"/> was fetched, decrypted, and
+    /// confirmed, so the next reuse does not pay for the read again.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, because two segments in flight can verify the same object
+    /// at once. Not restored by a rebuild — see <see cref="CatalogueSchema"/>.
+    /// </remarks>
+    public void RecordVerified(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "INSERT OR IGNORE INTO verified_objects (object_id) VALUES ($object);";
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        command.ExecuteNonQuery();
+    }
+
     /// <summary>Looks up a prior segment by content identifier — the dedup path (NFR-PERF-010).</summary>
     public ObjectId? LookupByContent(ContentId contentId)
     {
@@ -676,8 +734,7 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
             SELECT l.blob_id, b.store_blob_key, l.physical_offset, l.stored_length,
-                   l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence,
-                   b.blob_class, b.length
+                   l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence
             FROM object_locations l
             LEFT JOIN blobs b ON b.blob_id = l.blob_id
             WHERE l.object_id = $object
@@ -702,9 +759,7 @@ public sealed class Catalogue : IDisposable
             (ushort)reader.GetInt64(5),
             (ulong)reader.GetInt64(6),
             WriterId.FromBytes((byte[])reader.GetValue(7)),
-            (ulong)reader.GetInt64(8),
-            reader.IsDBNull(9) ? null : (BlobClass)reader.GetInt64(9),
-            reader.IsDBNull(10) ? null : reader.GetInt64(10));
+            (ulong)reader.GetInt64(8));
     }
 
     private void InsertLocation(
