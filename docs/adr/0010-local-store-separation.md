@@ -1,6 +1,6 @@
 # ADR-0010 — Local store separation
 
-**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Accepted · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-REL-002, NFR-REL-007, NFR-OPS-003, FR-MAN-002
 **Review finding:** [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
@@ -68,3 +68,4 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
+| 2026-08 | Accepted | Built and held to: `LocalStateSeparationTests` deletes the catalogue and asserts device identity and configuration survive, which is the whole claim. Nothing about the three-way split awaits a later phase. |

@@ -15,7 +15,7 @@ public sealed class ObjectIdDeriverTests
     [Theory]
     [InlineData((byte)0x00)]
     [InlineData((byte)0x07)] // reserved store-key domain separator
-    [InlineData((byte)0x0D)]
+    [InlineData((byte)0x10)]
     public void Unassigned_object_types_are_refused(byte value)
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);

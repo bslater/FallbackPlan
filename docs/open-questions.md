@@ -36,7 +36,11 @@ This is a flag rather than a legal opinion. It should be assessed alongside Q2 �
 
 **Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0003](adr/0003-canonical-metadata-encoding.md)
 
-Canonical CBOR is the candidate. Confirm with cross-language determinism tests and an encoding-size benchmark on realistic manifests before the format freezes. The requirement it has to satisfy is that an independent implementer, in another language, produces byte-identical output from the same logical input.
+**Narrowed (2026-08).** The decision is [Accepted](adr/0003-canonical-metadata-encoding.md): canonical CBOR is the encoding, and the choice is no longer in question. What remains open is confirmation, and only part of it.
+
+The cross-language half is met inside the project: `conformance/generate.py` builds the format's objects with its own CBOR encoder, in another language, and the committed vectors are byte-identical on every run. That is a second implementation agreeing, not an independent one — the same author wrote both, which is exactly what freeze-gate item 2 exists to remedy.
+
+Still owed: the **encoding-size benchmark on realistic manifests**, and an **independent reader** written from the published specification by someone who did not write the format. Neither can change the choice; both bound what it costs and whether the specification is sufficient to implement from.
 
 ---
 

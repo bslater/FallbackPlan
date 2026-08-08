@@ -1,6 +1,6 @@
 # ADR-0003 — Canonical metadata encoding
 
-**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Accepted · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-COMP-004, NFR-PORT-003, FR-MAN-004
 
@@ -55,3 +55,4 @@ CBOR gives us a self-describing binary encoding with a *specified* deterministic
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Confirm via cross-language determinism tests and size benchmark before format v1 freeze |
+| 2026-08 | Accepted | The decision stands: canonical CBOR is the encoding. The cross-language half of the confirmation is met — `conformance/generate.py` builds the same objects with its own CBOR encoder, in another language, and the committed vectors are byte-identical on every run. The encoding-size benchmark on realistic manifests and the fully independent reader are freeze-gate items 1 and 2, and remain open as [Q4](../open-questions.md#q4--canonical-metadata-encoding); neither can change the choice, only its measured cost. |

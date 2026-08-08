@@ -16,7 +16,7 @@ If the engine is wrong, every later phase inherits the defect and the format can
 |---|---|
 | Architecture, reviewed twice | [`docs/architecture/`](architecture/) |
 | Requirements with acceptance criteria | 142 IDs, fully traced |
-| Decisions | 20 ADRs; 10 accepted, the rest proposed |
+| Decisions | 20 ADRs; 10 accepted, the rest proposed *(at the time; 30 records now, 25 accepted)* |
 | **Normative format specification** | [`specifications/repository-format/`](../specifications/repository-format/README.md) |
 | **Conformance vectors** | Identifiers, keys, record and footer AAD, segmentation, compression, AES-GCM and Argon2id known-answer tests |
 | **Solution scaffold** | 12 src + 8 test projects, building clean with warnings-as-errors |
