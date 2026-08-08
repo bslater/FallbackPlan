@@ -135,6 +135,36 @@ public abstract class ObjectStoreContractTests
     }
 
     [Fact]
+    public async Task A_put_of_different_content_under_a_live_key_never_takes_effect()
+    {
+        // INV-BLOB-001 (specification 05 §5.1) and the general rule it
+        // specialises (01 §4). The idempotent-retry case above re-puts
+        // identical bytes; this is the one that matters, because a store
+        // that quietly accepted it would break nonce uniqueness, make a
+        // published blob digest meaningless, and hand a concurrent reader a
+        // different object at the offsets it already holds.
+        var store = CreateStore();
+        var key = ObjectKey.Parse("blobs/data/aaaa/sealed-blob");
+        var sealedBytes = "the bytes that were sealed"u8.ToArray();
+
+        Assert.Equal(
+            PutOutcome.Created,
+            (await store.PutAsync(key, ContentFactory(sealedBytes), PutConditions.IfNotExists, CancellationToken.None)).Outcome);
+
+        foreach (var conditions in new[] { PutConditions.IfNotExists, PutConditions.None })
+        {
+            var rewrite = await store.PutAsync(
+                key, ContentFactory("different bytes entirely"u8.ToArray()), conditions, CancellationToken.None);
+
+            // Reported as a result, not thrown — and, either way, not applied.
+            Assert.Equal(PutOutcome.AlreadyExists, rewrite.Outcome);
+        }
+
+        var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
+        Assert.Equal(sealedBytes, await ReadAllAsync(read));
+    }
+
+    [Fact]
     public async Task The_content_factory_is_invoked_and_its_stream_disposed()
     {
         var store = CreateStore();

@@ -100,6 +100,8 @@ Where a store offers conditional create, a writer SHOULD use it. Where it does n
 
 Re-writing an object with byte-identical content is permitted, and is the expected outcome of an idempotent retry.
 
+For blobs the rule is stated as a named invariant, [INV-BLOB-001](05-blob.md#51-blob-immutability--inv-blob-001), because the operations that would break it — compaction, key rotation, upload retry — are the ones written last and the ones whose violation nothing detects.
+
 ## 5 Deletion
 
 Only two processes delete objects: garbage collection ([`07-retention-and-gc.md`](../../docs/architecture/07-retention-and-gc.md)) and index-delta retirement ([07](07-index.md)).

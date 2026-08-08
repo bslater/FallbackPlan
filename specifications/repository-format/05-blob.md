@@ -127,7 +127,26 @@ The age limit exists so that a low-churn backup set still commits within a bound
 
 Sealing computes the footer, appends it and the locator, and computes the blob digest — SHA-256 over the complete sealed representation, recorded in the index and used for end-to-end verification during replication.
 
-After sealing, the blob is immutable. Appending to a sealed blob is not permitted, and a reader encountering data beyond the locator MUST report a damage finding.
+### 5.1 Blob immutability — INV-BLOB-001
+
+> **A sealed blob's bytes never change.** Once a blob has been sealed and published, no participant may append to it, rewrite any part of it, or replace it with different bytes under the same store key, for the entire life of the repository.
+
+This is a **format invariant**: an identified rule that other documents cite and that no operation, present or future, may be designed around. It is stated separately from the sentence above because everything in this format that could plausibly break it is a *maintenance* operation, and maintenance operations are exactly the ones written years after the rule.
+
+**What it forbids, specifically.**
+
+- Appending records to a blob after sealing. A writer MUST NOT, and a reader that encounters data beyond the footer locator MUST report a damage finding rather than reading it.
+- Rewriting a blob to reclaim the space of records that are no longer live. That is compaction, and it is the operation this invariant is really about: compaction reads live records out of a mostly-dead blob, re-seals each one into a **new** blob under a new key, and republishes the index entries as supersessions. The source blob is then tombstoned and deleted whole ([11 §3](11-lifecycle-objects.md#3-tombstone)). It is never edited in place. → [ADR-0025](../../docs/adr/0025-compaction-reseals-records.md)
+- Re-encrypting a blob under a rotated key by rewriting it. Key rotation proceeds the same way: new blobs, new index entries, delete the old.
+- Overwriting a blob after a failed or partial upload. A writer that cannot establish that its upload succeeded MUST allocate a new blob identifier rather than re-put under the old one, *unless* it can re-put byte-identical content — an idempotent retry of the same sealed buffer is permitted and expected ([01 §4](01-object-layout.md#4-object-immutability)).
+
+**Why it has to be an invariant rather than a convention.** Three things depend on it and none of them can detect a violation on their own:
+
+1. **Nonce uniqueness.** Every record in a blob draws its nonce from its ordinal under one blob key ([04 §3](04-record.md#3-nonce)). A rewritten blob that reuses the key and re-numbers records reuses a `(key, nonce)` pair, which is the failure AES-GCM does not survive — it is a plaintext-recovery bug, not a corruption bug, and nothing in the repository would report it.
+2. **The blob digest.** A digest published in an index delta ([07 §2.2](07-index.md#22-covered-blob-digests)) names bytes. If the bytes may change, a mismatch stops meaning "these are not the bytes that were sealed" and starts meaning nothing at all.
+3. **Concurrent readers.** A reader resolving a record through the index holds an offset and a length into a blob. Rewriting under the same key gives that reader a different object at the same coordinates, and range reads make the result arbitrary rather than merely wrong.
+
+**A store cannot enforce this and MUST NOT be relied on to.** Conditional create is unavailable on at least one intended provider, and a store that offers it can still be raced by a participant that is not following the rule. The invariant is a property of every writer, upheld by writers.
 
 > **Erratum (phase 0), resolved in phase 1.** Two defects in the digest sentence above. First, "the complete sealed representation" was circular: the locator carries `digest_prefix`, so the locator cannot be inside its own digest's preimage. The digest is computed over bytes `[0, blob_length − 16)` — everything up to but excluding the 16-byte locator. Second, "recorded in the index" named a field that did not exist. It exists now: `covered_blob_digests`, optional and parallel to `covered_blob_ids` on the index delta ([07 §2.2](07-index.md#22-covered-blob-digests)), inside the signature. The device-local catalogue keeps its copy as a cache. → [Q16](../../docs/open-questions.md#closed)
 
