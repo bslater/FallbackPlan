@@ -191,31 +191,12 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 
 ---
 
-## Q21 — The source-identity hint is per-snapshot and whole-tree
-
-**Owner:** engineering · **Blocks:** nothing yet · **Gates:** NFR-PERF-005 at scale · **Specification:** [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity) · **Requirement:** [NFR-PERF-005](requirements/non-functional.md)
-
-The source-identity map records every file version a snapshot names, so that a rename is still recognisable after the catalogue — a disposable cache — has been rebuilt. It works, and two tests hold it.
-
-It also costs **~52 bytes per file, per snapshot**, measured: 53 415 bytes for 1 024 files. That is proportional to repository size rather than to what changed, which is exactly what NFR-PERF-005 exists to prevent. At a million files it is roughly 52 MB per run, dwarfing everything else a small backup writes now that the manifest plane reuses unchanged objects.
-
-The cost is inherent to the map being *complete*, and completeness is what makes it work: a file renamed today may not have been modified for a hundred snapshots, so a map holding only this snapshot's new versions would not name it.
-
-Three ways out, none free:
-
-- **Accept it**, and state NFR-PERF-005 as bounding the manifest plane only. Cheapest, and it leaves a real cost undeclared in the requirement it contradicts.
-- **Chain incremental maps** — each snapshot records only its new versions and names its predecessor map; a reader walks back. Restores the incremental property; makes a lookup O(snapshots) and needs a bound on how far back it is worth walking.
-- **Key the hint by source key rather than by snapshot** — `/hints/identity/<source-key>/<snapshot-id>`, written only for changed files, found by listing one prefix. Incremental and a single-prefix lookup, at the price of one tiny store object per changed file per snapshot, which is precisely the per-object overhead blobs exist to avoid.
-
-**Not decided.** The feature ships as it is because losing a file's history to a cold cache is worse than writing 52 bytes a file, but that is a stopgap, not the answer.
-
----
-
 ## Closed
 
 | Question | Resolution |
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
+| Q21 — the source-identity hint grew with the repository, not with the change | Resolved by keying it on the **source key** rather than the snapshot: `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, one small object per file version created, found by listing one prefix whose entries are chronological. The per-snapshot map it replaced described the whole tree every run, at a measured ~52 bytes per file; a one-file change to a 1 024-file tree now adds 7 386 bytes to the store against ~57 200 before. The accepted price is object count — one store object, and on a metered store one request, per changed file — which is the per-object overhead blobs exist to amortise, and it is the cheaper side from the second capture onward ([ADR-0007 Amendment 2](adr/0007-logical-object-identifiers-in-manifests.md), [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) |
 | Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |

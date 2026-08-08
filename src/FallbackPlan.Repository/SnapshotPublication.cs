@@ -173,17 +173,18 @@ public sealed partial class PublicationOrchestrator
             using var grouper = new HardlinkGrouper(_keys.ContentIdKey);
             using var sourceKeys = new SourceIdentityKeyDeriver(_keys.ContentIdKey);
 
-            // The durable half of rename detection (06 §11). Loaded once per
-            // publication and consulted only when the catalogue cannot answer
-            // — which, after a rebuild, is every file.
-            var priorIdentities = job.PriorSnapshotId is { } priorForIdentity
-                ? await SourceIdentityLookup
-                    .TryLoadAsync(_store, _repositoryId, _keys, priorForIdentity, cancellationToken)
-                    .ConfigureAwait(false)
+            // The durable half of rename detection (06 §11), and the gate on
+            // ever touching it: a catalogue that still holds identities has
+            // already answered, so the hints are consulted only in the window
+            // a rebuild opens — where identity is gone and paths are not.
+            var hintBound = job.PriorSnapshotId is { } priorForIdentity && _catalogue is { } identityCatalogue
+                && !identityCatalogue.HasIdentities(priorForIdentity.Span)
+                ? identityCatalogue.LookupSnapshotCaptureTime(priorForIdentity.Span)
                 : null;
 
             var walker = new TreeWalkPublisher(
-                job, options, session, builder, grouper, _catalogue, sourceKeys, priorIdentities);
+                job, options, session, builder, grouper, _catalogue, sourceKeys,
+                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -311,13 +312,11 @@ public sealed partial class PublicationOrchestrator
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded
-            // by the advisory source-identity map, so a hint the next
+            // by the advisory source-identity hints, so a hint the next
             // publication wants is never published after the snapshot that
             // makes it findable (06 §11).
-            await builder.WriteSourceIdentityMapAsync(
-                SourceIdentityMap.Create(job.SnapshotId, walker.SourceIdentities),
-                _sequence.AllocateNext(),
-                cancellationToken).ConfigureAwait(false);
+            await builder.WriteSourceIdentityHintsAsync(
+                walker.SourceIdentities, intentSequence, cancellationToken).ConfigureAwait(false);
 
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, _sequence.AllocateNext(), cancellationToken).ConfigureAwait(false);
@@ -452,7 +451,7 @@ public sealed partial class PublicationOrchestrator
         HardlinkGrouper grouper,
         Catalogue.Catalogue? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
-        SourceIdentityLookup? priorIdentities)
+        HintSource? hints)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -460,7 +459,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
-        private readonly List<SourceIdentity> _sourceIdentities = [];
+        private readonly Dictionary<SourceKey, SourceIdentityHint?> _hints = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -474,12 +473,26 @@ public sealed partial class PublicationOrchestrator
         public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
 
         /// <summary>
-        /// The keyed source identity of every file version this snapshot
-        /// names, for the 06 §11 map. Reused versions are included: the map
-        /// describes what the snapshot contains, and a file that was
-        /// short-circuited this time may be the one that gets renamed next.
+        /// The 06 §11 hints this snapshot owes: one per file version it
+        /// <em>created</em>.
         /// </summary>
-        public IReadOnlyList<SourceIdentity> SourceIdentities => _sourceIdentities;
+        /// <remarks>
+        /// <para>
+        /// A version that was reused was created by an earlier snapshot and
+        /// already has its hint, which still names it — re-publishing that is
+        /// the whole per-snapshot cost this layout exists to remove. A rename
+        /// does produce a new manifest, because a manifest states its own
+        /// name, so a rename does get a hint.
+        /// </para>
+        /// <para>
+        /// A source key claimed by two versions in one snapshot is dropped
+        /// rather than resolved: that is a hardlink group's two names, and
+        /// asserting either as the other's ancestor would be a coin toss a
+        /// manifest keeps forever.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<SourceIdentityHint> SourceIdentities =>
+            [.. _hints.Values.Where(static hint => hint is not null).Select(static hint => hint!)];
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
         {
@@ -564,7 +577,6 @@ public sealed partial class PublicationOrchestrator
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
                     priorModified, priorDevice, priorFileId, Reused: true));
-                RecordSourceIdentity(entry, prior.ObjectId);
                 return;
             }
 
@@ -588,7 +600,8 @@ public sealed partial class PublicationOrchestrator
                 // so about the fourth edit of a document, or about a file the
                 // user merely renamed, is the history loss FR-MAN-003 exists
                 // to prevent.
-                var ancestor = prior?.ObjectId ?? FindPriorVersionByHint(entry);
+                var ancestor = prior?.ObjectId
+                    ?? await FindPriorVersionByHintAsync(entry, cancellationToken).ConfigureAwait(false);
                 var withParent = ancestor is { } parentVersion
                     ? manifest with { ParentVersion = parentVersion }
                     : manifest;
@@ -644,39 +657,66 @@ public sealed partial class PublicationOrchestrator
         }
 
         /// <summary>
-        /// The prior version named by the previous snapshot's source-identity
-        /// map (specification 06 §11), when the catalogue could not answer.
+        /// The prior version named by the source-identity hints (specification
+        /// 06 §11), when the catalogue could not answer.
         /// </summary>
         /// <remarks>
         /// This is the case a rebuilt catalogue produces: paths survive a
         /// forensic rebuild, identities do not, so a file that was renamed
-        /// since the last snapshot matches neither index. Without the map its
-        /// new version would claim to be the file's first — a durable loss
+        /// since the last snapshot matches neither index. Without the hints
+        /// its new version would claim to be the file's first — a durable loss
         /// caused by a transient cache state. It yields <b>ancestry only</b>;
         /// the content short-circuit above still needs size and modification
-        /// time, which the map does not carry.
+        /// time, which a hint does not carry.
         /// </remarks>
-        private ObjectId? FindPriorVersionByHint(ScanEntry entry)
+        private async ValueTask<ObjectId?> FindPriorVersionByHintAsync(
+            ScanEntry entry, CancellationToken cancellationToken)
         {
-            if (priorIdentities is null || entry.Identity is not { } identity)
+            if (hints is null || entry.Identity is not { } identity)
             {
                 return null;
             }
 
-            return priorIdentities.Find(sourceKeys.Derive(job.DeviceId.Span, identity.FileId));
+            return await hints
+                .FindAsync(sourceKeys.Derive(job.DeviceId.Span, identity.FileId), cancellationToken)
+                .ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Records this snapshot's own identity for <paramref name="objectId"/>,
+        /// Records this snapshot's own hint for <paramref name="objectId"/>,
         /// so the next publication can find it after a catalogue rebuild.
         /// </summary>
         private void RecordSourceIdentity(ScanEntry entry, ObjectId objectId)
         {
-            if (entry.Identity is { } identity)
+            if (entry.Identity is not { } identity)
             {
-                _sourceIdentities.Add(
-                    new SourceIdentity(objectId, sourceKeys.Derive(job.DeviceId.Span, identity.FileId)));
+                return;
             }
+
+            var sourceKey = sourceKeys.Derive(job.DeviceId.Span, identity.FileId);
+            var key = SourceKey.From(sourceKey);
+
+            if (_hints.TryGetValue(key, out var existing))
+            {
+                // Two versions, one inode, one snapshot: a hardlink group's
+                // two names. Neither is the other's ancestor and nothing here
+                // can tell which the next rename will mean, so the source key
+                // answers nothing at all.
+                if (existing is null || existing.ObjectId != objectId)
+                {
+                    _hints[key] = null;
+                }
+
+                return;
+            }
+
+            _hints[key] = new SourceIdentityHint
+            {
+                SourceKey = sourceKey,
+                SnapshotId = job.SnapshotId,
+                ObjectId = objectId,
+                CapturedAt = job.NowUnixMilliseconds,
+            };
         }
 
         private ArchiveResult? LastArchive { get; set; }

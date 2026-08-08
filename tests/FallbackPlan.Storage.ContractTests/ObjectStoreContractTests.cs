@@ -203,6 +203,60 @@ public abstract class ObjectStoreContractTests
     }
 
     [Fact]
+    public async Task A_prefix_ending_mid_component_still_matches_by_string()
+    {
+        var store = CreateStore();
+        var keys = new[]
+        {
+            "hints/identity/aaaa/aaaabbbb/0000000000000001/s",
+            "hints/identity/aaab/aaabcccc/0000000000000002/s",
+            "hints/identity/aaaa/aaaadddd/0000000000000003/s",
+            "hints/placement/aaaa",
+        };
+
+        foreach (var value in keys)
+        {
+            await store.PutAsync(ObjectKey.Parse(value), ContentFactory([0x01]), PutConditions.None, CancellationToken.None);
+        }
+
+        // A prefix is a string over the flat namespace and need not stop at a
+        // component boundary. An implementation that narrows its walk to the
+        // directory a prefix names has to keep answering this, because the
+        // last component may be a fragment of a name rather than a directory.
+        var listed = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("hints/identity/aaa"), ListOptions.Default, CancellationToken.None))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        Assert.Equal(
+            [
+                "hints/identity/aaaa/aaaabbbb/0000000000000001/s",
+                "hints/identity/aaaa/aaaadddd/0000000000000003/s",
+                "hints/identity/aaab/aaabcccc/0000000000000002/s",
+            ],
+            listed);
+
+        // And a prefix that names a whole directory sees only that directory.
+        var narrowed = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("hints/identity/aaaa/aaaabbbb/"), ListOptions.Default, CancellationToken.None))
+        {
+            narrowed.Add(entry.Key.Value);
+        }
+
+        Assert.Equal(["hints/identity/aaaa/aaaabbbb/0000000000000001/s"], narrowed);
+
+        // A prefix naming nothing lists nothing, rather than everything.
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("hints/identity/zzzz/"), ListOptions.Default, CancellationToken.None))
+        {
+            Assert.Fail($"'{entry.Key}' matched a prefix nothing sits under.");
+        }
+    }
+
+    [Fact]
     public async Task A_resume_token_persisted_across_enumerators_resumes_strictly_after_its_entry()
     {
         var store = CreateStore();

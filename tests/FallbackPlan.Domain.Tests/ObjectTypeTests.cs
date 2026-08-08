@@ -18,7 +18,7 @@ public sealed class ObjectTypeTests
     [InlineData(0x09, ObjectType.IndexCheckpoint)]
     [InlineData(0x0A, ObjectType.JournalRecord)]
     [InlineData(0x0B, ObjectType.PlacementHint)]
-    [InlineData(0x0C, ObjectType.SourceIdentityMap)]
+    [InlineData(0x0C, ObjectType.SourceIdentityHint)]
     public void Assigned_types_are_valid(byte value, ObjectType expected)
     {
         Assert.True(ObjectTypes.IsValid(value));

@@ -42,8 +42,8 @@ public enum ObjectType : byte
     /// <summary>An advisory placement hint (specification 06 §10).</summary>
     PlacementHint = 0x0B,
 
-    /// <summary>An advisory source-identity map (specification 06 §11).</summary>
-    SourceIdentityMap = 0x0C,
+    /// <summary>An advisory source-identity hint (specification 06 §11).</summary>
+    SourceIdentityHint = 0x0C,
 }
 
 /// <summary>

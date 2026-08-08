@@ -352,16 +352,20 @@ A separate object has neither problem, and gains one: absence is the normal case
 
 ## 11 Source identity
 
-**Optional, and load-bearing for one thing.** A writer MAY publish one source-identity map per snapshot at `/hints/identity/<snapshot-id>`, recording the stable filesystem identity of each file version it captured.
+**Optional, and load-bearing for one thing.** A writer MAY publish one source-identity hint per file version it creates, recording the stable filesystem identity that version was captured from:
+
+```text
+/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
+```
 
 ```text
 source_identity = {
     1: u16       schema version, 1
-    2: bytes[16] snapshot_id
-    3: array     identities
+    2: bytes[16] source_key
+    3: bytes[16] snapshot_id
+    4: bytes[32] object_id     the file version captured from this source
+    5: u64       captured_at   the snapshot's capture time
 }
-
-identity = [ object_id[32], source_key[16] ]
 ```
 
 `source_key` is derived exactly as `hardlink_group` is ([06 §4](#4-file-version-manifest) key 12, [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 1) but under the label `"fbp/identity/v1"`:
@@ -370,7 +374,13 @@ identity = [ object_id[32], source_key[16] ]
 source_key = HMAC-SHA-256(content_id_key, "fbp/identity/v1" ‖ device_id ‖ u64(file_identity))[0..16]
 ```
 
-Keyed, so the store learns nothing about the source's inode space. Identities MUST be sorted by `object_id` ascending, and an `object_id` MUST NOT appear twice — a reader that finds a duplicate MUST refuse the object rather than pick one, because the two entries disagree about which file this version came from. Like the placement hint, this is a standalone metadata record — type `0x0C` ([02 §3.1](02-identifiers.md#31-object-types)) — and is sealed and encrypted the same way.
+Keyed, so the store learns nothing about the source's inode space. It renders as 26 lowercase base32 characters ([00 §6](00-conventions.md#6-object-identifiers-in-paths)), and `<shard>` is its **first four characters** — the same rule blobs follow, for the reason [01 §2](01-object-layout.md#2-namespace) gives: without it, `/hints/identity/` would hold one child per file in the repository. `<captured-at>` is a zero-padded 16-digit decimal, so lexicographic order within one source key is chronological. Like the placement hint, this is a standalone metadata record — type `0x0C` ([02 §3.1](02-identifiers.md#31-object-types)) — sealed and encrypted the same way.
+
+Keys 2, 3 and 5 repeat what the store key already says, and that is deliberate: a store key is not covered by the AEAD, so a reader MUST verify that the body agrees with the key it was fetched under and MUST refuse the object otherwise.
+
+A hint carries the **sequence number of the write intent it was published under** rather than one of its own, and does not consume the writer's sequence space ([08 §2](08-journal.md#2-record-framing); [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7). One number per hint would be a durable state write and an accounting obligation per changed file, for objects whose absence is never damage. Key uniqueness does not rest on the counter: each record seals under its own CSPRNG salt.
+
+A writer MUST NOT publish two hints for one `source_key` within one snapshot. Two file versions sharing a source identity is a hardlink group's several names, and neither is the other's ancestor; a writer that observes it MUST publish no hint for that source key rather than choose.
 
 ### 11.1 What it is for
 
@@ -386,13 +396,21 @@ The same reason as §10.2, and it is worth stating twice because the pull toward
 
 ### 11.3 What a reader may do with it
 
-A reader MAY use it to locate a prior version whose path has changed. It MUST still check size and modification time before reusing content, exactly as it would for a path match: an inode is reused after its file is deleted, so identity alone never establishes that two versions are the same file.
+A reader looking for the version a given snapshot held lists `/hints/identity/<shard>/<source-key>/` and takes the **last entry whose `<captured-at>` is at or before that snapshot's capture time**. Later entries describe versions that snapshot did not contain. Because the listing is chronological, the scan stops at the first entry past the bound.
 
-Absence is ordinary. A writer that publishes no map, or a reader that cannot find one, falls back to matching by path — which is correct and merely misses renames.
+Every hint under one source key was written by one device — `device_id` is inside the derivation — so no cross-device ordering question arises.
+
+A reader MAY use a hint to locate a prior version whose path has changed. It MUST still check size and modification time before reusing content, exactly as it would for a path match: an inode is reused after its file is deleted, so identity alone never establishes that two versions are the same file.
+
+Absence is ordinary. A writer that publishes no hints, or a reader that finds none, falls back to matching by path — which is correct and merely misses renames. So is a hint that fails to authenticate, fails to parse, or disagrees with its key: none of those is a damage finding, because a hint is never evidence.
 
 ### 11.4 What it costs
 
-A complete map costs roughly 52 bytes per file **per snapshot**, and that is proportional to the repository rather than to what changed — the growth [NFR-PERF-005](../../docs/requirements/non-functional.md) exists to prevent. Completeness is what makes it work, because a file renamed today may not have been modified for a hundred snapshots, so a map holding only this snapshot's new versions would not name it. The trade is open as [Q21](../../docs/open-questions.md#q21--the-source-identity-hint-is-per-snapshot-and-whole-tree); a writer that finds the cost unacceptable publishes no map, which this section already permits.
+One store object per file version created — so a first capture writes one per file, and every capture after it writes one per **changed** file. Per-snapshot cost therefore follows what changed, which is what [NFR-PERF-005](../../docs/requirements/non-functional.md) requires.
+
+The price is object count rather than bytes: a sealed standalone record is around 230 bytes whatever it holds, against roughly 50 bytes for an entry in a packed table, and on a store that charges per request each one is a request. That is the per-object overhead blobs exist to amortise, spent deliberately. It is cheaper than the alternative from the second capture onwards, because the alternative — one object per snapshot naming every file — pays for the whole repository every run whether or not anything changed. → [Q21](../../docs/open-questions.md#closed)
+
+A collector treats a hint as it treats the placement hint: unreferenced by anything, advisory, and collectable once the snapshot that wrote it is gone.
 
 ---
 

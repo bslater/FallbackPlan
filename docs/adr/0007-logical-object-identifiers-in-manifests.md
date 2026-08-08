@@ -92,17 +92,30 @@ reasoning is identical and should not have to be rediscovered a third time.
 Finding a renamed file's prior version needs its **source identity** — the
 inode or `FileId` it was captured from. That is device-specific, so putting it
 on a file version would have made the same version encode differently on every
-device, for exactly the reason set out above. It became a second optional
-object per snapshot instead:
+device, for exactly the reason set out above. It became a separate optional
+object instead:
 [specification 06 §11](../../specifications/repository-format/06-manifests.md#11-source-identity),
-at `/hints/identity/<snapshot-id>`, keyed under the content-ID key so the store
-learns nothing about the source's inode space.
+at `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, keyed
+under the content-ID key so the store learns nothing about the source's inode
+space.
 
 What made this worth doing rather than leaving to the local catalogue: the
 catalogue is a disposable cache, and a rename captured while it was cold would
 write a file version with no `parent_version` — severing that file's history
 **permanently**, in an immutable object, because of a transient local state.
 Speed degrading with a cold cache is acceptable; correctness degrading is not.
+
+**Keyed by source key, not by snapshot**, and that is the second half of the
+decision. The first attempt published one object per snapshot naming every
+file version it contained, which answered the question and cost ~52 bytes per
+file *every run* — growth proportional to the repository for a backup that
+changed one file, which is what NFR-PERF-005 forbids. Keying by the source key
+and writing only when a version is created makes the per-snapshot cost follow
+what changed; a reader lists one prefix, whose entries are chronological by
+construction, and takes the newest at or before the snapshot it is asking
+about. The price is object count rather than bytes — one small object per
+changed file — and it is the cheaper side of the trade from the second capture
+onward. → [Q21](../open-questions.md#closed)
 
 `hardlink_group` remains the one device-specific value inside a manifest. That
 exception is narrow and accepted — it is present only for files with multiple

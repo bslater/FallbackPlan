@@ -216,48 +216,64 @@ public sealed class ManifestBuilder : IAsyncDisposable
     }
 
     /// <summary>
-    /// Writes the snapshot's source-identity map at
-    /// <c>/hints/identity/&lt;snapshot&gt;</c> (specification 06 §11), sealed
-    /// under the same standalone framing as the snapshot object.
+    /// Writes one source-identity hint per newly created file version
+    /// (specification 06 §11), sealed under the same standalone framing as
+    /// the snapshot object.
     /// </summary>
+    /// <param name="hints">The hints to publish; an empty list writes nothing.</param>
+    /// <param name="intentSequence">
+    /// The publication's write-intent sequence number, which every hint
+    /// carries.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the writes.</param>
     /// <remarks>
-    /// Advisory, so a store that refuses the put is not a publication
-    /// failure — a later reader simply falls back to matching by path and
-    /// misses renames. It is written <em>before</em> the snapshot object for
-    /// the ordinary reason: a hint that becomes visible after the snapshot
-    /// that needs it is a hint that is missing exactly when it is wanted.
+    /// <para>
+    /// Advisory, so a store that refuses a put is not a publication failure —
+    /// a later reader simply falls back to matching by path and misses that
+    /// file's rename. They are written <em>before</em> the snapshot object
+    /// for the ordinary reason: a hint that becomes visible after the
+    /// snapshot that needs it is a hint that is missing exactly when it is
+    /// wanted.
+    /// </para>
+    /// <para>
+    /// Every hint of one publication carries the intent's sequence number
+    /// rather than drawing its own. A number per hint would be a durable
+    /// state write per changed file and an accounting obligation per changed
+    /// file, and hints discharge none of the four (ADR-0022 §Decision 7);
+    /// the intent's number is already accounted by its journal record. Key
+    /// uniqueness never rested on the counter — each object seals under a
+    /// fresh 32-byte salt.
+    /// </para>
     /// </remarks>
-    public async ValueTask WriteSourceIdentityMapAsync(
-        SourceIdentityMap map,
-        ulong counter,
+    public async ValueTask WriteSourceIdentityHintsAsync(
+        IReadOnlyList<SourceIdentityHint> hints,
+        ulong intentSequence,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(hints);
 
-        if (map.Identities.Count == 0)
+        foreach (var hint in hints)
         {
-            return;
+            var encoded = SourceIdentityHintCodec.Encode(hint);
+            var contentId = ContentHasher.Hash(encoded);
+            var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityHint, contentId);
+
+            var sealedObject = StandaloneRecordCipher.Seal(
+                _repositoryId,
+                _metadataClassKey,
+                _generation,
+                _writerId,
+                intentSequence,
+                ObjectType.SourceIdentityHint,
+                objectId,
+                encoded);
+
+            await _store.PutAsync(
+                MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
+                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
         }
-
-        var encoded = SourceIdentityMapCodec.Encode(map);
-        var contentId = ContentHasher.Hash(encoded);
-        var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityMap, contentId);
-
-        var sealedObject = StandaloneRecordCipher.Seal(
-            _repositoryId,
-            _metadataClassKey,
-            _generation,
-            _writerId,
-            counter,
-            ObjectType.SourceIdentityMap,
-            objectId,
-            encoded);
-
-        await _store.PutAsync(
-            MetadataStoreKeys.SourceIdentity(map.SnapshotId.Span),
-            _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
-            PutConditions.IfNotExists,
-            cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask SealAndUploadAsync(CancellationToken cancellationToken)

@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -11,57 +10,112 @@ using FallbackPlan.Storage.Abstractions;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// The read side of the source-identity map (specification 06 §11): given a
-/// prior snapshot, which published file version came from a given file
-/// identity.
+/// The read side of the source-identity hints (specification 06 §11): given
+/// one source file's keyed identity, which file version was captured from
+/// it.
 /// </summary>
 /// <remarks>
+/// <para>
 /// This is the durable half of rename detection. The catalogue answers the
 /// same question faster and is consulted first, but it is a disposable cache
 /// — after a rebuild it holds no identities at all, and a rename captured in
 /// that window would record no <c>parent_version</c>, severing the file's
-/// history permanently. The map costs one small object fetch per
-/// publication and removes that failure mode.
-///
-/// It is used for <b>ancestry only</b>, never for the NFR-PERF-003 content
-/// short-circuit: the map carries no size and no modification time, and an
+/// history permanently. The hints cost one prefix listing and one fetch,
+/// and only in that window.
+/// </para>
+/// <para>
+/// It yields <b>ancestry only</b>, never the NFR-PERF-003 content
+/// short-circuit: a hint carries no size and no modification time, and an
 /// inode is reused after its file is deleted, so a match here establishes a
 /// likely lineage and nothing about the bytes (06 §11.3).
+/// </para>
 /// </remarks>
-public sealed class SourceIdentityLookup
+public static class SourceIdentityLookup
 {
-    private readonly Dictionary<SourceKey, ObjectId> _versions;
-
-    private SourceIdentityLookup(Dictionary<SourceKey, ObjectId> versions) => _versions = versions;
-
-    /// <summary>The number of identities the map carried.</summary>
-    public int Count => _versions.Count;
-
     /// <summary>
-    /// Loads the map published for <paramref name="snapshotId"/>, or returns
-    /// <see langword="null"/> when there is none.
+    /// The version captured from <paramref name="sourceKey"/> most recently
+    /// at or before <paramref name="capturedAtBound"/>, or
+    /// <see langword="null"/> when no hint answers.
     /// </summary>
+    /// <param name="store">The repository store.</param>
+    /// <param name="repositoryId">The repository the records bind to.</param>
+    /// <param name="keys">The repository key set.</param>
+    /// <param name="sourceKey">The 16-byte keyed source identity.</param>
+    /// <param name="capturedAtBound">
+    /// The prior snapshot's capture time. Entries after it describe versions
+    /// the prior snapshot did not contain, so they are not its ancestor.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the lookup.</param>
     /// <remarks>
-    /// Absence is ordinary — a writer that never published one, a store that
-    /// refused the put, a snapshot from an implementation that does not write
-    /// hints — and so is an object that fails to authenticate or to parse. A
-    /// hint is never evidence, so nothing here is a damage finding; the
-    /// caller falls back to matching by path and misses renames.
+    /// Absence is ordinary — a writer that published no hint, a store that
+    /// refused the put, an implementation that writes none — and so is an
+    /// object that fails to authenticate, fails to parse, or disagrees with
+    /// the key it was found under. A hint is never evidence, so nothing here
+    /// is a damage finding; the caller falls back to matching by path.
     /// </remarks>
-    public static async ValueTask<SourceIdentityLookup?> TryLoadAsync(
+    public static async ValueTask<ObjectId?> FindAsync(
         IObjectStore store,
         RepositoryId repositoryId,
         RepositoryKeySet keys,
-        ReadOnlyMemory<byte> snapshotId,
+        ReadOnlyMemory<byte> sourceKey,
+        ulong capturedAtBound,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(keys);
 
-        byte[] bytes;
-        using (var read = await store
-            .OpenReadAsync(MetadataStoreKeys.SourceIdentity(snapshotId.Span), range: null, cancellationToken)
+        var prefix = MetadataStoreKeys.SourceIdentityPrefix(sourceKey.Span);
+        var bound = MetadataStoreKeys.Decimal16(capturedAtBound);
+
+        // Keys under one source key sort chronologically by construction, so
+        // the last one at or before the bound is the answer and the scan can
+        // stop as soon as it passes the bound.
+        ObjectKey? best = null;
+        await foreach (var entry in store.ListAsync(prefix, ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
+        {
+            if (CapturedAtComponent(entry.Key, prefix.Value) is not { } capturedAt)
+            {
+                continue;
+            }
+
+            if (string.CompareOrdinal(capturedAt, bound) > 0)
+            {
+                break;
+            }
+
+            best = entry.Key;
+        }
+
+        return best is { } key
+            ? await ReadAsync(store, repositoryId, keys, key, sourceKey, cancellationToken).ConfigureAwait(false)
+            : null;
+    }
+
+    /// <summary>
+    /// The <c>&lt;captured-at&gt;</c> component of a hint key, or
+    /// <see langword="null"/> when the key is not shaped like one.
+    /// </summary>
+    private static string? CapturedAtComponent(ObjectKey key, string prefix)
+    {
+        var remainder = key.Value.AsSpan(prefix.Length);
+        var separator = remainder.IndexOf('/');
+
+        return separator == MetadataStoreKeys.Decimal16Length
+            ? remainder[..separator].ToString()
+            : null;
+    }
+
+    private static async ValueTask<ObjectId?> ReadAsync(
+        IObjectStore store,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        ObjectKey key,
+        ReadOnlyMemory<byte> expectedSourceKey,
+        CancellationToken cancellationToken)
+    {
+        byte[] bytes;
+        using (var read = await store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false))
         {
             if (read.Outcome != OpenReadOutcome.Found)
             {
@@ -73,16 +127,16 @@ public sealed class SourceIdentityLookup
             bytes = buffer.ToArray();
         }
 
-        SourceIdentityMap map;
         try
         {
             var record = StandaloneRecordFraming.Parse(bytes);
-            if (record.Header.ObjectType != ObjectType.SourceIdentityMap)
+            if (record.Header.ObjectType != ObjectType.SourceIdentityHint)
             {
                 return null;
             }
 
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
+            SourceIdentityHint hint;
             try
             {
                 if (!StandaloneRecordCipher.TryOpen(record, repositoryId, metadataKey, out var plaintext))
@@ -90,68 +144,76 @@ public sealed class SourceIdentityLookup
                     return null;
                 }
 
-                map = SourceIdentityMapCodec.Decode(plaintext);
+                hint = SourceIdentityHintCodec.Decode(plaintext);
             }
             finally
             {
                 CryptographicOperations.ZeroMemory(metadataKey);
             }
+
+            // The store key is not covered by the AEAD, so what the key
+            // promised and what the object says are two claims and only the
+            // second is authenticated. They must agree.
+            return hint.SourceKey.Span.SequenceEqual(expectedSourceKey.Span)
+                && string.Equals(
+                    MetadataStoreKeys.SourceIdentityHint(
+                        hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span).Value,
+                    key.Value,
+                    StringComparison.Ordinal)
+                ? hint.ObjectId
+                : null;
         }
         catch (Exception exception) when (exception is FormatException or ManifestValidationException)
         {
             return null;
         }
-
-        if (!map.SnapshotId.Span.SequenceEqual(snapshotId.Span))
-        {
-            // The object under this key names a different snapshot. Nothing
-            // in the format prevents that — the key is not covered by the
-            // AEAD — so it is checked here rather than assumed.
-            return null;
-        }
-
-        // Object identifiers are unique by the codec's own check, but two of
-        // them may share a source key — a file captured, deleted, and
-        // recreated at the same inode within one snapshot, or two paths of a
-        // hardlink group. Keeping the first is arbitrary, and arbitrary is
-        // the wrong answer for ancestry that a manifest records forever, so
-        // an ambiguous key answers nothing at all.
-        var resolved = new Dictionary<SourceKey, ObjectId>(map.Identities.Count);
-        var seen = new HashSet<SourceKey>(map.Identities.Count);
-        foreach (var identity in map.Identities)
-        {
-            var key = SourceKey.From(identity.SourceKey.Span);
-            if (seen.Add(key))
-            {
-                resolved[key] = identity.ObjectId;
-            }
-            else
-            {
-                resolved.Remove(key);
-            }
-        }
-
-        return new SourceIdentityLookup(resolved);
     }
+}
 
-    /// <summary>
-    /// The file version captured from <paramref name="sourceKey"/>, or
-    /// <see langword="null"/> when the map does not name it unambiguously.
-    /// </summary>
-    public ObjectId? Find(ReadOnlySpan<byte> sourceKey) =>
-        _versions.TryGetValue(SourceKey.From(sourceKey), out var objectId) ? objectId : null;
-
-    /// <summary>
-    /// A 16-byte source key as a hashable value, so the lookup costs no
-    /// allocation per file.
-    /// </summary>
-    private readonly record struct SourceKey(ulong High, ulong Low)
-    {
-        internal static SourceKey From(ReadOnlySpan<byte> value) => value.Length == SourceIdentityMapCodec.SourceKeyLength
+/// <summary>
+/// A 16-byte source key as a hashable value, so keying a dictionary on one
+/// costs no allocation.
+/// </summary>
+internal readonly record struct SourceKey(ulong High, ulong Low)
+{
+    internal static SourceKey From(ReadOnlySpan<byte> value) =>
+        value.Length == SourceIdentityHint.SourceKeyLength
             ? new SourceKey(
-                BinaryPrimitives.ReadUInt64BigEndian(value),
-                BinaryPrimitives.ReadUInt64BigEndian(value[8..]))
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(value),
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(value[8..]))
             : throw new ArgumentException(
-                $"A source key is exactly {SourceIdentityMapCodec.SourceKeyLength} bytes.", nameof(value));
+                $"A source key is exactly {SourceIdentityHint.SourceKeyLength} bytes.", nameof(value));
+}
+
+/// <summary>
+/// One publication's view of the source-identity hints: the store, the keys,
+/// the capture time to bound the answer at, and a memo so two files that
+/// somehow ask the same question pay for one round trip.
+/// </summary>
+/// <remarks>
+/// Constructed only when the catalogue cannot answer identity questions for
+/// the prior snapshot, which is the window a rebuild opens. On the warm path
+/// nothing here is built and nothing here is called.
+/// </remarks>
+internal sealed class HintSource(
+    IObjectStore store, RepositoryId repositoryId, RepositoryKeySet keys, ulong capturedAtBound)
+{
+    private readonly Dictionary<SourceKey, ObjectId?> _answered = [];
+
+    public async ValueTask<ObjectId?> FindAsync(
+        ReadOnlyMemory<byte> sourceKey, CancellationToken cancellationToken)
+    {
+        var memo = SourceKey.From(sourceKey.Span);
+        if (_answered.TryGetValue(memo, out var cached))
+        {
+            return cached;
+        }
+
+        var found = await SourceIdentityLookup
+            .FindAsync(store, repositoryId, keys, sourceKey, capturedAtBound, cancellationToken)
+            .ConfigureAwait(false);
+
+        _answered[memo] = found;
+        return found;
     }
 }

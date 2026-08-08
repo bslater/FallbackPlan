@@ -476,7 +476,77 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [Fact]
-    public async Task The_source_identity_map_is_advisory_and_its_absence_costs_only_the_rename()
+    public async Task A_file_untouched_for_several_snapshots_still_finds_its_ancestor_when_it_moves()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/quiet.bin", Deterministic(3_000, 21), fileId: 7_777);
+        source.AddFile("docs/busy.bin", Deterministic(1_000, 22), fileId: 7_778);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        ObjectId original;
+        using (var live = OpenCatalogue())
+        {
+            var first = await CreateOrchestrator(store, keys, hierarchy, live)
+                .PublishAsync(Job(source, 0xC5), CancellationToken.None);
+            original = first.Files.Single(file => file.RelativePath == "docs/quiet.bin").ObjectId;
+
+            // Three more snapshots in which the quiet file is short-circuited
+            // and writes no hint of its own. Its answer has to come from the
+            // snapshot that created it, several generations back — the case a
+            // per-snapshot map holding only new versions could not answer,
+            // and the reason the whole-tree map was complete and expensive.
+            for (byte seed = 0xC6; seed <= 0xC8; seed++)
+            {
+                source.AddFile("docs/busy.bin", Deterministic(1_000, seed), fileId: 7_778)
+                    .Metadata = EntryMetadata.Empty with { ModifiedAt = 1_722_600_000_000ul + seed };
+
+                await CreateOrchestrator(store, keys, hierarchy, live).PublishAsync(
+                    Job(source, seed, now: 1_722_600_000_000ul + seed) with
+                    {
+                        PriorSnapshotId = Enumerable.Repeat((byte)(seed - 1), 16).ToArray(),
+                    },
+                    CancellationToken.None);
+            }
+        }
+
+        // The cache is lost, so only the store can answer.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+
+        using var rebuilt = OpenCatalogue();
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+
+        using (var reader = new RepositoryReader(Repo, keys, store))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            await CatalogueProjector.ProjectAsync(
+                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+        }
+
+        Assert.True(source.Remove("docs/quiet.bin"));
+        source.AddFile("archive/moved.bin", Deterministic(3_000, 21), fileId: 7_777);
+
+        var final = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+            .PublishAsync(
+                Job(source, 0xC9, now: 1_722_600_000_100) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xC8, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var moved = final.Files.Single(file => file.RelativePath == "archive/moved.bin");
+        var manifest = await ReadManifestAsync(store, keys, rebuilt, moved.ObjectId);
+
+        Assert.Equal(original, manifest.ParentVersion);
+    }
+
+    [Fact]
+    public async Task The_source_identity_hints_are_advisory_and_their_absence_costs_only_the_rename()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
@@ -492,14 +562,21 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         }
 
         var priorSnapshotId = Enumerable.Repeat((byte)0xF1, 16).ToArray();
-        var hintKey = MetadataStoreKeys.SourceIdentity(priorSnapshotId);
 
-        // It was published, and it is only a hint: deleting it must leave a
-        // publication that still succeeds.
-        Assert.Equal(
-            OpenReadOutcome.Found,
-            (await store.OpenReadAsync(hintKey, range: null, CancellationToken.None)).Outcome);
-        await store.DeleteAsync(hintKey, DeleteConditions.None, CancellationToken.None);
+        // They were published, and they are only hints: deleting every one
+        // must leave a publication that still succeeds.
+        var hintKeys = new List<ObjectKey>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("hints/identity/"), ListOptions.Default, CancellationToken.None))
+        {
+            hintKeys.Add(entry.Key);
+        }
+
+        Assert.NotEmpty(hintKeys);
+        foreach (var key in hintKeys)
+        {
+            await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
+        }
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
@@ -555,6 +632,8 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xB1), CancellationToken.None);
 
+        var afterFirst = Directory.EnumerateFiles(StoreRoot, "*", SearchOption.AllDirectories).Sum(p => new FileInfo(p).Length);
+
         var changed = source.AddFile("d00/f00.bin", Deterministic(2_100, 99));
         changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
@@ -565,6 +644,8 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                     PriorSnapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray(),
                 },
                 CancellationToken.None);
+
+        var afterSecond = Directory.EnumerateFiles(StoreRoot, "*", SearchOption.AllDirectories).Sum(p => new FileInfo(p).Length);
 
         // One file changed, so one file-version manifest is new, and so are
         // the trees on the path to it — its own directory, the root — because
@@ -583,6 +664,17 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.True(
             after * 20 < before,
             $"The second snapshot rewrote {after} bytes of metadata against the first's {before}.");
+
+        // And the whole store, not just the manifest plane — which is the
+        // assertion the per-snapshot source-identity map made impossible. It
+        // described the whole tree every run, so the bytes a snapshot wrote
+        // followed the repository however little had changed; keyed by source
+        // key, a hint is written once per version and this measures it
+        // (06 §11, Q21).
+        var growth = afterSecond - afterFirst;
+        Assert.True(
+            growth * 20 < afterFirst,
+            $"The second snapshot added {growth} bytes to a {afterFirst}-byte store.");
     }
 
     /// <summary>Reads a published file-version manifest back out of the store.</summary>

@@ -25,12 +25,12 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /tombstones/<object-type>/<object-id>
 /audit/<period>/<record-id>
 /hints/placement/<snapshot-id>
-/hints/identity/<snapshot-id>
+/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
 ```
 
 `<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).
 
-`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` follows the same rule.
+`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` and a source-identity hint's `<captured-at>` ([06 §11](06-manifests.md#11-source-identity)) follow the same rule; that hint's `<shard>` is the first four base32 characters of its `<source-key>`, sharded for the reason blobs are — one child per file in the repository is exactly the listing prefix this rule exists to bound.
 
 > **Erratum (phase 0).** This specification never defines how `<delta-id>`, `<checkpoint-id>`, or `<key-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6); the key identifier is likewise 16 opaque bytes, and readers discover it by listing `/keys/` (see the erratum at §6).
 

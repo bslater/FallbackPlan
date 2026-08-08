@@ -348,6 +348,50 @@ public sealed class Catalogue : IDisposable
         return snapshots;
     }
 
+    /// <summary>One snapshot's capture time, or <see langword="null"/> when it is unknown here.</summary>
+    /// <param name="snapshotId">The snapshot, 16 bytes.</param>
+    /// <remarks>
+    /// Snapshot rows survive a catalogue rebuild — the projector reads the
+    /// standalone snapshot objects — so this answers even when file-version
+    /// identities do not.
+    /// </remarks>
+    public ulong? LookupSnapshotCaptureTime(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT captured_at FROM snapshots WHERE snapshot_id = $snapshot LIMIT 1;";
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+
+        var value = command.ExecuteScalar();
+        return value is null or DBNull ? null : (ulong)Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Whether this snapshot's file versions carry the scan-time identity the
+    /// incremental path compares.
+    /// </summary>
+    /// <param name="snapshotId">The snapshot, 16 bytes.</param>
+    /// <remarks>
+    /// The gate on consulting the durable source-identity hints (06 §11).
+    /// Identity is scan-time local fact and is not durable (02 §2), so a
+    /// rebuilt catalogue has none and the hints are the only remaining answer;
+    /// a warm one has them all and answering from the store would be a
+    /// round trip to learn what is already in hand.
+    /// </remarks>
+    public bool HasIdentities(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM tree_entries t
+            JOIN file_versions f ON f.object_id = t.object_id
+            WHERE t.snapshot_id = $snapshot AND f.identity_file_id IS NOT NULL
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+
+        return command.ExecuteScalar() is not (null or DBNull);
+    }
+
     /// <summary>
     /// Resolves one path within a snapshot — the NFR-PERF-004 lookup.
     /// Case-insensitive resolution folds through the ADR-0026 §Decision 8

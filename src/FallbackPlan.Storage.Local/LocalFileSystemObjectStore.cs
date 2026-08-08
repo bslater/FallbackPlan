@@ -201,11 +201,26 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             yield break;
         }
 
+        // Only the subtree the prefix names is walked. A prefix is a string
+        // over the whole flat namespace and may end mid-component, so the
+        // walk starts at the deepest directory the prefix fully names and the
+        // ordinary string match still decides every candidate — narrowing
+        // changes what is *visited*, never what matches. Walking the whole
+        // store and filtering afterwards made one prefix listing cost the
+        // entire repository, which is the difference between a per-file hint
+        // lookup being cheap and being unusable.
+        var searchRoot = ResolvePrefixRoot(prefix);
+
+        if (!Directory.Exists(searchRoot))
+        {
+            yield break;
+        }
+
         // The local filesystem holds everything at hand, so listing collects
         // and sorts eagerly: ordinal key order is part of the contract.
         var entries = new List<ObjectEntry>();
 
-        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        foreach (var path in Directory.EnumerateFiles(searchRoot, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -258,6 +273,41 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         File.Delete(path);
 
         return ValueTask.FromResult(new DeleteResult(DeleteOutcome.Deleted));
+    }
+
+    /// <summary>
+    /// The deepest directory a prefix fully names, as a filesystem path under
+    /// the root; the store root when the prefix names none.
+    /// </summary>
+    /// <remarks>
+    /// Only components the prefix <em>completes</em> — those followed by a
+    /// <c>/</c> — can narrow the walk: a prefix ending mid-component names a
+    /// filename fragment, not a directory, and its parent is as deep as the
+    /// walk may start. Anything the prefix cannot be proven to sit under
+    /// falls back to the store root, so narrowing can only ever visit fewer
+    /// files, never fewer matches.
+    /// </remarks>
+    private string ResolvePrefixRoot(ObjectPrefix prefix)
+    {
+        var value = prefix.Value;
+        var lastSeparator = value.LastIndexOf('/');
+
+        if (lastSeparator <= 0)
+        {
+            return _root;
+        }
+
+        var directoryPart = value[..lastSeparator];
+
+        // The grammar admits '.' and '-', so ".." is spellable and traversal
+        // has to be refused rather than assumed away — the same rule
+        // ResolvePath applies to keys.
+        var candidate = Path.GetFullPath(Path.Combine(
+            _root, directoryPart.Replace('/', Path.DirectorySeparatorChar)));
+
+        return candidate.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? candidate
+            : _root;
     }
 
     /// <summary>

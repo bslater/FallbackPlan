@@ -136,6 +136,12 @@ The following maps and enums have no key assignments in the specification. Phase
 
 A number satisfying none of these after the reader's configured bounded number of generations is a damage finding, per 07 §4. The writer's own recovery obligation is unchanged: a number it knows it skipped gets a void delta.
 
+**Advisory hint objects consume no number.** The placement hint (06 §10) and the source-identity hint (06 §11) are sealed under the same standalone framing, and each carries the sequence of the **write intent it was published under** rather than one of its own. The four cases above stay exhaustive because a hint never enters the space.
+
+The reason is arithmetic rather than taste. A source-identity hint is written per file version created, so a number apiece would mean one durable sequence-state write and one unaccounted obligation — and therefore one void delta on the next run — for every changed file in every backup. Spending a gapless space on objects whose absence is *by construction* never damage would also invert what the space is for: it exists so a missing object is detectable, and a missing hint is a fallback to matching by path.
+
+Nothing is weakened. No gap scan enumerates `/hints/`. Record-key uniqueness rests on the per-object CSPRNG salt in the `FBPKSREC` prefix, not on the counter, so several hints sharing the intent's number still derive distinct keys and distinct nonces (Decision 1; 03 §5).
+
 ## Decision 8 — Ed25519 conformance vectors, and the Bodu verifier's strictness
 
 The conformance suite's Ed25519 gap closes with a **pure-Python RFC 8032 implementation inside `generate.py`** (standard-library `hashlib.sha512` and integer arithmetic), self-checked against the RFC 8032 §7.1 published test vectors in the builder's inline asserts — the same pattern as the generator's RFC 5869 HKDF self-test. `ed25519.json` then carries both the §7.1 known-answer cases and format-real cases (seed = `HKDF-Expand(master_key, "fbp/signing/v1" ‖ u32(g), 32)` signing pinned canonical-CBOR snapshot bytes), all computed, so the file is honestly `independently_derived: true` under the suite's own definition.
