@@ -5,9 +5,11 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -675,6 +677,65 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.True(
             growth * 20 < afterFirst,
             $"The second snapshot added {growth} bytes to a {afterFirst}-byte store.");
+    }
+
+    [Fact]
+    public async Task The_published_delta_carries_a_digest_of_every_blob_it_covers()
+    {
+        var source = BuildSource();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue();
+
+        var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xE1), CancellationToken.None);
+
+        // Read the delta back out of the store rather than trusting the
+        // in-process value: what a replicating participant checks is the
+        // published object, and only the published object.
+        var deltaBytes = await ReadObjectAsync(
+            store, MetadataStoreKeys.IndexDelta(0, published.DeltaId));
+
+        var record = StandaloneRecordFraming.Parse(deltaBytes);
+        var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
+        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+
+        var decoded = IndexDeltaCodec.Decode(plaintext);
+        var delta = decoded.Delta;
+
+        Assert.NotEmpty(delta.CoveredBlobIds);
+        Assert.Equal(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests.Count);
+
+        // The signature covers the digests, so what the receiving participant
+        // checks against is what the writer asserted (07 §2, §2.2).
+        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        {
+            Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        }
+
+        // And each digest is the digest of the blob it names, over the bytes
+        // the store actually holds, excluding the 16-byte locator (05 §5).
+        var byId = published.ContentBlobs.Concat(published.MetadataBlobs)
+            .ToDictionary(blob => blob.BlobId, blob => blob.StoreKey);
+
+        for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+        {
+            var bytes = await ReadObjectAsync(store, byId[delta.CoveredBlobIds[i]]);
+            var expected = System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 16));
+
+            Assert.Equal(expected, delta.CoveredBlobDigests[i].ToArray());
+        }
+    }
+
+    private static async Task<byte[]> ReadObjectAsync(LocalFileSystemObjectStore store, ObjectKey key)
+    {
+        using var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
+        Assert.Equal(OpenReadOutcome.Found, read.Outcome);
+
+        using var buffer = new MemoryStream();
+        await read.Content!.CopyToAsync(buffer, CancellationToken.None);
+        return buffer.ToArray();
     }
 
     /// <summary>Reads a published file-version manifest back out of the store.</summary>

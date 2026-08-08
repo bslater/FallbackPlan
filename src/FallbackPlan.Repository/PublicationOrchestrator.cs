@@ -286,9 +286,11 @@ public sealed partial class PublicationOrchestrator
             // entries projected from the sealed record tables (07 §10).
             var entries = new List<IndexEntry>();
             var covered = new List<BlobId>();
+            var digests = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in archive.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
+                digests.Add(blob.Digest.ToArray());
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -302,8 +304,8 @@ public sealed partial class PublicationOrchestrator
                 }
             }
 
-            var deltaId = await indexPublisher.PublishDeltaAsync(
-                _generation.Value, covered, entries, cancellationToken).ConfigureAwait(false);
+            var (deltaId, _) = await indexPublisher.PublishDeltaDetailedAsync(
+                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
             // Step 7: the snapshot's discoverable standalone copy — same

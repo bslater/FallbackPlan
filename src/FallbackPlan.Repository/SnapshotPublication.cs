@@ -291,9 +291,17 @@ public sealed partial class PublicationOrchestrator
             // Step 6: index deltas referencing the now-durable blobs.
             var entries = new List<IndexEntry>();
             var covered = new List<BlobId>();
+
+            // The blob digest's durable home (07 §2.2). It is published
+            // beside the blob it names, inside the signature, so a
+            // participant receiving that blob can check the bytes against
+            // something the writer signed rather than against a record kept
+            // on the writer's own machine.
+            var digests = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in session.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
+                digests.Add(blob.Digest.ToArray());
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -308,7 +316,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, cancellationToken).ConfigureAwait(false);
+                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded

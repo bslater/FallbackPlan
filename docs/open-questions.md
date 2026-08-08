@@ -131,18 +131,6 @@ A related build decision is recorded here so it is not silently re-made: `Invari
 
 ---
 
-## Q16 — The blob digest has no home in the index
-
-**Owner:** engineering · **Blocks:** replication receipts (verify level 2 at scale) · **Gates:** Phase 2 replication — Phase 1 is unaffected · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) · **Spec:** [05 §5](../specifications/repository-format/05-blob.md#5-sealing), [07 §2](../specifications/repository-format/07-index.md#2-index-delta)
-
-05 §5 says the blob digest is "recorded in the index and used for end-to-end verification during replication", but no index delta or checkpoint field carries it — 07's entry array has no digest position and its object-level keys have none either. Phase 0 records the digest in the **catalogue** (`blobs.digest`, populated at seal and by verify level 2), which serves single-machine verification but is device-local and disposable — it cannot serve as a replication receipt another participant can check.
-
-The candidate format fix is an optional parallel array on the delta (`covered_blob_digests`, aligned with `covered_blob_ids`, inside the signed prefix), which would make digests durable, signed, and discoverable exactly where the covered blobs are declared. That is a format change and waits for a format-change window; the 05 §5 sentence carries an erratum note meanwhile.
-
-**Not decided** (the format-level carriage; the catalogue-domain recording is implemented).
-
----
-
 ## Q18 — Streaming restored content to a remote client
 
 **Owner:** product · **Blocks:** Phase 2 console work
@@ -176,6 +164,7 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
 | Q21 — the source-identity hint grew with the repository, not with the change | Resolved by keying it on the **source key** rather than the snapshot: `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, one small object per file version created, found by listing one prefix whose entries are chronological. The per-snapshot map it replaced described the whole tree every run, at a measured ~52 bytes per file; a one-file change to a 1 024-file tree now adds 7 386 bytes to the store against ~57 200 before. The accepted price is object count — one store object, and on a metered store one request, per changed file — which is the per-object overhead blobs exist to amortise, and it is the cheaper side from the second capture onward ([ADR-0007 Amendment 2](adr/0007-logical-object-identifiers-in-manifests.md), [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) |
 | Q12 — should `xchacha20-poly1305-v1` ship while unverified? | No — the profile is **withdrawn** and `0x0002` is reserved, never to be assigned to another suite. Cross-verification against a second independent implementation is the condition on which a third-party primitive is admitted here, and none existed for XChaCha20-Poly1305. An unverified AEAD is a different order of risk from an unverified KDF, and it would be discovered inside bytes the user had already stored; a format version can add a profile but cannot un-admit one that written repositories depend on. The cost — slower on hardware without AES acceleration — is accepted ([ADR-0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md), [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)) |
+| Q16 — where does the blob digest live? | On the index delta, as `covered_blob_digests` — an optional array parallel to `covered_blob_ids`, inside the signature ([07 §2.2](../specifications/repository-format/07-index.md#22-covered-blob-digests)). A replication receipt has to be checkable by the participant receiving the blob, and the catalogue is device-local, so it stays as a cache and this is the durable copy. Optional because the format's integrity rests on per-record AEAD tags; a **present** digest that does not match is a damage finding, and absence is not |
 | Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |

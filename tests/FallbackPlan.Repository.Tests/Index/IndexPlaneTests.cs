@@ -49,6 +49,73 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [Fact]
+    public void A_covered_blob_digest_round_trips_and_is_covered_by_the_signature()
+    {
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+
+        var digest = Enumerable.Repeat((byte)0x5A, 32).ToArray();
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 11,
+            Generation = 0,
+            CoveredBlobIds = [BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray())],
+            CoveredBlobDigests = [digest],
+            Entries = [Entry(1, 6)],
+        };
+
+        var signedBytes = IndexDeltaCodec.EncodeForSigning(delta);
+        var decoded = IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(signedBytes)));
+
+        Assert.Equal(digest, Assert.Single(decoded.Delta.CoveredBlobDigests).ToArray());
+        Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+
+        // Key 10 sorts after the signature and is signed anyway — the
+        // signature covers every key except itself (07 §2), which is the rule
+        // that let a field be added without renumbering an established one.
+        // A digest that changes must change the signed bytes.
+        var altered = delta with { CoveredBlobDigests = [Enumerable.Repeat((byte)0x5B, 32).ToArray()] };
+        Assert.NotEqual(signedBytes, IndexDeltaCodec.EncodeForSigning(altered));
+    }
+
+    [Fact]
+    public void Covered_blob_digests_are_parallel_to_the_covered_blobs_or_absent()
+    {
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 12,
+            Generation = 0,
+            CoveredBlobIds =
+            [
+                BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray()),
+                BlobId.FromBytes(Enumerable.Repeat((byte)7, 16).ToArray()),
+            ],
+
+            // One digest, two blobs. Pairing what can be paired would attach
+            // the first blob's digest to whichever blob a reader happened to
+            // pair it with, which is worse than carrying no digest at all.
+            CoveredBlobDigests = [Enumerable.Repeat((byte)0x5A, 32).ToArray()],
+            Entries = [Entry(1, 6)],
+        };
+
+        // The same validation guards both directions — a writer cannot
+        // produce this object and a reader would refuse it if one appeared.
+        Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(delta));
+
+        var wrongWidth = delta with
+        {
+            CoveredBlobDigests = [new byte[31], new byte[31]],
+        };
+
+        Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(wrongWidth));
+    }
+
+    [Fact]
     public void A_delta_round_trips_through_the_two_pass_signature()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);

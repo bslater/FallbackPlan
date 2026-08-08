@@ -39,6 +39,20 @@ public sealed record IndexDelta
 
     /// <summary>Present and true only for a void delta (key 8; 07 §4).</summary>
     public bool IsVoid { get; init; }
+
+    /// <summary>
+    /// SHA-256 of each covered blob's sealed bytes, parallel to
+    /// <see cref="CoveredBlobIds"/> (key 10; 07 §2.2). Empty when the writer
+    /// published none.
+    /// </summary>
+    /// <remarks>
+    /// The durable home of the blob digest, and the reason it is here rather
+    /// than only in the catalogue: a replication receipt has to be checkable
+    /// by the participant receiving the blob, and a device-local record is
+    /// not. Inside the signature, so what it asserts is what the writer
+    /// signed.
+    /// </remarks>
+    public IReadOnlyList<ReadOnlyMemory<byte>> CoveredBlobDigests { get; init; } = [];
 }
 
 /// <summary>A decoded delta: the value, the exact signed bytes, and the signature to verify against the derived signing key for <see cref="IndexDelta.Generation"/>.</summary>
@@ -101,6 +115,7 @@ public static class IndexDeltaCodec
         DeltaId? predecessor = null;
         ushort? shard = null;
         List<BlobId> covered = [];
+        List<ReadOnlyMemory<byte>> digests = [];
         List<IndexEntry> entries = [];
         bool? isVoid = null;
         byte[]? signature = null;
@@ -142,9 +157,19 @@ public static class IndexDeltaCodec
                 case 9:
                     signature = reader.ReadFixedByteString(64);
                     break;
+                case 10:
+                    var digestCount = reader.ReadStartArray(maxCount: 65_536);
+                    digests = new List<ReadOnlyMemory<byte>>(digestCount);
+                    for (var digestIndex = 0; digestIndex < digestCount; digestIndex++)
+                    {
+                        digests.Add(reader.ReadFixedByteString(32));
+                    }
+
+                    reader.ReadEndArray();
+                    break;
                 default:
                     throw new IndexFormatException(
-                        "The delta carries an unknown key; specification 07 §2 assigns keys 1-9 only.");
+                        "The delta carries an unknown key; specification 07 §2 assigns keys 1-10 only.");
             }
         }
 
@@ -172,6 +197,7 @@ public static class IndexDeltaCodec
             CoveredBlobIds = covered,
             Entries = entries,
             IsVoid = isVoid == true,
+            CoveredBlobDigests = digests,
         };
 
         Validate(delta);
@@ -185,6 +211,25 @@ public static class IndexDeltaCodec
         {
             throw new IndexFormatException(
                 "A void delta is well-formed and signed with empty entries and empty covered_blob_ids (specification 07 §4).");
+        }
+
+        // Parallel arrays or no array at all. Pairing what can be paired
+        // would silently attach one blob's digest to another blob, which is
+        // worse than carrying no digest (specification 07 §2.2).
+        if (delta.CoveredBlobDigests.Count > 0 && delta.CoveredBlobDigests.Count != delta.CoveredBlobIds.Count)
+        {
+            throw new IndexFormatException(
+                $"covered_blob_digests has {delta.CoveredBlobDigests.Count} elements against " +
+                $"{delta.CoveredBlobIds.Count} covered blobs; the arrays are parallel or absent (specification 07 §2.2).");
+        }
+
+        foreach (var digest in delta.CoveredBlobDigests)
+        {
+            if (digest.Length != 32)
+            {
+                throw new IndexFormatException(
+                    "A covered blob digest is a 32-byte SHA-256 (specification 07 §2.2).");
+            }
         }
 
         if (delta.Shard is { } shard)
@@ -265,7 +310,8 @@ public static class IndexDeltaCodec
             + (delta.PredecessorDeltaId is not null ? 1 : 0)
             + (delta.Shard is not null ? 1 : 0)
             + (delta.IsVoid ? 1 : 0)
-            + (signature is not null ? 1 : 0);
+            + (signature is not null ? 1 : 0)
+            + (delta.CoveredBlobDigests.Count > 0 ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -309,6 +355,21 @@ public static class IndexDeltaCodec
         {
             writer.WriteKey(9);
             writer.WriteByteString(signature);
+        }
+
+        // Key 10 sorts after the signature and is nonetheless signed: the
+        // signature covers every key except itself (07 §2), which is what
+        // lets a later key be signed without renumbering an established one.
+        if (delta.CoveredBlobDigests.Count > 0)
+        {
+            writer.WriteKey(10);
+            writer.WriteStartArray(delta.CoveredBlobDigests.Count);
+            foreach (var digest in delta.CoveredBlobDigests)
+            {
+                writer.WriteByteString(digest.Span);
+            }
+
+            writer.WriteEndArray();
         }
 
         writer.WriteEndMap();
