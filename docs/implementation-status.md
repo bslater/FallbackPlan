@@ -80,6 +80,8 @@ Two such objects are specified. The **source-identity hint** ([06 §11](../speci
 
 It is keyed by **source key** rather than by snapshot, and the difference is the whole of [Q21](open-questions.md#closed): one object per file version created, so per-snapshot cost follows what changed. The first shape named every file the snapshot contained and cost ~52 bytes per file every run — the growth NFR-PERF-005 forbids, and the reason that requirement could not be asserted on total store bytes until this changed.
 
+A renamed file no longer pays for its move in reads either. `PriorManifestSource` resolves the prior version's location through the catalogue and opens that one blob through its recovery footer, so the publisher can fetch the prior manifest and rewrite it under the new name instead of re-reading the file — a handful of range reads in place of the whole file. It is best-effort: a manifest that cannot be fetched or decoded sends the file down the ordinary capture path and raises no finding. It also needs the catalogue, so after a rebuild the hints recover the ancestry and the content is read again, because a hint names an object and not its location.
+
 The **placement hint** ([06 §10](../specifications/repository-format/06-manifests.md#10-placement-hint)) is specified and not built. It is a `MAY`, and the thing it accelerates — single-file emergency recovery without an index — has no implementation to accelerate yet; it is worth writing alongside that path rather than before it.
 
 ### 0009 — the intents are written; nothing collects yet

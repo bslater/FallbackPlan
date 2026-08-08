@@ -36,6 +36,14 @@ public sealed record CatalogueTreeEntry(
     ulong? IdentityFileId);
 
 /// <summary>A resolved physical location: everything a targeted read needs to open one blob and one record.</summary>
+/// <remarks>
+/// <see cref="StoreBlobKey"/>, <see cref="BlobClass"/> and
+/// <see cref="BlobLength"/> come from the blob row rather than the location
+/// row and are null when no blob row exists — an index delta names locations
+/// whether or not this catalogue has seen the blob that holds them. All three
+/// are needed to address the object: the key and class give the store key,
+/// the length gives the recovery footer's locator.
+/// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
     StoreBlobKey? StoreBlobKey,
@@ -45,7 +53,9 @@ public sealed record ResolvedLocation(
     ushort EncryptionProfileValue,
     ulong Generation,
     WriterId WriterId,
-    ulong Sequence);
+    ulong Sequence,
+    BlobClass? BlobClass = null,
+    long? BlobLength = null);
 
 /// <summary>
 /// The local catalogue (architecture 02 §7; FR-MAN-002, FR-MAN-005;
@@ -666,7 +676,8 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
             SELECT l.blob_id, b.store_blob_key, l.physical_offset, l.stored_length,
-                   l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence
+                   l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence,
+                   b.blob_class, b.length
             FROM object_locations l
             LEFT JOIN blobs b ON b.blob_id = l.blob_id
             WHERE l.object_id = $object
@@ -691,7 +702,9 @@ public sealed class Catalogue : IDisposable
             (ushort)reader.GetInt64(5),
             (ulong)reader.GetInt64(6),
             WriterId.FromBytes((byte[])reader.GetValue(7)),
-            (ulong)reader.GetInt64(8));
+            (ulong)reader.GetInt64(8),
+            reader.IsDBNull(9) ? null : (BlobClass)reader.GetInt64(9),
+            reader.IsDBNull(10) ? null : reader.GetInt64(10));
     }
 
     private void InsertLocation(

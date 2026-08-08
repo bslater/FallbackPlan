@@ -389,10 +389,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             .PublishAsync(Job(source, 0xD1), CancellationToken.None);
         var before = first.Files.Single(file => file.RelativePath == "docs/before.bin").ObjectId;
 
+        var priorManifest = await ReadManifestAsync(store, keys, catalogue, before);
+
         // The same file, moved. Same inode, same content, same mtime — only
         // the path changed, which is exactly what a rename is.
         Assert.True(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
+        source.OpenedPaths.Clear();
 
         var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(
@@ -418,6 +421,34 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // Content is not duplicated — every segment resolves to what the
         // first snapshot already wrote.
         Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+
+        // And it is not re-read either. The prior manifest is fetched and
+        // rewritten under the new name, so a moved file costs one record read
+        // rather than the whole file (architecture 06 §4.2). Reading it and
+        // then discarding every segment as a duplicate is the cost this path
+        // exists to stop paying.
+        Assert.Empty(source.OpenedPaths);
+
+        // Everything the rename did not change is inherited verbatim, because
+        // it describes bytes nothing re-examined.
+        Assert.Equal(priorManifest.WholeFileHash.ToArray(), manifest.WholeFileHash.ToArray());
+        Assert.Equal(priorManifest.LogicalLength, manifest.LogicalLength);
+        Assert.Equal(
+            priorManifest.SegmentReferences.Select(reference => reference.ObjectId),
+            manifest.SegmentReferences.Select(reference => reference.ObjectId));
+
+        // The catalogue keeps the version's real content facts, so the next
+        // incremental can still short-circuit a file that has not changed
+        // since before it moved.
+        var third = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(
+                Job(source, 0xD3, now: 1_722_700_000_002) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xD2, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        Assert.Equal(after.ObjectId, third.Files.Single(file => file.RelativePath == "archive/after.bin").ObjectId);
     }
 
     [Fact]

@@ -56,7 +56,8 @@ public sealed record SnapshotJob
     /// for a full backup. An unchanged file — same identity, size, and
     /// modification time as this snapshot's version of the same path
     /// (NFR-PERF-003) — re-emits the prior file-version reference without
-    /// its content ever being read.
+    /// its content ever being read; one that only moved gets a new manifest
+    /// rewritten from the prior one, still without reading its content.
     /// </summary>
     public ReadOnlyMemory<byte>? PriorSnapshotId { get; init; }
 
@@ -78,6 +79,13 @@ public sealed record SnapshotJob
 /// marks the NFR-PERF-003 short-circuit: the object identifier names the
 /// prior snapshot's version and no content was read.
 /// </summary>
+/// <remarks>
+/// <c>Inherited</c> carries the manifest a renamed file's version was
+/// rewritten from, when its content was inherited rather than captured.
+/// <c>Archive</c> is null in that case — nothing was archived — so the
+/// inherited manifest is what states the version's real length and hash to
+/// the catalogue.
+/// </remarks>
 public sealed record PublishedFileVersion(
     string RelativePath,
     ReadOnlyMemory<byte> NameBytes,
@@ -87,7 +95,8 @@ public sealed record PublishedFileVersion(
     ulong? ModifiedAt = null,
     ulong? IdentityDevice = null,
     ulong? IdentityFileId = null,
-    bool Reused = false);
+    bool Reused = false,
+    FileVersionManifest? Inherited = null);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -182,9 +191,19 @@ public sealed partial class PublicationOrchestrator
                 ? identityCatalogue.LookupSnapshotCaptureTime(priorForIdentity.Span)
                 : null;
 
+            // The read side of the rename path: a file that only moved needs a
+            // new manifest but not a new read, so the publisher can fetch the
+            // prior one (architecture 06 §4.2). Only where there is a
+            // catalogue to resolve a location with — without one there is no
+            // prior version to find in the first place.
+            using var manifests = _catalogue is { } manifestCatalogue
+                ? new PriorManifestSource(_store, _repositoryId, _keys, manifestCatalogue)
+                : null;
+
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, _catalogue, sourceKeys,
-                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null);
+                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
+                manifests);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -419,15 +438,22 @@ public sealed partial class PublicationOrchestrator
                 continue;
             }
 
+            // A renamed file archived nothing, so its content facts come from
+            // the manifest it inherited. Recording zeroes there would leave
+            // the next incremental unable to short-circuit a file that has not
+            // changed since before it moved.
             var archive = file.Archive;
+            var inherited = file.Inherited;
             _catalogue.RecordFileVersion(
                 file.ObjectId,
                 file.NameBytes.Span,
                 file.EntryKind,
-                (ulong)(archive?.LogicalLength ?? 0),
-                archive is null ? TreeWalkPublisher.EmptyHash : [.. archive.WholeFileHash],
+                (ulong)(archive?.LogicalLength ?? (long?)inherited?.LogicalLength ?? 0),
+                archive is not null ? [.. archive.WholeFileHash]
+                    : inherited is not null ? inherited.WholeFileHash.ToArray()
+                    : TreeWalkPublisher.EmptyHash,
                 parentVersion: null,
-                archive?.SegmentReferences.Count ?? 0,
+                archive?.SegmentReferences.Count ?? inherited?.SegmentReferences.Count ?? 0,
                 file.ModifiedAt,
                 file.IdentityDevice,
                 file.IdentityFileId);
@@ -459,7 +485,8 @@ public sealed partial class PublicationOrchestrator
         HardlinkGrouper grouper,
         Catalogue.Catalogue? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
-        HintSource? hints)
+        HintSource? hints,
+        PriorManifestSource? manifests)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -554,37 +581,34 @@ public sealed partial class PublicationOrchestrator
             // The prior version of THIS file, found by path where the path is
             // unchanged and by stable identity where it moved. Identity is
             // what makes a rename the same file rather than a delete plus a
-            // create (architecture 06 §1) — both for the NFR-PERF-003
-            // short-circuit below and for the ancestry the manifest records.
+            // create (architecture 06 §1) — both for the content
+            // short-circuits below and for the ancestry the manifest records.
             var prior = FindPriorVersion(entry);
+            var unchanged = IsContentUnchanged(entry, prior);
 
-            // The NFR-PERF-003 short-circuit: same identity, size, and
-            // modification time as the prior version — re-emit its reference;
-            // the content is never opened. All three keys must be present and
-            // equal; a rebuilt catalogue has no identities, so it disables
-            // this rather than weakening it.
-            //
-            // The path must match too, and that is not redundant with the
-            // identity check below. Re-emitting the prior *manifest* re-emits
-            // its `name`, so doing it for a file that moved would put a tree
-            // entry under the new name pointing at a manifest that states the
-            // old one. A renamed file therefore gets a new manifest — its
-            // ancestry preserved by `prior`, its content still never re-read
-            // only once the manifest-rewrite path below exists.
-            if (entry.Kind == ScanEntryKind.File &&
-                prior is { EntryKind: EntryKind.File } &&
-                string.Equals(prior.Path, entry.RelativePath, StringComparison.Ordinal) &&
-                prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
-                prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
-                prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
-                entry.Identity is { } identity &&
-                identity.Device == priorDevice && identity.FileId == priorFileId)
+            // The NFR-PERF-003 short-circuit: nothing about the file changed
+            // and it is still where it was — re-emit the prior version's
+            // reference; the content is never opened.
+            if (unchanged && string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
-                    priorModified, priorDevice, priorFileId, Reused: true));
+                    prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true));
+                return;
+            }
+
+            // The same file, moved. Its reference cannot be re-emitted — a
+            // manifest states its own name (06 §4), so a tree entry under the
+            // new name pointing at the old manifest would restore the file
+            // under the name it no longer has. It needs a new manifest, but
+            // not a new read: the bytes are unchanged and already durable, so
+            // the prior manifest is fetched and rewritten with the new name.
+            if (unchanged &&
+                await ReadPriorManifestAsync(prior!.ObjectId, cancellationToken).ConfigureAwait(false) is { } moved)
+            {
+                await PublishRenameAsync(entry, prior, moved, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -632,6 +656,77 @@ public sealed partial class PublicationOrchestrator
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="entry"/>'s content is provably the same as
+        /// <paramref name="prior"/>'s — identity, size, and modification time
+        /// all present and all equal.
+        /// </summary>
+        /// <remarks>
+        /// All three must be present, not merely non-contradictory. A rebuilt
+        /// catalogue holds no identities, so it disables both short-circuits
+        /// rather than weakening either: without identity, size and time alone
+        /// cannot tell an unchanged file from a different file at the same
+        /// path.
+        /// </remarks>
+        private static bool IsContentUnchanged(ScanEntry entry, CatalogueTreeEntry? prior) =>
+            entry.Kind == ScanEntryKind.File &&
+            prior is { EntryKind: EntryKind.File } &&
+            prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
+            prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
+            prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
+            entry.Identity is { } identity &&
+            identity.Device == priorDevice && identity.FileId == priorFileId;
+
+        /// <summary>
+        /// The prior version's manifest, when this publication can read one
+        /// (architecture 06 §4.2). Null disables the rename rewrite and the
+        /// file is captured normally.
+        /// </summary>
+        private ValueTask<FileVersionManifest?> ReadPriorManifestAsync(
+            ObjectId objectId, CancellationToken cancellationToken) =>
+            manifests is null
+                ? ValueTask.FromResult<FileVersionManifest?>(null)
+                : manifests.TryReadAsync(objectId, cancellationToken);
+
+        /// <summary>
+        /// Publishes a moved file by rewriting its prior manifest under the
+        /// new name, without reading a byte of its content.
+        /// </summary>
+        /// <remarks>
+        /// Exactly three fields change: the name, its normalisation, and the
+        /// ancestry. Everything else — the segment references, the whole-file
+        /// hash, the length, the sparse extents, the segmentation profile, the
+        /// metadata map, the hardlink group, the capture diagnostics — is
+        /// inherited verbatim, because it describes bytes that were not
+        /// re-examined and must not be re-stated as though they had been. That
+        /// is the same fidelity the unchanged-path short-circuit above already
+        /// gives, which re-emits the prior manifest whole.
+        /// </remarks>
+        private async ValueTask PublishRenameAsync(
+            ScanEntry entry,
+            CatalogueTreeEntry prior,
+            FileVersionManifest priorManifest,
+            CancellationToken cancellationToken)
+        {
+            var renamed = priorManifest with
+            {
+                Name = entry.NameBytes,
+                NameNormalisation = entry.NameNormalisation,
+                ParentVersion = prior.ObjectId,
+            };
+
+            var objectId = await builder.AppendManifestAsync(
+                ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(renamed), cancellationToken)
+                .ConfigureAwait(false);
+
+            EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "renamed"));
+            _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, EntryKind.File));
+            _files.Add(new PublishedFileVersion(
+                entry.RelativePath, entry.NameBytes, objectId, EntryKind.File, Archive: null,
+                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: renamed));
+            RecordSourceIdentity(entry, objectId);
         }
 
         /// <summary>
