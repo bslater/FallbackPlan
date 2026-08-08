@@ -15,7 +15,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - detect hard links and record link identity so restore can reconstruct the relationship;
 - detect sparse extents and record them as logical zero extents rather than reading zeroes;
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
-- use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create;
+- use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create — see [§4.2](#42-a-rename-is-a-move-not-a-new-file);
 - **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued. *The identity half of this is not built* — revalidation currently compares size and mtime only, which detects an ordinary edit and not a deliberate substitution ([§4.1](#41-links-are-classified-before-they-are-traversed)).
 
 ## 2. Path handling
@@ -79,6 +79,18 @@ The reconciliation interval is configurable; a full scan is also forced after an
 A link is a link whatever it points at. An object carrying both a directory marker and a link marker — an NTFS directory junction, a directory symlink — **MUST** be classified as a link, and the scanner MUST NOT descend through it. Testing the directory marker first classifies a junction as an ordinary directory and walks out of the approved root, and junctions need no privilege to create, so that is the shape an unprivileged attacker on the source machine actually has.
 
 **What this does not yet close.** The scanner classifies from a path-based stat and re-opens the object by pathname to read it, so an object can be replaced between the two — the ordinary time-of-check-to-time-of-use gap. Closing it needs no-follow, handle-relative operations: open the object without following a link, take its stable identity from the opened handle, stream from that handle, and compare the identity again after the read rather than comparing size and modification time alone. Revalidation currently compares size and modification time, which detects an ordinary edit and not a deliberate substitution. This is owed and is not claimed.
+
+### 4.2 A rename is a move, not a new file
+
+The prior version of a file is found **by path first, then by stable identity**. Path first because it is the common case and the cheaper index; identity second because a rename or a move changes the path and nothing else.
+
+Two things depend on getting this right, and only one of them is speed. The obvious cost of missing a rename is re-reading and re-hashing every byte of a file whose content did not change. The durable cost is that the new version is written with no `parent_version` — so a file the user renamed loses its history permanently, in an immutable object, because the engine could not tell a move from a deletion and a creation.
+
+Identity is never sufficient on its own and is not treated as such. An inode is reused after its file is deleted, so size and modification time are still checked before any content is reused, exactly as they are for a path match.
+
+**A renamed file still gets a new manifest.** A manifest states its own name, so re-emitting the prior object under a new tree entry would produce a tree that says one name and a manifest that says another. The new manifest carries the new name and names the prior version as its parent.
+
+> **What is not yet built.** The renamed file's *content* is currently re-read, because reusing it without re-reading means fetching the prior manifest and rewriting it with the new name, which needs a manifest-read path the publisher does not have yet. Ancestry is correct today; the read is still paid.
 
 ## 5. Consistency
 

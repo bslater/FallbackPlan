@@ -8,6 +8,7 @@ using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 
@@ -499,16 +500,29 @@ public sealed partial class PublicationOrchestrator
 
         private async ValueTask PublishLeafAsync(ScanEntry entry, CancellationToken cancellationToken)
         {
+            // The prior version of THIS file, found by path where the path is
+            // unchanged and by stable identity where it moved. Identity is
+            // what makes a rename the same file rather than a delete plus a
+            // create (architecture 06 §1) — both for the NFR-PERF-003
+            // short-circuit below and for the ancestry the manifest records.
+            var prior = FindPriorVersion(entry);
+
             // The NFR-PERF-003 short-circuit: same identity, size, and
-            // modification time as the prior snapshot's version of this path
-            // — re-emit its reference; the content is never opened. All
-            // three keys must be present and equal; a rebuilt catalogue has
-            // no identities, so it disables this rather than weakening it.
+            // modification time as the prior version — re-emit its reference;
+            // the content is never opened. All three keys must be present and
+            // equal; a rebuilt catalogue has no identities, so it disables
+            // this rather than weakening it.
+            //
+            // The path must match too, and that is not redundant with the
+            // identity check below. Re-emitting the prior *manifest* re-emits
+            // its `name`, so doing it for a file that moved would put a tree
+            // entry under the new name pointing at a manifest that states the
+            // old one. A renamed file therefore gets a new manifest — its
+            // ancestry preserved by `prior`, its content still never re-read
+            // only once the manifest-rewrite path below exists.
             if (entry.Kind == ScanEntryKind.File &&
-                catalogue is not null &&
-                job.PriorSnapshotId is { } priorSnapshot &&
-                catalogue.LookupPath(priorSnapshot.Span, entry.RelativePath) is
-                    { EntryKind: EntryKind.File } prior &&
+                prior is { EntryKind: EntryKind.File } &&
+                string.Equals(prior.Path, entry.RelativePath, StringComparison.Ordinal) &&
                 prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
                 prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
                 prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
@@ -538,8 +552,17 @@ public sealed partial class PublicationOrchestrator
                     return; // the failure was already recorded
                 }
 
+                // The ancestor, when there is one. A file version whose parent
+                // is null claims to be the first version of that file; saying
+                // so about the fourth edit of a document, or about a file the
+                // user merely renamed, is the history loss FR-MAN-003 exists
+                // to prevent.
+                var withParent = prior is null
+                    ? manifest
+                    : manifest with { ParentVersion = prior.ObjectId };
+
                 var objectId = await builder.AppendManifestAsync(
-                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(manifest), cancellationToken)
+                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(withParent), cancellationToken)
                     .ConfigureAwait(false);
 
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
@@ -555,6 +578,36 @@ public sealed partial class PublicationOrchestrator
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
+        }
+
+        /// <summary>
+        /// The prior snapshot's version of this entry — by path first, then by
+        /// stable identity.
+        /// </summary>
+        /// <param name="entry">The entry being captured.</param>
+        /// <returns>The prior version, or <see langword="null"/> when this is a new file.</returns>
+        /// <remarks>
+        /// Path first because it is the overwhelmingly common case and the
+        /// cheaper index. Identity second because a rename or a move changes
+        /// the path and changes nothing else, and treating that as a new file
+        /// costs a full re-read of unchanged bytes and severs the version
+        /// history the user was trying to keep.
+        /// </remarks>
+        private CatalogueTreeEntry? FindPriorVersion(ScanEntry entry)
+        {
+            if (catalogue is null || job.PriorSnapshotId is not { } priorSnapshot)
+            {
+                return null;
+            }
+
+            if (catalogue.LookupPath(priorSnapshot.Span, entry.RelativePath) is { } byPath)
+            {
+                return byPath;
+            }
+
+            return entry.Identity is { } identity
+                ? catalogue.LookupIdentity(priorSnapshot.Span, identity.Device, identity.FileId)
+                : null;
         }
 
         private ArchiveResult? LastArchive { get; set; }

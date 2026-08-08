@@ -353,6 +353,52 @@ public sealed class Catalogue : IDisposable
     /// Case-insensitive resolution folds through the ADR-0026 §Decision 8
     /// key; an exact match always wins over a folded one.
     /// </summary>
+    /// <summary>
+    /// Finds a snapshot's version of a file by the source's **stable
+    /// identity** rather than by its path.
+    /// </summary>
+    /// <param name="snapshotId">The snapshot to look in.</param>
+    /// <param name="device">The source device number or volume identifier.</param>
+    /// <param name="fileId">The inode or file identifier.</param>
+    /// <returns>The prior entry, or <see langword="null"/> when this snapshot has no file with that identity.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is what makes a rename or a move recognisable as the same file
+    /// rather than a delete plus a create (architecture 06 §1). Keyed on path,
+    /// a moved file misses entirely, and the engine re-reads and re-hashes
+    /// every byte of a file whose content did not change — and writes a
+    /// version with no ancestor, permanently severing the history a user
+    /// renamed rather than replaced.
+    /// </para>
+    /// <para>
+    /// Identity alone is not sufficient to reuse content, and this does not
+    /// claim it is: an inode is reused after its file is deleted. The caller
+    /// still checks size and modification time, exactly as it does for a
+    /// path match.
+    /// </para>
+    /// </remarks>
+    public CatalogueTreeEntry? LookupIdentity(ReadOnlySpan<byte> snapshotId, ulong device, ulong fileId)
+    {
+        var started = Stopwatch.GetTimestamp();
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+            FROM file_versions f
+            JOIN tree_entries t ON t.object_id = f.object_id AND t.snapshot_id = $snapshot
+            WHERE f.identity_device = $device AND f.identity_file_id = $fileId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$device", (long)device);
+        command.Parameters.AddWithValue("$fileId", (long)fileId);
+
+        using var reader = command.ExecuteReader();
+        var entry = reader.Read() ? ReadTreeEntry(reader) : null;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return entry;
+    }
+
     public CatalogueTreeEntry? LookupPath(ReadOnlySpan<byte> snapshotId, string path, bool caseInsensitive = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);

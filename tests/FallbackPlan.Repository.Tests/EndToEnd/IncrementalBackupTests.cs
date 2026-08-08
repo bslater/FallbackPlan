@@ -1,4 +1,5 @@
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Catalogue;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using FallbackPlan.Repository.Crypto;
@@ -333,5 +334,98 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.Equal(3, source.OpenedPaths.Distinct().Count());
         Assert.All(second.Files, file => Assert.False(file.Reused));
         Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+    }
+
+    [Fact]
+    public async Task A_new_version_of_a_file_names_the_version_it_replaced()
+    {
+        var source = BuildSource();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xC1), CancellationToken.None);
+
+        var before = first.Files.Single(file => file.RelativePath == "readme.md").ObjectId;
+
+        // Edited: new content, new mtime, same path and inode.
+        var node = source.AddFile("readme.md", Deterministic(2_500, 9));
+        node.Metadata = node.Metadata with { ModifiedAt = 1_722_700_000_000 };
+
+        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(
+                Job(source, 0xC2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xC1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        // Ancestry: the manifest names the version it replaced. Without it
+        // every version claims to be the first, and a file's history is a
+        // set of unrelated objects that happen to share a path.
+        var after = second.Files.Single(file => file.RelativePath == "readme.md");
+        Assert.NotEqual(before, after.ObjectId);
+
+        var manifest = await ReadManifestAsync(store, keys, catalogue, after.ObjectId);
+        Assert.Equal(before, manifest.ParentVersion);
+    }
+
+    [Fact]
+    public async Task A_renamed_file_keeps_its_ancestry_rather_than_starting_over()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xD1), CancellationToken.None);
+        var before = first.Files.Single(file => file.RelativePath == "docs/before.bin").ObjectId;
+
+        // The same file, moved. Same inode, same content, same mtime — only
+        // the path changed, which is exactly what a rename is.
+        Assert.True(source.Remove("docs/before.bin"));
+        source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(
+                Job(source, 0xD2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xD1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var after = second.Files.Single(file => file.RelativePath == "archive/after.bin");
+
+        // Keyed on path, this lookup misses and the renamed file becomes a
+        // brand-new file with no history — permanently, because the manifest
+        // is immutable. Identity is what makes it the same file.
+        var manifest = await ReadManifestAsync(store, keys, catalogue, after.ObjectId);
+        Assert.Equal(before, manifest.ParentVersion);
+
+        // A new manifest, not the prior object re-emitted: the name changed,
+        // and a manifest states its own name.
+        Assert.NotEqual(before, after.ObjectId);
+        Assert.Equal("after.bin"u8.ToArray(), manifest.Name.ToArray());
+
+        // Content is not duplicated — every segment resolves to what the
+        // first snapshot already wrote.
+        Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+    }
+
+    /// <summary>Reads a published file-version manifest back out of the store.</summary>
+    private static async Task<FileVersionManifest> ReadManifestAsync(
+        IObjectStore store, RepositoryKeySet keys, CatalogueDb catalogue, ObjectId objectId)
+    {
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
+        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+        return FileVersionManifestCodec.Decode(read.Plaintext!);
     }
 }

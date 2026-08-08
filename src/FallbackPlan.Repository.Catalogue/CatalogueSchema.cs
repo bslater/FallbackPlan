@@ -104,6 +104,12 @@ public static class CatalogueSchema
 
         CREATE INDEX ix_file_versions_hash ON file_versions (whole_file_hash);
 
+        -- Finds a prior version by the file's stable identity rather than by
+        -- its path, which is what makes a rename or a move recognisable as
+        -- the same file instead of a delete plus a create (architecture 06 §1).
+        CREATE INDEX ix_file_versions_identity
+            ON file_versions (identity_device, identity_file_id);
+
         CREATE TABLE tree_entries (
             snapshot_id   BLOB NOT NULL,
             path          TEXT NOT NULL,
