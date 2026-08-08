@@ -16,7 +16,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - detect sparse extents and record them as logical zero extents rather than reading zeroes;
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
 - use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create — see [§4.2](#42-a-rename-is-a-move-not-a-new-file);
-- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued. *The identity half of this is not built* — revalidation currently compares size and mtime only, which detects an ordinary edit and not a deliberate substitution ([§4.1](#41-links-are-classified-before-they-are-traversed)).
+- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued, and one whose name has come to mean a different object is recorded as a substitution and **not** re-read ([§4.1](#41-links-are-classified-before-they-are-traversed)).
 
 ## 2. Path handling
 
@@ -78,7 +78,9 @@ The reconciliation interval is configurable; a full scan is also forced after an
 
 A link is a link whatever it points at. An object carrying both a directory marker and a link marker — an NTFS directory junction, a directory symlink — **MUST** be classified as a link, and the scanner MUST NOT descend through it. Testing the directory marker first classifies a junction as an ordinary directory and walks out of the approved root, and junctions need no privilege to create, so that is the shape an unprivileged attacker on the source machine actually has.
 
-**What this does not yet close.** The scanner classifies from a path-based stat and re-opens the object by pathname to read it, so an object can be replaced between the two — the ordinary time-of-check-to-time-of-use gap. Closing it needs no-follow, handle-relative operations: open the object without following a link, take its stable identity from the opened handle, stream from that handle, and compare the identity again after the read rather than comparing size and modification time alone. Revalidation currently compares size and modification time, which detects an ordinary edit and not a deliberate substitution. This is owed and is not claimed.
+**The traversal is handle-relative on POSIX.** Each directory is held open, and every operation on its children — listing, stat, descent, opening content, reading a link target — is performed against that descriptor with the child's raw name bytes, opening with `O_NOFOLLOW`. A name is therefore never turned back into a path to be resolved a second time, which is what closes the time-of-check-to-time-of-use gap: the object that was classified is the object that is read, because a descriptor names an inode and nothing can move it to another one. Revalidation stats the same handle, so it compares the read object to itself rather than to whatever the name means afterwards.
+
+**Windows keeps the path-based walk**, and gains the identity half of revalidation instead: the post-read stat carries device and file identifier, and a name that has come to mean a different object is recorded as `captured-identity-changed` ([ADR-0026 §Decision 2](../adr/0026-phase-1-capture-shapes.md)) rather than re-read — re-reading the name would read the substitute. A UTF-16 name has no byte-fidelity problem to solve, so the remaining gap there is the substitution window itself, which needs `NtCreateFile` relative to a directory handle and is not built.
 
 ### 4.2 A rename is a move, not a new file
 

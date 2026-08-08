@@ -484,6 +484,41 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [Fact]
+    public async Task A_name_that_comes_to_mean_a_different_object_is_recorded_as_a_substitution()
+    {
+        var source = new FakeFileSystemSource();
+        var swapped = source.AddFile("swapped.bin", Deterministic(4000, 22), fileId: 900);
+
+        // Revalidation sees a different inode at the same name. That is not an
+        // edit: re-reading the name would read the substitute, so the attempt
+        // loop must stop rather than spend its budget confirming the swap.
+        swapped.SubstitutedIdentity = new ScanIdentity(Device: 7, FileId: 901, LinkCount: 1);
+
+        var settled = source.AddFile("settled.bin", Deterministic(4000, 23));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var byPath = published.Files.ToDictionary(file => file.RelativePath);
+        var diagnosed = await ReadFileVersionAsync(reader, byPath["swapped.bin"].ObjectId);
+        var ordinary = await ReadFileVersionAsync(reader, byPath[settled.RelativePath].ObjectId);
+
+        Assert.Contains("captured-identity-changed", diagnosed.CaptureDiagnostics);
+        Assert.DoesNotContain(diagnosed.CaptureDiagnostics, diagnostic =>
+            diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal));
+
+        // An unchanged file's identity matches its own, so nothing is claimed
+        // about it — the check must not fire on the ordinary case.
+        Assert.DoesNotContain("captured-identity-changed", ordinary.CaptureDiagnostics);
+    }
+
+    [Fact]
     public async Task Blob_continuity_spans_files_instead_of_sealing_per_file()
     {
         // 40 files of 1 KiB under a 256 KiB blob target: continuity means a

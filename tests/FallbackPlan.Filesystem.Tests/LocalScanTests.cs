@@ -455,6 +455,122 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.False(info.CaseSensitive);
     }
 
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "symlink", SetLastError = true)]
+    private static partial int NativeSymlink(byte[] target, byte[] linkPath);
+
+    /// <summary>
+    /// Advances a live scan to one leaf and stops there, leaving the walk
+    /// suspended so the entry's handle is still open. Everything about the
+    /// handle-relative walk is a claim about that moment, and a scan already
+    /// collected into a list has passed it.
+    /// </summary>
+    private async Task<(ScanEntry Entry, IAsyncEnumerator<ScanEvent> Walk)> PauseAtLeafAsync(string relativePath)
+    {
+        var walk = _source.ScanAsync(_root, new ScanOptions(), CancellationToken.None).GetAsyncEnumerator();
+
+        while (await walk.MoveNextAsync())
+        {
+            if (walk.Current is ScanEvent.Leaf leaf && leaf.Entry.RelativePath == relativePath)
+            {
+                return (leaf.Entry, walk);
+            }
+        }
+
+        await walk.DisposeAsync();
+        throw new InvalidOperationException($"The scan never reached '{relativePath}'.");
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "openat and fstatat are the POSIX handle-relative calls")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Content_is_read_from_the_handle_even_after_the_name_is_repointed()
+    {
+        Write("victim.bin", "the bytes that were classified");
+
+        var (entry, walk) = await PauseAtLeafAsync("victim.bin");
+
+        await using (walk.ConfigureAwait(false))
+        {
+            // The premise: this platform took a handle. Without one the rest
+            // of this test would prove nothing about the handle-relative walk.
+            Assert.NotNull(entry.ContentHandle);
+            Assert.False(entry.ContentHandle!.IsInvalid);
+
+            // The attack: between classification and read, the name is made to
+            // refer to a different object. A path-based scanner re-opens the
+            // name and stores the substitute's bytes under the original's
+            // metadata — the time-of-check-to-time-of-use gap.
+            var path = Path.Combine(_root, "victim.bin");
+            File.Delete(path);
+            File.WriteAllText(path, "bytes the attacker substituted");
+
+            // The substitution took: the name now yields the attacker's bytes.
+            Assert.Equal("bytes the attacker substituted", await File.ReadAllTextAsync(path));
+
+            using (var reader = new StreamReader(_source.OpenRead(entry)))
+            {
+                Assert.Equal("the bytes that were classified", await reader.ReadToEndAsync());
+            }
+
+            // And revalidation describes the object that was read, not the one
+            // now at the name — which is what makes it a revalidation.
+            var probe = _source.Revalidate(entry);
+            Assert.NotNull(probe);
+            Assert.Equal(entry.Identity!.Value.FileId, probe!.Identity!.Value.FileId);
+            Assert.Equal(entry.Length, probe.Length);
+        }
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "a link target is a byte string only on POSIX; Windows targets are UTF-16")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task A_link_target_that_is_not_valid_utf8_is_recorded_as_the_bytes_it_holds()
+    {
+        // A link target is under exactly the same rules as a name: bytes that
+        // are not NUL. Decoding it to a string first replaces the invalid
+        // sequence with U+FFFD, and the stored target then points somewhere
+        // the link does not.
+        byte[] target = [(byte)'.', (byte)'/', 0xFF, 0xFE, (byte)'x', 0x00];
+        var linkPath = Encoding.UTF8.GetBytes(Path.Combine(_root, "dangling") + "\0");
+
+        if (NativeSymlink(target, linkPath) != 0)
+        {
+            return; // the filesystem refused the link — nothing to assert
+        }
+
+        var events = await ScanAsync();
+        var link = events.OfType<ScanEvent.Leaf>().Single(leaf => leaf.Entry.RelativePath == "dangling").Entry;
+
+        Assert.Equal(ScanEntryKind.Symlink, link.Kind);
+        Assert.Equal(target[..^1], link.LinkTarget!.Value.ToArray());
+    }
+
+    [PlatformFact(TestPlatforms.Posix, "O_NOFOLLOW on the descent is what refuses this, and it is POSIX")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task A_symlink_standing_where_a_directory_was_is_not_descended()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "outside"));
+        File.WriteAllText(Path.Combine(_root, "outside", "secret.txt"), "not in the backup set");
+
+        Directory.CreateDirectory(Path.Combine(_root, "inside"));
+        File.CreateSymbolicLink(Path.Combine(_root, "inside", "escape"), Path.Combine(_root, "outside"));
+
+        var events = await ScanAsync(new ScanOptions
+        {
+            Rules = PathRuleSet.TryCreate([], ["outside/**"], caseSensitive: true, out var rules, out _)
+                ? rules
+                : throw new InvalidOperationException("The exclusion rule did not compile."),
+        });
+
+        // The link is captured as a link, and nothing beneath its target is
+        // reachable through it — the excluded tree stays excluded.
+        var escape = events.OfType<ScanEvent.Leaf>()
+            .Single(leaf => leaf.Entry.RelativePath == "inside/escape").Entry;
+
+        Assert.Equal(ScanEntryKind.Symlink, escape.Kind);
+        Assert.DoesNotContain(
+            events.OfType<ScanEvent.Leaf>(),
+            leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

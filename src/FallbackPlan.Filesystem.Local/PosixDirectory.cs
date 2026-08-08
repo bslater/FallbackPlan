@@ -58,11 +58,54 @@ internal static partial class PosixDirectory
     [LibraryImport("libc", EntryPoint = "opendir", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint NativeOpenDir(string name);
 
+    [LibraryImport("libc", EntryPoint = "fdopendir", SetLastError = true)]
+    private static partial nint NativeFdOpenDir(int fd);
+
     [LibraryImport("libc", EntryPoint = "readdir", SetLastError = true)]
     private static partial nint NativeReadDir(nint dir);
 
     [LibraryImport("libc", EntryPoint = "closedir", SetLastError = true)]
     private static partial int NativeCloseDir(nint dir);
+
+    /// <summary>
+    /// Reads the names of the directory an open descriptor names, without
+    /// ever resolving a path.
+    /// </summary>
+    /// <param name="directoryFd">The directory descriptor; it stays open and usable.</param>
+    /// <param name="names"><c>.</c> and <c>..</c> excluded, in readdir order.</param>
+    /// <returns><see langword="false"/> when the listing could not be started.</returns>
+    /// <remarks>
+    /// <c>fdopendir</c> takes ownership of the descriptor it is given —
+    /// <c>closedir</c> closes it — so a duplicate is handed over and the
+    /// caller's descriptor survives to open this directory's children.
+    /// </remarks>
+    public static bool TryReadNamesFrom(int directoryFd, out List<byte[]> names)
+    {
+        names = [];
+
+        var duplicate = PosixHandleInterop.Duplicate(directoryFd);
+        if (duplicate < 0)
+        {
+            return false;
+        }
+
+        var handle = NativeFdOpenDir(duplicate);
+        if (handle == nint.Zero)
+        {
+            PosixHandleInterop.Close(duplicate);
+            return false;
+        }
+
+        try
+        {
+            ReadAll(handle, names);
+            return true;
+        }
+        finally
+        {
+            NativeCloseDir(handle);
+        }
+    }
 
     /// <summary>Reads one directory's entry names as raw bytes.</summary>
     /// <param name="directory">The directory to read.</param>
@@ -80,37 +123,43 @@ internal static partial class PosixDirectory
 
         try
         {
-            var nameOffset = NameOffset;
-            while (true)
-            {
-                var entry = NativeReadDir(handle);
-                if (entry == nint.Zero)
-                {
-                    // End of directory, or an error. Both end the walk; an
-                    // error part-way is indistinguishable from the end without
-                    // clearing errno first, and a short listing is reported by
-                    // the caller's own comparison rather than guessed at here.
-                    return true;
-                }
-
-                var reclen = (int)(ushort)Marshal.ReadInt16(entry, ReclenOffset);
-                var name = ReadName(entry, nameOffset, reclen);
-
-                // "." and ".." are the two entries every directory has and
-                // nothing wants.
-                if (name.Length == 0
-                    || (name.Length == 1 && name[0] == (byte)'.')
-                    || (name.Length == 2 && name[0] == (byte)'.' && name[1] == (byte)'.'))
-                {
-                    continue;
-                }
-
-                names.Add(name);
-            }
+            ReadAll(handle, names);
+            return true;
         }
         finally
         {
             NativeCloseDir(handle);
+        }
+    }
+
+    private static void ReadAll(nint handle, List<byte[]> names)
+    {
+        var nameOffset = NameOffset;
+        while (true)
+        {
+            var entry = NativeReadDir(handle);
+            if (entry == nint.Zero)
+            {
+                // End of directory, or an error. Both end the walk; an error
+                // part-way is indistinguishable from the end without clearing
+                // errno first, and a short listing is reported by the caller's
+                // own comparison rather than guessed at here.
+                return;
+            }
+
+            var reclen = (int)(ushort)Marshal.ReadInt16(entry, ReclenOffset);
+            var name = ReadName(entry, nameOffset, reclen);
+
+            // "." and ".." are the two entries every directory has and
+            // nothing wants.
+            if (name.Length == 0
+                || (name.Length == 1 && name[0] == (byte)'.')
+                || (name.Length == 2 && name[0] == (byte)'.' && name[1] == (byte)'.'))
+            {
+                continue;
+            }
+
+            names.Add(name);
         }
     }
 

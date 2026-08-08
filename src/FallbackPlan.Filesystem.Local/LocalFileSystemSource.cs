@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
+using Microsoft.Win32.SafeHandles;
 
 namespace FallbackPlan.Filesystem.Local;
 
@@ -91,15 +92,23 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         ArgumentNullException.ThrowIfNull(options);
 
         var full = Path.GetFullPath(rootPath);
-        if (!TryStat(full, out var rootStat) || !rootStat.IsDirectory)
+
+        // The root's own descriptor, from which every descent below is taken.
+        // Null on Windows, and on a POSIX root that cannot be opened as a
+        // directory without following a link — both fall back to the
+        // path-based walk, which is what this platform has always done.
+        using var root = PosixDirectoryScope.TryOpenRoot(full);
+
+        if (!(root is not null && root.TryStatSelf(out var rootStat)) &&
+            (!TryStat(full, out rootStat) || !rootStat.IsDirectory))
         {
             throw new DirectoryNotFoundException($"'{rootPath}' is not a scannable directory.");
         }
 
-        var rootEntry = BuildEntry(full, relativePath: "", "/"u8.ToArray(), rootStat, options);
+        var rootEntry = BuildEntry(full, relativePath: "", "/"u8.ToArray(), rootStat, options, root);
 
         yield return new ScanEvent.EnterDirectory(rootEntry);
-        await foreach (var scanEvent in WalkAsync(full, "", rootStat.Device, options, cancellationToken)
+        await foreach (var scanEvent in WalkAsync(full, root, "", rootStat.Device, options, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return scanEvent;
@@ -110,6 +119,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
     private async IAsyncEnumerable<ScanEvent> WalkAsync(
         string directory,
+        PosixDirectoryScope? scope,
         string relativePrefix,
         ulong rootDevice,
         ScanOptions options,
@@ -121,7 +131,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         ScanFailure? listingFailure = null;
         try
         {
-            children = ListChildren(directory);
+            children = ListChildren(directory, scope);
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
@@ -169,43 +179,66 @@ public sealed class LocalFileSystemSource : IFileSystemSource
                 continue; // pruned by policy — not a failure, not an error-manifest entry (06 §8)
             }
 
-            if (!TryStat(fullPath, out var stat))
+            // Handle-relative where the platform allows it: the name never
+            // becomes a path, so nothing can be substituted underneath it.
+            var stated = scope is not null
+                ? scope.TryStat(nameBytes, out var stat)
+                : TryStat(fullPath, out stat);
+
+            if (!stated)
             {
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath, CaptureFailureReason.NotFound, "The entry vanished between listing and stat."));
                 continue;
             }
 
-            ScanEntry? entry = null;
-            ScanFailure? entryFailure = null;
-            try
+            if (stat.IsDirectory)
             {
-                entry = BuildEntry(fullPath, relativePath, nameBytes, stat, options);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-            {
-                entryFailure = new ScanFailure(
-                    relativePath,
-                    exception is UnauthorizedAccessException ? CaptureFailureReason.Permission : CaptureFailureReason.IoError,
-                    exception.Message);
-            }
+                using var childScope = scope?.TryOpenChild(nameBytes);
 
-            if (entryFailure is not null || entry is null)
-            {
-                yield return new ScanEvent.Failure(entryFailure ?? new ScanFailure(
-                    relativePath, CaptureFailureReason.IoError, "The entry could not be captured."));
-                continue;
-            }
+                // The stat is re-taken from the descriptor once it is open.
+                // Between the listing stat and the open, the name could have
+                // been repointed; the descriptor is what the walk descends
+                // into, so the descriptor is what must be described.
+                if (childScope is not null && childScope.TryStatSelf(out var opened))
+                {
+                    stat = opened;
+                }
+                else if (scope is not null)
+                {
+                    yield return new ScanEvent.Failure(new ScanFailure(
+                        relativePath,
+                        CaptureFailureReason.Permission,
+                        "The directory could not be opened without following a link."));
+                    continue;
+                }
 
-            if (entry.Kind == ScanEntryKind.Directory)
-            {
+                ScanEntry? directoryEntry = null;
+                ScanFailure? directoryFailure = null;
+                try
+                {
+                    directoryEntry = BuildEntry(
+                        fullPath, relativePath, nameBytes, stat, options, childScope);
+                }
+                catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+                {
+                    directoryFailure = ToFailure(relativePath, exception);
+                }
+
+                if (directoryEntry is null)
+                {
+                    yield return new ScanEvent.Failure(directoryFailure ?? new ScanFailure(
+                        relativePath, CaptureFailureReason.IoError, "The entry could not be captured."));
+                    continue;
+                }
+
                 if (!options.CrossMountBoundaries && stat.Device != rootDevice)
                 {
                     // Stop at the boundary and say so (architecture 06 §1) —
                     // the directory appears, its contents do not.
-                    var boundary = entry with
+                    var boundary = directoryEntry with
                     {
-                        Diagnostics = [.. entry.Diagnostics, "mount-boundary: " + Probe(fullPath).Name],
+                        Diagnostics = [.. directoryEntry.Diagnostics, "mount-boundary: " + Probe(fullPath).Name],
                     };
                     yield return new ScanEvent.EnterDirectory(boundary);
                     yield return new ScanEvent.LeaveDirectory(boundary);
@@ -217,21 +250,66 @@ public sealed class LocalFileSystemSource : IFileSystemSource
                     continue;
                 }
 
-                yield return new ScanEvent.EnterDirectory(entry);
-                await foreach (var scanEvent in WalkAsync(fullPath, relativePath, rootDevice, options, cancellationToken)
-                    .ConfigureAwait(false))
+                yield return new ScanEvent.EnterDirectory(directoryEntry);
+                await foreach (var scanEvent in WalkAsync(
+                    fullPath, childScope, relativePath, rootDevice, options, cancellationToken).ConfigureAwait(false))
                 {
                     yield return scanEvent;
                 }
 
-                yield return new ScanEvent.LeaveDirectory(entry);
+                yield return new ScanEvent.LeaveDirectory(directoryEntry);
+                continue;
             }
-            else
+
+            // A regular file is opened here and read from the handle. Anything
+            // else — a link, a FIFO, a device — is described from its stat and
+            // never opened: opening it would follow, block, or touch hardware,
+            // and none of them carries content this format stores.
+            using var content = scope is not null && stat.IsRegularFile
+                ? scope.TryOpenContent(nameBytes)
+                : null;
+
+            if (scope is not null && stat.IsRegularFile)
             {
-                yield return new ScanEvent.Leaf(entry);
+                if (content is null || content.IsInvalid)
+                {
+                    yield return new ScanEvent.Failure(new ScanFailure(
+                        relativePath,
+                        CaptureFailureReason.Permission,
+                        "The file could not be opened without following a link."));
+                    continue;
+                }
+
+                // Same reasoning as the directory case, and it matters more:
+                // this stat describes the bytes that will actually be read.
+                if (PosixDirectoryScope.StatHandle((int)content.DangerousGetHandle(), out var openedFile))
+                {
+                    stat = openedFile;
+                }
             }
+
+            ScanEntry? entry = null;
+            ScanFailure? entryFailure = null;
+            try
+            {
+                entry = BuildEntry(fullPath, relativePath, nameBytes, stat, options, scope, nameBytes, content);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+            {
+                entryFailure = ToFailure(relativePath, exception);
+            }
+
+            yield return entry is null
+                ? new ScanEvent.Failure(entryFailure ?? new ScanFailure(
+                    relativePath, CaptureFailureReason.IoError, "The entry could not be captured."))
+                : new ScanEvent.Leaf(entry);
         }
     }
+
+    private static ScanFailure ToFailure(string relativePath, Exception exception) => new(
+        relativePath,
+        exception is UnauthorizedAccessException ? CaptureFailureReason.Permission : CaptureFailureReason.IoError,
+        exception.Message);
 
     /// <summary>
     /// Lists one directory's children, taking each name's bytes from the
@@ -252,8 +330,20 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// the string rather than the bytes, because the substitution happens
     /// during the encode.
     /// </remarks>
-    private static List<(string Name, byte[] NameBytes, string FullPath)> ListChildren(string directory)
+    private static List<(string Name, byte[] NameBytes, string FullPath)> ListChildren(
+        string directory, PosixDirectoryScope? scope)
     {
+        // From the descriptor when the walk holds one: the directory being
+        // listed is then the directory that was descended into, not whatever
+        // the path names now.
+        if (scope is not null && scope.TryListNames(out var fromHandle))
+        {
+            return [.. fromHandle.Select(bytes => (
+                Name: Encoding.UTF8.GetString(bytes),
+                NameBytes: bytes,
+                FullPath: Path.Combine(directory, Encoding.UTF8.GetString(bytes))))];
+        }
+
         if (PosixDirectory.IsSupported && PosixDirectory.TryReadNames(directory, out var rawNames))
         {
             return rawNames
@@ -289,8 +379,29 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         && string.Equals(
             Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(name)), name, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Builds one entry from what is already open.
+    /// </summary>
+    /// <param name="fullPath">The reconstructed path, for the calls that still need one.</param>
+    /// <param name="relativePath">The rules-and-trees path.</param>
+    /// <param name="nameBytes">The final component's raw bytes.</param>
+    /// <param name="stat">The stat taken from the handle where there is one.</param>
+    /// <param name="options">Scanner switches.</param>
+    /// <param name="scope">
+    /// For a directory, its own open scope; for a leaf, its parent's — which
+    /// is what <c>readlinkat</c> resolves the link name against.
+    /// </param>
+    /// <param name="nameInScope">The leaf's name within <paramref name="scope"/>; null for a directory.</param>
+    /// <param name="content">An open handle on a regular file's content.</param>
     private static ScanEntry BuildEntry(
-        string fullPath, string relativePath, byte[] nameBytes, StatResult stat, ScanOptions options)
+        string fullPath,
+        string relativePath,
+        byte[] nameBytes,
+        StatResult stat,
+        ScanOptions options,
+        PosixDirectoryScope? scope = null,
+        byte[]? nameInScope = null,
+        SafeFileHandle? content = null)
     {
         var kind = stat switch
         {
@@ -319,21 +430,40 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             }
         }
 
-        var metadata = CaptureMetadata(fullPath, stat, options);
+        // Extended attributes come off the descriptor when there is one — the
+        // same object the content came from, rather than whatever the path
+        // resolves to by the time they are read.
+        var metadataDescriptor = content is { IsInvalid: false }
+            ? (int)content.DangerousGetHandle()
+            : nameInScope is null && scope is not null ? scope.Descriptor : -1;
+
+        var metadata = CaptureMetadata(fullPath, stat, options, metadataDescriptor);
 
         ReadOnlyMemory<byte>? linkTarget = null;
         if (kind == ScanEntryKind.Symlink)
         {
-            // A directory junction is a link too, and its target lives on
-            // DirectoryInfo rather than FileInfo. Reading it through the wrong
-            // one returns null, which would record a link with no target.
-            FileSystemInfo info = Directory.Exists(fullPath)
-                ? new DirectoryInfo(fullPath)
-                : new FileInfo(fullPath);
-
-            if (info.LinkTarget is { } target)
+            // A link target is a byte string under the same rules as a name,
+            // so it is read as bytes where the platform allows: one that is
+            // not valid UTF-8 would otherwise be recorded as a target that
+            // does not point where the link points.
+            if (scope is not null && nameInScope is not null && scope.ReadLink(nameInScope) is { } target)
             {
-                linkTarget = Encoding.UTF8.GetBytes(target);
+                linkTarget = target;
+            }
+            else
+            {
+                // A directory junction is a link too, and its target lives on
+                // DirectoryInfo rather than FileInfo. Reading it through the
+                // wrong one returns null, which would record a link with no
+                // target.
+                FileSystemInfo info = Directory.Exists(fullPath)
+                    ? new DirectoryInfo(fullPath)
+                    : new FileInfo(fullPath);
+
+                if (info.LinkTarget is { } managed)
+                {
+                    linkTarget = Encoding.UTF8.GetBytes(managed);
+                }
             }
         }
 
@@ -360,22 +490,34 @@ public sealed class LocalFileSystemSource : IFileSystemSource
                 : [],
             Diagnostics = diagnostics,
             FullPath = fullPath,
+            ContentHandle = content,
         };
     }
 
-    private static EntryMetadata CaptureMetadata(string fullPath, StatResult stat, ScanOptions options)
+    private static EntryMetadata CaptureMetadata(
+        string fullPath, StatResult stat, ScanOptions options, int descriptor)
     {
         var xattrs = new List<ExtendedAttributeEntry>();
         if (options.CaptureExtendedAttributes && !OperatingSystem.IsWindows())
         {
-            var names = OperatingSystem.IsMacOS()
-                ? DarwinInterop.ListXattrNames(fullPath)
-                : LinuxInterop.ListXattrNames(fullPath);
+            var names = descriptor >= 0
+                ? OperatingSystem.IsMacOS()
+                    ? DarwinInterop.ListXattrNamesAt(descriptor)
+                    : LinuxInterop.ListXattrNamesAt(descriptor)
+                : OperatingSystem.IsMacOS()
+                    ? DarwinInterop.ListXattrNames(fullPath)
+                    : LinuxInterop.ListXattrNames(fullPath);
+
             foreach (var name in names)
             {
-                var value = OperatingSystem.IsMacOS()
-                    ? DarwinInterop.GetXattr(fullPath, name)
-                    : LinuxInterop.GetXattr(fullPath, name);
+                var value = descriptor >= 0
+                    ? OperatingSystem.IsMacOS()
+                        ? DarwinInterop.GetXattrAt(descriptor, name)
+                        : LinuxInterop.GetXattrAt(descriptor, name)
+                    : OperatingSystem.IsMacOS()
+                        ? DarwinInterop.GetXattr(fullPath, name)
+                        : LinuxInterop.GetXattr(fullPath, name);
+
                 if (value is not null)
                 {
                     xattrs.Add(new ExtendedAttributeEntry(Encoding.UTF8.GetBytes(name), value));
@@ -464,18 +606,56 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Against the handle when the scanner took one, and that is what makes
+    /// this a revalidation rather than a second lookup: a descriptor names
+    /// one inode for as long as it is open, so this stat describes exactly
+    /// the object whose bytes were just read. Stat'ing the path again
+    /// describes whatever is at the path now, which is not the same claim.
+    /// </remarks>
     public RevalidationProbe? Revalidate(ScanEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        if (entry.ContentHandle is { IsInvalid: false, IsClosed: false } handle &&
+            PosixDirectoryScope.StatHandle((int)handle.DangerousGetHandle(), out var fromHandle))
+        {
+            return new RevalidationProbe(
+                fromHandle.Size,
+                fromHandle.ModifiedAtMs,
+                new ScanIdentity(fromHandle.Device, fromHandle.FileId, fromHandle.LinkCount));
+        }
+
+        // No handle — Windows, or a fallback walk. The identity still travels,
+        // and it is worth more here than it is above: this stat describes
+        // whatever the path names now, so a change means the name was
+        // repointed while the file was being read.
         return TryStat(entry.FullPath, out var stat)
-            ? new RevalidationProbe(stat.Size, stat.ModifiedAtMs)
+            ? new RevalidationProbe(
+                stat.Size, stat.ModifiedAtMs, new ScanIdentity(stat.Device, stat.FileId, stat.LinkCount))
             : null;
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The handle is duplicated rather than handed over, because a file that
+    /// changes mid-read is read again (ADR-0026 §Decision 2) and the stream
+    /// from the first attempt has been disposed by then. Both attempts read
+    /// the same inode; neither goes back through the name.
+    /// </remarks>
     public Stream OpenRead(ScanEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        if (entry.ContentHandle is { IsInvalid: false, IsClosed: false } handle)
+        {
+            var duplicate = PosixHandleInterop.Duplicate((int)handle.DangerousGetHandle());
+            if (duplicate >= 0)
+            {
+                return new FileStream(PosixHandleInterop.ToHandle(duplicate), FileAccess.Read);
+            }
+        }
+
         return File.Open(entry.FullPath, new FileStreamOptions
         {
             Mode = FileMode.Open,

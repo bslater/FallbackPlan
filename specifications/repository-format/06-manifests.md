@@ -130,7 +130,7 @@ That last rule exists because the failure it prevents is silent. An entry stored
 
 > **Implementation status (2026-08).** Both rules are enforced. Names come from `readdir` on POSIX, and a name that does not survive conversion in **either** direction is refused with reason 8 — which is what catches the Windows case, since an unpaired surrogate is already substituted by the time bytes exist and a bytes-only check cannot see it. Two different lone surrogates encode to the same replacement bytes, so the substitution also collapsed distinct filenames into one.
 >
-> What is **not** yet built is capturing a refused entry anyway. That needs the byte-native open path [architecture 06 §4.1](../../docs/architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) also owes for its own reasons. Until then a name the host cannot represent is reported and skipped rather than backed up.
+> What is **not** yet built is capturing a POSIX name that is not valid UTF-8 rather than refusing it. The byte-native open path this used to wait on now exists — the walk opens children by name bytes relative to a directory descriptor, so such a file *can* be opened and read. What still blocks it is above the scanner: the pipeline carries a relative path as a host string, through rule matching, the catalogue's path tables, and restore. Storing a lossy string for a name that has none would produce a file the user cannot find and cannot restore under its own name, which is the failure this section exists to prevent, moved one layer up. Closing it means a byte-native relative path end to end, and that is not a scanner change.
 
 ## 5 Tree manifest
 

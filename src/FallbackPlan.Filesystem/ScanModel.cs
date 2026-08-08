@@ -1,5 +1,6 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
+using Microsoft.Win32.SafeHandles;
 
 namespace FallbackPlan.Filesystem;
 
@@ -69,6 +70,27 @@ public sealed record ScanEntry
 
     /// <summary>The OS path used to open the entry's content.</summary>
     public required string FullPath { get; init; }
+
+    /// <summary>
+    /// An open, no-follow handle on the entry's content, where the source
+    /// could take one; otherwise <see langword="null"/> and the entry is
+    /// opened by <see cref="FullPath"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A handle is what makes "the object I stat'd is the object I read" a
+    /// fact rather than an assumption. It names an inode for as long as it
+    /// is open, so nothing can substitute another object between
+    /// classification and read — the time-of-check-to-time-of-use gap
+    /// architecture 06 §4.1 records.
+    /// </para>
+    /// <para>
+    /// It belongs to the scanner and is valid only while the consumer is
+    /// handling this entry's event: the scan stream is pulled one event at a
+    /// time, and the handle closes when the walk moves on.
+    /// </para>
+    /// </remarks>
+    public SafeFileHandle? ContentHandle { get; init; }
 }
 
 /// <summary>A per-path capture failure — an error-manifest entry, never an aborted snapshot.</summary>
@@ -139,7 +161,15 @@ public sealed record SourceFilesystemInfo(
 /// and after reading; a difference means the content may be inconsistent
 /// and the read is retried, then diagnosed — ADR-0026 §Decision 2).
 /// </summary>
-public sealed record RevalidationProbe(long Length, ulong? ModifiedAtMs);
+/// <param name="Length">The object's length after the read.</param>
+/// <param name="ModifiedAtMs">Its modification time after the read.</param>
+/// <param name="Identity">
+/// The identity of the object that was actually read, where the source took
+/// a handle. Size and modification time detect an ordinary edit; they do
+/// not detect a substitution, which is what this catches — a mismatch means
+/// the bytes just read did not come from the object the scanner classified.
+/// </param>
+public sealed record RevalidationProbe(long Length, ulong? ModifiedAtMs, ScanIdentity? Identity = null);
 
 /// <summary>
 /// A filesystem the engine can capture from (architecture 11 §6). One

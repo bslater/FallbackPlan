@@ -688,6 +688,7 @@ public sealed partial class PublicationOrchestrator
             ArchiveResult? archive = null;
             var attempts = 0;
             var consistent = false;
+            var substituted = false;
 
             // Read, then revalidate: a file that changed mid-read is read
             // again, up to the option's bound; content is always a complete
@@ -706,6 +707,20 @@ public sealed partial class PublicationOrchestrator
                 }
 
                 var probe = job.Source.Revalidate(entry);
+
+                // Identity first. Size and modification time detect an
+                // ordinary edit; they do not detect the object at this name
+                // being replaced by another one, which is what a
+                // time-of-check-to-time-of-use attack does — and re-reading
+                // would only read the substitute again, so it is recorded and
+                // the loop stops rather than retrying.
+                if (probe?.Identity is { } observed && entry.Identity is { } expected &&
+                    (observed.Device != expected.Device || observed.FileId != expected.FileId))
+                {
+                    substituted = true;
+                    break;
+                }
+
                 if (probe is null ||
                     (probe.Length == archive.LogicalLength &&
                      (probe.ModifiedAtMs is null || entry.Metadata.ModifiedAt is null ||
@@ -716,7 +731,11 @@ public sealed partial class PublicationOrchestrator
                 }
             }
 
-            if (!consistent)
+            if (substituted)
+            {
+                diagnostics.Add("captured-identity-changed");
+            }
+            else if (!consistent)
             {
                 diagnostics.Add($"captured-inconsistent: {attempts}");
             }

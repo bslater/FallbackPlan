@@ -47,6 +47,7 @@ string — the convention import provenance already established
 | String | Meaning |
 |---|---|
 | `captured-inconsistent: <attempts>` | The file changed during read; content is the **last complete read** after `<attempts>` total attempts (architecture 06 §1's captured-inconsistent state). A file with **no** complete read is instead an error-manifest entry, reason 4 |
+| `captured-identity-changed` | The name no longer refers to the object that was classified: revalidation observed a different device and file identifier. This is a substitution, not an edit, so the read is **not** retried — re-reading the name would read the substitute again. It appears only where the source could not take a handle on the content; where it could, the read came from the handle and the object cannot have changed |
 | `special-kind: fifo\|socket\|chardev\|blockdev` | See decision 4 |
 | `device: <major>,<minor>` | Device numbers for `chardev`/`blockdev` |
 | `mount-boundary: <fstype>` | Recorded on a directory entry where traversal stopped at a mount point |
