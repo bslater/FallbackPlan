@@ -165,7 +165,7 @@ An earlier draft made `device` the default on the grounds that it "costs nothing
 `device` must know which segments *this device* wrote; `repository` must remember which shared segments it has already verified, or it pays the cost repeatedly. Both are catalogue state, and the catalogue is disposable ([ADR-0010](../adr/0010-local-store-separation.md)).
 
 - **Writer attribution is recoverable.** Index deltas carry `writer_id`, so a rebuild reconstructs which segments this device authored. The dedup lookup key includes writer attribution for exactly this reason (FR-MAN-006).
-- **Verification outcomes are recorded durably**, so that deleting the catalogue — a documented, supported recovery action — does not silently re-impose full re-verification and turn the next incremental into hours of egress ([PT-12](../review/2026-08-fix-pressure-test.md#pt-12--device-attribution-and-verify-on-reuse-state-live-only-in-a-disposable-cache)).
+- **Verification outcomes are catalogue state, and a rebuild re-imposes the read once.** [PT-12](../review/2026-08-fix-pressure-test.md#pt-12--device-attribution-and-verify-on-reuse-state-live-only-in-a-disposable-cache) named the cost and offered a durable repository object as one answer; the [freeze-gate decision](../freeze-gate-decisions-2026-08.md#decision-1--verification-outcomes-live-in-the-catalogue-not-the-repository) took the other: the cost only exists in a multi-writer repository, none exists yet, and adding an optional object later is a minor-version change. Deleting the catalogue therefore re-imposes the verification read once — a bounded, user-initiated cost, accepted rather than optimised away with pre-freeze format surface.
 
 ### 5.3 The residual leak
 
