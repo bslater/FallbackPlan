@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
@@ -24,7 +25,7 @@ public sealed class CatalogueRebuilder
     /// <summary>Creates a rebuilder over a loader.</summary>
     public CatalogueRebuilder(IndexLoader loader)
     {
-        ArgumentNullException.ThrowIfNull(loader);
+        ThrowHelper.ThrowIfNull(loader);
         _loader = loader;
     }
 
@@ -39,7 +40,7 @@ public sealed class CatalogueRebuilder
         Func<WriterId, ulong, ValueTask<bool>>? isSequenceAccountedAsync,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(target);
+        ThrowHelper.ThrowIfNull(target);
 
         var state = await _loader.LoadAsync(
             currentGeneration, gapPatienceGenerations, isSequenceAccountedAsync, blobState: null, cancellationToken)

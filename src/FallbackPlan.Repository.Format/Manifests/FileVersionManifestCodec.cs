@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
@@ -22,7 +23,7 @@ public static class FileVersionManifestCodec
     /// <exception cref="ManifestValidationException">The manifest violates specification 06.</exception>
     public static byte[] Encode(FileVersionManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         var writer = new CanonicalCborWriter();

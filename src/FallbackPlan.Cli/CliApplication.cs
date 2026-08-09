@@ -1,3 +1,4 @@
+using Bodu;
 using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -38,7 +39,7 @@ public static class CliApplication
     /// <returns>The process exit code: 0 on success.</returns>
     public static async Task<int> RunAsync(string[] args, InvocationConfiguration? configuration = null)
     {
-        ArgumentNullException.ThrowIfNull(args);
+        ThrowHelper.ThrowIfNull(args);
 
         // Writers, not Console: tests capture output by passing them in,
         // rather than by mutating global console state — which would make

@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
@@ -85,7 +86,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public static Catalogue Open(string path, RepositoryId repositoryId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         var connection = Connect(path);
 
@@ -173,7 +174,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public void ApplyDelta(DeltaId deltaId, IndexDelta delta)
     {
-        ArgumentNullException.ThrowIfNull(delta);
+        ThrowHelper.ThrowIfNull(delta);
 
         using var transaction = _connection.BeginTransaction();
 
@@ -209,7 +210,7 @@ public sealed class Catalogue : IDisposable
     /// <summary>Applies one checkpoint idempotently, entries carrying the checkpoint's provenance.</summary>
     public void ApplyCheckpoint(CheckpointId checkpointId, Checkpoint checkpoint)
     {
-        ArgumentNullException.ThrowIfNull(checkpoint);
+        ThrowHelper.ThrowIfNull(checkpoint);
 
         using var transaction = _connection.BeginTransaction();
 
@@ -303,7 +304,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public static string Casefold(string path)
     {
-        ArgumentNullException.ThrowIfNull(path);
+        ThrowHelper.ThrowIfNull(path);
         return path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
     }
 
@@ -314,7 +315,7 @@ public sealed class Catalogue : IDisposable
         EntryKind entryKind,
         ObjectId objectId)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path);
+        ThrowHelper.ThrowIfNullOrEmpty(path);
 
         var slash = path.LastIndexOf('/');
         var parent = slash < 0 ? string.Empty : path[..slash];
@@ -460,7 +461,7 @@ public sealed class Catalogue : IDisposable
 
     public CatalogueTreeEntry? LookupPath(ReadOnlySpan<byte> snapshotId, string path, bool caseInsensitive = false)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path);
+        ThrowHelper.ThrowIfNullOrEmpty(path);
         var started = Stopwatch.GetTimestamp();
 
         using var command = _connection.CreateCommand();
@@ -498,7 +499,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public IReadOnlyList<CatalogueTreeEntry> ListDirectory(ReadOnlySpan<byte> snapshotId, string parentPath)
     {
-        ArgumentNullException.ThrowIfNull(parentPath);
+        ThrowHelper.ThrowIfNull(parentPath);
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
@@ -575,7 +576,7 @@ public sealed class Catalogue : IDisposable
     /// <summary>Appends a damage finding (FR-MAN-011).</summary>
     public void RecordFinding(DamageFinding finding, ObjectId? objectId = null, BlobId? blobId = null)
     {
-        ArgumentNullException.ThrowIfNull(finding);
+        ThrowHelper.ThrowIfNull(finding);
 
         using var command = _connection.CreateCommand();
         command.CommandText = """

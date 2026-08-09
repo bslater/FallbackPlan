@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Protocol;
 
 /// <summary>
@@ -48,8 +50,8 @@ public sealed class PeerAuthenticator
         ReadOnlySpan<byte> theirTlsPublicKeyHash,
         PeerIdentity? expected = null)
     {
-        ArgumentNullException.ThrowIfNull(keypair);
-        ArgumentNullException.ThrowIfNull(grants);
+        ThrowHelper.ThrowIfNull(keypair);
+        ThrowHelper.ThrowIfNull(grants);
 
         _keypair = keypair;
         _grants = grants;
@@ -100,7 +102,7 @@ public sealed class PeerAuthenticator
     /// </remarks>
     public SessionAuthProof Accept(SessionAuth theirs)
     {
-        ArgumentNullException.ThrowIfNull(theirs);
+        ThrowHelper.ThrowIfNull(theirs);
         Require(PeerSessionState.Encrypted);
 
         if (_expected is not null && theirs.Identity != _expected)
@@ -133,7 +135,7 @@ public sealed class PeerAuthenticator
     /// </exception>
     public PeerGrant Verify(SessionAuthProof proof)
     {
-        ArgumentNullException.ThrowIfNull(proof);
+        ThrowHelper.ThrowIfNull(proof);
         Require(PeerSessionState.Encrypted);
 
         if (_theirs is null || Peer is null)

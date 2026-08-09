@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
@@ -143,12 +144,12 @@ public sealed partial class PublicationOrchestrator
         IJobProgressReporter? progress = null)
     {
         _catalogue = catalogue;
-        ArgumentNullException.ThrowIfNull(policy);
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(hierarchy);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(sequence);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(policy);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(sequence);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         _policy = policy;
         _repositoryId = repositoryId;
@@ -166,7 +167,7 @@ public sealed partial class PublicationOrchestrator
     /// <summary>Runs one publication end to end.</summary>
     public async ValueTask<PublishedSnapshot> PublishAsync(BackupJob job, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(job);
+        ThrowHelper.ThrowIfNull(job);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);

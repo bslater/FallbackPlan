@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Agent;
@@ -105,7 +106,7 @@ public sealed class JobScheduler : IAsyncDisposable
     /// <param name="job">The work.</param>
     public void Enqueue(QueuedJob job)
     {
-        ArgumentNullException.ThrowIfNull(job);
+        ThrowHelper.ThrowIfNull(job);
 
         lock (_gate)
         {

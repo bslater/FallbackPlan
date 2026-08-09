@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -67,7 +68,7 @@ public static class IndexDeltaCodec
     /// <summary>Encodes keys 1–8 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(IndexDelta delta)
     {
-        ArgumentNullException.ThrowIfNull(delta);
+        ThrowHelper.ThrowIfNull(delta);
         Validate(delta);
 
         var writer = new CanonicalCborWriter();
@@ -78,7 +79,7 @@ public static class IndexDeltaCodec
     /// <summary>Encodes the stored form: keys 1–8 plus the signature at key 9.</summary>
     public static byte[] Encode(IndexDelta delta, ReadOnlySpan<byte> signature)
     {
-        ArgumentNullException.ThrowIfNull(delta);
+        ThrowHelper.ThrowIfNull(delta);
         Validate(delta);
 
         if (signature.Length != 64)
@@ -409,7 +410,7 @@ public static class ShardHashes
     /// <summary>Computes the parallel shard_set / shard_hashes arrays for a checkpoint's entries.</summary>
     public static (IReadOnlyList<ushort> ShardSet, IReadOnlyList<byte[]> Hashes) Compute(IReadOnlyList<IndexEntry> entries)
     {
-        ArgumentNullException.ThrowIfNull(entries);
+        ThrowHelper.ThrowIfNull(entries);
 
         var byShard = entries
             .GroupBy(entry => entry.Shard)

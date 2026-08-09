@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
@@ -246,7 +247,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ThrowHelper.ThrowIfNull(request);
 
         // A service runs what its configuration names. An ad-hoc root is not
         // something it can be asked for, and quietly running it here instead
@@ -318,7 +319,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ThrowHelper.ThrowIfNull(request);
 
         var result = await SendAsync<RestoreResult>(
             new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory),
@@ -405,7 +406,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ThrowHelper.ThrowIfNull(request);
 
         string rootPath;
         IReadOnlyList<string> include, exclude;
@@ -606,7 +607,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ThrowHelper.ThrowIfNull(request);
 
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
         var snapshotId = Convert.FromHexString(request.SnapshotId);

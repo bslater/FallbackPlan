@@ -1,3 +1,4 @@
+using Bodu;
 using System.Formats.Cbor;
 using System.Text;
 
@@ -50,7 +51,7 @@ public sealed record SessionAuth(PeerIdentity Identity, ReadOnlyMemory<byte> Non
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteByteString(Identity.PublicKey);
@@ -64,7 +65,7 @@ public sealed record SessionAuth(PeerIdentity Identity, ReadOnlyMemory<byte> Non
     /// <exception cref="PeerProtocolException">The body violates 02 §3.1.</exception>
     public static SessionAuth Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         byte[]? identity = null;
         byte[]? nonce = null;
@@ -121,7 +122,7 @@ public sealed record SessionAuthProof(ReadOnlyMemory<byte> Signature) : IPeerMes
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteByteString(Signature.Span);
@@ -133,7 +134,7 @@ public sealed record SessionAuthProof(ReadOnlyMemory<byte> Signature) : IPeerMes
     /// <exception cref="PeerProtocolException">The body violates 02 §3.1.</exception>
     public static SessionAuthProof Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         byte[]? signature = null;
 
@@ -235,7 +236,7 @@ public sealed record SessionHello(
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteUInt32(MinimumVersion);
@@ -268,7 +269,7 @@ public sealed record SessionHello(
     /// <exception cref="PeerProtocolException">The body violates 02 §2 or a 00 §2.3 limit.</exception>
     public static SessionHello Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         ushort minimum = 0;
         ushort maximum = 0;
@@ -454,7 +455,7 @@ public sealed record SessionAccept(ushort Version, IReadOnlyList<string> Feature
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteUInt32(Version);
@@ -474,7 +475,7 @@ public sealed record SessionAccept(ushort Version, IReadOnlyList<string> Feature
     /// <exception cref="PeerProtocolException">The body violates 02 §2.</exception>
     public static SessionAccept Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         ushort version = 0;
         var features = new List<string>();
@@ -537,14 +538,14 @@ public sealed record SessionRefuse(PeerRefusalReason Reason, string Text) : IPee
     /// </remarks>
     public static SessionRefuse From(PeerProtocolException exception)
     {
-        ArgumentNullException.ThrowIfNull(exception);
+        ThrowHelper.ThrowIfNull(exception);
         return new SessionRefuse(exception.Reason, exception.Message);
     }
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteUInt32((uint)Reason);
@@ -558,7 +559,7 @@ public sealed record SessionRefuse(PeerRefusalReason Reason, string Text) : IPee
     /// <exception cref="PeerProtocolException">The body violates 02 §6.</exception>
     public static SessionRefuse Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         PeerRefusalReason reason = 0;
         var text = string.Empty;

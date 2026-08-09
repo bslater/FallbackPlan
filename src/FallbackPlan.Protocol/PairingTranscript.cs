@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Bodu.Security.Cryptography;
@@ -55,8 +56,8 @@ public static class PairingTranscript
     /// <returns>The transcript bytes.</returns>
     public static byte[] Build(PairingContribution offerer, PairingContribution responder, ushort protocolVersion)
     {
-        ArgumentNullException.ThrowIfNull(offerer);
-        ArgumentNullException.ThrowIfNull(responder);
+        ThrowHelper.ThrowIfNull(offerer);
+        ThrowHelper.ThrowIfNull(responder);
 
         Validate(offerer, nameof(offerer));
         Validate(responder, nameof(responder));

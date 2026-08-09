@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
@@ -44,7 +45,7 @@ public static class TreeManifestCodec
     /// <exception cref="ManifestValidationException">The manifest violates specification 06 §5.</exception>
     public static byte[] Encode(TreeManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         ValidateEntryOrder(manifest.Entries);
 
         var isFirst = manifest.Name is not null;
@@ -255,7 +256,7 @@ public static class TreeChain
     /// <exception cref="ManifestValidationException">The chain violates 06 §9 — a damage finding.</exception>
     public static IReadOnlyList<TreeEntry> ValidateAndFlatten(IReadOnlyList<TreeManifest> chain)
     {
-        ArgumentNullException.ThrowIfNull(chain);
+        ThrowHelper.ThrowIfNull(chain);
 
         if (chain.Count == 0)
         {

@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 
 namespace FallbackPlan.Repository.Segmentation;
@@ -35,7 +36,7 @@ public sealed class CdcSegmentReader : ISegmentReader
     /// <exception cref="ArgumentException">The source is not readable or the parameters unset.</exception>
     public CdcSegmentReader(Stream source, CdcParameters parameters)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         if (!source.CanRead)
         {

@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -30,7 +31,7 @@ public sealed class PathRule
     /// </summary>
     public static bool TryCreate(string rule, bool caseSensitive, out PathRule? compiled, out string? defect)
     {
-        ArgumentNullException.ThrowIfNull(rule);
+        ThrowHelper.ThrowIfNull(rule);
         compiled = null;
 
         var pattern = rule.StartsWith("re:", StringComparison.Ordinal)
@@ -65,7 +66,7 @@ public sealed class PathRule
     /// <summary>Whether the rule matches <paramref name="path"/> in full.</summary>
     public bool Matches(string path)
     {
-        ArgumentNullException.ThrowIfNull(path);
+        ThrowHelper.ThrowIfNull(path);
         return _matcher.IsMatch(path);
     }
 
@@ -242,8 +243,8 @@ public sealed class PathRuleSet
         out PathRuleSet? rules,
         out IReadOnlyList<string> defects)
     {
-        ArgumentNullException.ThrowIfNull(includeRules);
-        ArgumentNullException.ThrowIfNull(excludeRules);
+        ThrowHelper.ThrowIfNull(includeRules);
+        ThrowHelper.ThrowIfNull(excludeRules);
 
         var found = new List<string>();
         var includes = Compile(includeRules, caseSensitive, "include", found);
@@ -288,7 +289,7 @@ public sealed class PathRuleSet
 
     private static bool AnyPrefixMatches(IReadOnlyList<PathRule> rules, string path)
     {
-        ArgumentNullException.ThrowIfNull(path);
+        ThrowHelper.ThrowIfNull(path);
 
         if (rules.Count == 0)
         {

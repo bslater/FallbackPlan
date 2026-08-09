@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Formats.Cbor;
 
@@ -173,8 +174,8 @@ public static class PeerFrame
         IPeerMessage message,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(message);
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(message);
 
         var payload = Encode(message);
         var prefix = new byte[sizeof(uint)];
@@ -193,7 +194,7 @@ public static class PeerFrame
     public static async ValueTask<(PeerMessageType Type, CborReader Body)?> ReadAsync(
         Stream stream, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(stream);
 
         var prefix = new byte[sizeof(uint)];
         if (!await ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false))
@@ -227,7 +228,7 @@ public static class PeerFrame
     /// <exception cref="PeerProtocolException">The encoding exceeds the frame limit.</exception>
     public static byte[] Encode(IPeerMessage message)
     {
-        ArgumentNullException.ThrowIfNull(message);
+        ThrowHelper.ThrowIfNull(message);
 
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(message.BodyEntryCount + 1);
@@ -253,7 +254,7 @@ public static class PeerFrame
     /// <exception cref="PeerProtocolException">The body violates this specification.</exception>
     public static (PeerMessageType Type, CborReader Body) Decode(byte[] payload)
     {
-        ArgumentNullException.ThrowIfNull(payload);
+        ThrowHelper.ThrowIfNull(payload);
 
         var reader = new CborReader(payload, CborConformanceMode.Canonical);
 

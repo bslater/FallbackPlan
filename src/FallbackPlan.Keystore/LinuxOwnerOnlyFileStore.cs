@@ -1,3 +1,4 @@
+using Bodu;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
@@ -67,7 +68,7 @@ internal sealed class LinuxOwnerOnlyFileStore(string stateDirectory) : IPassphra
 
     public void Write(string account, string passphrase)
     {
-        ArgumentException.ThrowIfNullOrEmpty(passphrase);
+        ThrowHelper.ThrowIfNullOrEmpty(passphrase);
 
         var directory = Directory();
         System.IO.Directory.CreateDirectory(directory);
@@ -117,7 +118,7 @@ internal sealed class LinuxOwnerOnlyFileStore(string stateDirectory) : IPassphra
 
     private string PathFor(string account)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
         var name = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)).AsSpan(0, 8))
             .ToLowerInvariant();
         return Path.Combine(Directory(), $"{name}.key");

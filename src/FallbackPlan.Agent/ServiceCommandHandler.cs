@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -33,7 +34,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     /// <inheritdoc/>
     public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(command);
+        ThrowHelper.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
 
         try

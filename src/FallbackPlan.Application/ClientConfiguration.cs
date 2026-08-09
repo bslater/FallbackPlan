@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
@@ -65,7 +66,7 @@ public sealed record ClientConfiguration
     /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
     public static ClientConfiguration Load(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         if (!File.Exists(path))
         {

@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
@@ -15,7 +16,7 @@ public static class JournalRecordCodec
     /// <summary>Encodes keys 1–5 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(JournalRecord record)
     {
-        ArgumentNullException.ThrowIfNull(record);
+        ThrowHelper.ThrowIfNull(record);
         Validate(record);
 
         var writer = new CanonicalCborWriter();
@@ -26,7 +27,7 @@ public static class JournalRecordCodec
     /// <summary>Encodes the stored form: keys 1–5 plus the signature at key 6.</summary>
     public static byte[] Encode(JournalRecord record, ReadOnlySpan<byte> signature)
     {
-        ArgumentNullException.ThrowIfNull(record);
+        ThrowHelper.ThrowIfNull(record);
         Validate(record);
 
         if (signature.Length != 64)
@@ -67,7 +68,7 @@ public static class JournalRecordCodec
         KeyHierarchy hierarchy,
         uint maxGeneration)
     {
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         for (var generation = (long)maxGeneration; generation >= 0; generation--)
         {

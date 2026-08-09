@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
@@ -195,7 +196,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<ArchiveResult> ArchiveFileAsync(
         Stream source, ArchiveResult? priorVersion, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var usesCdc = _policy.SegmentationProfile == SegmentationProfile.CdcV1;
 
@@ -613,8 +614,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<ArchiveResult> ArchiveSparseFileAsync(
         Stream source, IReadOnlyList<SparseExtent> holes, long logicalLength, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(holes);
+        ThrowHelper.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(holes);
 
         if (!HolesAreWellFormed(holes, logicalLength))
         {
@@ -704,7 +705,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<SingleSegmentRecord?> TryArchiveSingleSegmentAsync(
         Stream source, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var segmentBuffer = RentBuffer();
         try

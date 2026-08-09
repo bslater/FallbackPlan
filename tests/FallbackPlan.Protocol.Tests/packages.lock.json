@@ -96,6 +96,7 @@
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Globalization.Recurrence": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
@@ -103,12 +104,14 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Text.Encoding": "[0.2.0, )"
         }
       },
       "fallbackplan.protocol": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Security.Cryptography": "[0.2.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",

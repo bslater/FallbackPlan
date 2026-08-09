@@ -1,3 +1,4 @@
+using Bodu;
 using System.Formats.Cbor;
 
 namespace FallbackPlan.Repository.Format.Cbor;
@@ -23,7 +24,7 @@ public sealed class CanonicalCborWriter
     /// <summary>Begins a definite-length map of <paramref name="entryCount"/> key–value pairs.</summary>
     public void WriteStartMap(int entryCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(entryCount);
+        ThrowHelper.ThrowIfNegative(entryCount);
         _writer.WriteStartMap(entryCount);
     }
 
@@ -33,7 +34,7 @@ public sealed class CanonicalCborWriter
     /// <summary>Begins a definite-length array of <paramref name="itemCount"/> items.</summary>
     public void WriteStartArray(int itemCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(itemCount);
+        ThrowHelper.ThrowIfNegative(itemCount);
         _writer.WriteStartArray(itemCount);
     }
 
@@ -58,7 +59,7 @@ public sealed class CanonicalCborWriter
     /// <summary>Writes a definite-length UTF-8 text string.</summary>
     public void WriteTextString(string value)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        ThrowHelper.ThrowIfNull(value);
         _writer.WriteTextString(value);
     }
 

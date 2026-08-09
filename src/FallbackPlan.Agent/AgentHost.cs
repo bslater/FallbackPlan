@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
@@ -30,9 +31,9 @@ public static class AgentHost
     public static async Task<int> RunAsync(
         string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(args);
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(error);
+        ThrowHelper.ThrowIfNull(args);
+        ThrowHelper.ThrowIfNull(output);
+        ThrowHelper.ThrowIfNull(error);
 
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {

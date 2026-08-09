@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Cbor;
 
@@ -19,7 +20,7 @@ public static class KeyBundleCodec
     /// <summary>Encodes the bundle as deterministic CBOR.</summary>
     public static byte[] Encode(KeyBundle bundle)
     {
-        ArgumentNullException.ThrowIfNull(bundle);
+        ThrowHelper.ThrowIfNull(bundle);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(4);

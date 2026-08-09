@@ -1,3 +1,4 @@
+using Bodu;
 using System.Formats.Cbor;
 using System.Text;
 
@@ -34,7 +35,7 @@ public sealed record PairOffer(
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         PairingCbor.WriteContribution(writer, Contribution);
         writer.WriteInt32(4);
@@ -49,7 +50,7 @@ public sealed record PairOffer(
     /// <exception cref="PeerProtocolException">The body violates 01 §2.2.</exception>
     public static PairOffer Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         var fields = PairingCbor.ReadFields(reader, hasTerms: false);
         return new PairOffer(fields.Contribution(), fields.Label, fields.Version);
@@ -91,7 +92,7 @@ public sealed record PairAccept(
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         PairingCbor.WriteContribution(writer, Contribution);
         writer.WriteInt32(4);
@@ -112,7 +113,7 @@ public sealed record PairAccept(
     /// <exception cref="PeerProtocolException">The body violates 01 §2.2.</exception>
     public static PairAccept Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         var fields = PairingCbor.ReadFields(reader, hasTerms: true);
         return new PairAccept(fields.Contribution(), fields.Label, fields.Version, fields.Terms);
@@ -154,7 +155,7 @@ public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteByteString(Signature.Span);
@@ -166,7 +167,7 @@ public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
     /// <exception cref="PeerProtocolException">The body violates 01 §2.2.</exception>
     public static PairConfirm Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         byte[]? signature = null;
         PeerCbor.ReadEntries(reader, key =>
@@ -218,7 +219,7 @@ public sealed record PairRefuse(PeerRefusalReason Reason, string Text) : IPeerMe
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
-        ArgumentNullException.ThrowIfNull(writer);
+        ThrowHelper.ThrowIfNull(writer);
 
         writer.WriteInt32(1);
         writer.WriteUInt32((uint)Reason);
@@ -232,7 +233,7 @@ public sealed record PairRefuse(PeerRefusalReason Reason, string Text) : IPeerMe
     /// <exception cref="PeerProtocolException">The body violates 01 §2.2.</exception>
     public static PairRefuse Read(CborReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
 
         PeerRefusalReason reason = 0;
         var text = string.Empty;
@@ -266,7 +267,7 @@ internal static class PairingCbor
     /// <summary>Writes keys 1–3, which the offer and the acceptance share.</summary>
     public static void WriteContribution(CborWriter writer, PairingContribution contribution)
     {
-        ArgumentNullException.ThrowIfNull(contribution);
+        ThrowHelper.ThrowIfNull(contribution);
 
         writer.WriteInt32(1);
         writer.WriteByteString(contribution.Identity.PublicKey);

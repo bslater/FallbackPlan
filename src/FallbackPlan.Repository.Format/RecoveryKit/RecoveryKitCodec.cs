@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain.Identifiers;
@@ -45,7 +46,7 @@ public static class RecoveryKitCodec
     /// <summary>Serializes a kit into its framed machine form.</summary>
     public static byte[] Serialize(RecoveryKit kit)
     {
-        ArgumentNullException.ThrowIfNull(kit);
+        ThrowHelper.ThrowIfNull(kit);
         Validate(kit);
 
         var body = EncodeBody(kit);

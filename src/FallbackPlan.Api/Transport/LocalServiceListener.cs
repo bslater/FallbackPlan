@@ -1,3 +1,4 @@
+using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
@@ -44,8 +45,8 @@ public sealed class LocalServiceListener : IAsyncDisposable
     /// <returns>The running listener; dispose to stop.</returns>
     public static LocalServiceListener Start(IFallbackPlanService service, string stateDirectory, Action<string>? log = null)
     {
-        ArgumentNullException.ThrowIfNull(service);
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNull(service);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         LocalEndpoint.PrepareDirectory(stateDirectory);
         var address = LocalEndpoint.AddressFor(stateDirectory);

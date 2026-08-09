@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Domain;
 
 /// <summary>
@@ -34,7 +36,7 @@ public static class Base32
     /// </summary>
     public static int GetEncodedLength(int byteCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(byteCount);
+        ThrowHelper.ThrowIfNegative(byteCount);
         return checked((byteCount * 8 + 4) / 5);
     }
 

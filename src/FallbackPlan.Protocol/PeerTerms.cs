@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Protocol;
 
 /// <summary>
@@ -44,7 +46,7 @@ public sealed record PeerTerms(ulong QuotaBytes, string ScheduleWindow, uint Ret
     /// </remarks>
     public bool IsWithin(PeerTerms offered)
     {
-        ArgumentNullException.ThrowIfNull(offered);
+        ThrowHelper.ThrowIfNull(offered);
 
         return QuotaBytes <= offered.QuotaBytes
             && RetentionFloorGenerations <= offered.RetentionFloorGenerations;
@@ -65,7 +67,7 @@ public sealed record PeerTerms(ulong QuotaBytes, string ScheduleWindow, uint Ret
     /// </remarks>
     public bool Narrows(PeerTerms previous)
     {
-        ArgumentNullException.ThrowIfNull(previous);
+        ThrowHelper.ThrowIfNull(previous);
 
         return QuotaBytes < previous.QuotaBytes
             || RetentionFloorGenerations < previous.RetentionFloorGenerations

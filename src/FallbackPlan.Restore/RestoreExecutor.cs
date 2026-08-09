@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
@@ -208,9 +209,9 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
         RestoreExecutionOptions options,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
-        ArgumentNullException.ThrowIfNull(options);
+        ThrowHelper.ThrowIfNull(plan);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ThrowHelper.ThrowIfNull(options);
 
         using var activity = FallbackPlan.Domain.Diagnostics.EngineDiagnostics.Activities.StartActivity("restore");
         Directory.CreateDirectory(outputDirectory);

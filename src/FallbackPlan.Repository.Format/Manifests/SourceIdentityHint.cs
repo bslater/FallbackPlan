@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
 
@@ -79,7 +80,7 @@ public static class SourceIdentityHintCodec
     /// <exception cref="ArgumentException">A fixed-width field is the wrong length.</exception>
     public static byte[] Encode(SourceIdentityHint hint)
     {
-        ArgumentNullException.ThrowIfNull(hint);
+        ThrowHelper.ThrowIfNull(hint);
 
         if (hint.SourceKey.Length != SourceIdentityHint.SourceKeyLength)
         {

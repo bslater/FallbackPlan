@@ -1,3 +1,4 @@
+using Bodu;
 using Bodu.Security.Cryptography;
 using FallbackPlan.Domain.Configuration;
 using KdfParameters = FallbackPlan.Domain.Configuration.Argon2Parameters;
@@ -37,8 +38,8 @@ public static class KekDerivation
         ReadOnlySpan<byte> salt,
         KdfValidationMode mode)
     {
-        ArgumentNullException.ThrowIfNull(passphrase);
-        ArgumentNullException.ThrowIfNull(parameters);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(parameters);
 
         if (salt.Length != SaltLength)
         {

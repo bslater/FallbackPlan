@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 
 namespace FallbackPlan.Repository.Crypto;
@@ -64,7 +65,7 @@ public static class RecordCipher
         Span<byte> ciphertext,
         Span<byte> tag)
     {
-        ArgumentNullException.ThrowIfNull(cipher);
+        ThrowHelper.ThrowIfNull(cipher);
         cipher.Encrypt(nonce, plaintext, ciphertext, tag, aad);
     }
 

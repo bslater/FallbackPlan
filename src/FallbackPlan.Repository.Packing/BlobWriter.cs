@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -118,9 +119,9 @@ public sealed class BlobWriter : IAsyncDisposable
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null)
     {
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(profile);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         if (encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
@@ -206,10 +207,10 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         SpoolPinnedConfiguration current)
     {
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentNullException.ThrowIfNull(current);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(profile);
+        ThrowHelper.ThrowIfNull(current);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         if (!Directory.Exists(spoolDirectory))
         {
@@ -448,7 +449,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public bool CanAppend(int storedLength)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(storedLength);
+        ThrowHelper.ThrowIfNegative(storedLength);
 
         if (_entries.Count >= _profile.MaximumRecordCount || _entries.Count >= FormatLimits.MaxRecordsPerBlob)
         {
@@ -475,7 +476,7 @@ public sealed class BlobWriter : IAsyncDisposable
         ReadOnlyMemory<byte> storedPayload,
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
 
         if (!CanAppend(storedPayload.Length))
         {
@@ -541,7 +542,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask AbandonAsync()
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
         _abandoned = true;
 
         _cipher.Dispose();
@@ -579,7 +580,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask<SealedBlob> SealAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
         _sealed = true;
 
         var table = BlobFooter.EncodeRecordTable(_entries);

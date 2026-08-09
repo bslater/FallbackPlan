@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Status;
 
 namespace FallbackPlan.Api;
@@ -53,7 +54,7 @@ public static class StatusRollup
     /// <returns>The summary.</returns>
     public static MachineSummary Summarise(MachineObservation observation, ulong nowUnixMilliseconds)
     {
-        ArgumentNullException.ThrowIfNull(observation);
+        ThrowHelper.ThrowIfNull(observation);
 
         if (!observation.Reachable || observation.Status is null)
         {
@@ -84,7 +85,7 @@ public static class StatusRollup
     public static IReadOnlyList<MachineSummary> Summarise(
         IEnumerable<MachineObservation> observations, ulong nowUnixMilliseconds)
     {
-        ArgumentNullException.ThrowIfNull(observations);
+        ThrowHelper.ThrowIfNull(observations);
         return [.. observations.Select(observation => Summarise(observation, nowUnixMilliseconds))];
     }
 
@@ -98,7 +99,7 @@ public static class StatusRollup
     /// <returns>The worst state present, or null when there are no sets.</returns>
     public static ProtectionState? Worst(IReadOnlyList<BackupSetStatusDescriptor> sets)
     {
-        ArgumentNullException.ThrowIfNull(sets);
+        ThrowHelper.ThrowIfNull(sets);
 
         ProtectionState? worst = null;
         var worstRank = int.MinValue;

@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Application;
@@ -94,7 +95,7 @@ public sealed class PeerGrantStore
     /// <exception cref="ClientStateException">The file exists and is not readable as grants.</exception>
     public static PeerGrantStore Open(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
         var path = Path.Combine(stateDirectory, "peers.json");
 
@@ -132,7 +133,7 @@ public sealed class PeerGrantStore
     /// <exception cref="ClientStateException">The store is full.</exception>
     public void Pin(PeerGrant grant)
     {
-        ArgumentNullException.ThrowIfNull(grant);
+        ThrowHelper.ThrowIfNull(grant);
 
         lock (_gate)
         {
@@ -152,7 +153,7 @@ public sealed class PeerGrantStore
     /// <returns>The grant, or <see langword="null"/> when this peer is not paired.</returns>
     public PeerGrant? Find(PeerIdentity identity)
     {
-        ArgumentNullException.ThrowIfNull(identity);
+        ThrowHelper.ThrowIfNull(identity);
 
         lock (_gate)
         {
@@ -172,7 +173,7 @@ public sealed class PeerGrantStore
     /// </remarks>
     public bool Revoke(PeerIdentity identity)
     {
-        ArgumentNullException.ThrowIfNull(identity);
+        ThrowHelper.ThrowIfNull(identity);
 
         lock (_gate)
         {
@@ -192,8 +193,8 @@ public sealed class PeerGrantStore
     /// <returns><see langword="true"/> when the peer was found.</returns>
     public bool Relabel(PeerIdentity identity, string label)
     {
-        ArgumentNullException.ThrowIfNull(identity);
-        ArgumentNullException.ThrowIfNull(label);
+        ThrowHelper.ThrowIfNull(identity);
+        ThrowHelper.ThrowIfNull(label);
 
         lock (_gate)
         {
@@ -221,8 +222,8 @@ public sealed class PeerGrantStore
     /// <exception cref="ClientStateException">The peer is not paired.</exception>
     public bool ApplyTerms(PeerIdentity identity, PeerTerms terms)
     {
-        ArgumentNullException.ThrowIfNull(identity);
-        ArgumentNullException.ThrowIfNull(terms);
+        ThrowHelper.ThrowIfNull(identity);
+        ThrowHelper.ThrowIfNull(terms);
 
         lock (_gate)
         {

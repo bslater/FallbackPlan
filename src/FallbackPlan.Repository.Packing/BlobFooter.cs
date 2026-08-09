@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -27,7 +28,7 @@ public static class BlobFooter
     /// </summary>
     public static byte[] EncodeRecordTable(IReadOnlyList<RecordTableEntry> entries)
     {
-        ArgumentNullException.ThrowIfNull(entries);
+        ThrowHelper.ThrowIfNull(entries);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartArray(entries.Count);

@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Keystore;
 
 /// <summary>Raised when a platform keystore refuses or is unavailable.</summary>
@@ -79,7 +81,7 @@ public static class PlatformKeystore
     /// <exception cref="KeystoreException">The platform has no implementation.</exception>
     public static IPassphraseStore For(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (OperatingSystem.IsWindows())
         {

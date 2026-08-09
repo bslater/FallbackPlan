@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
@@ -100,7 +101,7 @@ public static class SnapshotManifestCodec
     /// <summary>Encodes the map of keys 1–16 — the exact bytes the signature covers (06 §6.1).</summary>
     public static byte[] EncodeForSigning(SnapshotManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         var writer = new CanonicalCborWriter();
@@ -111,7 +112,7 @@ public static class SnapshotManifestCodec
     /// <summary>Encodes the stored form: keys 1–16 plus the 64-byte signature at key 17.</summary>
     public static byte[] Encode(SnapshotManifest manifest, ReadOnlySpan<byte> signature)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         if (signature.Length != 64)

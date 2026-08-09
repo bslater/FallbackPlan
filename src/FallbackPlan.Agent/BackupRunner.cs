@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
@@ -40,8 +41,8 @@ public static class BackupRunner
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(set);
+        ThrowHelper.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(set);
 
         var jobs = runtime.Jobs;
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();

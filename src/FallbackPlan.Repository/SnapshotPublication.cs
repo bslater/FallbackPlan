@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
@@ -126,7 +127,7 @@ public sealed partial class PublicationOrchestrator
     /// <summary>Runs one tree publication end to end.</summary>
     public async ValueTask<PublishedTreeSnapshot> PublishAsync(SnapshotJob job, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(job);
+        ThrowHelper.ThrowIfNull(job);
 
         using var activity = EngineDiagnostics.Activities.StartActivity("publish");
         var publicationStarted = Stopwatch.GetTimestamp();

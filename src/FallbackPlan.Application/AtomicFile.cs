@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Application;
 
 /// <summary>
@@ -26,7 +28,7 @@ public static class AtomicFile
     /// <param name="contents">The text to write.</param>
     public static void WriteAllText(string path, string contents)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory))

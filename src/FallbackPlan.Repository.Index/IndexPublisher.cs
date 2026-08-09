@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -32,9 +33,9 @@ public sealed class IndexPublisher : IDisposable
         KeyHierarchy hierarchy,
         WriterSequence sequence)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
-        ArgumentNullException.ThrowIfNull(sequence);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(sequence);
 
         _store = store;
         _repositoryId = repositoryId;

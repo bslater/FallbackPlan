@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
@@ -45,8 +46,8 @@ public sealed class VerifyEngine : IDisposable
     /// <summary>Creates an engine.</summary>
     public VerifyEngine(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
     {
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
 
         _repositoryId = repositoryId;
         _keys = keys;
@@ -141,8 +142,8 @@ public sealed class VerifyEngine : IDisposable
         RepositoryReader reader,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(reader);
 
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 

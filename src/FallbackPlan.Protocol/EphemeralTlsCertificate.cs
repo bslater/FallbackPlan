@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -89,7 +90,7 @@ public sealed class EphemeralTlsCertificate : IDisposable
     /// <returns>SHA-256 of its DER <c>SubjectPublicKeyInfo</c>.</returns>
     public static byte[] BindingOf(X509Certificate2 certificate)
     {
-        ArgumentNullException.ThrowIfNull(certificate);
+        ThrowHelper.ThrowIfNull(certificate);
         return SessionBinding.TlsPublicKeyHash(certificate.PublicKey.ExportSubjectPublicKeyInfo());
     }
 

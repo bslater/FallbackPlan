@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -120,7 +121,7 @@ public static class StandaloneRecordCipher
         ReadOnlySpan<byte> metadataClassKey,
         out byte[] plaintext)
     {
-        ArgumentNullException.ThrowIfNull(record);
+        ThrowHelper.ThrowIfNull(record);
 
         plaintext = [];
 

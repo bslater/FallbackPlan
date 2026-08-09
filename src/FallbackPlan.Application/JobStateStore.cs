@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain.Jobs;
@@ -84,7 +85,7 @@ public sealed class JobStateStore
     /// <summary>Opens (or creates) the journal in <paramref name="stateDirectory"/>.</summary>
     public static JobStateStore Open(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
         var path = Path.Combine(stateDirectory, "jobs.json");
 
@@ -110,7 +111,7 @@ public sealed class JobStateStore
     /// <summary>Begins a job in <see cref="JobState.Pending"/> and persists.</summary>
     public JobRecord Begin(string backupSetId, ulong nowUnixMilliseconds)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(backupSetId);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(backupSetId);
 
         var job = new JobRecord
         {

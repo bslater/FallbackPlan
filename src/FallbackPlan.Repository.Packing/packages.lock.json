@@ -11,12 +11,14 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Text.Encoding": "[0.2.0, )"
         }
       },
       "fallbackplan.repository.crypto": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Security.Cryptography": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
@@ -24,6 +26,7 @@
       "fallbackplan.repository.format": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "System.Formats.Cbor": "[10.0.10, )",
           "ZstdSharp.Port": "[0.8.8, )"
@@ -32,6 +35,7 @@
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },

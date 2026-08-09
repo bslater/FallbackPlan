@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -101,9 +102,9 @@ public static class RepositoryLifecycle
         ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(passphrase);
-        ArgumentNullException.ThrowIfNull(settings);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(settings);
 
         var validation = settings.Validate();
         if (!validation.IsValid)
@@ -199,8 +200,8 @@ public static class RepositoryLifecycle
         Passphrase passphrase,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(passphrase);
 
         // Step 1: the descriptor — magic, digest, version, features.
         var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
@@ -299,8 +300,8 @@ public static class RepositoryLifecycle
         Passphrase passphrase,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(passphrase);
 
         var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
             ?? throw new RepositoryOpenException("No repository descriptor exists at /repository-format.");

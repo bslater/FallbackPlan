@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -47,11 +48,11 @@ public sealed class ManifestBuilder : IAsyncDisposable
         IIntentScope? intentScope = null,
         ReusePredicate? mayReuse = null)
     {
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(counters);
-        ArgumentNullException.ThrowIfNull(blobProfile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(counters);
+        ThrowHelper.ThrowIfNull(blobProfile);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -84,8 +85,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ObjectId? parentVersion,
         IReadOnlyList<string>? captureDiagnostics = null)
     {
-        ArgumentNullException.ThrowIfNull(result);
-        ArgumentNullException.ThrowIfNull(metadata);
+        ThrowHelper.ThrowIfNull(result);
+        ThrowHelper.ThrowIfNull(metadata);
 
         return new FileVersionManifest
         {
@@ -193,7 +194,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ulong counter,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
 
         var contentId = ContentHasher.Hash(encodedManifest.Span);
         var objectId = _objectIdDeriver.Derive(ObjectType.SnapshotManifest, contentId);
@@ -258,7 +259,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ulong intentSequence,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(hints);
+        ThrowHelper.ThrowIfNull(hints);
 
         foreach (var hint in hints)
         {

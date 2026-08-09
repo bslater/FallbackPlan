@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Cbor;
 
@@ -60,7 +61,7 @@ public static class PolicyManifestCodec
     /// <summary>Encodes a policy manifest canonically.</summary>
     public static byte[] Encode(PolicyManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(9);
@@ -299,7 +300,7 @@ public static class ErrorManifestCodec
     /// <summary>Encodes an error manifest canonically.</summary>
     public static byte[] Encode(ErrorManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(1);

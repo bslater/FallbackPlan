@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -70,8 +71,8 @@ public sealed class IndexLoader : IDisposable
     /// <summary>Creates a loader.</summary>
     public IndexLoader(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         _store = store;
         _repositoryId = repositoryId;

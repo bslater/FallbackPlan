@@ -1,3 +1,4 @@
+using Bodu;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using FallbackPlan.Api;
@@ -31,7 +32,7 @@ public sealed class ProgressHub : IJobProgressReporter
     /// <inheritdoc/>
     public void Report(JobProgress progress)
     {
-        ArgumentNullException.ThrowIfNull(progress);
+        ThrowHelper.ThrowIfNull(progress);
 
         lock (_gate)
         {

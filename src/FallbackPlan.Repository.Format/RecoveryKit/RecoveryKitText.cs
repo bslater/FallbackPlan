@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -62,7 +63,7 @@ public static class RecoveryKitText
     /// <exception cref="RecoveryKitFormatException">A line check fails, or the payload does not decode.</exception>
     public static byte[] ParseToFramed(string text)
     {
-        ArgumentNullException.ThrowIfNull(text);
+        ThrowHelper.ThrowIfNull(text);
 
         var payload = new StringBuilder();
         var sawPayload = false;

@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
@@ -54,8 +55,8 @@ public sealed class ForensicRebuilder : IDisposable
     /// <summary>Creates a rebuilder over the key hierarchy — footers and keys are all a scan needs (FR-MAN-007).</summary>
     public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         _store = store;
         _repositoryId = repositoryId;
@@ -73,8 +74,8 @@ public sealed class ForensicRebuilder : IDisposable
         ForensicTarget scope,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(scope);
+        ThrowHelper.ThrowIfNull(target);
+        ThrowHelper.ThrowIfNull(scope);
 
         var findings = new List<DamageFinding>();
         var indexed = new Dictionary<ObjectId, BlobId>();

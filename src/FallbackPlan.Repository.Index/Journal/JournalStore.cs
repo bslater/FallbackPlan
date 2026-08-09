@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -32,9 +33,9 @@ public sealed class JournalPublisher : IDisposable
         KeyHierarchy hierarchy,
         WriterSequence sequence)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
-        ArgumentNullException.ThrowIfNull(sequence);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(sequence);
 
         _store = store;
         _repositoryId = repositoryId;
@@ -116,8 +117,8 @@ public sealed class JournalReader : IDisposable
     /// <summary>Creates a reader.</summary>
     public JournalReader(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         _store = store;
         _repositoryId = repositoryId;

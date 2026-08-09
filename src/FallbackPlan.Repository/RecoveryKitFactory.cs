@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Abstractions;
@@ -30,7 +31,7 @@ public static class RecoveryKitFactory
         IReadOnlyList<KitDestination> destinations,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(destinations);
+        ThrowHelper.ThrowIfNull(destinations);
 
         var (descriptor, keyObject) = await RepositoryLifecycle
             .ExportVerifiedKeyObjectAsync(store, passphrase, cancellationToken).ConfigureAwait(false);

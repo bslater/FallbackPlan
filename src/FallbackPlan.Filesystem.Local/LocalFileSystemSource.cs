@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -27,7 +28,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// <inheritdoc />
     public SourceFilesystemInfo Probe(string rootPath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
         var full = Path.GetFullPath(rootPath);
 
         if (OperatingSystem.IsWindows())
@@ -88,8 +89,8 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     public async IAsyncEnumerable<ScanEvent> ScanAsync(
         string rootPath, ScanOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
-        ArgumentNullException.ThrowIfNull(options);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
+        ThrowHelper.ThrowIfNull(options);
 
         var full = Path.GetFullPath(rootPath);
 
@@ -615,7 +616,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// </remarks>
     public RevalidationProbe? Revalidate(ScanEntry entry)
     {
-        ArgumentNullException.ThrowIfNull(entry);
+        ThrowHelper.ThrowIfNull(entry);
 
         if (entry.ContentHandle is { IsInvalid: false, IsClosed: false } handle &&
             PosixDirectoryScope.StatHandle((int)handle.DangerousGetHandle(), out var fromHandle))
@@ -645,7 +646,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// </remarks>
     public Stream OpenRead(ScanEntry entry)
     {
-        ArgumentNullException.ThrowIfNull(entry);
+        ThrowHelper.ThrowIfNull(entry);
 
         if (entry.ContentHandle is { IsInvalid: false, IsClosed: false } handle)
         {
@@ -668,8 +669,8 @@ public sealed class LocalFileSystemSource : IFileSystemSource
     /// <inheritdoc />
     public Stream OpenAlternateStream(ScanEntry entry, string streamName)
     {
-        ArgumentNullException.ThrowIfNull(entry);
-        ArgumentException.ThrowIfNullOrEmpty(streamName);
+        ThrowHelper.ThrowIfNull(entry);
+        ThrowHelper.ThrowIfNullOrEmpty(streamName);
 
         if (!OperatingSystem.IsWindows())
         {

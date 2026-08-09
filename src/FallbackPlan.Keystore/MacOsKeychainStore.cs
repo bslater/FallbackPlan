@@ -1,3 +1,4 @@
+using Bodu;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
@@ -29,7 +30,7 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
     public bool TryRead(string account, out string? passphrase)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
         passphrase = null;
 
         var serviceBytes = Encoding.UTF8.GetBytes(Service);
@@ -77,8 +78,8 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
     public void Write(string account, string passphrase)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
-        ArgumentException.ThrowIfNullOrEmpty(passphrase);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrEmpty(passphrase);
 
         // Replace rather than add-and-hope: an existing item would make the add
         // fail with duplicate-item, and a stale passphrase that silently
@@ -116,7 +117,7 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
     public void Delete(string account)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
 
         var serviceBytes = Encoding.UTF8.GetBytes(Service);
         var accountBytes = Encoding.UTF8.GetBytes(account);

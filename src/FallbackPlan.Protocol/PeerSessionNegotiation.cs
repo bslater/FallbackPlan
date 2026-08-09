@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Protocol;
 
 /// <summary>
@@ -48,8 +50,8 @@ public static class PeerSessionNegotiation
     /// </exception>
     public static SessionAccept Negotiate(SessionHello ours, SessionHello theirs)
     {
-        ArgumentNullException.ThrowIfNull(ours);
-        ArgumentNullException.ThrowIfNull(theirs);
+        ThrowHelper.ThrowIfNull(ours);
+        ThrowHelper.ThrowIfNull(theirs);
 
         return new SessionAccept(SelectVersion(ours, theirs), SelectFeatures(ours, theirs));
     }
@@ -61,8 +63,8 @@ public static class PeerSessionNegotiation
     /// <exception cref="PeerProtocolException">The ranges do not overlap.</exception>
     public static ushort SelectVersion(SessionHello ours, SessionHello theirs)
     {
-        ArgumentNullException.ThrowIfNull(ours);
-        ArgumentNullException.ThrowIfNull(theirs);
+        ThrowHelper.ThrowIfNull(ours);
+        ThrowHelper.ThrowIfNull(theirs);
 
         var highest = Math.Min(ours.MaximumVersion, theirs.MaximumVersion);
         var lowest = Math.Max(ours.MinimumVersion, theirs.MinimumVersion);
@@ -88,8 +90,8 @@ public static class PeerSessionNegotiation
     /// <exception cref="PeerProtocolException">A required feature is absent.</exception>
     public static IReadOnlyList<string> SelectFeatures(SessionHello ours, SessionHello theirs)
     {
-        ArgumentNullException.ThrowIfNull(ours);
-        ArgumentNullException.ThrowIfNull(theirs);
+        ThrowHelper.ThrowIfNull(ours);
+        ThrowHelper.ThrowIfNull(theirs);
 
         var weOffer = new HashSet<string>(ours.FeaturesOffered, StringComparer.Ordinal);
         var theyOffer = new HashSet<string>(theirs.FeaturesOffered, StringComparer.Ordinal);

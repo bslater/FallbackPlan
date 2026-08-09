@@ -340,15 +340,31 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
-    /// Same canary pattern for the other Bodu reference: Repository.Packing
-    /// is where Bodu.Core lives (ADR-0021). If that reference moves or is
-    /// removed, this fails, and whoever made the change decides deliberately
-    /// whether the containment rules above still cover what they should.
+    /// Bodu.Core is deliberately <b>not</b> contained. It supplies the
+    /// solution's parameter-validation vocabulary (ADR-0021 amendment 1), so
+    /// every project that guards an argument references it, and a rule
+    /// pinning it to one project would be a rule against the decision.
+    ///
+    /// What replaces the old containment canary is the reason containment
+    /// existed: Repository.Format is what the standalone recovery tool links,
+    /// and its dependency closure must stay small enough to build and run on
+    /// a clean machine when everything else has failed (NFR-PORT-001). This
+    /// asserts the closure is exactly the two Bodu packages that decision
+    /// admits — a third arriving here is the thing to catch, and it would
+    /// otherwise arrive silently.
     /// </summary>
     [Fact]
-    public void Repository_Packing_is_where_the_bodu_utility_library_actually_lives()
+    public void Recovery_tool_closure_admits_only_the_two_intended_bodu_packages()
     {
-        AssertProjectReferences("FallbackPlan.Repository.Packing", "<PackageReference Include=\"Bodu.Core\" />");
+        AssertPasses(
+            Types.InAssembly(Format)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "Bodu.Security.Cryptography",
+                    "Bodu.Globalization.Recurrence")
+                .GetResult(),
+            "Repository.Format's closure is the recovery tool's closure: only Bodu.Core (guard clauses) " +
+            "and Bodu.Text.Encoding (base32) belong in it.");
     }
 
     /// <summary>

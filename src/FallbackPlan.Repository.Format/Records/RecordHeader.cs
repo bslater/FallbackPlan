@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -43,17 +44,17 @@ public readonly struct RecordHeader
         uint storedLength,
         ObjectId objectId)
     {
-        ArgumentNullException.ThrowIfNull(compressionProfile);
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(compressionProfile);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
 
         if (!ObjectTypes.IsValid((byte)objectType))
         {
             throw new ArgumentException("Not an assigned object type (specification 02 §3.1).", nameof(objectType));
         }
 
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(ordinal, MaxOrdinal);
-        ArgumentOutOfRangeException.ThrowIfZero(logicalLength);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(storedLength, (uint)FormatLimits.MaxRecordStoredLength);
+        ThrowHelper.ThrowIfGreaterThan(ordinal, MaxOrdinal);
+        ThrowHelper.ThrowIfEqual(logicalLength, 0UL);
+        ThrowHelper.ThrowIfGreaterThan(storedLength, (uint)FormatLimits.MaxRecordStoredLength);
 
         if (compressionProfile == CompressionProfile.None && storedLength != logicalLength)
         {

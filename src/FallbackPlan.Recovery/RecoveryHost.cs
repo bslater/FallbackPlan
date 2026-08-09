@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
@@ -28,9 +29,9 @@ public static class RecoveryHost
     public static async Task<int> RunAsync(
         string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(args);
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(error);
+        ThrowHelper.ThrowIfNull(args);
+        ThrowHelper.ThrowIfNull(output);
+        ThrowHelper.ThrowIfNull(error);
         // The standalone recovery tool (architecture 08 §5; FR-KIT-006): opens a
         // repository with nothing but a store location, a recovery kit, and the
         // passphrase. Argument parsing is by hand on purpose — the smallest

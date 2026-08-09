@@ -1,3 +1,4 @@
+using Bodu;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Storage.Abstractions;
 
@@ -37,7 +38,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     /// </summary>
     public LocalFileSystemObjectStore(string rootPath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
 
         _root = Path.GetFullPath(rootPath);
         _spool = Path.Combine(_root, SpoolDirectoryName);
@@ -118,8 +119,8 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         PutConditions conditions,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(openContent);
-        ArgumentNullException.ThrowIfNull(conditions);
+        ThrowHelper.ThrowIfNull(openContent);
+        ThrowHelper.ThrowIfNull(conditions);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "put"));
 
         var finalPath = ResolvePath(key);
@@ -191,7 +192,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         ListOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ThrowHelper.ThrowIfNull(options);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "list"));
 
         await Task.Yield();
@@ -259,7 +260,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     /// <inheritdoc />
     public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(conditions);
+        ThrowHelper.ThrowIfNull(conditions);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "delete"));
         cancellationToken.ThrowIfCancellationRequested();
 

@@ -1,3 +1,4 @@
+using Bodu;
 using System.Numerics;
 using FallbackPlan.Domain;
 
@@ -61,7 +62,7 @@ public static class FixedSegmentation
 
     private static void ValidateArguments(long length, SegmentSize segmentSize)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ThrowHelper.ThrowIfNegative(length);
 
         if (segmentSize.Bytes == 0)
         {

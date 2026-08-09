@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Identifiers;
 
 namespace FallbackPlan.Repository.Index.Journal;
@@ -69,7 +70,7 @@ public static class IntentSurveyor
         ulong nowMs,
         ulong skewMarginMs)
     {
-        ArgumentNullException.ThrowIfNull(records);
+        ThrowHelper.ThrowIfNull(records);
 
         var live = new List<LiveIntent>();
 

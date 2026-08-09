@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -84,9 +85,9 @@ public sealed class BlobReader : IDisposable
         ObjectIdDeriver objectIdDeriver,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(classKeyProvider);
-        ArgumentNullException.ThrowIfNull(objectIdDeriver);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(classKeyProvider);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
 
         if (blobLength < BlobEnvelope.Length + BlobFooter.HeaderLength + RecordCipher.TagLength + FooterLocator.Length)
         {

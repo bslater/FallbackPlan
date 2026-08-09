@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
@@ -60,11 +61,11 @@ public sealed class FileArchiver
         string spoolDirectory,
         IIntentScope? intentScope = null)
     {
-        ArgumentNullException.ThrowIfNull(policy);
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(counters);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(policy);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(counters);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         var validation = policy.ValidateAgainstStore(store.Capabilities.MaximumObjectSize);
         if (!validation.IsValid)
@@ -109,7 +110,7 @@ public sealed class FileArchiver
     /// </remarks>
     public async ValueTask<ArchiveResult> ArchiveAsync(Stream source, ArchiveResult? priorVersion, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var session = OpenSession();
         await using (session.ConfigureAwait(false))

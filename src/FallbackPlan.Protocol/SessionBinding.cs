@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -137,7 +138,7 @@ public static class SessionBinding
         SessionBindingContribution responder,
         PeerSessionRole role)
     {
-        ArgumentNullException.ThrowIfNull(keypair);
+        ThrowHelper.ThrowIfNull(keypair);
         return new SessionAuthProof(keypair.Sign(Transcript(initiator, responder, role)));
     }
 
@@ -159,7 +160,7 @@ public static class SessionBinding
         SessionBindingContribution responder,
         PeerSessionRole peerRole)
     {
-        ArgumentNullException.ThrowIfNull(proof);
+        ThrowHelper.ThrowIfNull(proof);
         Validate(initiator, nameof(initiator));
         Validate(responder, nameof(responder));
 
@@ -169,7 +170,7 @@ public static class SessionBinding
 
     private static void Validate(SessionBindingContribution contribution, string parameter)
     {
-        ArgumentNullException.ThrowIfNull(contribution, parameter);
+        ThrowHelper.ThrowIfNull(contribution, parameter);
 
         if (contribution.TlsPublicKeyHash.Length != TlsPublicKeyHashLength)
         {

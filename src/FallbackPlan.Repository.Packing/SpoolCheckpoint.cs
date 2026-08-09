@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,8 +31,8 @@ public sealed record SpoolPinnedConfiguration(
     /// </summary>
     public static SpoolPinnedConfiguration FromPolicy(Domain.Configuration.CapturePolicy policy, string codecVersion)
     {
-        ArgumentNullException.ThrowIfNull(policy);
-        ArgumentException.ThrowIfNullOrWhiteSpace(codecVersion);
+        ThrowHelper.ThrowIfNull(policy);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(codecVersion);
 
         return policy.SegmentationProfile == Domain.Profiles.SegmentationProfile.CdcV1
             ? new SpoolPinnedConfiguration(

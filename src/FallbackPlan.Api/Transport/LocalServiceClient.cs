@@ -1,3 +1,4 @@
+using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
@@ -68,8 +69,8 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     public static async ValueTask<LocalServiceClient> ConnectAsync(
         string stateDirectory, string clientName, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(clientName);
 
         var address = LocalEndpoint.AddressFor(stateDirectory);
         var stream = await OpenAsync(address, cancellationToken).ConfigureAwait(false);
@@ -112,7 +113,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     /// <inheritdoc/>
     public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(command);
+        ThrowHelper.ThrowIfNull(command);
 
         var id = Interlocked.Increment(ref _nextRequestId);
         await _exchange.WaitAsync(cancellationToken).ConfigureAwait(false);

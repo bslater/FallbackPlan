@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
@@ -121,8 +122,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     public static async ValueTask<ServiceRuntime> StartAsync(
         ServiceOptions options, Passphrase passphrase, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(options);
+        ThrowHelper.ThrowIfNull(passphrase);
 
         var writerRole = StateDirectoryLock.Acquire(options.StateDirectory, StateDirectoryLock.ServiceRole);
         try

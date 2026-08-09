@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
 
@@ -50,7 +51,7 @@ public static class CheckpointCodec
     /// <summary>Encodes keys 1–8 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(Checkpoint checkpoint)
     {
-        ArgumentNullException.ThrowIfNull(checkpoint);
+        ThrowHelper.ThrowIfNull(checkpoint);
         Validate(checkpoint);
 
         var writer = new CanonicalCborWriter();
@@ -61,7 +62,7 @@ public static class CheckpointCodec
     /// <summary>Encodes the stored form: keys 1–8 plus the signature at key 9.</summary>
     public static byte[] Encode(Checkpoint checkpoint, ReadOnlySpan<byte> signature)
     {
-        ArgumentNullException.ThrowIfNull(checkpoint);
+        ThrowHelper.ThrowIfNull(checkpoint);
         Validate(checkpoint);
 
         if (signature.Length != 64)

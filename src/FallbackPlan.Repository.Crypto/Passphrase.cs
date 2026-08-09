@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -37,7 +38,7 @@ public sealed class Passphrase : IDisposable
     /// <exception cref="ArgumentException"><paramref name="value"/> is empty (specification 03 §2.1).</exception>
     public static Passphrase Create(string value)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        ThrowHelper.ThrowIfNull(value);
 
         if (value.Length == 0)
         {

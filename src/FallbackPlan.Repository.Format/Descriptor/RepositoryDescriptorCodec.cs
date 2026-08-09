@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
@@ -35,7 +36,7 @@ public static class RepositoryDescriptorCodec
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
     {
-        ArgumentNullException.ThrowIfNull(descriptor);
+        ThrowHelper.ThrowIfNull(descriptor);
 
         if (descriptor.KdfSalt.Length != 16)
         {

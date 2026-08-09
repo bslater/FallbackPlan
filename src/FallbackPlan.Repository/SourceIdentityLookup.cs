@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -61,8 +62,8 @@ public static class SourceIdentityLookup
         ulong capturedAtBound,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(keys);
 
         var prefix = MetadataStoreKeys.SourceIdentityPrefix(sourceKey.Span);
         var bound = MetadataStoreKeys.Decimal16(capturedAtBound);

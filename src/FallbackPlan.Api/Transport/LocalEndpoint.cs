@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -41,7 +42,7 @@ public static class LocalEndpoint
     /// <returns>The address, in the platform's own form.</returns>
     public static string AddressFor(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (OperatingSystem.IsWindows())
         {
@@ -72,7 +73,7 @@ public static class LocalEndpoint
     /// <param name="stateDirectory">The state directory.</param>
     public static void PrepareDirectory(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
 
         if (!OperatingSystem.IsWindows())
@@ -95,7 +96,7 @@ public static class LocalEndpoint
     /// </remarks>
     public static bool Exists(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (OperatingSystem.IsWindows())
         {

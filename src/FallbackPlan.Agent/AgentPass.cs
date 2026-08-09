@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Agent;
@@ -27,9 +28,9 @@ public static class AgentPass
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        ArgumentNullException.ThrowIfNull(passphrase);
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryPath);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         var options = new ServiceOptions
         {

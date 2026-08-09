@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using Bodu.Globalization.Recurrence;
 
@@ -40,7 +41,7 @@ public sealed class Schedule
     /// <summary>Parses a schedule string; strict, with the defect named.</summary>
     public static bool TryParse(string text, out Schedule? schedule, out string? defect)
     {
-        ArgumentNullException.ThrowIfNull(text);
+        ThrowHelper.ThrowIfNull(text);
         schedule = null;
         defect = null;
 

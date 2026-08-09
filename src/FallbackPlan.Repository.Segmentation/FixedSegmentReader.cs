@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 
 namespace FallbackPlan.Repository.Segmentation;
@@ -28,7 +29,7 @@ public sealed class FixedSegmentReader : ISegmentReader
     /// <exception cref="ArgumentException">The source is not readable or the segment size unset.</exception>
     public FixedSegmentReader(Stream source, SegmentSize segmentSize)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         if (!source.CanRead)
         {

@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -88,7 +89,7 @@ public sealed class LocalState
     /// </summary>
     public static LocalState LoadOrCreate(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
 
         var path = Path.Combine(stateDirectory, "state.json");
@@ -121,7 +122,7 @@ public sealed class LocalState
     /// <summary>Appends one job to the history and persists.</summary>
     public void RecordJob(JobHistoryEntry entry)
     {
-        ArgumentNullException.ThrowIfNull(entry);
+        ThrowHelper.ThrowIfNull(entry);
         _model = _model with { JobHistory = [.. _model.JobHistory, entry] };
         Save();
     }

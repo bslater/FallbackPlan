@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using System.IO.Pipes;
 using System.Net.Sockets;
@@ -27,7 +28,7 @@ public static partial class PeerCredentials
     /// <returns>The caller's identity, or <see cref="PeerIdentity.Unknown"/>.</returns>
     public static PeerIdentity Read(Socket socket)
     {
-        ArgumentNullException.ThrowIfNull(socket);
+        ThrowHelper.ThrowIfNull(socket);
 
         if (OperatingSystem.IsLinux())
         {
@@ -43,7 +44,7 @@ public static partial class PeerCredentials
     [SupportedOSPlatform("windows")]
     public static PeerIdentity Read(NamedPipeServerStream pipe)
     {
-        ArgumentNullException.ThrowIfNull(pipe);
+        ThrowHelper.ThrowIfNull(pipe);
 
         try
         {

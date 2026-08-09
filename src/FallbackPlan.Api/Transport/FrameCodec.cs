@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Text.Json;
 
@@ -31,8 +32,8 @@ public static class FrameCodec
     /// <returns>A task that completes when the frame is flushed.</returns>
     public static async ValueTask WriteAsync(Stream stream, WireFrame frame, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(frame);
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(frame);
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SerializerOptions);
         if (payload.Length > MaximumFrameBytes)
@@ -55,7 +56,7 @@ public static class FrameCodec
     /// <exception cref="InvalidDataException">The peer sent something that is not a frame.</exception>
     public static async ValueTask<WireFrame?> ReadAsync(Stream stream, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(stream);
 
         var prefix = new byte[4];
         if (!await ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false))
