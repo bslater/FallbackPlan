@@ -32,13 +32,13 @@ public sealed class SegmentSizeTests
     }
 
     [TestMethod]
-    public void The_specification_default_is_one_mebibyte()
+    public void SegmentSize_TheSpecificationDefault_IsOneMebibyte()
     {
         Assert.AreEqual(1024 * 1024, SegmentSize.Default.Bytes);
     }
 
     [TestMethod]
-    public void The_default_struct_value_is_not_a_valid_segment_size()
+    public void SegmentSize_TheDefaultStructValue_IsNotValid()
     {
         Assert.AreEqual(0, default(SegmentSize).Bytes);
     }

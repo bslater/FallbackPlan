@@ -11,7 +11,7 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 public sealed class Argon2ParameterValidationTests
 {
     [TestMethod]
-    public void The_creation_minimums_validate_clean()
+    public void ValidateCreationMinimums_TheCreationMinimums_ReportNoDefect()
     {
         Assert.IsTrue(Argon2Parameters.CreationMinimums.ValidateCreationMinimums().IsValid);
     }
@@ -32,7 +32,7 @@ public sealed class Argon2ParameterValidationTests
     }
 
     [TestMethod]
-    public void All_below_minimum_values_are_reported_together()
+    public void ValidateCreationMinimums_WhenEveryValueIsBelowMinimum_ShouldReportThemTogether()
     {
         var parameters = new Argon2Parameters { MemoryKiB = 8, Iterations = 1, Parallelism = 1 };
 
@@ -42,7 +42,7 @@ public sealed class Argon2ParameterValidationTests
     }
 
     [TestMethod]
-    public void Repository_creation_settings_carry_kdf_defects_through()
+    public void RepositoryCreationSettings_KdfParametersAreInvalid_CarryTheDefectsThrough()
     {
         var settings = RepositoryCreationSettings.Default with
         {

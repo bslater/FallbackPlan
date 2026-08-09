@@ -25,7 +25,7 @@ public sealed class KeyHierarchyConformanceTests
         Vectors.RootElement.GetProperty("derived").GetProperty(name).GetString()!;
 
     [TestMethod]
-    public void Repository_scoped_keys_match_the_committed_vectors()
+    public void RepositoryScopedKeys_TheCommittedVectors_Match()
     {
         using var hierarchy = CreateHierarchy();
 
@@ -34,7 +34,7 @@ public sealed class KeyHierarchyConformanceTests
     }
 
     [TestMethod]
-    public void Generational_keys_match_the_committed_vectors()
+    public void GenerationalKeys_TheCommittedVectors_Match()
     {
         using var hierarchy = CreateHierarchy();
 
@@ -45,7 +45,7 @@ public sealed class KeyHierarchyConformanceTests
     }
 
     [TestMethod]
-    public void Blob_key_and_separation_checks_match_the_committed_vectors()
+    public void BlobKeyAndSeparationChecks_TheCommittedVectors_Match()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
         var writer = WriterId.FromBytes(Convert.FromHexString(inputs.GetProperty("writer_id").GetString()!));

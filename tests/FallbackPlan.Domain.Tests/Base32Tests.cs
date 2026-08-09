@@ -61,7 +61,7 @@ public sealed class Base32Tests
     }
 
     [TestMethod]
-    public void Decode_rejects_non_zero_trailing_padding_bits()
+    public void Decode_WhenTrailingPaddingBitsAreNonZero_ShouldThrow()
     {
         // "f" (0x66) encodes as "my": 'm'=12, 'y'=24 leaves three trailing
         // zero bits. "mz" ('z'=25) names the same byte with a non-zero
@@ -71,16 +71,16 @@ public sealed class Base32Tests
     }
 
     [TestMethod]
-    public void Decode_rejects_a_destination_that_is_too_small()
+    public void Decode_WhenTheDestinationIsTooSmall_ShouldThrow()
     {
         Assert.IsFalse(Base32.TryDecode("mzxw6ytboi", new byte[3], out _));
     }
 
     [TestMethod]
-    public void Decode_of_encode_returns_the_original_bytes() =>
+    public void Decode_OfAnyEncodedInput_ReturnsTheOriginalBytes() =>
         PropertyCheck.Holds(this);
 
-    public static bool Decode_of_encode_returns_the_original_bytesProperty(byte[]? bytes)
+    public static bool Decode_OfAnyEncodedInput_ReturnsTheOriginalBytesProperty(byte[]? bytes)
     {
         bytes ??= [];
 

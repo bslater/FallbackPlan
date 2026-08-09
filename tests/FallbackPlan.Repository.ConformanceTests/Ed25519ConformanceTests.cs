@@ -20,7 +20,7 @@ public sealed class Ed25519ConformanceTests
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
 
     [TestMethod]
-    public void Every_rfc8032_case_reproduces_public_key_and_signature()
+    public void Ed25519_EveryRfc8032Case_ReproducesItsPublicKeyAndSignature()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("rfc8032_cases").EnumerateArray())
         {
@@ -37,7 +37,7 @@ public sealed class Ed25519ConformanceTests
     }
 
     [TestMethod]
-    public void Every_format_case_reproduces_from_the_derived_seed()
+    public void Ed25519_EveryFormatCase_ReproducesFromItsDerivedSeed()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
 
@@ -64,7 +64,7 @@ public sealed class Ed25519ConformanceTests
     }
 
     [TestMethod]
-    public void A_signature_verifies_and_any_tampered_byte_is_rejected()
+    public void Ed25519_AnyTamperedByte_FailsVerification()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -86,7 +86,7 @@ public sealed class Ed25519ConformanceTests
     }
 
     [TestMethod]
-    public void Different_generations_derive_different_keypairs()
+    public void Ed25519_DifferentKeyGenerations_DeriveDifferentKeyPairs()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var zero = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);

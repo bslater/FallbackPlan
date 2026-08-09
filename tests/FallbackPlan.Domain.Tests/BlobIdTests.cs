@@ -11,7 +11,7 @@ namespace FallbackPlan.Domain.Tests;
 public sealed class BlobIdTests
 {
     [TestMethod]
-    public void Structured_formation_matches_the_committed_conformance_constant()
+    public void Create_TheConformanceVectorInputs_MatchesTheCommittedConstant()
     {
         // identifiers.json blob_identifier group: writer_id a0a1…af, counter 42.
         var writer = WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
@@ -22,7 +22,7 @@ public sealed class BlobIdTests
     }
 
     [TestMethod]
-    public void Structured_formation_carries_only_the_first_eight_writer_bytes()
+    public void Create_AnyWriterId_CarriesOnlyItsFirstEightBytes()
     {
         var writerA = WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
         var writerB = WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7ffffffffffffffff"));
@@ -33,7 +33,7 @@ public sealed class BlobIdTests
     }
 
     [TestMethod]
-    public void Counter_is_encoded_big_endian()
+    public void Create_AnyCounter_EncodesItBigEndian()
     {
         var writer = WriterId.FromBytes(new byte[WriterId.Size]);
 
@@ -43,7 +43,7 @@ public sealed class BlobIdTests
     }
 
     [TestMethod]
-    public void Random_formation_requires_exactly_sixteen_bytes()
+    public void CreateRandom_WhenGivenOtherThanSixteenBytes_ShouldThrow()
     {
         Assert.ThrowsExactly<ArgumentException>(() => BlobId.FromRandom(new byte[15]));
         Assert.ThrowsExactly<ArgumentException>(() => BlobId.FromRandom(new byte[17]));

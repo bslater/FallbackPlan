@@ -42,7 +42,7 @@ public sealed class IdentifierConformanceTests
     };
 
     [TestMethod]
-    public void Content_and_object_identifiers_match_every_committed_case()
+    public void ContentAndObjectIdentifiers_EveryCommittedCase_Match()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var deriver = new ObjectIdDeriver(ContentIdKey());
@@ -79,7 +79,7 @@ public sealed class IdentifierConformanceTests
     }
 
     [TestMethod]
-    public void Object_identifiers_separate_by_object_type()
+    public void ObjectIdentifier_TheSameContentUnderDifferentTypes_Differs()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var deriver = new ObjectIdDeriver(ContentIdKey());
@@ -101,7 +101,7 @@ public sealed class IdentifierConformanceTests
     }
 
     [TestMethod]
-    public void Blob_identifier_and_store_key_match_the_committed_vector()
+    public void BlobIdentifierAndStoreKey_TheCommittedVector_Match()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var keys = LoadVectors("keys.json");

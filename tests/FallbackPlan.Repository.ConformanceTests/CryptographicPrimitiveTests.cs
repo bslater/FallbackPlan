@@ -79,7 +79,7 @@ public sealed class CryptographicPrimitiveTests
     /// the generator's would be caught rather than silently accepted.
     /// </summary>
     [TestMethod]
-    public void Hkdf_expand_matches_rfc_5869_test_case_1()
+    public void HkdfExpand_Rfc5869TestCaseOne_Matches()
     {
         var prk = Hex("077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5");
         var info = Hex("f0f1f2f3f4f5f6f7f8f9");
@@ -94,7 +94,7 @@ public sealed class CryptographicPrimitiveTests
     // ---------------------------------------------------------------------
 
     [TestMethod]
-    public void Derived_keys_match_the_committed_vectors()
+    public void DerivedKeys_TheCommittedVectors_Match()
     {
         using var document = Load("keys.json");
         var derived = document.RootElement.GetProperty("derived");
@@ -129,7 +129,7 @@ public sealed class CryptographicPrimitiveTests
     /// the format's confidentiality rests on.
     /// </summary>
     [TestMethod]
-    public void Blob_key_derivation_matches_the_committed_vector()
+    public void BlobKeyDerivation_TheCommittedVector_Matches()
     {
         using var document = Load("keys.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -153,7 +153,7 @@ public sealed class CryptographicPrimitiveTests
     /// assuming, because it is invisible until it fails catastrophically.
     /// </summary>
     [TestMethod]
-    public void Identical_salt_with_a_different_writer_or_counter_yields_a_different_key()
+    public void BlobKeyDerivation_SameSaltDifferentWriterOrCounter_YieldsADifferentKey()
     {
         using var document = Load("keys.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -180,7 +180,7 @@ public sealed class CryptographicPrimitiveTests
     // ---------------------------------------------------------------------
 
     [TestMethod]
-    public void Content_identifiers_match_the_committed_vectors()
+    public void ContentIdentifiers_TheCommittedVectors_Match()
     {
         using var document = Load("identifiers.json");
 
@@ -196,7 +196,7 @@ public sealed class CryptographicPrimitiveTests
     }
 
     [TestMethod]
-    public void Object_identifiers_match_the_committed_vectors()
+    public void ObjectIdentifiers_TheCommittedVectors_Match()
     {
         using var document = Load("identifiers.json");
         var contentIdKey = Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/content-id/v1"), 32);
@@ -218,7 +218,7 @@ public sealed class CryptographicPrimitiveTests
     }
 
     [TestMethod]
-    public void Store_blob_key_derivation_matches_the_committed_vector()
+    public void StoreBlobKeyDerivation_TheCommittedVector_Matches()
     {
         using var document = Load("identifiers.json");
         var blob = document.RootElement.GetProperty("blob_identifier");
@@ -239,7 +239,7 @@ public sealed class CryptographicPrimitiveTests
     // ---------------------------------------------------------------------
 
     [TestMethod]
-    public void Associated_data_matches_the_committed_vectors()
+    public void AssociatedData_TheCommittedVectors_Match()
     {
         using var document = Load("records.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -272,7 +272,7 @@ public sealed class CryptographicPrimitiveTests
     /// bytes, and the footer's deserves the same.
     /// </summary>
     [TestMethod]
-    public void Footer_associated_data_matches_the_committed_vector()
+    public void FooterAssociatedData_TheCommittedVector_Matches()
     {
         using var document = Load("records.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -316,7 +316,7 @@ public sealed class CryptographicPrimitiveTests
     /// property the record format leans on.
     /// </summary>
     [TestMethod]
-    public void Aes_gcm_matches_known_answer_tests()
+    public void AesGcm_TheKnownAnswerTests_Match()
     {
         using var document = Load("aes-gcm.json");
 
@@ -351,7 +351,7 @@ public sealed class CryptographicPrimitiveTests
     /// repositories detectable (specification 04 section 4, threat T-3).
     /// </summary>
     [TestMethod]
-    public void Altering_associated_data_causes_authentication_to_fail()
+    public void AesGcm_AssociatedDataAltered_FailsAuthentication()
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var nonce = new byte[12];

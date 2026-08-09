@@ -17,7 +17,7 @@ public sealed class SegmentationConformanceTests
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "segmentation.json")));
 
     [TestMethod]
-    public void Boundary_arithmetic_matches_every_committed_case()
+    public void SegmentationBoundaries_EveryCommittedCase_Match()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("cases").EnumerateArray())
         {
@@ -40,7 +40,7 @@ public sealed class SegmentationConformanceTests
     }
 
     [TestMethod]
-    public async Task The_streaming_reader_reproduces_every_materializable_case()
+    public async Task StreamingSegmentReader_EveryMaterialisableCase_Reproduces()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("cases").EnumerateArray())
         {
@@ -72,7 +72,7 @@ public sealed class SegmentationConformanceTests
     }
 
     [TestMethod]
-    public void Cdc_tables_derived_from_the_polynomial_match_the_committed_tables()
+    public void CdcTables_DerivedFromThePolynomial_MatchTheCommittedTables()
     {
         // The vectors commit the polynomial, the derivation rule, and the
         // computed tables; the engine derives its tables from the polynomial
@@ -97,7 +97,7 @@ public sealed class SegmentationConformanceTests
     }
 
     [TestMethod]
-    public async Task The_cdc_reader_reproduces_every_committed_boundary()
+    public async Task CdcSegmentReader_EveryCommittedBoundary_Reproduces()
     {
         var cdc = Vectors.RootElement.GetProperty("cdc_v1");
 

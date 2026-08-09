@@ -12,13 +12,13 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 public sealed class CapturePolicyValidationTests
 {
     [TestMethod]
-    public void The_default_policy_validates_clean()
+    public void Validate_TheDefaultPolicy_ReportsNoDefect()
     {
         Assert.IsTrue(CapturePolicy.Default.Validate().IsValid);
     }
 
     [TestMethod]
-    public void Cdc_v1_with_validated_parameters_is_clean()
+    public void Validate_CdcV1WithValidatedParameters_ReportsNoDefect()
     {
         var policy = CapturePolicy.Default with
         {
@@ -30,7 +30,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void Cdc_v1_without_parameters_is_refused_by_name()
+    public void Validate_CdcV1WithoutParameters_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with { SegmentationProfile = SegmentationProfile.CdcV1 };
 
@@ -41,7 +41,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void Cdc_parameters_under_a_fixed_profile_are_refused_by_name()
+    public void Validate_CdcParametersUnderAFixedProfile_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with { CdcParameters = CdcParameters.Default };
 
@@ -61,7 +61,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void An_unset_segment_size_is_named()
+    public void Validate_SegmentSizeIsUnset_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with { SegmentSize = default };
 
@@ -69,7 +69,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void A_compression_level_out_of_range_is_named()
+    public void Validate_CompressionLevelIsOutOfRange_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with
         {
@@ -80,7 +80,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void A_compression_threshold_out_of_range_is_named()
+    public void Validate_CompressionThresholdIsOutOfRange_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with
         {
@@ -91,7 +91,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void An_unknown_trust_domain_is_named()
+    public void Validate_TrustDomainIsUnknown_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with { DedupTrustDomain = (DedupTrustDomain)9 };
 
@@ -99,7 +99,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void Multiple_defects_are_reported_together()
+    public void Validate_SeveralDefectsAtOnce_ReportsThemTogether()
     {
         var policy = CapturePolicy.Default with
         {
@@ -145,7 +145,7 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
-    public void The_default_is_below_the_machines_capacity_on_purpose()
+    public void DefaultPolicy_OnAnyMachine_StaysBelowItsCapacityOnPurpose()
     {
         // NFR-OPS-004: defaults safe on a 4-core laptop. A backup that makes the
         // machine unpleasant to use gets switched off, and a switched-off backup

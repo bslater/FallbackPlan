@@ -40,7 +40,7 @@ public sealed class IdentifierTests
     }
 
     [TestMethod]
-    public void Round_trip_preserves_the_exact_bytes()
+    public void Identifiers_RoundTrippedThroughBytes_PreserveTheExactBytes()
     {
         var sixteen = Enumerable.Range(0xa0, 16).Select(value => (byte)value).ToArray();
         var thirtyTwo = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
@@ -55,7 +55,7 @@ public sealed class IdentifierTests
     }
 
     [TestMethod]
-    public void Equality_is_by_value()
+    public void Identifiers_TwoWithTheSameBytes_AreEqual()
     {
         var bytes = Enumerable.Range(1, 16).Select(value => (byte)value).ToArray();
         var other = (byte[])bytes.Clone();
@@ -68,7 +68,7 @@ public sealed class IdentifierTests
     }
 
     [TestMethod]
-    public void Content_identifier_rendering_is_redacted()
+    public void ContentId_Rendered_IsRedacted()
     {
         var contentId = ContentId.FromBytes(new byte[ContentId.Size]);
 
@@ -77,7 +77,7 @@ public sealed class IdentifierTests
     }
 
     [TestMethod]
-    public void Rendered_identifiers_produce_the_specified_character_counts()
+    public void Identifiers_Rendered_ProduceTheSpecifiedCharacterCounts()
     {
         // Specification 02 §5: 32 bytes → 52 characters, 16 bytes → 26.
         Assert.AreEqual(52, ObjectId.FromBytes(new byte[32]).ToBase32().Length);

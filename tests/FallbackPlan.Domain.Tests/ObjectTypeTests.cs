@@ -23,7 +23,7 @@ public sealed class ObjectTypeTests
     [DataRow((byte)0x0D, ObjectType.Lease)]
     [DataRow((byte)0x0E, ObjectType.Tombstone)]
     [DataRow((byte)0x0F, ObjectType.AuditPeriodRecord)]
-    public void Assigned_types_are_valid(byte value, ObjectType expected)
+    public void TryFromValue_WhenTheValueIsAssigned_ShouldResolveToItsType(byte value, ObjectType expected)
     {
         Assert.IsTrue(ObjectTypes.IsValid(value));
         Assert.IsTrue(ObjectTypes.TryFromValue(value, out var objectType));
@@ -35,7 +35,7 @@ public sealed class ObjectTypeTests
     [DataRow((byte)0x07)] // reserved: store-blob-key domain separator, never a record type
     [DataRow((byte)0x10)]
     [DataRow((byte)0xFF)]
-    public void Unassigned_and_reserved_values_are_refused(byte value)
+    public void TryFromValue_WhenTheValueIsUnassignedOrReserved_ShouldReturnFalse(byte value)
     {
         Assert.IsFalse(ObjectTypes.IsValid(value));
         Assert.IsFalse(ObjectTypes.TryFromValue(value, out _));

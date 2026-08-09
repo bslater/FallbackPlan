@@ -28,7 +28,7 @@ public sealed class RecoveryKitConformanceTests
     private static JsonElement Kit => Vectors.RootElement.GetProperty("kit");
 
     [TestMethod]
-    public void The_vector_kit_parses_with_every_committed_field()
+    public void RecoveryKit_TheVectorKit_ParsesWithEveryCommittedField()
     {
         var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
         var kit = RecoveryKitCodec.Parse(framed);
@@ -45,7 +45,7 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
-    public void The_text_form_renders_canonically_and_parses_back()
+    public void RecoveryKitText_AnyKit_RendersCanonicallyAndParsesBack()
     {
         var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
 
@@ -62,7 +62,7 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
-    public void A_transcription_error_is_caught_by_its_line()
+    public void RecoveryKitText_ATranscriptionError_IsCaughtAndItsLineNamed()
     {
         var damaged = Kit.GetProperty("damaged_text_form").GetString()!;
 
@@ -71,7 +71,7 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
-    public void Every_refusal_case_is_refused()
+    public void RecoveryKit_EveryCommittedRefusalCase_IsRefused()
     {
         foreach (var refusal in Vectors.RootElement.GetProperty("refusal_cases").EnumerateArray())
         {
@@ -114,7 +114,7 @@ public sealed class RecoveryKitConformanceTests
         Path.Combine(Path.GetDirectoryName(kitDirectory)!, "fixture-repository-v1");
 
     [TestMethod]
-    public async Task The_committed_fixture_kit_is_byte_identical_to_regeneration()
+    public async Task RecoveryKit_TheCommittedFixture_IsByteIdenticalToRegeneration()
     {
         var directory = FixtureKitDirectory();
         var binPath = Path.Combine(directory, "kit.bin");
@@ -133,7 +133,7 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
-    public async Task The_fixture_kit_plus_passphrase_opens_the_fixture_repository()
+    public async Task RecoveryKit_TheFixtureKitAndItsPassphrase_OpenTheFixtureRepository()
     {
         // FR-KIT-001, the clean-machine premise: no catalogue, no state
         // directory, no /keys/ listing — the kit supplies the key object and
@@ -193,7 +193,7 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
-    public async Task The_fixture_kit_text_form_round_trips_to_the_binary()
+    public async Task RecoveryKitText_TheFixtureKit_RoundTripsToTheBinaryForm()
     {
         var directory = FixtureKitDirectory();
         var framed = await File.ReadAllBytesAsync(Path.Combine(directory, "kit.bin"));

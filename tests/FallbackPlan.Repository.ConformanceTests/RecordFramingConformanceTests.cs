@@ -18,7 +18,7 @@ public sealed class RecordFramingConformanceTests
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "records.json")));
 
     [TestMethod]
-    public void Nonces_and_aad_match_every_committed_ordinal()
+    public void RecordNonceAndAad_EveryCommittedOrdinal_Match()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
         var repositoryId = RepositoryId.FromBytes(Convert.FromHexString(inputs.GetProperty("repository_id").GetString()!));
@@ -42,7 +42,7 @@ public sealed class RecordFramingConformanceTests
     }
 
     [TestMethod]
-    public void The_footer_nonce_and_aad_match_the_committed_vector()
+    public void FooterNonceAndAad_TheCommittedVector_Match()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
         var repositoryId = RepositoryId.FromBytes(Convert.FromHexString(inputs.GetProperty("repository_id").GetString()!));

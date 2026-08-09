@@ -70,7 +70,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void A_round_trip_through_bytes_preserves_every_identifier()
+    public void Identifiers_RoundTrippedThroughBytes_PreserveTheirValue()
     {
         SequenceAssert.AreEqual(Bytes(ObjectId.Size), ObjectId.FromBytes(Bytes(ObjectId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(ContentId.Size), ContentId.FromBytes(Bytes(ContentId.Size)).ToArray());
@@ -84,7 +84,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void A_fresh_random_identifier_differs_from_the_last()
+    public void Identifiers_GeneratedTwice_DifferFromEachOther()
     {
         // Not a randomness test — a wiring test. A NewRandom that returned a
         // constant would reuse a checkpoint or delta identity across
@@ -94,7 +94,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void A_content_identifier_never_renders_itself()
+    public void ContentId_RenderedToString_RedactsItsValue()
     {
         // NFR-SEC-004: a content identifier in a log is a confirmation
         // oracle for file contents, so ToString redacts rather than renders.
@@ -107,7 +107,7 @@ public sealed class GuardClauseTests
     // ------------------------------------------------------ configuration
 
     [TestMethod]
-    public void Argon2_parallelism_of_zero_is_named_as_its_own_defect()
+    public void Argon2Parameters_ParallelismIsZero_NamesItsOwnDefect()
     {
         // Zero is not merely "below the minimum": it is not computable in
         // any mode, so it is reported as a distinct defect rather than
@@ -119,7 +119,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void A_non_positive_open_blob_age_is_refused()
+    public void BlobWriteProfile_OpenBlobAgeIsNotPositive_IsRefusedByName()
     {
         var result = (BlobWriteProfile.LocalDefault with { OpenBlobMaximumAge = TimeSpan.Zero }).Validate();
 
@@ -161,7 +161,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void Cdc_parameters_at_the_boundaries_are_accepted()
+    public void CdcParameters_AtTheBoundaryValues_AreAccepted()
     {
         // The edges are the interesting cases: an off-by-one in any bound
         // shows up here rather than in the middle of the range.
@@ -177,7 +177,7 @@ public sealed class GuardClauseTests
     // ---------------------------------------------------------- path rules
 
     [TestMethod]
-    public void A_compiled_rule_keeps_its_text_verbatim()
+    public void PathRule_Compiled_KeepsItsTextVerbatim()
     {
         // The policy manifest records the rule as the user wrote it, so a
         // compiled rule must carry its own source rather than a normalised
@@ -208,7 +208,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void The_empty_rule_is_refused()
+    public void PathRule_RuleTextIsEmpty_IsRefused()
     {
         Assert.IsFalse(PathRule.TryCreate(string.Empty, caseSensitive: true, out _, out var defect));
         Assert.Contains("empty rule", defect!, StringComparison.Ordinal);
@@ -255,7 +255,7 @@ public sealed class GuardClauseTests
     }
 
     [TestMethod]
-    public void A_regex_rule_that_passes_the_subset_but_will_not_compile_is_refused()
+    public void PathRule_RegexPassesTheSubsetButWillNotCompile_IsRefused()
     {
         // The subset check is a syntactic screen, not a parse: a counted
         // quantifier with an inverted range satisfies it and still fails

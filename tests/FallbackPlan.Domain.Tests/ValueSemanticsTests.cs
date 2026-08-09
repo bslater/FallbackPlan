@@ -89,7 +89,7 @@ public sealed class ValueSemanticsTests
     }
 
     [TestMethod]
-    public void Identifiers_honour_the_value_contract()
+    public void Identifiers_ComparedAndHashed_HonourTheValueContract()
     {
         AssertValueSemantics(
             ObjectId.FromBytes(Pattern(ObjectId.Size, 1)),
@@ -138,7 +138,7 @@ public sealed class ValueSemanticsTests
     }
 
     [TestMethod]
-    public void Sized_quantities_honour_the_value_contract()
+    public void SizedQuantities_ComparedAndHashed_HonourTheValueContract()
     {
         AssertValueSemantics(new KeyGeneration(7), new KeyGeneration(7), new KeyGeneration(9));
         AssertValueSemantics(SegmentSize.Create(65_536), SegmentSize.Create(65_536), SegmentSize.Create(131_072));
@@ -149,7 +149,7 @@ public sealed class ValueSemanticsTests
     }
 
     [TestMethod]
-    public void Profiles_honour_the_value_contract()
+    public void Profiles_ComparedAndHashed_HonourTheValueContract()
     {
         AssertValueSemantics(SegmentationProfile.FixedV1, SegmentationProfile.FixedV1, SegmentationProfile.CdcV1);
         AssertValueSemantics(CompressionProfile.None, CompressionProfile.None, CompressionProfile.ZstdV1);
@@ -157,7 +157,7 @@ public sealed class ValueSemanticsTests
     }
 
     [TestMethod]
-    public void Single_valued_profiles_still_refuse_null_and_foreign_types()
+    public void SingleValuedProfiles_ComparedToNullOrAForeignType_RefuseEquality()
     {
         // KdfProfile and ContentHashProfile have one assigned value each, so
         // there is no "different" instance to compare against — the half of
@@ -191,7 +191,7 @@ public sealed class ValueSemanticsTests
     }
 
     [TestMethod]
-    public void The_profiles_that_are_assigned_do_resolve()
+    public void Profiles_EveryAssignedValue_Resolves()
     {
         Assert.IsTrue(KdfProfile.TryFromValue(KdfProfile.Argon2id.Value, out var kdf));
         Assert.AreEqual(KdfProfile.Argon2id, kdf);

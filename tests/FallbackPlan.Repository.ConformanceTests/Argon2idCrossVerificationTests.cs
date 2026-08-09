@@ -56,7 +56,7 @@ public sealed class Argon2idCrossVerificationTests
     /// (03 section 2): 64 MiB, 3 iterations, parallelism 4, 32-byte tag.
     /// </summary>
     [TestMethod]
-    public void Both_implementations_agree_at_the_specified_minimum_parameters()
+    public void Argon2id_AtTheSpecifiedMinimumParameters_BothImplementationsAgree()
     {
         var password = Encoding.UTF8.GetBytes("correct horse battery staple");
         var salt = Enumerable.Range(0, 16).Select(i => (byte)i).ToArray();
@@ -78,7 +78,7 @@ public sealed class Argon2idCrossVerificationTests
     [DataRow(256, 1, 4, 32)]
     [DataRow(1024, 2, 4, 64)]
     [DataRow(65536, 3, 4, 32)]
-    public void Both_implementations_agree_across_the_parameter_range(
+    public void Argon2id_AcrossTheParameterRange_BothImplementationsAgree(
         int memoryKiB, int iterations, int parallelism, int tagLength)
     {
         var password = Encoding.UTF8.GetBytes("a passphrase with a fair bit of entropy in it");
@@ -104,7 +104,7 @@ public sealed class Argon2idCrossVerificationTests
     /// passphrase strength was not.
     /// </summary>
     [TestMethod]
-    public void The_two_implementations_differ_only_at_the_empty_password_boundary()
+    public void Argon2id_AtTheEmptyPasswordBoundary_IsTheOnlyPlaceTheImplementationsDiffer()
     {
         var salt = Enumerable.Repeat((byte)0x5A, 16).ToArray();
 
@@ -124,7 +124,7 @@ public sealed class Argon2idCrossVerificationTests
     /// checks the property rather than the agreement.
     /// </summary>
     [TestMethod]
-    public void Derivation_depends_on_the_salt()
+    public void Argon2id_DifferentSalts_DeriveDifferentKeys()
     {
         var password = Encoding.UTF8.GetBytes("passphrase");
         var saltA = Enumerable.Repeat((byte)0x01, 16).ToArray();
@@ -146,7 +146,7 @@ public sealed class Argon2idCrossVerificationTests
     /// fails and names which.
     /// </summary>
     [TestMethod]
-    public void Both_implementations_reproduce_the_committed_vector()
+    public void Argon2id_TheCommittedVector_IsReproducedByBothImplementations()
     {
         using var document = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "argon2id.json")));
@@ -173,7 +173,7 @@ public sealed class Argon2idCrossVerificationTests
     /// let a repository created at 64 MiB be opened as though it were 8 MiB.
     /// </summary>
     [TestMethod]
-    public void Derivation_depends_on_every_cost_parameter()
+    public void Argon2id_AnyCostParameterChanged_DerivesADifferentKey()
     {
         var password = Encoding.UTF8.GetBytes("passphrase");
         var salt = Enumerable.Repeat((byte)0x5A, 16).ToArray();

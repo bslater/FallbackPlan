@@ -21,7 +21,7 @@ public sealed class RecordCipherConformanceTests
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", name)));
 
     [TestMethod]
-    public void The_real_record_construction_reproduces_the_pinned_case()
+    public void RecordCipher_ThePinnedCase_IsReproducedByTheRealConstruction()
     {
         using var aesGcm = Load("aes-gcm.json");
         using var keys = Load("keys.json");

@@ -16,7 +16,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 public sealed class KekConformanceTests
 {
     [TestMethod]
-    public void The_engine_kek_path_reproduces_the_pinned_vector()
+    public void KeyEncryptionKey_ThePinnedVector_IsReproducedByTheEnginePath()
     {
         using var vectors = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "argon2id.json")));

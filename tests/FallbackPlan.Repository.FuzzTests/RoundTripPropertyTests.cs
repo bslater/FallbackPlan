@@ -26,10 +26,10 @@ public sealed class RoundTripPropertyTests
         BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(~seed)).AsSpan(0, 16));
 
     [TestMethod]
-    public void File_version_manifests_round_trip_byte_identically() =>
+    public void FileVersionManifest_AnyGeneratedManifest_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this, maxTest: 100);
 
-    public static void File_version_manifests_round_trip_byte_identicallyProperty(byte[]? segmentSeeds, bool sparse)
+    public static void FileVersionManifest_AnyGeneratedManifest_RoundTripsByteIdenticallyProperty(byte[]? segmentSeeds, bool sparse)
     {
         // Build a legitimate manifest: contiguous references whose lengths
         // are derived from the generated seeds, coverage exact by
@@ -70,10 +70,10 @@ public sealed class RoundTripPropertyTests
     }
 
     [TestMethod]
-    public void Index_deltas_round_trip_byte_identically() =>
+    public void IndexDelta_AnyGeneratedDelta_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this, maxTest: 100);
 
-    public static void Index_deltas_round_trip_byte_identicallyProperty(byte entryCount, ulong sequence, bool isVoid)
+    public static void IndexDelta_AnyGeneratedDelta_RoundTripsByteIdenticallyProperty(byte entryCount, ulong sequence, bool isVoid)
     {
         var entries = Enumerable.Range(0, isVoid ? 0 : 1 + entryCount % 32)
             .Select(index => new IndexEntry(
@@ -107,10 +107,10 @@ public sealed class RoundTripPropertyTests
     }
 
     [TestMethod]
-    public void Checkpoints_round_trip_byte_identically() =>
+    public void Checkpoint_AnyGeneratedCheckpoint_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this, maxTest: 100);
 
-    public static void Checkpoints_round_trip_byte_identicallyProperty(byte entryCount, ulong generation)
+    public static void Checkpoint_AnyGeneratedCheckpoint_RoundTripsByteIdenticallyProperty(byte entryCount, ulong generation)
     {
         var entries = Enumerable.Range(0, 1 + entryCount % 24)
             .Select(index => new IndexEntry(
@@ -141,10 +141,10 @@ public sealed class RoundTripPropertyTests
     }
 
     [TestMethod]
-    public void Journal_records_of_every_kind_round_trip_byte_identically() =>
+    public void JournalRecord_EveryKind_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this, maxTest: 100);
 
-    public static void Journal_records_of_every_kind_round_trip_byte_identicallyProperty(
+    public static void JournalRecord_EveryKind_RoundTripsByteIdenticallyProperty(
         byte kindSeed, ulong sequence, ulong timestamp, byte blobCount)
     {
         var blobs = Enumerable.Range(0, 1 + blobCount % 16).Select(BlobFrom).ToList();
@@ -173,10 +173,10 @@ public sealed class RoundTripPropertyTests
     }
 
     [TestMethod]
-    public void Base32_encodes_then_decodes_to_the_original_bytes() =>
+    public void Base32_AnyInput_EncodesThenDecodesToTheOriginalBytes() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void Base32_encodes_then_decodes_to_the_original_bytesProperty(byte[]? bytes)
+    public static void Base32_AnyInput_EncodesThenDecodesToTheOriginalBytesProperty(byte[]? bytes)
     {
         bytes ??= [];
         var text = Base32.Encode(bytes);

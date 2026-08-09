@@ -61,10 +61,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void Random_bytes_never_escape_a_parser_with_an_untyped_exception() =>
+    public void Parsers_GivenRandomBytes_ThrowOnlyTheirDeclaredExceptions() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void Random_bytes_never_escape_a_parser_with_an_untyped_exceptionProperty(byte[]? data)
+    public static void Parsers_GivenRandomBytes_ThrowOnlyTheirDeclaredExceptionsProperty(byte[]? data)
     {
         data ??= [];
         foreach (var (name, parse) in ThrowingParsers)
@@ -74,10 +74,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void Random_bytes_behind_a_valid_magic_never_escape_a_parser() =>
+    public void Parsers_GivenRandomBytesBehindAValidMagic_ThrowOnlyTheirDeclaredExceptions() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void Random_bytes_behind_a_valid_magic_never_escape_a_parserProperty(byte[]? data, int magicIndex)
+    public static void Parsers_GivenRandomBytesBehindAValidMagic_ThrowOnlyTheirDeclaredExceptionsProperty(byte[]? data, int magicIndex)
     {
         // Stamp each framing magic over the head so the fuzz input gets past
         // the cheap gate and into the field validation it exists to test.
@@ -101,10 +101,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void Mutated_valid_encodings_never_escape_their_parser() =>
+    public void Parsers_GivenAMutatedValidEncoding_ThrowOnlyTheirDeclaredExceptions() =>
         PropertyCheck.Holds(this, maxTest: 300);
 
-    public static void Mutated_valid_encodings_never_escape_their_parserProperty(
+    public static void Parsers_GivenAMutatedValidEncoding_ThrowOnlyTheirDeclaredExceptionsProperty(
         int seedIndex, (int Offset, byte Mask)[]? mutations, int resize)
     {
         var seed = FuzzCorpus.Seeds[(int)((uint)seedIndex % FuzzCorpus.Seeds.Count)];
@@ -127,10 +127,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void The_descriptor_parser_returns_a_result_for_any_input_and_never_throws() =>
+    public void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrows() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void The_descriptor_parser_returns_a_result_for_any_input_and_never_throwsProperty(
+    public static void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrowsProperty(
         byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations)
     {
         // 01 §3.1: "not a repository", "damaged", and "unsupported" are
@@ -156,10 +156,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void Spool_checkpoint_TryParse_never_throws() =>
+    public void SpoolCheckpointTryParse_GivenAnyInput_NeverThrows() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void Spool_checkpoint_TryParse_never_throwsProperty(byte[]? data, bool stampMagic)
+    public static void SpoolCheckpointTryParse_GivenAnyInput_NeverThrowsProperty(byte[]? data, bool stampMagic)
     {
         var candidate = data ?? [];
         if (stampMagic && candidate.Length >= 8)
@@ -176,10 +176,10 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void Base32_TryDecode_never_throws_and_never_lies() =>
+    public void Base32TryDecode_GivenAnyInput_NeverThrowsAndNeverReportsFalseSuccess() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static void Base32_TryDecode_never_throws_and_never_liesProperty(string? text)
+    public static void Base32TryDecode_GivenAnyInput_NeverThrowsAndNeverReportsFalseSuccessProperty(string? text)
     {
         var input = (text ?? string.Empty).AsSpan();
         var destination = new byte[Domain.Base32.GetEncodedLength(input.Length) + 8];
@@ -193,7 +193,7 @@ public sealed class ParserFuzzTests
     }
 
     [TestMethod]
-    public void A_truncated_standalone_record_claiming_a_huge_length_is_refused_before_allocation()
+    public void StandaloneRecord_TruncatedButClaimingAHugeLength_IsRefusedBeforeAllocation()
     {
         // The 00 §8 pre-allocation bound with teeth: a 126-byte buffer whose
         // header declares a 16 MiB payload must be refused from the declared

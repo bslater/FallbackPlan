@@ -17,7 +17,7 @@ public sealed class PathRulesConformanceTests
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "path-rules.json")));
 
     [TestMethod]
-    public void Every_single_rule_match_case_agrees()
+    public void PathRuleMatching_EveryCommittedCase_Agrees()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("match_cases").EnumerateArray())
         {
@@ -36,7 +36,7 @@ public sealed class PathRulesConformanceTests
     }
 
     [TestMethod]
-    public void Every_invalid_rule_is_refused_with_a_named_defect()
+    public void PathRuleValidation_EveryCommittedInvalidRule_IsRefusedWithANamedDefect()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("invalid_cases").EnumerateArray())
         {
@@ -50,7 +50,7 @@ public sealed class PathRulesConformanceTests
     }
 
     [TestMethod]
-    public void Every_evaluation_scenario_agrees_on_excluded_and_captured()
+    public void PathRuleEvaluation_EveryCommittedScenario_AgreesOnExcludedAndCaptured()
     {
         foreach (var scenario in Vectors.RootElement.GetProperty("evaluation_scenarios").EnumerateArray())
         {

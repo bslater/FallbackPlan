@@ -13,7 +13,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 public sealed class CompressionConformanceTests
 {
     [TestMethod]
-    public void The_storage_decision_matches_every_committed_case()
+    public void CompressionStorageDecision_EveryCommittedCase_Matches()
     {
         using var vectors = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "compression.json")));

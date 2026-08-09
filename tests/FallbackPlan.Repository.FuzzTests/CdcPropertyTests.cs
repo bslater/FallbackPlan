@@ -40,10 +40,10 @@ public sealed class CdcPropertyTests
     }
 
     [TestMethod]
-    public void Segments_are_contiguous_cover_the_input_and_obey_the_bounds() =>
+    public void CdcSegmentation_AnyInput_ProducesContiguousSegmentsWithinTheBounds() =>
         PropertyCheck.Holds(this, maxTest: 50);
 
-    public static async Task Segments_are_contiguous_cover_the_input_and_obey_the_boundsProperty(int seed, byte sizeSeed)
+    public static async Task CdcSegmentation_AnyInput_ProducesContiguousSegmentsWithinTheBoundsProperty(int seed, byte sizeSeed)
     {
         var data = Expand(seed, sizeSeed);
 
@@ -73,10 +73,10 @@ public sealed class CdcPropertyTests
     }
 
     [TestMethod]
-    public void Boundaries_are_deterministic_and_independent_of_stream_chunking() =>
+    public void CdcSegmentation_TheSameContentChunkedDifferently_ProducesIdenticalBoundaries() =>
         PropertyCheck.Holds(this, maxTest: 30);
 
-    public static async Task Boundaries_are_deterministic_and_independent_of_stream_chunkingProperty(
+    public static async Task CdcSegmentation_TheSameContentChunkedDifferently_ProducesIdenticalBoundariesProperty(
         int seed, byte sizeSeed, ushort chunkSeed)
     {
         var data = Expand(seed, sizeSeed);

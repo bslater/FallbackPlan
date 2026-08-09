@@ -49,7 +49,7 @@ public sealed class PathRulesTests
     }
 
     [TestMethod]
-    public void Exclude_wins_over_include_and_prunes_the_subtree()
+    public void PathRuleSet_ExcludeAndIncludeBothMatch_ExcludesAndPrunesTheSubtree()
     {
         Assert.IsTrue(PathRuleSet.TryCreate(
             includeRules: ["build/keep/**"], excludeRules: ["build"], caseSensitive: true,
@@ -61,7 +61,7 @@ public sealed class PathRulesTests
     }
 
     [TestMethod]
-    public void A_rule_set_with_defects_reports_every_one_by_rule_and_reason()
+    public void TryCreate_WhenSeveralRulesAreInvalid_ShouldReportEachByRuleAndReason()
     {
         Assert.IsFalse(PathRuleSet.TryCreate(
             includeRules: ["ok/**", "a**b"], excludeRules: ["re:^bad"], caseSensitive: true,
@@ -78,10 +78,10 @@ public sealed class PathRulesTests
     /// version of the anchoring rule, over generated component paths.
     /// </summary>
     [TestMethod]
-    public void A_slashless_rule_is_equivalent_to_its_explicit_expansion() =>
+    public void PathRule_WrittenWithoutASlash_MatchesAsItsExplicitExpansion() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static bool A_slashless_rule_is_equivalent_to_its_explicit_expansionProperty(byte[]? seeds, byte nameSeed)
+    public static bool PathRule_WrittenWithoutASlash_MatchesAsItsExplicitExpansionProperty(byte[]? seeds, byte nameSeed)
     {
         var name = "f" + (char)('a' + nameSeed % 26) + ".txt";
         var components = (seeds ?? [])
@@ -98,10 +98,10 @@ public sealed class PathRulesTests
     }
 
     [TestMethod]
-    public void Case_insensitive_matching_is_case_sensitive_matching_after_folding() =>
+    public void PathRuleSet_CaseInsensitiveMatching_EqualsCaseSensitiveMatchingAfterFolding() =>
         PropertyCheck.Holds(this, maxTest: 200);
 
-    public static bool Case_insensitive_matching_is_case_sensitive_matching_after_foldingProperty(byte[]? seeds)
+    public static bool PathRuleSet_CaseInsensitiveMatching_EqualsCaseSensitiveMatchingAfterFoldingProperty(byte[]? seeds)
     {
         var name = string.Concat((seeds ?? [1]).Take(8).Select(seed => (char)('A' + seed % 26)));
         if (name.Length == 0)

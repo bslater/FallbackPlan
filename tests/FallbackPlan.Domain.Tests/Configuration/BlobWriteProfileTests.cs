@@ -11,14 +11,14 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 public sealed class BlobWriteProfileTests
 {
     [TestMethod]
-    public void The_specification_defaults_validate_clean()
+    public void Validate_TheSpecificationDefaults_ReportsNoDefect()
     {
         Assert.IsTrue(BlobWriteProfile.LocalDefault.Validate().IsValid);
         Assert.IsTrue(BlobWriteProfile.ObjectStoreDefault.Validate().IsValid);
     }
 
     [TestMethod]
-    public void A_profile_exceeding_a_provider_limit_is_rejected_at_configuration_time_with_a_named_reason()
+    public void ValidateAgainstStore_ProfileExceedsAProviderLimit_IsRejectedWithANamedReason()
     {
         // The acceptance scenario: the object-store default seals up to
         // 512 MiB, but this provider only accepts 256 MiB objects.
@@ -29,13 +29,13 @@ public sealed class BlobWriteProfileTests
     }
 
     [TestMethod]
-    public void A_profile_within_the_provider_limit_passes_the_store_check()
+    public void ValidateAgainstStore_ProfileIsWithinTheProviderLimit_ReportsNoDefect()
     {
         Assert.IsTrue(BlobWriteProfile.LocalDefault.ValidateAgainstStore(long.MaxValue).IsValid);
     }
 
     [TestMethod]
-    public void A_maximum_above_the_format_blob_limit_is_named()
+    public void Validate_MaximumExceedsTheFormatBlobLimit_NamesThatDefect()
     {
         var profile = BlobWriteProfile.ObjectStoreDefault with { MaximumSizeBytes = 513L * 1024 * 1024 };
 
@@ -43,7 +43,7 @@ public sealed class BlobWriteProfileTests
     }
 
     [TestMethod]
-    public void A_target_above_the_maximum_is_named()
+    public void Validate_TargetExceedsTheMaximum_NamesThatDefect()
     {
         var profile = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 512L * 1024 * 1024 };
 
@@ -51,7 +51,7 @@ public sealed class BlobWriteProfileTests
     }
 
     [TestMethod]
-    public void A_record_count_above_the_format_limit_is_named()
+    public void Validate_RecordCountExceedsTheFormatLimit_NamesThatDefect()
     {
         var profile = BlobWriteProfile.LocalDefault with { MaximumRecordCount = 65_537 };
 
@@ -59,7 +59,7 @@ public sealed class BlobWriteProfileTests
     }
 
     [TestMethod]
-    public void The_policy_level_store_check_aggregates_both_sources()
+    public void ValidateAgainstStore_DefectsFromPolicyAndProfile_AggregatesBoth()
     {
         var policy = CapturePolicy.Default with
         {

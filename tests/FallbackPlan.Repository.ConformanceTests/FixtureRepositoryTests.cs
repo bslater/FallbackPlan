@@ -60,7 +60,7 @@ public sealed class FixtureRepositoryTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Regeneration_is_byte_identical_to_the_committed_fixture()
+    public async Task FixtureRepository_Regenerated_IsByteIdenticalToTheCommittedOne()
     {
         var committed = CommittedFixturePath();
         var regenerated = Path.Combine(_scratch, "regenerated");
@@ -91,7 +91,7 @@ public sealed class FixtureRepositoryTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_committed_fixture_opens_restores_verifies_and_rebuilds()
+    public async Task FixtureRepository_TheCommittedFixture_OpensRestoresVerifiesAndRebuilds()
     {
         var store = new LocalFileSystemObjectStore(CommittedFixturePath());
         using var passphrase = FixtureRepository.CreatePassphrase();

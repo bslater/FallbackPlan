@@ -16,7 +16,7 @@ namespace FallbackPlan.Domain.Tests;
 public sealed class ProfileTests
 {
     [TestMethod]
-    public void Known_segmentation_profiles_resolve()
+    public void SegmentationProfile_EveryAssignedValue_Resolves()
     {
         Assert.IsTrue(SegmentationProfile.TryFromValue(0x0001, out var fixedV1));
         Assert.AreSame(SegmentationProfile.FixedV1, fixedV1);
@@ -25,7 +25,7 @@ public sealed class ProfileTests
     }
 
     [TestMethod]
-    public void Known_compression_profiles_resolve()
+    public void CompressionProfile_EveryAssignedValue_Resolves()
     {
         Assert.IsTrue(CompressionProfile.TryFromValue(0x0000, out var none));
         Assert.AreSame(CompressionProfile.None, none);
@@ -34,7 +34,7 @@ public sealed class ProfileTests
     }
 
     [TestMethod]
-    public void Known_encryption_profiles_resolve()
+    public void EncryptionProfile_EveryAssignedValue_Resolves()
     {
         Assert.IsTrue(EncryptionProfile.TryFromValue(0x0001, out var aes));
         Assert.AreSame(EncryptionProfile.Aes256GcmV1, aes);
@@ -49,7 +49,7 @@ public sealed class ProfileTests
     }
 
     [TestMethod]
-    public void Known_content_hash_and_kdf_profiles_resolve()
+    public void ContentHashAndKdfProfiles_EveryAssignedValue_Resolve()
     {
         Assert.IsTrue(ContentHashProfile.TryFromValue(0x0001, out var sha256));
         Assert.AreSame(ContentHashProfile.Sha256V1, sha256);
@@ -81,7 +81,7 @@ public sealed class ProfileTests
     }
 
     [TestMethod]
-    public void Compression_none_is_a_valid_wire_value_but_segmentation_zero_is_not()
+    public void Profiles_ZeroOnTheWire_IsValidForCompressionAndNotForSegmentation()
     {
         Assert.IsTrue(CompressionProfile.TryFromValue(0x0000, out _));
         Assert.IsFalse(SegmentationProfile.TryFromValue(0x0000, out _));

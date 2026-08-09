@@ -54,7 +54,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Every_expected_vector_file_is_present_and_parses()
+    public void VectorFiles_EveryExpectedFile_IsPresentAndParses()
     {
         foreach (var name in ExpectedFiles.Keys)
         {
@@ -78,7 +78,7 @@ public sealed class VectorFileTests
     /// change, with the reason in view.
     /// </summary>
     [TestMethod]
-    public void Every_vector_group_declares_its_provenance_truthfully()
+    public void VectorGroups_EveryGroup_DeclaresItsProvenanceTruthfully()
     {
         foreach (var (name, expected) in ExpectedFiles)
         {
@@ -94,7 +94,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Key_derivation_vectors_prove_writer_separation()
+    public void KeyDerivationVectors_DifferentWriters_ProveSeparation()
     {
         using var document = Load("keys.json");
         var derived = document.RootElement.GetProperty("derived");
@@ -116,7 +116,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Associated_data_is_fifty_five_bytes_in_every_case()
+    public void AssociatedData_EveryCommittedCase_IsFiftyFiveBytes()
     {
         using var document = Load("records.json");
         foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
@@ -127,7 +127,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Object_identifiers_differ_by_object_type()
+    public void ObjectIdentifierVectors_TheSameContentUnderDifferentTypes_Differ()
     {
         using var document = Load("identifiers.json");
         var ids = document.RootElement
@@ -139,7 +139,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Fixed_segmentation_cases_are_contiguous_and_complete()
+    public void FixedSegmentationVectors_EveryCase_AreContiguousAndComplete()
     {
         using var document = Load("segmentation.json");
         foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
@@ -175,7 +175,7 @@ public sealed class VectorFileTests
     }
 
     [TestMethod]
-    public void Compression_threshold_decisions_are_self_consistent()
+    public void CompressionThresholdVectors_EveryCase_AreSelfConsistent()
     {
         using var document = Load("compression.json");
         var threshold = document.RootElement.GetProperty("threshold_permille").GetInt32();
