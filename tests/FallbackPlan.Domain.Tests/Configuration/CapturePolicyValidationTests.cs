@@ -54,7 +54,7 @@ public sealed class CapturePolicyValidationTests
     [DataRow(65_536, 8_191, 524_288)]          // min below target/8
     [DataRow(65_536, 8_192, 524_289)]          // max above target*8
     [DataRow(1_048_576, 900_000, 800_000)]     // min above max
-    public void Out_of_range_cdc_parameters_cannot_be_constructed(int target, int min, int max)
+    public void CdcParameters_ValuesOutsideTheSpecifiedRange_RefuseToBeConstructed(int target, int min, int max)
     {
         Assert.IsFalse(CdcParameters.TryCreate(target, min, max, out _));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => CdcParameters.Create(target, min, max));
@@ -121,7 +121,7 @@ public sealed class CapturePolicyValidationTests
     [DataRow(0)]
     [DataRow(-1)]
     [DataRow(CapturePolicy.MaximumConcurrency + 1)]
-    public void A_concurrency_outside_the_bound_is_a_named_defect(int concurrency)
+    public void Validate_ConcurrencyOutsideTheBound_NamesThatDefect(int concurrency)
     {
         // Memory is bounded by concurrency × segment size (NFR-PERF-001), so an
         // unbounded setting does not make the pipeline faster — it makes the
@@ -136,7 +136,7 @@ public sealed class CapturePolicyValidationTests
     [DataRow(1)]
     [DataRow(CapturePolicy.DefaultConcurrency)]
     [DataRow(CapturePolicy.MaximumConcurrency)]
-    public void Concurrency_within_the_bound_is_accepted(int concurrency)
+    public void Validate_ConcurrencyWithinTheBound_ReportsNoDefect(int concurrency)
     {
         // 1 in particular must stay valid: it is the configuration in which the
         // ordering barrier is trivially satisfied, and the control case for

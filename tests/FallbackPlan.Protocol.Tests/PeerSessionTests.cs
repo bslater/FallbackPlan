@@ -304,7 +304,7 @@ public sealed class PeerSessionMessageTests
     [TestMethod]
     [DataRow(31)]
     [DataRow(33)]
-    public void An_identity_that_is_not_thirty_two_bytes_is_refused(int length)
+    public void SessionAuth_IdentityIsNotThirtyTwoBytes_RefusesAsMalformed(int length)
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(3);

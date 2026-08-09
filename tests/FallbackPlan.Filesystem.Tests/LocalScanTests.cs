@@ -117,7 +117,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Symlinks_are_captured_as_links_and_never_followed()
+    public async Task Scan_TreeContainsASymlink_CapturesItAsALinkAndNeverFollowsIt()
     {
         Write("target/secret.txt");
         File.CreateSymbolicLink(Path.Combine(_root, "link"), Path.Combine(_root, "target"));
@@ -136,7 +136,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "the link(2) syscall this drives is POSIX; Windows hardlinks are covered separately")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Hardlinks_share_identity_and_report_their_link_count()
+    public async Task Scan_TwoNamesShareAnInode_ReportTheSameIdentityAndLinkCount()
     {
         var original = Write("one.bin", "linked");
         Assert.AreEqual(0, Link(original, Path.Combine(_root, "two.bin")));
@@ -155,7 +155,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "FIFOs, sockets and device nodes are POSIX entry kinds with no Windows analogue")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Special_files_carry_their_kind_as_diagnostics_and_are_never_errors()
+    public async Task Scan_TreeContainsAFifo_CapturesItsKindAsADiagnosticRatherThanAFailure()
     {
         var fifo = Path.Combine(_root, "pipe");
         if (MkFifo(fifo, 0x1B6 /* 0666 */) != 0)
@@ -183,7 +183,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "setxattr(2) is POSIX; the Windows analogue is alternate data streams, tested separately")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Extended_attributes_round_trip_where_the_platform_supports_them()
+    public async Task Scan_FileCarriesAnExtendedAttribute_CapturesItsNameAndValueUnchanged()
     {
         var full = Write("attr.txt");
         if (SetXattr(full, "user.fbp-test", "hello"u8.ToArray(), 5, 0) != 0)
@@ -206,7 +206,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "hole discovery here uses SEEK_HOLE; Windows sparse files use a different query")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Sparse_holes_are_reported_as_extents_where_supported()
+    public async Task Scan_FileContainsASparseHole_ReportsTheHoleAsAnExtentInsideTheGap()
     {
         // 1 MiB hole between two data regions, created by seeking.
         var full = Path.Combine(_root, "sparse.bin");
@@ -234,7 +234,7 @@ public sealed partial class LocalScanTests : IDisposable
     [UnprivilegedPlatformCondition(TestPlatforms.Posix, "denial is expressed here with chmod, a POSIX permission shape")]
     [PlatformTrait(TestPlatforms.Posix)]
     [UnsupportedOSPlatform("windows")]
-    public async Task An_unreadable_directory_is_a_failure_event_not_an_aborted_scan()
+    public async Task Scan_ADirectoryIsUnreadable_RaisesAFailureEventAndKeepsScanning()
     {
         Write("open/readable.txt");
         var denied = Path.Combine(_root, "denied");
@@ -284,7 +284,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "POSIX mode bits and owner names have no NTFS equivalent — Windows carries a security descriptor instead")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Posix_metadata_is_captured_for_a_regular_file()
+    public async Task Scan_RegularFileOnPosix_CapturesItsModeBitsAndOwnerName()
     {
         Write("file.txt", "contents");
 
@@ -297,7 +297,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "the readdir ABI and non-UTF-8 filenames are POSIX shapes")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Names_come_from_the_filesystem_not_from_a_decoded_string()
+    public async Task Scan_NamesUseMultiByteAndCombiningSequences_CapturesTheFilesystemBytes()
     {
         // Names chosen to exercise the decode: ASCII, multi-byte UTF-8, and a
         // combining sequence that is a different byte string from its composed
@@ -325,7 +325,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "a filename that is not valid UTF-8 is only expressible on POSIX")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task A_name_that_is_not_valid_utf8_is_reported_rather_than_mangled()
+    public async Task Scan_NameIsNotValidUtf8_ReportsItRatherThanManglesIt()
     {
         // 0xFF 0xFE is not a valid UTF-8 sequence and is a perfectly legal
         // POSIX filename. Created through the syscall directly, because the
@@ -393,7 +393,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "an unpaired surrogate is a UTF-16 filename shape; POSIX names are bytes")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public async Task A_name_with_an_unpaired_surrogate_is_reported_rather_than_substituted()
+    public async Task Scan_NameHasAnUnpairedSurrogate_ReportsItRatherThanSubstitutesIt()
     {
         // U+D800 with nothing after it. Legal in an NTFS name, and it has no
         // UTF-8 encoding at all — Encoding.UTF8.GetBytes replaces it with
@@ -424,7 +424,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public async Task A_directory_junction_is_a_link_and_is_not_descended()
+    public async Task Scan_TreeContainsADirectoryJunction_CapturesItAsALinkAndDoesNotDescend()
     {
         Write("target/secret.txt");
 
@@ -450,7 +450,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "reserved device names (CON, NUL) and case-insensitive-by-default volumes are Windows filesystem shapes")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public void Probe_reports_the_windows_filesystem_shape()
+    public void Probe_VolumeIsNtfs_ReportsReservedNamesAndCaseInsensitivity()
     {
         var info = _source.Probe(_root);
 
@@ -486,7 +486,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "openat and fstatat are the POSIX handle-relative calls")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Content_is_read_from_the_handle_even_after_the_name_is_repointed()
+    public async Task Scan_NameIsRepointedAfterClassification_ReadsContentFromTheOpenHandle()
     {
         Write("victim.bin", "the bytes that were classified");
 
@@ -527,7 +527,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "a link target is a byte string only on POSIX; Windows targets are UTF-16")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task A_link_target_that_is_not_valid_utf8_is_recorded_as_the_bytes_it_holds()
+    public async Task Scan_LinkTargetIsNotValidUtf8_RecordsTheExactBytesItHolds()
     {
         // A link target is under exactly the same rules as a name: bytes that
         // are not NUL. Decoding it to a string first replaces the invalid
@@ -551,7 +551,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "O_NOFOLLOW on the descent is what refuses this, and it is POSIX")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task A_symlink_standing_where_a_directory_was_is_not_descended()
+    public async Task Scan_ASymlinkStandsWhereADirectoryWas_DoesNotDescendThroughIt()
     {
         Directory.CreateDirectory(Path.Combine(_root, "outside"));
         File.WriteAllText(Path.Combine(_root, "outside", "secret.txt"), "not in the backup set");

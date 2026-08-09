@@ -11,7 +11,7 @@ public sealed class SegmentSizeTests
     [DataRow(64 * 1024)]
     [DataRow(1024 * 1024)]
     [DataRow(64 * 1024 * 1024)]
-    public void Powers_of_two_inside_the_range_are_accepted(int bytes)
+    public void TryCreate_PowerOfTwoInsideTheRange_AcceptsAndKeepsTheExactSize(int bytes)
     {
         Assert.IsTrue(SegmentSize.TryCreate(bytes, out var size));
         Assert.AreEqual(bytes, size.Bytes);
@@ -25,7 +25,7 @@ public sealed class SegmentSizeTests
     [DataRow(128 * 1024 * 1024)] // above the maximum
     [DataRow(0)]
     [DataRow(-1024)]
-    public void Everything_else_is_refused(int bytes)
+    public void TryCreate_SizeOutsideTheRangeOrNotAPowerOfTwo_RefusesAndCreateThrows(int bytes)
     {
         Assert.IsFalse(SegmentSize.TryCreate(bytes, out _));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => SegmentSize.Create(bytes));

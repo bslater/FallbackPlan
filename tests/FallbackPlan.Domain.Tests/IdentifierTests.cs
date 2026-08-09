@@ -15,7 +15,7 @@ public sealed class IdentifierTests
     [DataRow(15)]
     [DataRow(17)]
     [DataRow(32)]
-    public void Sixteen_byte_identifiers_reject_every_other_length(int length)
+    public void SixteenByteIdentifiers_BufferIsAnyOtherLength_ThrowArgumentException(int length)
     {
         var bytes = new byte[length];
 
@@ -31,7 +31,7 @@ public sealed class IdentifierTests
     [DataRow(16)]
     [DataRow(31)]
     [DataRow(33)]
-    public void Thirty_two_byte_identifiers_reject_every_other_length(int length)
+    public void ThirtyTwoByteIdentifiers_BufferIsAnyOtherLength_ThrowArgumentException(int length)
     {
         var bytes = new byte[length];
 

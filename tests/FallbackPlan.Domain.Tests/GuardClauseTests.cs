@@ -50,7 +50,7 @@ public sealed class GuardClauseTests
 
     [TestMethod]
     [DynamicData(nameof(BufferOperations))]
-    public void An_identifier_refuses_a_wrong_sized_buffer(
+    public void Identifier_BufferIsTheWrongSize_ThrowsArgumentException(
         string name, int size, Action<byte[]> fromBytes, Action<byte[]> copyTo)
     {
         // One byte short and one byte long are both refused: a length check
@@ -136,7 +136,7 @@ public sealed class GuardClauseTests
     [DataRow(0)]
     [DataRow(-1)]
     [DataRow(int.MinValue)]
-    public void A_segment_size_that_is_not_positive_is_refused(int bytes)
+    public void SegmentSize_ValueIsNotPositive_RefusesAndCreateThrows(int bytes)
     {
         Assert.IsFalse(SegmentSize.TryCreate(bytes, out var size));
         Assert.AreEqual(default, size);
@@ -196,7 +196,7 @@ public sealed class GuardClauseTests
     [DataRow("trailing/")]
     [DataRow("double//slash")]
     [DataRow("/")]
-    public void A_rule_with_an_empty_component_is_refused_by_name(string rule)
+    public void PathRule_RuleHasAnEmptyComponent_RefusesNamingTheDefect(string rule)
     {
         // rules-v1 (ADR-0024, 06 §7.1): an empty component is ambiguous
         // between "the root" and "a name that is nothing", so it is refused
@@ -226,7 +226,7 @@ public sealed class GuardClauseTests
     [DataRow("re:back\\1", "backslash-alphanumeric")]
     [DataRow("re:trailing\\", "trailing backslash")]
     [DataRow("re:brace{", "counted quantifier")]
-    public void A_regex_rule_outside_the_rules_v1_subset_is_refused_by_name(string rule, string expected)
+    public void PathRule_RegexIsOutsideTheRulesV1Subset_RefusesNamingTheClause(string rule, string expected)
     {
         // rules-v1 admits a raw regex behind an `re:` prefix, but only a
         // subset of it: no anchors (rules are implicitly anchored), no
@@ -242,7 +242,7 @@ public sealed class GuardClauseTests
     [TestMethod]
     [DataRow("re:docs/[a-z]*[.]txt", "docs/notes.txt", "docs/NOTES.txt")]
     [DataRow("re:logs/[0-9]{4}", "logs/2026", "logs/26")]
-    public void A_regex_rule_inside_the_subset_compiles_and_matches(string rule, string matching, string notMatching)
+    public void PathRule_RegexIsInsideTheSubset_MatchesWholePathsOnly(string rule, string matching, string notMatching)
     {
         Assert.IsTrue(PathRule.TryCreate(rule, caseSensitive: true, out var compiled, out var defect), defect);
         Assert.IsNull(defect);

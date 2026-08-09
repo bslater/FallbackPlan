@@ -67,7 +67,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(4)]
-    public async Task A_tree_publishes_identically_at_any_concurrency(int concurrency)
+    public async Task PublishTree_AtAnyConcurrency_ProducesAnIdenticalSnapshot(int concurrency)
     {
         var files = BuildSourceTree();
         var store = CreateStore();
@@ -109,7 +109,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
     [TestMethod]
     [DynamicData(nameof(KillPoints))]
-    public async Task A_killed_tree_publication_never_harms_the_committed_snapshot_and_a_fresh_process_completes(
+    public async Task PublishTree_KilledAtAnyStep_LeavesTheCommittedSnapshotIntactAndCompletesOnRerun(
         PublicationStep killAfter)
     {
         BuildSourceTree();

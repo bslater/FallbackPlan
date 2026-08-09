@@ -75,7 +75,7 @@ public sealed class KeystoreTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "Unix file modes decide who can read the stored material.")]
     [UnsupportedOSPlatform("windows")]
-    public void On_posix_the_stored_material_is_owner_only()
+    public void Write_OnPosix_StoresTheMaterialReadableByItsOwnerOnly()
     {
         var store = PlatformKeystore.For(_state);
         store.Write(_state, "secret");
@@ -95,7 +95,7 @@ public sealed class KeystoreTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "The Linux store's only protection is its permissions, so it checks them.")]
     [UnsupportedOSPlatform("windows")]
-    public void On_linux_material_whose_permissions_drifted_is_refused_not_read()
+    public void TryRead_OnLinuxWhenPermissionsDrifted_RefusesRatherThanReads()
     {
         var store = PlatformKeystore.For(_state);
         store.Write(_state, "secret");

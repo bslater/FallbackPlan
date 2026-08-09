@@ -20,7 +20,7 @@ public sealed class Argon2ParameterValidationTests
     [DataRow(64u * 1024 - 1, 3u, (byte)4, "kdf_memory_below_creation_minimum")]
     [DataRow(64u * 1024, 2u, (byte)4, "kdf_iterations_below_creation_minimum")]
     [DataRow(64u * 1024, 3u, (byte)3, "kdf_parallelism_below_creation_minimum")]
-    public void Each_below_minimum_value_yields_its_named_defect(
+    public void ValidateCreationMinimums_OneValueBelowItsMinimum_NamesThatDefect(
         uint memoryKiB, uint iterations, byte parallelism, string expectedDefect)
     {
         var parameters = new Argon2Parameters { MemoryKiB = memoryKiB, Iterations = iterations, Parallelism = parallelism };

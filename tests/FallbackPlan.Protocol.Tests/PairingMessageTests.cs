@@ -84,7 +84,7 @@ public sealed class PairingMessageTests
     [TestMethod]
     [DataRow(31)]
     [DataRow(33)]
-    public void A_contribution_field_of_the_wrong_length_is_refused(int length)
+    public void PairOffer_ContributionFieldIsTheWrongLength_RefusesAsMalformed(int length)
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(4);

@@ -181,7 +181,7 @@ public sealed class ValueSemanticsTests
     [DataRow(0x0002)]  // unassigned
     [DataRow(0x8000)]  // private-use range: never portable (specification 00 §3)
     [DataRow(0xFFFF)]
-    public void An_unassigned_profile_value_does_not_resolve(int value)
+    public void TryFromValue_ProfileValueIsUnassigned_ReturnsFalseAndNoProfile(int value)
     {
         Assert.IsFalse(KdfProfile.TryFromValue((ushort)value, out var kdf));
         Assert.IsNull(kdf);

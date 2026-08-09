@@ -60,7 +60,7 @@ public sealed class ProfileTests
     [TestMethod]
     [DataRow((ushort)0x0003)]
     [DataRow((ushort)0x7FFF)]
-    public void Unassigned_values_are_refused(ushort value)
+    public void TryFromValue_ValueIsUnassigned_ReturnsFalse(ushort value)
     {
         Assert.IsFalse(SegmentationProfile.TryFromValue(value, out _));
         Assert.IsFalse(EncryptionProfile.TryFromValue(value, out _));
@@ -71,7 +71,7 @@ public sealed class ProfileTests
     [TestMethod]
     [DataRow((ushort)0x8000)]
     [DataRow((ushort)0xFFFF)]
-    public void Private_use_range_is_refused_in_a_portable_repository(ushort value)
+    public void TryFromValue_ValueIsInThePrivateUseRange_ReturnsFalse(ushort value)
     {
         Assert.IsFalse(SegmentationProfile.TryFromValue(value, out _));
         Assert.IsFalse(CompressionProfile.TryFromValue(value, out _));

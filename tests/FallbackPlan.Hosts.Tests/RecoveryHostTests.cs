@@ -43,7 +43,7 @@ public sealed class RecoveryHostTests : IDisposable
     [DataRow("--help")]
     [DataRow("-h")]
     [DataRow("help")]
-    public async Task Help_explains_the_usage_and_succeeds(string flag)
+    public async Task RecoveryHost_EachHelpFlag_PrintsTheUsageAndSucceeds(string flag)
     {
         var result = await RunAsync(flag);
 

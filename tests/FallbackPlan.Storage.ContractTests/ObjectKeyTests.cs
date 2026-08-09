@@ -16,7 +16,7 @@ public sealed class ObjectKeyTests
     [DataRow("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura.footer")]
     [DataRow("index/delta/0000000000000001/delta-1")]
     [DataRow("keys/key_1")]
-    public void Valid_keys_parse_and_render_unchanged(string value)
+    public void TryParse_KeyIsWithinTheGrammar_RendersBackUnchanged(string value)
     {
         Assert.IsTrue(ObjectKey.TryParse(value, out var key));
         Assert.AreEqual(value, key.Value);
@@ -35,7 +35,7 @@ public sealed class ObjectKeyTests
     [DataRow("with space")]
     [DataRow("back\\slash")]
     [DataRow("percent%20")]
-    public void Invalid_keys_are_unconstructible(string value)
+    public void TryParse_KeyIsOutsideTheGrammar_RefusesAndParseThrows(string value)
     {
         Assert.IsFalse(ObjectKey.TryParse(value, out _));
         Assert.ThrowsExactly<ArgumentException>(() => ObjectKey.Parse(value));

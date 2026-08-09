@@ -21,7 +21,7 @@ public sealed class AgentHostTests : IDisposable
     [DataRow("--help")]
     [DataRow("-h")]
     [DataRow("help")]
-    public async Task Help_explains_the_usage_and_succeeds(string flag)
+    public async Task AgentHost_EachHelpFlag_PrintsTheUsageAndSucceeds(string flag)
     {
         var result = await RunAsync(flag);
 
@@ -42,7 +42,7 @@ public sealed class AgentHostTests : IDisposable
     [DataRow("walk")]                                  // not a command
     [DataRow("run")]                                   // no options at all
     [DataRow("run", "--repo", "/tmp/nowhere")]         // missing state and passphrase
-    public async Task An_incomplete_command_line_is_refused_with_the_usage(params string[] args)
+    public async Task AgentHost_CommandLineIsIncomplete_RefusesWithTheUsage(params string[] args)
     {
         var result = await RunAsync(args);
 

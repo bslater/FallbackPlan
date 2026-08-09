@@ -27,7 +27,7 @@ public sealed class PathRulesTests
     [DataRow("a/**/b", "a/x/y/b", true)]
     [DataRow("?", "x", true)]
     [DataRow("?", "xy", false)]
-    public void Glob_semantics_hold(string rule, string path, bool expected) =>
+    public void Matches_GlobRuleAndCandidatePath_FollowsTheRulesV1GlobSemantics(string rule, string path, bool expected) =>
         Assert.AreEqual(expected, Compile(rule).Matches(path));
 
     [TestMethod]
@@ -42,7 +42,7 @@ public sealed class PathRulesTests
     [DataRow("re:(?:group)")]
     [DataRow(@"re:(a)\1")]
     [DataRow("re:brace{x")]
-    public void Invalid_rules_are_refused_by_name(string rule)
+    public void TryCreate_RuleIsOutsideTheGrammar_RefusesNamingTheDefect(string rule)
     {
         Assert.IsFalse(PathRule.TryCreate(rule, caseSensitive: true, out _, out var defect));
         Assert.IsFalse(string.IsNullOrEmpty(defect));

@@ -98,7 +98,7 @@ public sealed class InspectionCommandTests : IDisposable
     [DataRow("not-hex-at-all")]
     [DataRow("abcd")]                                                        // well-formed hex, wrong length
     [DataRow("0000000000000000000000000000000000000000000000000000000000000000")]  // right shape, absent
-    public async Task Inspect_manifest_refuses_an_identifier_it_cannot_use(string objectId)
+    public async Task InspectManifest_IdentifierIsUnusable_RefusesWithoutAStackTrace(string objectId)
     {
         await ArchiveAsync();
 
@@ -173,7 +173,7 @@ public sealed class InspectionCommandTests : IDisposable
     [DataRow("locator")]
     [DataRow("digest")]
     [DataRow("records")]
-    public async Task Verify_accepts_every_level(string level)
+    public async Task Verify_EachDocumentedLevel_CompletesSuccessfully(string level)
     {
         await ArchiveAsync();
 

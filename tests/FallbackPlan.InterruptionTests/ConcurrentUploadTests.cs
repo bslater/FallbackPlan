@@ -23,7 +23,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     [TestMethod]
     [DataRow(1)]
     [DataRow(4)]
-    public async Task Every_blob_is_intent_covered_before_its_own_put(int concurrency)
+    public async Task Upload_AtAnyConcurrency_WritesEachBlobsCoveringIntentBeforeItsPut(int concurrency)
     {
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();
@@ -68,7 +68,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(4)]
-    public async Task A_restore_is_byte_identical_whatever_the_concurrency(int concurrency)
+    public async Task BackupAndRestore_AtAnyConcurrency_RestoresBytesIdenticalToTheSource(int concurrency)
     {
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();
@@ -93,7 +93,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(4)]
-    public async Task Every_blob_carries_dense_ascending_ordinals_at_any_concurrency(int concurrency)
+    public async Task Upload_AtAnyConcurrency_GivesEveryBlobDenseAscendingOrdinals(int concurrency)
     {
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();

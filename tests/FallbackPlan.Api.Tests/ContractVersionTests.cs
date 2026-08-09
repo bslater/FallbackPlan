@@ -23,7 +23,7 @@ public sealed class ContractVersionTests : IDisposable
     [TestMethod]
     [DataRow("1.0", 1, 0)]
     [DataRow("2.17", 2, 17)]
-    public void A_version_round_trips_through_its_rendering(string text, int major, int minor)
+    public void TryParse_WellFormedVersionText_RoundTripsThroughItsRendering(string text, int major, int minor)
     {
         Assert.IsTrue(ContractVersion.TryParse(text, out var parsed));
         Assert.AreEqual(new ContractVersion(major, minor), parsed);
@@ -36,7 +36,7 @@ public sealed class ContractVersionTests : IDisposable
     [DataRow("1")]
     [DataRow(".1")]
     [DataRow("one.zero")]
-    public void Anything_that_is_not_a_version_is_refused_rather_than_guessed(string? text)
+    public void TryParse_TextIsNotAVersion_RefusesRatherThanGuesses(string? text)
     {
         Assert.IsFalse(ContractVersion.TryParse(text, out _));
     }

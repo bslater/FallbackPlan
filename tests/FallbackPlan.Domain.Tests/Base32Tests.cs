@@ -19,7 +19,7 @@ public sealed class Base32Tests
     [DataRow("foob", "mzxw6yq")]
     [DataRow("fooba", "mzxw6ytb")]
     [DataRow("foobar", "mzxw6ytboi")]
-    public void Encode_matches_the_rfc_4648_vectors(string ascii, string expected)
+    public void Encode_Rfc4648TestVectors_ProducesTheSpecifiedText(string ascii, string expected)
     {
         SequenceAssert.AreEqual(expected, Base32.Encode(System.Text.Encoding.ASCII.GetBytes(ascii)));
     }
@@ -32,7 +32,7 @@ public sealed class Base32Tests
     [DataRow("mzxw6yq", "foob")]
     [DataRow("mzxw6ytb", "fooba")]
     [DataRow("mzxw6ytboi", "foobar")]
-    public void Decode_matches_the_rfc_4648_vectors(string encoded, string expectedAscii)
+    public void TryDecode_Rfc4648TestVectors_RecoversTheOriginalBytes(string encoded, string expectedAscii)
     {
         var destination = new byte[16];
 
@@ -46,7 +46,7 @@ public sealed class Base32Tests
     [DataRow("m1")]      // '1' is not in the alphabet
     [DataRow("m0")]      // '0' is not in the alphabet
     [DataRow("my=")]     // padding characters are not accepted
-    public void Decode_rejects_characters_outside_the_alphabet(string encoded)
+    public void TryDecode_CharacterIsOutsideTheAlphabet_ReturnsFalse(string encoded)
     {
         Assert.IsFalse(Base32.TryDecode(encoded, new byte[16], out _));
     }
@@ -55,7 +55,7 @@ public sealed class Base32Tests
     [DataRow("m")]         // length % 8 == 1 cannot arise from whole bytes
     [DataRow("mzx")]       // length % 8 == 3
     [DataRow("mzxw6y")]    // length % 8 == 6
-    public void Decode_rejects_impossible_lengths(string encoded)
+    public void TryDecode_LengthCannotAriseFromWholeBytes_ReturnsFalse(string encoded)
     {
         Assert.IsFalse(Base32.TryDecode(encoded, new byte[16], out _));
     }

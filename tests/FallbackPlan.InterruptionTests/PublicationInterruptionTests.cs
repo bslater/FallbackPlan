@@ -56,7 +56,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
     [TestMethod]
     [DynamicData(nameof(KillPoints))]
-    public async Task No_kill_point_makes_the_committed_snapshot_unreadable_and_a_fresh_process_completes(
+    public async Task Publish_KilledAtAnyStep_LeavesTheCommittedSnapshotReadableAndCompletesOnRerun(
         PublicationStep killAfter)
     {
         var store = CreateStore();
