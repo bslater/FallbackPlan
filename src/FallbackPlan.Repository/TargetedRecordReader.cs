@@ -72,6 +72,7 @@ internal sealed class TargetedRecordReader(
     private readonly ObjectIdDeriver _objectIdDeriver = new(keys.ContentIdKey);
     private readonly StoreBlobKeyDeriver _storeKeyDeriver = new(keys.KeyIdKey);
     private readonly ConcurrentDictionary<ObjectKey, BlobReader?> _blobs = new();
+    private volatile bool _disposed;
 
     /// <summary>
     /// The file-version manifest <paramref name="objectId"/> names, or
@@ -133,6 +134,8 @@ internal sealed class TargetedRecordReader(
     /// <inheritdoc />
     public void Dispose()
     {
+        _disposed = true;
+
         foreach (var reader in _blobs.Values)
         {
             reader?.Dispose();
@@ -150,6 +153,16 @@ internal sealed class TargetedRecordReader(
     private async ValueTask<(RecordReadOutcome? Outcome, byte[]? Plaintext)> ReadAsync(
         ObjectId objectId, ObjectType expectedType, CancellationToken cancellationToken)
     {
+        // Disposal is not synchronised against in-flight reads — the owner
+        // disposes only after both consumers have drained (the using scope in
+        // SnapshotPublication outlives the session and builder). This check
+        // turns a late caller's use-after-dispose from a race on zeroed key
+        // material into the refusal every caller already handles.
+        if (_disposed)
+        {
+            return (null, null);
+        }
+
         if (catalogue.Read(c => c.ResolveLocation(objectId)) is not { } location)
         {
             return (null, null);

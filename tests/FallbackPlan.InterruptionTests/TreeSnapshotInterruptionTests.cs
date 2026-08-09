@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
@@ -112,7 +114,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     public async Task PublishTree_KilledAtAnyStep_LeavesTheCommittedSnapshotIntactAndCompletesOnRerun(
         PublicationStep killAfter)
     {
-        BuildSourceTree();
+        var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();
@@ -139,6 +141,28 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
         Assert.AreEqual(3, published.Files.Count);
         Assert.IsEmpty(published.Failures);
+
+        // The rerun snapshot is byte-verified, not merely counted: a crash,
+        // a rerun over the crash's leftovers, and then a restore of every
+        // file is the whole journey, and "3 files, no failures" holds
+        // without the restored bytes being right.
+        using (var reader = new RepositoryReader(Repo, keys, store))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            var engine = new RestoreEngine(reader);
+
+            foreach (var file in published.Files)
+            {
+                var read = await reader.ReadSegmentAsync(file.ObjectId, CancellationToken.None);
+                Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
+                var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+
+                using var restored = new MemoryStream();
+                var restore = await engine.RestoreFileAsync(manifest, restored, CancellationToken.None);
+                Assert.IsTrue(restore.Success, restore.FailureDetail);
+                SequenceAssert.AreEqual(files[file.RelativePath.Replace('\\', '/')], restored.ToArray());
+            }
+        }
 
         // And the baseline still restores after completion.
         SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));

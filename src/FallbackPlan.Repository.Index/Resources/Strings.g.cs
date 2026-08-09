@@ -188,6 +188,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, JournalPublisher_StoreRefusedJournalRecordWith, arg0);
 
     /// <summary>
+    /// The store already holds a different journal record at sequence {0}: this writer's sequence state has regressed (specification 08 §2). The publication is refused while the source data still exists.
+    /// </summary>
+    private static string JournalStore_StoreHeldDifferentRecordAtSequence => Get(nameof(JournalStore_StoreHeldDifferentRecordAtSequence));
+
+    /// <summary>
+    /// The store already holds a different journal record at sequence {0}: this writer's sequence state has regressed (specification 08 §2). The publication is refused while the source data still exists.
+    /// </summary>
+    internal static string FormatJournalStore_StoreHeldDifferentRecordAtSequence(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, JournalStore_StoreHeldDifferentRecordAtSequence, arg0);
+
+    /// <summary>
     /// The audit payload carries an unknown key (specification 08 §6).
     /// </summary>
     internal static string JournalRecordCodec_AuditPayloadCarriesUnknownKey => Get(nameof(JournalRecordCodec_AuditPayloadCarriesUnknownKey));

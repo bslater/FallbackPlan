@@ -471,6 +471,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
                 ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
                 PriorSnapshotId = prior?.SnapshotId,
                 NowUnixMilliseconds = now,
+                Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 DeclaredMaxDurationMs = 3_600_000,
                 ExpiryGeneration = session.CurrentGeneration.Value + 2,
                 ClientVersion = "fallbackplan-cli/0.1",

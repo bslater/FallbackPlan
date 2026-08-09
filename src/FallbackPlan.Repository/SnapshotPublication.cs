@@ -12,6 +12,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
@@ -65,6 +66,16 @@ public sealed record SnapshotJob
 
     /// <summary>Wall-clock now, epoch milliseconds.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
+
+    /// <summary>
+    /// Wall-clock reader for stamps taken while the job runs — capture
+    /// completion, in particular. The engine takes no clock of its own
+    /// (specification 00 §7), so without one every stamp is
+    /// <see cref="NowUnixMilliseconds"/> and the snapshot asserts a
+    /// zero-duration capture; retention reads capture times, so a caller
+    /// that has a clock should supply it.
+    /// </summary>
+    public Func<ulong>? Clock { get; init; }
 
     /// <summary>The declared maximum job duration for intent covering.</summary>
     public required ulong DeclaredMaxDurationMs { get; init; }
@@ -148,6 +159,11 @@ public sealed partial class PublicationOrchestrator
         }
 
         var options = job.ScanOptions with { Rules = rules };
+
+        // Crash hygiene before any new spool is created: a spool without its
+        // sidecar is unreachable by any resume and referenced by nothing
+        // (05 §6.3), and this writer owns the directory exclusively.
+        BlobWriter.SweepUnresumable(_spoolDirectory);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
@@ -287,7 +303,7 @@ public sealed partial class PublicationOrchestrator
                 DeviceId = job.DeviceId,
                 BackupSetId = job.BackupSetId,
                 CaptureStartedAt = job.NowUnixMilliseconds,
-                CaptureCompletedAt = job.NowUnixMilliseconds,
+                CaptureCompletedAt = job.Clock?.Invoke() ?? job.NowUnixMilliseconds,
                 RootTree = rootTreeId,
                 ParentSnapshots = job.ParentSnapshots,
                 PolicyManifest = policyId,

@@ -146,6 +146,13 @@ public sealed class ManifestBuilder : IAsyncDisposable
             await SealAndUploadAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Deliberately no pinned configuration, so no sidecar and no resume
+        // (05 §6 is a MAY, not a MUST). Manifests are regenerated from the
+        // next run's walk for less than a resume costs — and a metadata
+        // checkpoint in the shared spool directory would be found by the
+        // data session's resume walk, whose pinned fields it can never
+        // match, forcing a restart that deletes it (05 §6.2). What a crash
+        // strands here is reclaimed by the sweep at publication start.
         _writer ??= BlobWriter.Create(
             _repositoryId,
             _writerId,
@@ -307,6 +314,15 @@ public sealed class ManifestBuilder : IAsyncDisposable
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
                 throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
+            }
+
+            // 05 §5.1: only a byte-identical re-put is success. A freshly
+            // allocated identifier answered AlreadyExists means the sequence
+            // state regressed — see ArchiveSession.UploadAsync.
+            if (put.Outcome == PutOutcome.AlreadyExists &&
+                !await SealedBlobReadback.MatchesAsync(_store, storeKey, sealedBlob, cancellationToken).ConfigureAwait(false))
+            {
+                throw new IOException(Strings.FormatBlobUpload_StoreHeldDifferentBytesUnder(storeKey));
             }
 
             FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(

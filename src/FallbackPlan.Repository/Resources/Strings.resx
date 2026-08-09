@@ -67,6 +67,9 @@
   <data name="PreparedSegment_StoreRefusedBlobWithFailed" xml:space="preserve">
     <value>The store refused blob '{0}' with a failed precondition.</value>
   </data>
+  <data name="BlobUpload_StoreHeldDifferentBytesUnder" xml:space="preserve">
+    <value>The store already holds a different object under blob key '{0}': this writer's blob identifier has been used before, which means its sequence state has regressed (specification 05 §5.1, 08 §2). The publication is refused while the source data still exists.</value>
+  </data>
   <data name="PublicationOrchestrator_ScanProducedNoRootDirectory" xml:space="preserve">
     <value>The scan produced no root directory.</value>
   </data>

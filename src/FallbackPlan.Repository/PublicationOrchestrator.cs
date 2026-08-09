@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository;
@@ -168,6 +169,11 @@ public sealed partial class PublicationOrchestrator
     public async ValueTask<PublishedSnapshot> PublishAsync(BackupJob job, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(job);
+
+        // Crash hygiene before any new spool is created: a spool without its
+        // sidecar is unreachable by any resume and referenced by nothing
+        // (05 §6.3), and this writer owns the directory exclusively.
+        BlobWriter.SweepUnresumable(_spoolDirectory);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);

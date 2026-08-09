@@ -67,6 +67,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, PreparedSegment_StoreRefusedBlobWithFailed, arg0);
 
     /// <summary>
+    /// The store already holds a different object under blob key '{0}': this writer's blob identifier has been used before, which means its sequence state has regressed (specification 05 §5.1, 08 §2). The publication is refused while the source data still exists.
+    /// </summary>
+    private static string BlobUpload_StoreHeldDifferentBytesUnder => Get(nameof(BlobUpload_StoreHeldDifferentBytesUnder));
+
+    /// <summary>
+    /// The store already holds a different object under blob key '{0}': this writer's blob identifier has been used before, which means its sequence state has regressed (specification 05 §5.1, 08 §2). The publication is refused while the source data still exists.
+    /// </summary>
+    internal static string FormatBlobUpload_StoreHeldDifferentBytesUnder(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, BlobUpload_StoreHeldDifferentBytesUnder, arg0);
+
+    /// <summary>
     /// The scan produced no root directory.
     /// </summary>
     internal static string PublicationOrchestrator_ScanProducedNoRootDirectory => Get(nameof(PublicationOrchestrator_ScanProducedNoRootDirectory));

@@ -88,9 +88,35 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
             $"pending={string.Join(',', state.PendingSequences.Select(sequence => sequence.ToString(CultureInfo.InvariantCulture)))}\n" +
             $"last-delta={(state.LastDeltaId is { } delta ? Convert.ToHexStringLower(delta.ToArray()) : string.Empty)}\n";
 
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, content);
-        File.Move(temporary, _path, overwrite: true);
+        // The rename alone leaves the new bytes in the page cache; a power
+        // loss then regresses the sequence space, and every number the lost
+        // state had consumed is handed out again — the identity-cloning shape
+        // of architecture 04 §2, and a blob-key collision under 05 §5.1.
+        // Flushed to the platter before the rename, so the contract
+        // AllocateNext documents — durable before the number is returned —
+        // is what the disk actually holds.
+        var temporary = $"{_path}.{Guid.NewGuid():n}.tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream))
+            {
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, _path, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+
+            throw;
+        }
     }
 }
 
@@ -121,15 +147,29 @@ public sealed class WriterSequence : IBlobCounterAllocator
         _next = state.NextSequence;
         _pending = [.. state.PendingSequences];
         _lastDeltaId = state.LastDeltaId;
-        RecoveredObligations = [.. state.PendingSequences];
+        _recovered = [.. state.PendingSequences];
     }
+
+    private readonly List<ulong> _recovered;
 
     /// <summary>
     /// Sequence numbers allocated by a previous run and never accounted for —
     /// each one MUST get a void delta so readers can distinguish "skipped"
-    /// from "missing" (specification 07 §4).
+    /// from "missing" (specification 07 §4). An obligation leaves this list
+    /// when it is accounted for: the sequence outlives the job in the
+    /// long-lived service, and an obligation that never left would be
+    /// republished by every publication the process ever makes.
     /// </summary>
-    public IReadOnlyList<ulong> RecoveredObligations { get; }
+    public IReadOnlyList<ulong> RecoveredObligations
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _recovered.Where(_pending.Contains).ToList();
+            }
+        }
+    }
 
     /// <summary>The writer's most recently published delta, for predecessor chaining.</summary>
     public DeltaId? LastDeltaId

@@ -93,8 +93,40 @@ public sealed class JournalPublisher : IDisposable
             throw new IOException(Strings.FormatJournalPublisher_StoreRefusedJournalRecordWith(sequence));
         }
 
+        // This sequence number was freshly allocated, so an existing object
+        // under its journal key means the sequence state regressed and the
+        // store holds another run's record there (08 §2). Only a
+        // byte-identical re-put — a provider retry of this same record — may
+        // be treated as success (01 §4); anything else must refuse before
+        // the publication builds on an intent that was never written.
+        if (put.Outcome == PutOutcome.AlreadyExists &&
+            !await StoredBytesMatchAsync(sealedObject, sequence, cancellationToken).ConfigureAwait(false))
+        {
+            throw new IOException(Strings.FormatJournalStore_StoreHeldDifferentRecordAtSequence(sequence));
+        }
+
         _sequence.MarkAccounted(sequence);
         return sequence;
+    }
+
+    private async ValueTask<bool> StoredBytesMatchAsync(
+        byte[] sealedObject,
+        ulong sequence,
+        CancellationToken cancellationToken)
+    {
+        using var read = await _store.OpenReadAsync(
+            MetadataStoreKeys.Journal(_writerId, sequence), range: null, cancellationToken).ConfigureAwait(false);
+
+        if (read.Outcome != OpenReadOutcome.Found)
+        {
+            return false;
+        }
+
+        using var stored = new MemoryStream();
+        await read.Content!.CopyToAsync(stored, cancellationToken).ConfigureAwait(false);
+
+        return stored.TryGetBuffer(out var buffer)
+            && buffer.AsSpan().SequenceEqual(sealedObject);
     }
 
     /// <inheritdoc />

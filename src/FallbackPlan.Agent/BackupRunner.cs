@@ -102,6 +102,10 @@ public static class BackupRunner
                     ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
                     PriorSnapshotId = prior?.SnapshotId,
                     NowUnixMilliseconds = nowMs,
+                    // The pass clock above keeps schedule derivation pure; the
+                    // capture-completion stamp wants the time capture actually
+                    // finished, which only a live clock can say.
+                    Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     DeclaredMaxDurationMs = 3_600_000,
                     ExpiryGeneration = generation.Value + 2,
                     ClientVersion = "fallbackplan-agent/0.1",

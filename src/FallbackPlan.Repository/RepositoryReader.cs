@@ -137,14 +137,32 @@ public sealed class RepositoryReader : IDisposable
     }
 
     /// <summary>
+    /// Restores a file version from its logical segment references with no
+    /// assembly check: every segment verifies individually, and the computed
+    /// whole-file hash is returned for the <em>caller</em> to compare. Two
+    /// same-length segments swapped pass every per-part check here — prefer
+    /// the overload that takes the manifest's expected hash whenever the
+    /// caller has one (architecture 08 §3).
+    /// </summary>
+    public ValueTask<RestoreResult> RestoreAsync(
+        IReadOnlyList<SegmentReference> references,
+        Stream destination,
+        CancellationToken cancellationToken) =>
+        RestoreAsync(references, destination, expectedContentHash: default, cancellationToken);
+
+    /// <summary>
     /// Restores a file version from its logical segment references. Nothing
     /// reaches <paramref name="destination"/> unless every segment verifies —
     /// a failed record refuses the whole restore rather than emitting a
-    /// partial file (FR-RST-005).
+    /// partial file (FR-RST-005) — and, when
+    /// <paramref name="expectedContentHash"/> is provided, unless the
+    /// assembled whole-file hash matches it, which is the only check that
+    /// catches verified segments assembled in the wrong order.
     /// </summary>
     public async ValueTask<RestoreResult> RestoreAsync(
         IReadOnlyList<SegmentReference> references,
         Stream destination,
+        ReadOnlyMemory<byte> expectedContentHash,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(references);
@@ -189,16 +207,25 @@ public sealed class RepositoryReader : IDisposable
                     expectedOffset += reference.LogicalLength;
                 }
 
+                var hash = new byte[32];
+                wholeFile.GetHashAndReset(hash);
+
+                // The assembly check, before a byte reaches the caller: every
+                // segment passed its own verification, so a mismatch here can
+                // only mean verified content assembled into the wrong file.
+                if (!expectedContentHash.IsEmpty && !expectedContentHash.Span.SequenceEqual(hash))
+                {
+                    return new RestoreResult(false, 0, null,
+                        "The assembled content does not match the expected whole-file hash; every segment verified individually, so the reference list assembles a different file (architecture 08 §3).");
+                }
+
                 // Every segment verified: only now does anything reach the
                 // caller's destination.
                 spool.Position = 0;
                 await spool.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+
+                return new RestoreResult(true, expectedOffset, hash, null);
             }
-
-            var hash = new byte[32];
-            wholeFile.GetHashAndReset(hash);
-
-            return new RestoreResult(true, expectedOffset, hash, null);
         }
         finally
         {
