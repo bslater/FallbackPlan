@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -7,6 +8,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -31,6 +33,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly byte[] _metadataClassKey;
     private readonly List<ArchivedBlob> _blobs = [];
     private readonly IIntentScope? _intentScope;
+    private readonly ReusePredicate? _mayReuse;
     private BlobWriter? _writer;
 
     /// <summary>Creates a builder writing metadata blobs under <paramref name="blobProfile"/>.</summary>
@@ -43,13 +46,14 @@ public sealed class ManifestBuilder : IAsyncDisposable
         IBlobCounterAllocator counters,
         string spoolDirectory,
         BlobWriteProfile blobProfile,
-        IIntentScope? intentScope = null)
+        IIntentScope? intentScope = null,
+        ReusePredicate? mayReuse = null)
     {
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(counters);
-        ArgumentNullException.ThrowIfNull(blobProfile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(counters);
+        ThrowHelper.ThrowIfNull(blobProfile);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -60,6 +64,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _blobProfile = blobProfile;
         _intentScope = intentScope;
+        _mayReuse = mayReuse;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         _metadataClassKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
@@ -81,8 +86,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ObjectId? parentVersion,
         IReadOnlyList<string>? captureDiagnostics = null)
     {
-        ArgumentNullException.ThrowIfNull(result);
-        ArgumentNullException.ThrowIfNull(metadata);
+        ThrowHelper.ThrowIfNull(result);
+        ThrowHelper.ThrowIfNull(metadata);
 
         return new FileVersionManifest
         {
@@ -105,6 +110,23 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// specification 02 §3). Blobs rotate at the profile's targets exactly
     /// as data blobs do.
     /// </summary>
+    /// <remarks>
+    /// A manifest whose object the index already locates is **not** written
+    /// again; its identifier is returned and the reference resolves to what
+    /// is already there. This is the same reuse the segment path performs,
+    /// and it is what keeps metadata growth incremental (NFR-PERF-005): a
+    /// directory whose contents did not change encodes to the same bytes and
+    /// therefore the same object, so re-emitting it would make every
+    /// snapshot rewrite every tree in the repository — a cost proportional
+    /// to the whole repository for a backup that changed one file.
+    /// <para>
+    /// It is the same gate too, not merely the same idea: referencing another
+    /// writer's manifest is the trust question referencing their segment is
+    /// (ADR-0006), so the configured domain decides both. Under the default a
+    /// manifest this writer did not store is confirmed before it is
+    /// referenced, and under <c>device</c> it is written again.
+    /// </para>
+    /// </remarks>
     public async ValueTask<ObjectId> AppendManifestAsync(
         ObjectType objectType,
         ReadOnlyMemory<byte> encodedManifest,
@@ -112,6 +134,12 @@ public sealed class ManifestBuilder : IAsyncDisposable
     {
         var contentId = ContentHasher.Hash(encodedManifest.Span);
         var objectId = _objectIdDeriver.Derive(objectType, contentId);
+
+        if (_mayReuse is not null &&
+            await _mayReuse(objectId, cancellationToken).ConfigureAwait(false))
+        {
+            return objectId;
+        }
 
         if (_writer is not null && !_writer.CanAppend(encodedManifest.Length))
         {
@@ -167,7 +195,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ulong counter,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
 
         var contentId = ContentHasher.Hash(encodedManifest.Span);
         var objectId = _objectIdDeriver.Derive(ObjectType.SnapshotManifest, contentId);
@@ -193,7 +221,68 @@ public sealed class ManifestBuilder : IAsyncDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused snapshot object '{key}' with a failed precondition.");
+            throw new IOException(Strings.FormatManifestBuilder_StoreRefusedSnapshotObjectWith(key));
+        }
+    }
+
+    /// <summary>
+    /// Writes one source-identity hint per newly created file version
+    /// (specification 06 §11), sealed under the same standalone framing as
+    /// the snapshot object.
+    /// </summary>
+    /// <param name="hints">The hints to publish; an empty list writes nothing.</param>
+    /// <param name="intentSequence">
+    /// The publication's write-intent sequence number, which every hint
+    /// carries.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the writes.</param>
+    /// <remarks>
+    /// <para>
+    /// Advisory, so a store that refuses a put is not a publication failure —
+    /// a later reader simply falls back to matching by path and misses that
+    /// file's rename. They are written <em>before</em> the snapshot object
+    /// for the ordinary reason: a hint that becomes visible after the
+    /// snapshot that needs it is a hint that is missing exactly when it is
+    /// wanted.
+    /// </para>
+    /// <para>
+    /// Every hint of one publication carries the intent's sequence number
+    /// rather than drawing its own. A number per hint would be a durable
+    /// state write per changed file and an accounting obligation per changed
+    /// file, and hints discharge none of the four (ADR-0022 §Decision 7);
+    /// the intent's number is already accounted by its journal record. Key
+    /// uniqueness never rested on the counter — each object seals under a
+    /// fresh 32-byte salt.
+    /// </para>
+    /// </remarks>
+    public async ValueTask WriteSourceIdentityHintsAsync(
+        IReadOnlyList<SourceIdentityHint> hints,
+        ulong intentSequence,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(hints);
+
+        foreach (var hint in hints)
+        {
+            var encoded = SourceIdentityHintCodec.Encode(hint);
+            var contentId = ContentHasher.Hash(encoded);
+            var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityHint, contentId);
+
+            var sealedObject = StandaloneRecordCipher.Seal(
+                _repositoryId,
+                _metadataClassKey,
+                _generation,
+                _writerId,
+                intentSequence,
+                ObjectType.SourceIdentityHint,
+                objectId,
+                encoded);
+
+            await _store.PutAsync(
+                MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
+                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -217,7 +306,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
 
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
-                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
+                throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
             }
 
             FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(

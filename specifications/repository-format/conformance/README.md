@@ -85,14 +85,15 @@ Passing these vectors is necessary and not sufficient. A reader claiming conform
 
 ## Cross-implementation verification
 
-Two of the primitives this format needs have no platform implementation, so they come from a third party and do not inherit the platform's audit posture ([03 §6.1](../03-keys.md#61-where-each-primitive-comes-from)). Where a second independent implementation exists, CI checks them against each other:
+One primitive this format needs has no platform implementation, so it comes from a third party and does not inherit the platform's audit posture ([03 §6.1](../03-keys.md#61-where-each-primitive-comes-from)). CI checks it against a second independent implementation:
 
 | Primitive | Second implementation | Result |
 |-----------|----------------------|--------|
 | **Argon2id** | Konscious (test-only dependency, never shipped) | Bit-identical across the parameter range, including the mandated minimums — and both reproduce the committed [`argon2id.json`](vectors/argon2id.json) vector on every run. The two differ only in refusing versus accepting an empty password — an API-boundary policy difference, not an algorithmic one, and the reason [03 §2.1](../03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) now exists. |
-| **XChaCha20-Poly1305** | None available | **Unverified.** Recorded rather than glossed over — and open as [Q12](../../../docs/open-questions.md#q12--xchacha20-poly1305-has-no-second-implementation-to-check-against), which asks whether an unverifiable profile should ship at all. |
 
-Cross-verification is not an audit. It establishes that two people did not make the same mistake; it does not establish that either is correct. The external cryptographic review required before the first beta must cover both primitives specifically.
+**XChaCha20-Poly1305 had no second implementation, and that is why it is no longer in the format.** The profile was withdrawn before the freeze rather than shipped unverified: an AEAD defect is discovered inside bytes the user already stored, and a format version can add a profile but cannot un-admit one that written repositories depend on ([Q12](../../../docs/open-questions.md#closed), [03 §6.1](../03-keys.md#61-where-each-primitive-comes-from)). The table above is the standard it failed to meet, not a list it is missing from.
+
+Cross-verification is not an audit. It establishes that two people did not make the same mistake; it does not establish that either is correct. The external cryptographic review required before the first beta must cover Argon2id specifically.
 
 ## Fixtures
 

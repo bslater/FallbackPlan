@@ -11,13 +11,14 @@ namespace FallbackPlan.Hosts.Tests;
 /// The service (ADR-0028): sole writer role, a command surface, real job
 /// states, and cancellation that lands in the journal.
 /// </summary>
+[TestClass]
 public sealed class ServiceTests : IDisposable
 {
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
 
-    [Fact]
-    public async Task While_the_service_runs_no_second_writer_can_take_the_role()
+    [TestMethod]
+    public async Task Service_WhileItRuns_PreventsASecondWriterTakingTheRole()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -28,14 +29,14 @@ public sealed class ServiceTests : IDisposable
         // state directory are the same writer by construction, and the second
         // must be refused rather than silently drawing from the same sequence
         // space.
-        var refused = Assert.Throws<ClientStateException>(
+        var refused = Assert.ThrowsExactly<ClientStateException>(
             () => StateDirectoryLock.Acquire(_harness.StateDirectory, StateDirectoryLock.DirectRole));
 
         Assert.Contains(StateDirectoryLock.ServiceRole, refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_client_commands_the_service_over_the_local_binding()
+    [TestMethod]
+    public async Task Service_CommandedByAClient_AnswersOverTheLocalBinding()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -47,19 +48,17 @@ public sealed class ServiceTests : IDisposable
         await using var client = await LocalServiceClient.ConnectAsync(
             _harness.StateDirectory, "test", _timeout.Token);
 
-        var sets = Assert.IsType<BackupSetsResult>(
-            await client.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token));
-        Assert.Single(sets.Sets);
+        Assert.IsInstanceOfType<BackupSetsResult>(await client.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var sets);
+        Assert.ContainsSingle(sets.Sets);
 
-        var description = Assert.IsType<ServiceDescriptionResult>(
-            await client.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token));
-        Assert.Equal(ContractVersion.Current.ToString(), description.ContractVersion);
-        Assert.False(description.RemoteBindingEnabled);
-        Assert.Equal(_harness.StateDirectory, description.StateDirectory);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(await client.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+        Assert.AreEqual(ContractVersion.Current.ToString(), description.ContractVersion);
+        Assert.IsFalse(description.RemoteBindingEnabled);
+        Assert.AreEqual(_harness.StateDirectory, description.StateDirectory);
     }
 
-    [Fact]
-    public async Task A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning()
+    [TestMethod]
+    public async Task Backup_CommandedByAClient_RunsAndReportsStatesBeyondScanning()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", new string('x', 200_000));
@@ -68,10 +67,17 @@ public sealed class ServiceTests : IDisposable
 
         await using var runtime = await StartAsync();
         var seen = new List<JobState>();
+
+        // Subscribed here, on this thread, before the backup is commanded.
+        // Calling WatchAsync inside the Task.Run below would leave the
+        // subscription to whenever the pool got round to it, and a busy pool is
+        // exactly when the first states would be missed.
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+
         var watching = Task.Run(
             async () =>
             {
-                await foreach (var progress in runtime.Progress.WatchAsync(_timeout.Token))
+                await foreach (var progress in progressEvents)
                 {
                     lock (seen)
                     {
@@ -82,11 +88,23 @@ public sealed class ServiceTests : IDisposable
             _timeout.Token);
 
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        var accepted = Assert.IsType<JobAcceptedResult>(
-            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token));
-        Assert.NotEmpty(accepted.JobId);
+        Assert.IsInstanceOfType<JobAcceptedResult>(await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
+        Assert.IsNotEmpty(accepted.JobId);
 
-        await WaitForAsync(() => runtime.Jobs.Jobs.Any(job => job.State == JobState.Complete));
+        // Wait for the watcher, not for the job. The job reaching Complete says
+        // the engine finished; it says nothing about whether the task draining
+        // the progress channel has caught up, and reading `seen` before it has
+        // is a second race distinct from the subscription one — subscribing
+        // eagerly guarantees no event is missed, not that every event has been
+        // observed yet. The channel is FIFO, so a watcher that has seen
+        // Complete has seen everything before it.
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Complete);
+            }
+        });
 
         // FR-SVC-006 and ADR-0029 §5: before this, eight of fourteen states were
         // written nowhere, and a ten-hour backup announced `Scanning` and then
@@ -102,16 +120,15 @@ public sealed class ServiceTests : IDisposable
         Assert.Contains(JobState.Publishing, states);
         Assert.Contains(JobState.Complete, states);
 
-        var snapshots = Assert.IsType<SnapshotsResult>(
-            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token));
-        Assert.Single(snapshots.Snapshots);
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        Assert.ContainsSingle(snapshots.Snapshots);
 
         await _timeout.CancelAsync();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => watching);
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
     }
 
-    [Fact]
-    public async Task Cancelling_a_job_that_is_not_running_says_so_rather_than_pretending()
+    [TestMethod]
+    public async Task Cancel_WhenTheJobIsNotRunning_SaysSoRatherThanPretending()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -119,14 +136,35 @@ public sealed class ServiceTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
-        var error = Assert.IsType<ServiceError>(
-            await handler.ExecuteAsync(new CancelJobCommand("no-such-job"), _timeout.Token));
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand("no-such-job"), _timeout.Token), out var error);
 
-        Assert.Equal(ServiceErrorReason.NotFound, error.Reason);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
     }
 
-    [Fact]
-    public async Task A_read_path_the_service_does_not_serve_is_named_not_silently_missing()
+    [TestMethod]
+    public async Task Verify_CommandedThroughTheContract_ChecksTheBlobsTheServiceHolds()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        // This used to answer "read path, run it directly". The refusal was
+        // honest while it stood, but a service that cannot verify its own
+        // repository is a service a console cannot ask the only question that
+        // matters after a backup.
+        Assert.IsInstanceOfType<VerificationResult>(await handler.ExecuteAsync(new VerifyCommand("records"), _timeout.Token), out var verified);
+
+        Assert.IsTrue(verified.ObjectsChecked > 0, "the repository holds blobs, so the sweep must have examined some");
+        Assert.AreEqual(0, verified.Failures);
+        Assert.AreEqual("records", verified.Level);
+    }
+
+    [TestMethod]
+    public async Task Verify_LevelIsUnknown_RefusesListingTheVocabulary()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -134,15 +172,112 @@ public sealed class ServiceTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
-        var error = Assert.IsType<ServiceError>(
-            await handler.ExecuteAsync(new VerifyCommand("digest"), _timeout.Token));
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new VerifyCommand("paranoid"), _timeout.Token), out var error);
 
-        Assert.Equal(ServiceErrorReason.Unavailable, error.Reason);
-        Assert.Contains("read path", error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("locator | digest | records", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task The_service_reports_status_derived_in_one_place()
+    [TestMethod]
+    public async Task Check_AnUndamagedRepository_ReportsItClean()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<CheckResult>(await handler.ExecuteAsync(new CheckCommand("digest"), _timeout.Token), out var check);
+
+        // Findings only, so empty means "nothing is wrong" rather than
+        // "nothing ran" — the counts of what was healthy are not findings.
+        Assert.IsEmpty(check.Findings);
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_BeforeAnythingMoves_ReportsWhatItWouldWrite()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+
+        Assert.AreEqual(2, plan.Files);
+        Assert.IsTrue(plan.Bytes > 0);
+        Assert.IsEmpty(plan.MissingObjects);
+    }
+
+    [TestMethod]
+    public async Task Restore_CommandedThroughTheContract_WritesOnTheServiceMachine()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+
+        Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var restored);
+
+        // ADR-0028 §6: the output directory is a path on the machine running the
+        // service. A caller is told what happened and never sent the files, so
+        // the proof of a restore is on this disk rather than in the result.
+        Assert.AreEqual(2, restored.Restored);
+        Assert.AreEqual(0, restored.Failed);
+
+        // Quarantine by default (FR-RST-006): the content lands under the
+        // commanded directory rather than directly in it, and the result says
+        // where — a caller told the commanded path could not find its files.
+        Assert.StartsWith(destination, restored.OutputDirectory, StringComparison.Ordinal);
+        Assert.AreNotEqual(destination, restored.OutputDirectory);
+
+        Assert.AreEqual(
+            "hello",
+            await File.ReadAllTextAsync(Path.Combine(restored.OutputDirectory, "notes.txt"), _timeout.Token));
+        Assert.AreEqual(
+            "deeper",
+            await File.ReadAllTextAsync(
+                Path.Combine(restored.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task Restore_SnapshotIsUnknown_ReportsNotFoundRatherThanEmpty()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+                new PlanRestoreCommand(new string('a', 32), null), _timeout.Token), out var error);
+
+        // An empty plan and an absent snapshot are different answers, and a
+        // caller that cannot tell them apart cannot report either honestly.
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+    }
+
+    [TestMethod]
+    public async Task Status_AskedOfTheService_IsDerivedInOnePlace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -152,15 +287,14 @@ public sealed class ServiceTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
-        var status = Assert.IsType<StatusResult>(
-            await handler.ExecuteAsync(new GetStatusCommand(), _timeout.Token));
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), _timeout.Token), out var status);
 
         // The client receives the derivation, never the inputs to redo it
         // (10 §3.1) — a front end that computed its own would be a second
         // implementation of the never-merge rules.
-        var set = Assert.Single(status.Sets);
-        Assert.NotNull(set.NextRun);
-        Assert.Equal(Environment.MachineName, status.MachineName);
+        var set = Assert.ContainsSingle(status.Sets);
+        Assert.IsNotNull(set.NextRun);
+        Assert.AreEqual(Environment.MachineName, status.MachineName);
     }
 
     public void Dispose()

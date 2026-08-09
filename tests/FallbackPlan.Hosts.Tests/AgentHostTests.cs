@@ -9,6 +9,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// is covered by AgentPassTests; this covers everything around it, which
 /// until now nothing could call.
 /// </summary>
+[TestClass]
 public sealed class AgentHostTests : IDisposable
 {
     private readonly HostHarness _harness = new();
@@ -16,41 +17,41 @@ public sealed class AgentHostTests : IDisposable
     private static Task<HostHarness.Invocation> RunAsync(params string[] args) =>
         HostHarness.RunAsync(AgentHost.RunAsync, args);
 
-    [Theory]
-    [InlineData("--help")]
-    [InlineData("-h")]
-    [InlineData("help")]
-    public async Task Help_explains_the_usage_and_succeeds(string flag)
+    [TestMethod]
+    [DataRow("--help")]
+    [DataRow("-h")]
+    [DataRow("help")]
+    public async Task AgentHost_EachHelpFlag_PrintsTheUsageAndSucceeds(string flag)
     {
         var result = await RunAsync(flag);
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("--passphrase-env", result.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task No_arguments_prints_help_rather_than_failing()
+    [TestMethod]
+    public async Task AgentHost_NoArguments_PrintsHelpRatherThanFailing()
     {
         var result = await RunAsync();
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("usage", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Theory]
-    [InlineData("walk")]                                  // not a command
-    [InlineData("run")]                                   // no options at all
-    [InlineData("run", "--repo", "/tmp/nowhere")]         // missing state and passphrase
-    public async Task An_incomplete_command_line_is_refused_with_the_usage(params string[] args)
+    [TestMethod]
+    [DataRow("walk")]                                  // not a command
+    [DataRow("run")]                                   // no options at all
+    [DataRow("run", "--repo", "/tmp/nowhere")]         // missing state and passphrase
+    public async Task AgentHost_CommandLineIsIncomplete_RefusesWithTheUsage(params string[] args)
     {
         var result = await RunAsync(args);
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("usage", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task An_unset_passphrase_variable_is_refused_by_name()
+    [TestMethod]
+    public async Task AgentHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var result = await RunAsync(
             "run",
@@ -58,15 +59,15 @@ public sealed class AgentHostTests : IDisposable
             "--state", _harness.StateDirectory,
             "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET");
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.AreEqual(1, result.ExitCode);
 
         // The message must name the variable and must not carry the secret.
         Assert.Contains("FBP_VARIABLE_THAT_IS_NOT_SET", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_due_set_runs_once_and_reports_it()
+    [TestMethod]
+    public async Task AgentPass_ABackupSetIsDue_RunsItOnceAndReportsIt()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -79,13 +80,13 @@ public sealed class AgentHostTests : IDisposable
             "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("docs", result.Output, StringComparison.Ordinal);
         Assert.Contains("ran", result.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_manual_only_set_is_skipped_and_still_succeeds()
+    [TestMethod]
+    public async Task AgentPass_ABackupSetIsManualOnly_SkipsItAndStillSucceeds()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -100,12 +101,12 @@ public sealed class AgentHostTests : IDisposable
 
         // An empty schedule means manual-only: nothing runs, and that is a
         // success, not a failure (ADR-0027 §1).
-        Assert.Equal(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode);
         Assert.DoesNotContain("ran", result.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_second_pass_skips_the_set_it_just_ran()
+    [TestMethod]
+    public async Task AgentPass_RunTwiceInsideTheInterval_SkipsTheSetItJustRan()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -121,17 +122,17 @@ public sealed class AgentHostTests : IDisposable
         ];
 
         var first = await RunAsync(arguments);
-        Assert.Equal(0, first.ExitCode);
+        Assert.AreEqual(0, first.ExitCode);
         Assert.Contains("ran", first.Output, StringComparison.Ordinal);
 
         // The journal anchors the schedule, so the very next pass owes nothing.
         var second = await RunAsync(arguments);
-        Assert.Equal(0, second.ExitCode);
+        Assert.AreEqual(0, second.ExitCode);
         Assert.DoesNotContain("ran", second.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_set_whose_root_is_missing_fails_the_pass_without_a_stack_trace()
+    [TestMethod]
+    public async Task AgentPass_ABackupSetsRootIsMissing_FailsWithoutAStackTrace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 4h");
@@ -146,12 +147,12 @@ public sealed class AgentHostTests : IDisposable
 
         // A failed set is exit code 2 — distinct from a usage error (1), so a
         // supervisor can tell "I was invoked wrongly" from "a backup failed".
-        Assert.Equal(2, result.ExitCode);
+        Assert.AreEqual(2, result.ExitCode);
         Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_wrong_passphrase_is_refused_without_a_stack_trace()
+    [TestMethod]
+    public async Task AgentHost_PassphraseIsWrong_RefusesWithoutAStackTrace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -168,7 +169,7 @@ public sealed class AgentHostTests : IDisposable
                 "--passphrase-env", variable,
                 "--once");
 
-            Assert.Equal(1, result.ExitCode);
+            Assert.AreEqual(1, result.ExitCode);
             Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
         }
         finally

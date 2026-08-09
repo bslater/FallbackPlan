@@ -104,7 +104,7 @@ public abstract class InterruptionHarness : IDisposable
 
             var record = StandaloneRecordFraming.Parse(memory.ToArray());
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-            Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
 
             var decoded = SnapshotManifestCodec.Decode(plaintext);
             if (!decoded.Manifest.SnapshotId.Span.SequenceEqual(wantedId))
@@ -116,21 +116,42 @@ public abstract class InterruptionHarness : IDisposable
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, treeRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, treeRead.Outcome);
             var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
 
             var manifestRead = await reader.ReadSegmentAsync(tree.Entries[0].ObjectId, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
             var manifest = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
 
             using var restored = new MemoryStream();
             var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
-            Assert.True(restore.Success, restore.FailureDetail);
+            Assert.IsTrue(restore.Success, restore.FailureDetail);
 
             return restored.ToArray();
         }
 
         throw new InvalidOperationException($"Snapshot {snapshotSeed:x2} was not found.");
+    }
+
+    /// <summary>Every blob in the store, paired with the id inside its envelope.</summary>
+    /// <remarks>
+    /// Nothing can map a store key back to a blob id — that is the point of
+    /// keyed store keys — so the id comes from the envelope, exactly as a real
+    /// collector must read it (08 §8).
+    /// </remarks>
+    protected static async Task<List<(ObjectKey Key, BlobId BlobId)>> ReadStoredBlobsAsync(IObjectStore store)
+    {
+        var blobs = new List<(ObjectKey, BlobId)>();
+
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(entry.Key, new ObjectRange(0, BlobEnvelope.Length), CancellationToken.None);
+            var envelopeBytes = new byte[BlobEnvelope.Length];
+            await read.Content!.ReadExactlyAsync(envelopeBytes);
+            blobs.Add((entry.Key, BlobEnvelope.Parse(envelopeBytes).BlobId));
+        }
+
+        return blobs;
     }
 
     protected int CountUnder(string prefix)

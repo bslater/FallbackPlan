@@ -1,6 +1,8 @@
+using Bodu;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Api.Resources;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -41,7 +43,7 @@ public static class LocalEndpoint
     /// <returns>The address, in the platform's own form.</returns>
     public static string AddressFor(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (OperatingSystem.IsWindows())
         {
@@ -57,9 +59,7 @@ public static class LocalEndpoint
         {
             var length = bytes.ToString(CultureInfo.InvariantCulture);
             var limit = MaximumSocketPathBytes.ToString(CultureInfo.InvariantCulture);
-            throw new IOException(
-                $"The socket path '{socketPath}' is {length} bytes, and the platform accepts at most {limit}. "
-                + "Choose a shorter state directory — this limit is the operating system's, not this program's.");
+            throw new IOException(Strings.FormatLocalEndpoint_SocketPathBytesPlatformAccepts(socketPath, length, limit));
         }
 
         return socketPath;
@@ -72,7 +72,7 @@ public static class LocalEndpoint
     /// <param name="stateDirectory">The state directory.</param>
     public static void PrepareDirectory(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
 
         if (!OperatingSystem.IsWindows())
@@ -95,7 +95,7 @@ public static class LocalEndpoint
     /// </remarks>
     public static bool Exists(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (OperatingSystem.IsWindows())
         {

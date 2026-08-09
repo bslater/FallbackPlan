@@ -1,4 +1,5 @@
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Cbor;
 
@@ -7,10 +8,11 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 /// length above the caller's maximum is refused from the length prefix alone,
 /// never by allocating first and measuring afterwards.
 /// </summary>
+[TestClass]
 public sealed class CanonicalCborLimitsTests
 {
-    [Fact]
-    public void Byte_string_longer_than_the_stated_maximum_is_refused()
+    [TestMethod]
+    public void ReadByteString_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // 100-byte string, canonical prefix 58 64.
         var bytes = new byte[102];
@@ -19,21 +21,21 @@ public sealed class CanonicalCborLimitsTests
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadByteString(maxLength: 10));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadByteString(maxLength: 10));
     }
 
-    [Fact]
-    public void Byte_string_within_the_maximum_is_read()
+    [TestMethod]
+    public void ReadByteString_WhenWithinTheStatedMaximum_ShouldReturnIt()
     {
         var bytes = Convert.FromHexString("43010203");
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Equal([1, 2, 3], reader.ReadByteString(maxLength: 10));
+        SequenceAssert.AreEqual<byte>([1, 2, 3], reader.ReadByteString(maxLength: 10));
     }
 
-    [Fact]
-    public void Text_string_longer_than_the_stated_maximum_is_refused()
+    [TestMethod]
+    public void ReadTextString_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // 100-character text string, canonical prefix 78 64.
         var bytes = new byte[102];
@@ -43,25 +45,25 @@ public sealed class CanonicalCborLimitsTests
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadTextString(maxUtf8Length: 10));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadTextString(maxUtf8Length: 10));
     }
 
-    [Fact]
-    public void Array_longer_than_the_stated_maximum_is_refused()
+    [TestMethod]
+    public void ReadArray_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // Five-element array of zeros.
         var bytes = Convert.FromHexString("850000000000");
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadStartArray(maxCount: 4));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadStartArray(maxCount: 4));
     }
 
-    [Fact]
-    public void Fixed_length_byte_string_read_rejects_the_wrong_length()
+    [TestMethod]
+    public void ReadFixedLengthByteString_WhenTheLengthDiffers_ShouldThrow()
     {
         var reader = new CanonicalCborReader(Convert.FromHexString("43010203"));
 
-        Assert.Throws<CborFormatException>(() => reader.ReadFixedByteString(expectedLength: 16));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadFixedByteString(expectedLength: 16));
     }
 }

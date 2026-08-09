@@ -1,9 +1,9 @@
+using FallbackPlan.TestSupport;
 using FallbackPlan.Repository.Format.Cbor;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
-using FsCheck.Xunit;
 
 namespace FallbackPlan.Repository.FuzzTests;
 
@@ -14,6 +14,7 @@ namespace FallbackPlan.Repository.FuzzTests;
 /// index error, an overflow, or an unbounded allocation. Try-style parsers
 /// never throw at all, and the descriptor parser always returns a result.
 /// </summary>
+[TestClass]
 public sealed class ParserFuzzTests
 {
     /// <summary>
@@ -59,8 +60,11 @@ public sealed class ParserFuzzTests
 #pragma warning restore CA1031
     }
 
-    [Property(MaxTest = 200)]
-    public void Random_bytes_never_escape_a_parser_with_an_untyped_exception(byte[]? data)
+    [TestMethod]
+    public void Parsers_GivenRandomBytes_ThrowOnlyTheirDeclaredExceptions() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void Parsers_GivenRandomBytes_ThrowOnlyTheirDeclaredExceptionsProperty(byte[]? data)
     {
         data ??= [];
         foreach (var (name, parse) in ThrowingParsers)
@@ -69,8 +73,11 @@ public sealed class ParserFuzzTests
         }
     }
 
-    [Property(MaxTest = 200)]
-    public void Random_bytes_behind_a_valid_magic_never_escape_a_parser(byte[]? data, int magicIndex)
+    [TestMethod]
+    public void Parsers_GivenRandomBytesBehindAValidMagic_ThrowOnlyTheirDeclaredExceptions() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void Parsers_GivenRandomBytesBehindAValidMagic_ThrowOnlyTheirDeclaredExceptionsProperty(byte[]? data, int magicIndex)
     {
         // Stamp each framing magic over the head so the fuzz input gets past
         // the cheap gate and into the field validation it exists to test.
@@ -93,8 +100,11 @@ public sealed class ParserFuzzTests
         }
     }
 
-    [Property(MaxTest = 300)]
-    public void Mutated_valid_encodings_never_escape_their_parser(
+    [TestMethod]
+    public void Parsers_GivenAMutatedValidEncoding_ThrowOnlyTheirDeclaredExceptions() =>
+        PropertyCheck.Holds(this, maxTest: 300);
+
+    public static void Parsers_GivenAMutatedValidEncoding_ThrowOnlyTheirDeclaredExceptionsProperty(
         int seedIndex, (int Offset, byte Mask)[]? mutations, int resize)
     {
         var seed = FuzzCorpus.Seeds[(int)((uint)seedIndex % FuzzCorpus.Seeds.Count)];
@@ -116,8 +126,11 @@ public sealed class ParserFuzzTests
         AssertOnlyTypedFailure(seed.Name, mutated, seed.Parse);
     }
 
-    [Property(MaxTest = 200)]
-    public void The_descriptor_parser_returns_a_result_for_any_input_and_never_throws(
+    [TestMethod]
+    public void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrows() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrowsProperty(
         byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations)
     {
         // 01 §3.1: "not a repository", "damaged", and "unsupported" are
@@ -139,11 +152,14 @@ public sealed class ParserFuzzTests
 
         var result = RepositoryDescriptorCodec.Parse(candidate);
 
-        Assert.NotNull(result);
+        Assert.IsNotNull(result);
     }
 
-    [Property(MaxTest = 200)]
-    public void Spool_checkpoint_TryParse_never_throws(byte[]? data, bool stampMagic)
+    [TestMethod]
+    public void SpoolCheckpointTryParse_GivenAnyInput_NeverThrows() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void SpoolCheckpointTryParse_GivenAnyInput_NeverThrowsProperty(byte[]? data, bool stampMagic)
     {
         var candidate = data ?? [];
         if (stampMagic && candidate.Length >= 8)
@@ -155,12 +171,15 @@ public sealed class ParserFuzzTests
         // sidecar means "restart the blob", not "crash the resume".
         if (!SpoolCheckpoint.TryParse(candidate, out var checkpoint))
         {
-            Assert.Null(checkpoint);
+            Assert.IsNull(checkpoint);
         }
     }
 
-    [Property(MaxTest = 200)]
-    public void Base32_TryDecode_never_throws_and_never_lies(string? text)
+    [TestMethod]
+    public void Base32TryDecode_GivenAnyInput_NeverThrowsAndNeverReportsFalseSuccess() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void Base32TryDecode_GivenAnyInput_NeverThrowsAndNeverReportsFalseSuccessProperty(string? text)
     {
         var input = (text ?? string.Empty).AsSpan();
         var destination = new byte[Domain.Base32.GetEncodedLength(input.Length) + 8];
@@ -169,12 +188,12 @@ public sealed class ParserFuzzTests
         {
             // Bijectivity: exactly one rendering names the bytes, so a
             // successful decode re-encodes to the identical text.
-            Assert.Equal(new string(input), Domain.Base32.Encode(destination.AsSpan(0, written)));
+            Assert.AreEqual(new string(input), Domain.Base32.Encode(destination.AsSpan(0, written)));
         }
     }
 
-    [Fact]
-    public void A_truncated_standalone_record_claiming_a_huge_length_is_refused_before_allocation()
+    [TestMethod]
+    public void StandaloneRecord_TruncatedButClaimingAHugeLength_IsRefusedBeforeAllocation()
     {
         // The 00 §8 pre-allocation bound with teeth: a 126-byte buffer whose
         // header declares a 16 MiB payload must be refused from the declared
@@ -189,9 +208,9 @@ public sealed class ParserFuzzTests
             truncated.AsSpan(StandaloneRecordFraming.PrefixLength + 18), 16 * 1024 * 1024);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Throws<RecordFormatException>(() => StandaloneRecordFraming.Parse(truncated));
+        Assert.ThrowsExactly<RecordFormatException>(() => StandaloneRecordFraming.Parse(truncated));
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.True(allocated < 64 * 1024, $"refusal allocated {allocated} bytes");
+        Assert.IsTrue(allocated < 64 * 1024, $"refusal allocated {allocated} bytes");
     }
 }

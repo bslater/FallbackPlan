@@ -48,7 +48,9 @@ Blob compaction reclaims space by reading still-live records out of mostly-dead 
 
 Keeping manifests purely logical means compaction republishes index entries and touches no manifest, no tree, and no snapshot. → [ADR-0007](../../docs/adr/0007-logical-object-identifiers-in-manifests.md), [C1](../../docs/review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-The cost is one index lookup per segment on the restore path, and a slower path to the first byte when the index has been lost entirely. Both are recorded in [PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan); whether to add an advisory non-authoritative location hint is open as [Q11](../../docs/open-questions.md#q11--physical-hints-in-segment-references).
+The cost is one index lookup per segment on the restore path, and a slower path to the first byte when the index has been lost entirely. Both are recorded in [PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan).
+
+**[Q11](../../docs/open-questions.md#closed) is closed, and not by adding a field here.** A hint inside a manifest would have made the same file version encode differently on two devices, because the manifest's own object identifier is derived from its bytes ([02 §3](02-identifiers.md#3-object-identifier)) — and that identity across devices is what makes cross-device deduplication work. Neither the question nor ADR-0007 recorded that cost. The hint lives in a separate object instead — §10.
 
 ### 3.2 Ordering and coverage
 
@@ -113,6 +115,26 @@ Absent keys mean the source did not provide the value. They do not mean zero.
 `whole_file_hash` is computed over the **reconstructed plaintext file**, including materialised sparse extents as zeroes, using the repository's content-hash profile.
 
 It is verified after reassembly during restore. Per-segment verification already proves each part is authentic and truthfully identified; the whole-file hash proves they were *assembled correctly* — right order, no gaps, no duplication. The two check different things and both are required. → FR-RST-002
+
+### 4.3 What `name` must contain
+
+`name` is the entry name **as the source filesystem reported it**, and this section says what that means on each host so that "raw bytes" is a rule an implementer can follow rather than an aspiration.
+
+**POSIX.** A filename is a byte sequence containing neither NUL nor `/`. It carries no encoding guarantee. A conforming implementation MUST obtain it from the directory-reading syscall (`readdir` and its relatives) and store those bytes unchanged. It MUST NOT obtain the name through a host string type that decodes it, because that decoding is lossy for any name that is not valid UTF-8, and re-encoding the decoded string produces different bytes from the ones on disk.
+
+**Windows.** A filename is a UTF-16 code-unit sequence. The repository encoding is **UTF-8 of that sequence**. A name containing an unpaired surrogate has no UTF-8 encoding; a conforming implementation MUST refuse such an entry with error-manifest reason 8 rather than substituting a replacement character. Substitution would store a name that is not the file's name, under a format field that promises it is.
+
+**Both.** Where the host cannot hand the implementation the true bytes, the entry MUST be recorded in the error manifest with reason 8. It MUST NOT be captured under a substituted name.
+
+That last rule exists because the failure it prevents is silent. An entry stored under a replacement-character name looks captured, appears in listings, and restores as a file the user did not have — and where the substitution also breaks the implementation's ability to open the source, the content behind that plausible-looking entry was never read at all.
+
+> **Implementation status (2026-08).** Both rules are enforced. Names come from `readdir` on POSIX, and a name that does not survive conversion in **either** direction is refused with reason 8 — which is what catches the Windows case, since an unpaired surrogate is already substituted by the time bytes exist and a bytes-only check cannot see it. Two different lone surrogates encode to the same replacement bytes, so the substitution also collapsed distinct filenames into one.
+>
+> What is **not** yet built is capturing a POSIX name that is not valid UTF-8 rather than refusing it. The byte-native open path this used to wait on now exists — the walk opens children by name bytes relative to a directory descriptor, so such a file *can* be opened and read. What still blocks it is above the scanner: the pipeline carries a relative path as a host string, through rule matching, the catalogue's path tables, and restore. Storing a lossy string for a name that has none would produce a file the user cannot find and cannot restore under its own name, which is the failure this section exists to prevent, moved one layer up. Closing it means a byte-native relative path end to end, and that is not a scanner change.
+>
+> **The rendering convention is settled in advance, so nothing gets built against a guess.** Where a host string is genuinely unavoidable — terminal output, the restore receipt's JSON, the catalogue's path key — a byte that is not part of a valid UTF-8 sequence is rendered **percent-encoded**: `%` followed by two uppercase hexadecimal digits, with a literal `%` in an otherwise-decodable name rendered `%25`. It was chosen over the two alternatives on one property each. Surrogate-escaping (lone `U+DC80`–`U+DCFF`, the PEP 383 convention) round-trips inside a host string and then fails at every boundary that writes UTF-8, which moves the loss to the edge instead of removing it. Rendering `U+FFFD` for display only keeps the bytes authoritative but produces a name the user cannot paste back as an argument. Percent-encoding is the only one of the three that is lossless, valid UTF-8, and typeable.
+>
+> This is a **rendering** rule and nothing more. `name` in this format stays raw bytes; no percent-encoded form is ever stored in a manifest, and an implementation that encodes into the field rather than out of it has stored a name the file does not have.
 
 ## 5 Tree manifest
 
@@ -284,7 +306,7 @@ Object type `0x06`. Present only when something could not be captured.
 | Key | Type | Value |
 |-----|------|-------|
 | 1 | array | `path_components` — array of raw byte strings |
-| 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit |
+| 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit, 8 name not representable (§4.2) |
 | 3 | text | `detail` |
 
 A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules (§7.1). Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
@@ -301,6 +323,98 @@ Chain rules:
 - The `entries` of the whole chain, concatenated in chain order, form one logical entry list; §5's sorting and duplicate rules apply to that **logical** list, not to each shard independently — every entry in a manifest MUST sort strictly after every entry in its predecessor.
 - `metadata`, `name`, and `name_normalisation` are carried by the **first** manifest of the chain and MUST be absent from continuations.
 - A reader MUST follow the chain to its end before treating the directory as read, and MUST treat a cycle or a missing continuation target as a damage finding, not an empty remainder — a truncated directory that reads as complete is silent data loss.
+
+## 10 Placement hint
+
+**Optional, advisory, and authoritative for nothing.** A writer MAY publish one placement hint per snapshot at `/hints/placement/<snapshot-id>`, recording which blob each object it newly created was written into.
+
+It exists for one scenario: single-file recovery when the index is gone. Without it, finding one segment means fetching blob footers until the object identifier turns up — hours at scale **M** for one document, and that is the emergency path, so it is the worst place to be slow ([PT-10](../../docs/review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
+
+```text
+placement_hint = {
+    1: u16       schema version, 1
+    2: bytes[16] snapshot_id
+    3: array     placements
+}
+
+placement = [ object_id[32], blob_id[16] ]
+```
+
+Placements MUST be sorted by `object_id` ascending. The object is a standalone metadata record of type `0x0B` ([02 §3.1](02-identifiers.md#31-object-types)) like any other, and is sealed and encrypted the same way — it names object and blob identifiers, which [01 §2.1](01-object-layout.md#21-what-keys-must-not-reveal) keeps out of store keys and this keeps out of plaintext.
+
+### 10.1 What a reader may do with it
+
+A reader MAY consult the hint to choose which blob to fetch first. It MUST then verify that the record it finds carries the object identifier it wanted, exactly as it would have without the hint, and MUST fall back to the index or to a footer scan when the hint is absent, unreadable, or wrong.
+
+**A hint is never evidence.** It is not consulted to decide whether an object exists, is not repaired when it goes stale, and is not part of any reachability or liveness calculation. Compaction moves records and does not update it — that is expected, and is why "detectably stale" is the design rather than a defect. → [ADR-0007](../../docs/adr/0007-logical-object-identifiers-in-manifests.md)
+
+### 10.2 Why it is a separate object
+
+The obvious design puts a `last_known_blob` beside each segment reference. It was rejected: a manifest's object identifier is derived from its bytes ([02 §3](02-identifiers.md#3-object-identifier)), so a physical hint inside one makes the same file version encode differently on two devices — and identical encoding across devices is precisely what makes cross-device deduplication work. The hint would have bought faster emergency recovery by quietly disabling a core property.
+
+A separate object has neither problem, and gains one: absence is the normal case a reader must already handle, so there is no path on which an implementation can come to depend on the hint being there.
+
+## 11 Source identity
+
+**Optional, and load-bearing for one thing.** A writer MAY publish one source-identity hint per file version it creates, recording the stable filesystem identity that version was captured from:
+
+```text
+/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
+```
+
+```text
+source_identity = {
+    1: u16       schema version, 1
+    2: bytes[16] source_key
+    3: bytes[16] snapshot_id
+    4: bytes[32] object_id     the file version captured from this source
+    5: u64       captured_at   the snapshot's capture time
+}
+```
+
+`source_key` is derived exactly as `hardlink_group` is ([06 §4](#4-file-version-manifest) key 12, [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 1) but under the label `"fbp/identity/v1"`:
+
+```text
+source_key = HMAC-SHA-256(content_id_key, "fbp/identity/v1" ‖ device_id ‖ u64(file_identity))[0..16]
+```
+
+Keyed, so the store learns nothing about the source's inode space. It renders as 26 lowercase base32 characters ([00 §6](00-conventions.md#6-object-identifiers-in-paths)), and `<shard>` is its **first four characters** — the same rule blobs follow, for the reason [01 §2](01-object-layout.md#2-namespace) gives: without it, `/hints/identity/` would hold one child per file in the repository. `<captured-at>` is a zero-padded 16-digit decimal, so lexicographic order within one source key is chronological. Like the placement hint, this is a standalone metadata record — type `0x0C` ([02 §3.1](02-identifiers.md#31-object-types)) — sealed and encrypted the same way.
+
+Keys 2, 3 and 5 repeat what the store key already says, and that is deliberate: a store key is not covered by the AEAD, so a reader MUST verify that the body agrees with the key it was fetched under and MUST refuse the object otherwise.
+
+A hint carries the **sequence number of the write intent it was published under** rather than one of its own, and does not consume the writer's sequence space ([08 §2](08-journal.md#2-record-framing); [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7). One number per hint would be a durable state write and an accounting obligation per changed file, for objects whose absence is never damage. Key uniqueness does not rest on the counter: each record seals under its own CSPRNG salt.
+
+A writer MUST NOT publish two hints for one `source_key` within one snapshot. Two file versions sharing a source identity is a hardlink group's several names, and neither is the other's ancestor; a writer that observes it MUST publish no hint for that source key rather than choose.
+
+### 11.1 What it is for
+
+Finding the prior version of a file **by identity rather than by path**, which is what makes a rename or a move recognisable as the same file rather than a delete plus a create ([architecture 06 §4.2](../../docs/architecture/06-filesystem-capture.md)).
+
+That matters beyond speed. A file version whose `parent_version` is absent claims to be the first version of that file. Writing that about a file the user merely renamed severs its history — permanently, because the manifest is immutable — and the cause would be that a device-local cache happened to be cold at the wrong moment.
+
+### 11.2 Why it is not in the manifest
+
+The same reason as §10.2, and it is worth stating twice because the pull towards putting it in the manifest is strong: a source identity is device-specific, and a manifest is identified by its own bytes ([02 §3](02-identifiers.md#3-object-identifier)). A `source_key` field on a file version would make the same file version encode differently on every device that captured it, and identical encoding across devices is what makes cross-device deduplication work.
+
+`hardlink_group` already carries a device-specific value in the manifest, which is a real and accepted exception: it is present only when a file has multiple links, it is what makes hardlink reconstruction possible at all, and there is nowhere else it can live. Generalising it to every file — the obvious way to get identity durably — would extend that exception from a small minority of files to all of them.
+
+### 11.3 What a reader may do with it
+
+A reader looking for the version a given snapshot held lists `/hints/identity/<shard>/<source-key>/` and takes the **last entry whose `<captured-at>` is at or before that snapshot's capture time**. Later entries describe versions that snapshot did not contain. Because the listing is chronological, the scan stops at the first entry past the bound.
+
+Every hint under one source key was written by one device — `device_id` is inside the derivation — so no cross-device ordering question arises.
+
+A reader MAY use a hint to locate a prior version whose path has changed. It MUST still check size and modification time before reusing content, exactly as it would for a path match: an inode is reused after its file is deleted, so identity alone never establishes that two versions are the same file.
+
+Absence is ordinary. A writer that publishes no hints, or a reader that finds none, falls back to matching by path — which is correct and merely misses renames. So is a hint that fails to authenticate, fails to parse, or disagrees with its key: none of those is a damage finding, because a hint is never evidence.
+
+### 11.4 What it costs
+
+One store object per file version created — so a first capture writes one per file, and every capture after it writes one per **changed** file. Per-snapshot cost therefore follows what changed, which is what [NFR-PERF-005](../../docs/requirements/non-functional.md) requires.
+
+The price is object count rather than bytes: a sealed standalone record is around 230 bytes whatever it holds, against roughly 50 bytes for an entry in a packed table, and on a store that charges per request each one is a request. That is the per-object overhead blobs exist to amortise, spent deliberately. It is cheaper than the alternative from the second capture onwards, because the alternative — one object per snapshot naming every file — pays for the whole repository every run whether or not anything changed. → [Q21](../../docs/open-questions.md#closed)
+
+A collector treats a hint as it treats the placement hint: unreferenced by anything, advisory, and collectable once the snapshot that wrote it is gone.
 
 ---
 

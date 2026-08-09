@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 
 namespace FallbackPlan.Repository.Crypto;
@@ -11,10 +12,9 @@ namespace FallbackPlan.Repository.Crypto;
 /// <remarks>
 /// A failed tag is an expected outcome the blob reader must survive per
 /// record — corruption is local (04 §7) — so <see cref="TryOpen"/> reports
-/// it as a result and guarantees no partial plaintext escapes. The
-/// <c>xchacha20-poly1305-v1</c> profile is not implemented: the platform has
-/// no XChaCha20-Poly1305 and no second implementation exists to cross-verify
-/// one (open question Q12); callers refuse profile 0x0002 rather than guess.
+/// it as a result and guarantees no partial plaintext escapes. Format
+/// version 1 has one record AEAD (03 §6): profile <c>0x0002</c> is reserved
+/// and never assigned, and callers refuse it rather than guess.
 /// </remarks>
 public static class RecordCipher
 {
@@ -65,7 +65,7 @@ public static class RecordCipher
         Span<byte> ciphertext,
         Span<byte> tag)
     {
-        ArgumentNullException.ThrowIfNull(cipher);
+        ThrowHelper.ThrowIfNull(cipher);
         cipher.Encrypt(nonce, plaintext, ciphertext, tag, aad);
     }
 

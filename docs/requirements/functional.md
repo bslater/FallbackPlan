@@ -57,7 +57,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 |----|-------------|-----------|
 | FR-DED-001 **[new]** | The repository shall support dedup trust domains `device`, `repository`, and `repository-unverified`. | Each is selectable and recorded in the policy manifest. |
 | FR-DED-002 **[amended]** | `repository` shall be the default. In a single-writer repository it shall behave identically to `device` at no additional cost. `device` shall remain available as a hardened opt-in. | A fresh single-device repository performs no verification reads. A multi-device repository deduplicates across devices with verify-on-reuse. |
-| FR-DED-003 **[new]** | In `repository`, a segment written by another writer shall be fetched, decrypted, and its content identifier confirmed before being referenced. | A segment whose stored plaintext does not match its claimed content identifier is never referenced, and the mismatch is reported as a security finding. Verification outcomes survive a catalogue rebuild. |
+| FR-DED-003 **[amended]** | In `repository`, a segment written by another writer shall be fetched, decrypted, and its content identifier confirmed before being referenced. | A segment whose stored plaintext does not match its claimed content identifier is never referenced, and the mismatch is reported as a damage finding naming the object. Verification outcomes are catalogue state and are **not** required to survive a rebuild. |
 | FR-DED-004 **[new]** | `repository-unverified` shall require explicit acknowledgement recording that a faulty or hostile writer can corrupt other devices' backups. | It cannot be enabled without the acknowledgement. |
 
 ## Snapshots

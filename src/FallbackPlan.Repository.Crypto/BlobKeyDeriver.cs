@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -42,17 +43,17 @@ public static class BlobKeyDeriver
     {
         if (classKey.Length != 32)
         {
-            throw new ArgumentException("The class key is exactly 32 bytes.", nameof(classKey));
+            throw new ArgumentException(Strings.BlobKeyDeriver_ClassKeyExactlyBytes, nameof(classKey));
         }
 
         if (blobSalt.Length != BlobSaltLength)
         {
-            throw new ArgumentException($"The blob salt is exactly {BlobSaltLength} bytes.", nameof(blobSalt));
+            throw new ArgumentException(Strings.FormatBlobKeyDeriver_BlobSaltExactlyBytes(BlobSaltLength), nameof(blobSalt));
         }
 
         if (destination.Length != BlobKeyLength)
         {
-            throw new ArgumentException($"The destination is exactly {BlobKeyLength} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobKeyDeriver_DestinationExactlyBytes(BlobKeyLength), nameof(destination));
         }
 
         var label = "fbp/blob/v1"u8;

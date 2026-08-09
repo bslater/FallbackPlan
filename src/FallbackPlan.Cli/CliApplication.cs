@@ -1,3 +1,4 @@
+using Bodu;
 using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -15,6 +16,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.Cli.Resources;
 
 namespace FallbackPlan.Cli;
 
@@ -38,7 +40,7 @@ public static class CliApplication
     /// <returns>The process exit code: 0 on success.</returns>
     public static async Task<int> RunAsync(string[] args, InvocationConfiguration? configuration = null)
     {
-        ArgumentNullException.ThrowIfNull(args);
+        ThrowHelper.ThrowIfNull(args);
 
         // Writers, not Console: tests capture output by passing them in,
         // rather than by mutating global console state — which would make
@@ -64,6 +66,10 @@ public static class CliApplication
         {
             Description = "Client-local state directory (writer identity, sequence, catalogue, spool). Defaults per repository under the user profile.",
         };
+        var directOption = new Option<bool>("--direct")
+        {
+            Description = "Do the work in this process even if a service is running. Refused if the service holds the writer role.",
+        };
 
         var root = new RootCommand("FallbackPlan low-level repository tooling (phase 0)");
 
@@ -79,12 +85,14 @@ public static class CliApplication
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             parse.GetValue(repoOption)!, parse.GetValue(passphraseEnvOption)!, parse.GetValue(stateOption), cancellationToken);
 
-        // A command that writes takes the device's writer role for its duration
-        // and says so. Direct mode is never a fallback that happens silently
-        // (ADR-0028 §3): "did my backup run against the same state the service
-        // uses" is a question an operator must not have to guess at, and if a
-        // service holds the role this refuses naming the holder.
-        async ValueTask<CliSession> OpenWritingSessionAsync(ParseResult parse, CancellationToken cancellationToken)
+        // An engineering verb — one the service contract carries no command for
+        // — takes the device's writer role for its duration and says so. Direct
+        // mode is never a fallback that happens silently (ADR-0028 §3): "did my
+        // backup run against the same state the service uses" is a question an
+        // operator must not have to guess at, and if a service holds the role
+        // this refuses naming the holder rather than proceeding anyway.
+        async ValueTask<CliSession> OpenWritingSessionAsync(
+            ParseResult parse, string verb, CancellationToken cancellationToken)
         {
             var session = await CliSession.OpenAsync(
                 parse.GetValue(repoOption)!,
@@ -93,8 +101,40 @@ public static class CliApplication
                 writerRole: true,
                 cancellationToken).ConfigureAwait(false);
 
-            error.WriteLine($"mode: direct — this command holds the writer role for '{session.StateDirectory}'.");
+            error.WriteLine(
+                $"mode: direct — '{verb}' has no service equivalent, so this command holds the writer role for "
+                + $"'{session.StateDirectory}' itself.");
             return session;
+        }
+
+        // A read verb goes to the service when one is listening and reads the
+        // repository itself when none is. Unlike a write, neither path takes the
+        // writer role, so this is never refused for holding it — the choice is
+        // about who does the reading, not about who is allowed to.
+        async Task<int> ReadThroughGatewayAsync(
+            ParseResult parse,
+            Func<IOperationGateway, CancellationToken, ValueTask<OperationReport>> operation,
+            CancellationToken cancellationToken)
+        {
+            var gateway = await OperationGateway.OpenForReadAsync(
+                parse.GetValue(repoOption)!,
+                parse.GetValue(passphraseEnvOption)!,
+                parse.GetValue(stateOption),
+                parse.GetValue(directOption),
+                cancellationToken).ConfigureAwait(false);
+
+            await using (gateway.ConfigureAwait(false))
+            {
+                error.WriteLine(gateway.Mode);
+
+                var report = await operation(gateway, cancellationToken).ConfigureAwait(false);
+                foreach (var line in report.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return report.Ok ? 0 : 2;
+            }
         }
 
         async Task<int> GuardAsync(Func<Task<int>> action)
@@ -135,7 +175,7 @@ public static class CliApplication
             }
             catch (Exception exception) when (exception is FormatException or ArgumentException)
             {
-                throw new CliFailureException($"'{hex}' is not a 64-hex-digit object identifier.");
+                throw new CliFailureException(Strings.FormatCliApplication_NotHexDigitObjectIdentifier(hex));
             }
         }
 
@@ -183,10 +223,10 @@ public static class CliApplication
                 var filePath = parse.GetValue(fileArgument)!;
                 if (!File.Exists(filePath))
                 {
-                    throw new CliFailureException($"'{filePath}' does not exist.");
+                    throw new CliFailureException(Strings.FormatCliApplication_DoesNotExist(filePath));
                 }
 
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, "archive", cancellationToken).ConfigureAwait(false);
                 var policy = parse.GetValue(cdcOption)
                     ? CapturePolicy.Default with
                     {
@@ -253,7 +293,7 @@ public static class CliApplication
                 var metadata = await session.Store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
                 if (!metadata.Found)
                 {
-                    throw new CliFailureException($"No object exists at '{key.Value}'.");
+                    throw new CliFailureException(Strings.FormatCliApplication_NoObjectExists(key.Value));
                 }
 
                 using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Hierarchy.DeriveContentIdKey());
@@ -296,13 +336,13 @@ public static class CliApplication
 
                 if (!reader.TryLocateRecord(objectId, out _, out var entry))
                 {
-                    throw new CliFailureException("No record with that object identifier exists in any loaded blob.");
+                    throw new CliFailureException(Strings.CliApplication_NoRecordWithObjectIdentifier);
                 }
 
                 var read = await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
                 if (read.Outcome != RecordReadOutcome.Ok)
                 {
-                    throw new CliFailureException($"The record failed to read: {read.Outcome}.");
+                    throw new CliFailureException(Strings.FormatCliApplication_RecordFailedRead(read.Outcome));
                 }
 
                 output.WriteLine($"object type    {entry.ObjectType}");
@@ -387,7 +427,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                using var session = await OpenWritingSessionAsync(parse, "rebuild-index", cancellationToken).ConfigureAwait(false);
                 var cataloguePath = parse.GetValue(catalogueOption) ?? session.CataloguePath;
                 using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId);
 
@@ -410,7 +450,7 @@ public static class CliApplication
                 {
                     if (parse.GetValue(targetSnapshotOption) is not null)
                     {
-                        throw new CliFailureException("--target-snapshot requires --forensic; the checkpoint-plus-delta rebuild is already bounded.");
+                        throw new CliFailureException(Strings.CliApplication_TargetSnapshotRequiresForensicCheckpoint);
                     }
 
                     var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
@@ -451,57 +491,40 @@ public static class CliApplication
             var command = WithSession(new Command("verify", "Verify blobs at a chosen level, or one file version end to end."));
             command.Options.Add(levelOption);
             command.Options.Add(fileOption);
+            command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-
+                // --file has no service equivalent: the contract's verify takes a
+                // level and sweeps the store, with no way to name one manifest.
+                // So this branch stays direct and says so rather than pretending
+                // the flag routes.
                 if (parse.GetValue(fileOption) is { } manifestIdHex)
                 {
+                    using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
+                    error.WriteLine("mode: direct — verifying one file version has no service equivalent.");
+
                     using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
                     await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                     var read = await reader.ReadSegmentAsync(ParseObjectId(manifestIdHex), cancellationToken).ConfigureAwait(false);
                     if (read.Outcome != RecordReadOutcome.Ok)
                     {
-                        throw new CliFailureException($"The manifest record failed to read: {read.Outcome}.");
+                        throw new CliFailureException(Strings.FormatCliApplication_ManifestRecordFailedRead(read.Outcome));
                     }
 
                     using var engine = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
-                    var result = await engine.VerifyFileAsync(
+                    var fileResult = await engine.VerifyFileAsync(
                         FileVersionManifestCodec.Decode(read.Plaintext!), reader, cancellationToken).ConfigureAwait(false);
 
-                    output.WriteLine(result.Ok ? "file: OK (every segment and the whole-file hash verified)" : $"file: FAILED — {result.Detail}");
-                    return result.Ok ? 0 : 2;
+                    output.WriteLine(fileResult.Ok ? "file: OK (every segment and the whole-file hash verified)" : $"file: FAILED — {fileResult.Detail}");
+                    return fileResult.Ok ? 0 : 2;
                 }
 
-                var level = parse.GetValue(levelOption) switch
-                {
-                    "locator" => VerifyLevel.LocatorAndFooter,
-                    "digest" => VerifyLevel.FooterAndDigest,
-                    "records" => VerifyLevel.EveryRecord,
-                    var other => throw new CliFailureException($"'{other}' is not a verify level (locator | digest | records)."),
-                };
-
-                using var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
-                var blobs = 0;
-                var failures = 0;
-
-                await foreach (var entry in session.Store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    blobs++;
-                    var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken).ConfigureAwait(false);
-                    if (!result.Ok)
-                    {
-                        failures++;
-                        output.WriteLine($"FAILED {entry.Key.Value}: {result.Detail}");
-                    }
-                }
-
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"verified {blobs} blob(s) at level {level}; {failures} failure(s)"));
-                return failures == 0 ? 0 : 2;
+                return await ReadThroughGatewayAsync(
+                    parse,
+                    (gateway, token) => gateway.VerifyAsync(parse.GetValue(levelOption)!, token),
+                    cancellationToken).ConfigureAwait(false);
             }));
         }
 
@@ -534,13 +557,13 @@ public static class CliApplication
                 }
                 else
                 {
-                    throw new CliFailureException("Pass --manifest <object-id> or --snapshot <snapshot-id>.");
+                    throw new CliFailureException(Strings.CliApplication_PassManifestObjectIdSnapshot);
                 }
 
                 var read = await reader.ReadSegmentAsync(manifestId, cancellationToken).ConfigureAwait(false);
                 if (read.Outcome != RecordReadOutcome.Ok)
                 {
-                    throw new CliFailureException($"The manifest record failed to read: {read.Outcome}.");
+                    throw new CliFailureException(Strings.FormatCliApplication_ManifestRecordFailedRead(read.Outcome));
                 }
 
                 var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
@@ -556,7 +579,7 @@ public static class CliApplication
                 if (!result.Success)
                 {
                     File.Delete(outputPath);
-                    throw new CliFailureException($"Restore refused: {result.FailureDetail}");
+                    throw new CliFailureException(Strings.FormatCliApplication_RestoreRefused(result.FailureDetail));
                 }
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -593,16 +616,16 @@ public static class CliApplication
                     var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, cancellationToken).ConfigureAwait(false);
                     if (treeRead.Outcome != RecordReadOutcome.Ok)
                     {
-                        throw new CliFailureException($"The snapshot's root tree failed to read: {treeRead.Outcome}.");
+                        throw new CliFailureException(Strings.FormatCliApplication_SnapshotSRootTreeFailed(treeRead.Outcome));
                     }
 
                     var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
                     var file = tree.Entries.FirstOrDefault(treeEntry => treeEntry.EntryKind == EntryKind.File)
-                        ?? throw new CliFailureException("The snapshot's tree holds no file entry.");
+                        ?? throw new CliFailureException(Strings.CliApplication_SnapshotSTreeHoldsNo);
                     return file.ObjectId;
                 }
 
-                throw new CliFailureException($"No snapshot {snapshotHex} exists in this repository.");
+                throw new CliFailureException(Strings.FormatCliApplication_NoSnapshotExistsRepository(snapshotHex));
             }
         }
 
@@ -624,108 +647,43 @@ public static class CliApplication
             command.Options.Add(includeOption);
             command.Options.Add(excludeOption);
             command.Options.Add(fullOption);
+            command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                using var session = await OpenWritingSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-
-                string rootPath;
-                IReadOnlyList<string> include, exclude;
-                byte[] backupSetId;
-
-                if (parse.GetValue(setOption) is { } setName)
-                {
-                    var configuration = ClientConfiguration.Load(session.ConfigurationPath);
-                    var set = configuration.FindSet(setName)
-                        ?? throw new CliFailureException($"No backup set named '{setName}' exists in {session.ConfigurationPath}.");
-                    rootPath = set.Root;
-                    include = set.IncludeRules;
-                    exclude = set.ExcludeRules;
-                    backupSetId = Convert.FromHexString(set.Id);
-                }
-                else
-                {
-                    rootPath = parse.GetValue(rootArgument)
-                        ?? throw new CliFailureException("Pass a root directory or --set <name>.");
-                    include = parse.GetValue(includeOption) ?? [];
-                    exclude = parse.GetValue(excludeOption) ?? [];
-                    backupSetId = session.BackupSetId;
-                }
-
-                if (!Directory.Exists(rootPath))
-                {
-                    throw new CliFailureException($"'{rootPath}' is not a directory.");
-                }
-
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
-
-                // Incremental against the newest snapshot of the same set the
-                // catalogue knows — unless --full asks for a re-read.
-                var prior = parse.GetValue(fullOption)
-                    ? null
-                    : catalogue.EnumerateSnapshots()
-                        .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
-
-                var orchestrator = new PublicationOrchestrator(
-                    CapturePolicy.Default,
-                    session.Repository.RepositoryId,
-                    session.Writer,
-                    session.CurrentGeneration,
-                    session.Repository.Keys,
-                    session.Repository.Hierarchy,
-                    session.Store,
-                    session.CreateSequence(),
-                    session.SpoolDirectory,
-                    observer: null,
-                    catalogue);
-
-                var snapshotId = RandomNumberGenerator.GetBytes(16);
-                var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                var published = await orchestrator.PublishAsync(
-                    new SnapshotJob
-                    {
-                        Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
-                        RootPath = rootPath,
-                        IncludeRules = include,
-                        ExcludeRules = exclude,
-                        DeviceId = session.DeviceId,
-                        BackupSetId = backupSetId,
-                        SnapshotId = snapshotId,
-                        ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
-                        PriorSnapshotId = prior?.SnapshotId,
-                        NowUnixMilliseconds = now,
-                        DeclaredMaxDurationMs = 3_600_000,
-                        ExpiryGeneration = session.CurrentGeneration.Value + 2,
-                        ClientVersion = "fallbackplan-cli/0.1",
-                    },
+                // The one verb that both writes and has a service equivalent, so
+                // the one whose side has to be resolved rather than assumed
+                // (ADR-0028 §3). Everything the two sides do differently lives
+                // behind the gateway; what is left here is the same either way.
+                var gateway = await OperationGateway.OpenForWriteAsync(
+                    parse.GetValue(repoOption)!,
+                    parse.GetValue(passphraseEnvOption)!,
+                    parse.GetValue(stateOption),
+                    parse.GetValue(directOption),
                     cancellationToken).ConfigureAwait(false);
 
-                session.State.RecordJob(new JobHistoryEntry
+                await using (gateway.ConfigureAwait(false))
                 {
-                    SnapshotId = Hex(snapshotId),
-                    BackupSetId = Hex(backupSetId),
-                    StartedAt = now,
-                    CaptureStatus = (byte)(published.ErrorManifestObjectId is null ? 1 : 2),
-                    Files = published.Files.Count,
-                    Failures = published.Failures.Count,
-                });
+                    error.WriteLine(gateway.Mode);
 
-                var reused = published.Files.Count(file => file.Reused);
-                output.WriteLine($"snapshot id    {Hex(snapshotId)}");
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"files          {published.Files.Count} ({reused} unchanged, {published.Failures.Count} failed)"));
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"data blobs     {published.ContentBlobs.Count} new"));
-                if (prior is not null)
-                {
-                    output.WriteLine($"incremental    against {Hex(prior.SnapshotId)}");
+                    var outcome = await gateway.RunBackupAsync(
+                        new BackupRequest
+                        {
+                            SetName = parse.GetValue(setOption),
+                            Root = parse.GetValue(rootArgument),
+                            IncludeRules = parse.GetValue(includeOption) ?? [],
+                            ExcludeRules = parse.GetValue(excludeOption) ?? [],
+                            Full = parse.GetValue(fullOption),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    foreach (var line in outcome.Lines)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return outcome.Ok ? 0 : 2;
                 }
-
-                output.WriteLine(published.ErrorManifestObjectId is null
-                    ? "status         complete"
-                    : "status         PARTIAL — see the error manifest");
-                return published.ErrorManifestObjectId is null ? 0 : 2;
             }));
         }
 
@@ -793,14 +751,12 @@ public static class CliApplication
                     if (!catalogue.EnumerateSnapshots().Any(
                             snapshot => snapshot.SnapshotId.Span.SequenceEqual(snapshotId)))
                     {
-                        throw new CliFailureException(
-                            $"snapshot {Hex(snapshotId)} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.");
+                        throw new CliFailureException(Strings.FormatCliApplication_SnapshotNotCatalogue(Hex(snapshotId)));
                     }
 
                     if (path.Length > 0 && catalogue.LookupPath(snapshotId, path) is null)
                     {
-                        throw new CliFailureException(
-                            $"'{path}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+                        throw new CliFailureException(Strings.FormatCliApplication_DoesNotExistSnapshot(path, Hex(snapshotId)));
                     }
                 }
 
@@ -838,100 +794,17 @@ public static class CliApplication
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
             command.Options.Add(outputOption);
+            command.Options.Add(directOption);
 
-            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
-            {
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
-
-                var snapshotId = Convert.FromHexString(parse.GetValue(snapshotArgument)!);
-                var wanted = parse.GetValue(pathArgument);
-                var outputRoot = parse.GetValue(outputOption)!;
-
-                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
-                await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-                var engine = new RestoreEngine(reader);
-
-                var restored = 0;
-                var failed = 0;
-
-                async ValueTask RestoreEntryAsync(FallbackPlan.Repository.Catalogue.CatalogueTreeEntry entry)
-                {
-                    if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
-                    {
-                        Directory.CreateDirectory(Path.Combine(outputRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
-                        foreach (var child in catalogue.ListDirectory(snapshotId, entry.Path))
-                        {
-                            await RestoreEntryAsync(child).ConfigureAwait(false);
-                        }
-
-                        return;
-                    }
-
-                    var read = await reader.ReadSegmentAsync(entry.ObjectId, cancellationToken).ConfigureAwait(false);
-                    if (read.Outcome != RecordReadOutcome.Ok)
-                    {
-                        error.WriteLine($"FAILED {entry.Path}: manifest read {read.Outcome}");
-                        failed++;
-                        return;
-                    }
-
-                    var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
-                    if (manifest.EntryKind != EntryKind.File)
-                    {
-                        // Symlinks and specials materialise in wave R's planner;
-                        // reported, never silently dropped.
-                        error.WriteLine($"skipped {entry.Path}: {manifest.EntryKind} restore lands with the restore planner");
-                        return;
-                    }
-
-                    var destinationPath = Path.Combine(outputRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar));
-                    Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-
-                    RestoreResult result;
-                    var destination = File.Create(destinationPath);
-                    await using (destination.ConfigureAwait(false))
-                    {
-                        result = await engine.RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (!result.Success)
-                    {
-                        File.Delete(destinationPath);
-                        error.WriteLine($"FAILED {entry.Path}: {result.FailureDetail}");
-                        failed++;
-                        return;
-                    }
-
-                    restored++;
-                }
-
-                if (wanted is { Length: > 0 })
-                {
-                    var entry = catalogue.LookupPath(snapshotId, wanted)
-                        ?? throw new CliFailureException(
-                            $"'{wanted}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
-                    await RestoreEntryAsync(entry).ConfigureAwait(false);
-                }
-                else
-                {
-                    var roots = catalogue.ListDirectory(snapshotId, string.Empty);
-                    if (roots.Count == 0)
-                    {
-                        throw new CliFailureException(
-                            $"The catalogue knows nothing under snapshot {Hex(snapshotId)} — run `rebuild-index` first.");
-                    }
-
-                    foreach (var entry in roots)
-                    {
-                        await RestoreEntryAsync(entry).ConfigureAwait(false);
-                    }
-                }
-
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"restored {restored} file(s) to {outputRoot}; {failed} failure(s)"));
-                return failed == 0 ? 0 : 2;
-            }));
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.RestoreAsync(
+                    new RestoreRequest(
+                        parse.GetValue(snapshotArgument)!,
+                        parse.GetValue(pathArgument),
+                        parse.GetValue(outputOption)!),
+                    token),
+                cancellationToken)));
         }
 
         // --------------------------------------------------------------- check
@@ -945,77 +818,12 @@ public static class CliApplication
             var command = WithSession(new Command(
                 "check", "Repository health: blob verification sweep, journal survey, and the catalogue's damage findings."));
             command.Options.Add(levelOption);
+            command.Options.Add(directOption);
 
-            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
-            {
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-
-                var level = parse.GetValue(levelOption) switch
-                {
-                    "locator" => VerifyLevel.LocatorAndFooter,
-                    "digest" => VerifyLevel.FooterAndDigest,
-                    "records" => VerifyLevel.EveryRecord,
-                    var other => throw new CliFailureException($"'{other}' is not a verify level (locator | digest | records)."),
-                };
-
-                var problems = 0;
-
-                using (var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store))
-                {
-                    var blobs = 0;
-                    await foreach (var entry in session.Store
-                        .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
-                    {
-                        blobs++;
-                        var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken).ConfigureAwait(false);
-                        if (!result.Ok)
-                        {
-                            problems++;
-                            output.WriteLine($"blob FAILED  {entry.Key.Value}: {result.Detail}");
-                        }
-                    }
-
-                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"blobs      {blobs} verified at {level}"));
-                }
-
-                using (var journalReader = new FallbackPlan.Repository.Index.Journal.JournalReader(
-                    session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy))
-                {
-                    var (records, unparseable, journalFindings) = await journalReader.LoadAsync(
-                        session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
-                    problems += unparseable + journalFindings.Count;
-
-                    var survey = FallbackPlan.Repository.Index.Journal.IntentSurveyor.Survey(
-                        records, unparseable, session.CurrentGeneration.Value,
-                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
-
-                    output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                        $"journal    {records.Count} record(s), {unparseable} unparseable, {survey.LiveIntents.Count} live intent(s)"));
-                    foreach (var finding in journalFindings)
-                    {
-                        output.WriteLine($"journal    {finding.Kind}: {finding.Detail}");
-                    }
-                }
-
-                if (File.Exists(session.CataloguePath))
-                {
-                    using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
-                    var findings = catalogue.Findings();
-                    problems += findings.Count;
-                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"catalogue  {findings.Count} damage finding(s)"));
-                    foreach (var finding in findings)
-                    {
-                        output.WriteLine($"catalogue  {finding.Kind}: {finding.Detail}");
-                    }
-                }
-                else
-                {
-                    output.WriteLine("catalogue  absent (rebuildable cache — run `rebuild-index` to materialise it)");
-                }
-
-                output.WriteLine(problems == 0 ? "check: OK" : string.Create(CultureInfo.InvariantCulture, $"check: {problems} problem(s)"));
-                return problems == 0 ? 0 : 2;
-            }));
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.CheckAsync(parse.GetValue(levelOption)!, token),
+                cancellationToken)));
         }
 
         // ------------------------------------------------------- config-export

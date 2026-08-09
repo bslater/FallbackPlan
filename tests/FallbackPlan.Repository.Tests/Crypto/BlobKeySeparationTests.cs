@@ -1,6 +1,6 @@
+using FallbackPlan.TestSupport;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
-using FsCheck.Xunit;
 
 namespace FallbackPlan.Repository.Tests.Crypto;
 
@@ -11,6 +11,7 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// keys, and the nonce-reuse catastrophe the construction exists to prevent
 /// cannot arise from RNG state alone.
 /// </summary>
+[TestClass]
 public sealed class BlobKeySeparationTests
 {
     private static byte[] Derive(byte[] classKey, byte[] salt, WriterId writer, ulong counter)
@@ -20,8 +21,11 @@ public sealed class BlobKeySeparationTests
         return key;
     }
 
-    [Property]
-    public bool Distinct_writers_with_an_identical_csprng_stream_derive_distinct_keys(byte[]? saltSeed, byte writerDifference)
+    [TestMethod]
+    public void BlobKeyDerivation_DistinctWritersSharingACsprngStream_DeriveDistinctKeys() =>
+        PropertyCheck.Holds(this);
+
+    public static bool BlobKeyDerivation_DistinctWritersSharingACsprngStream_DeriveDistinctKeysProperty(byte[]? saltSeed, byte writerDifference)
     {
         // The identical CSPRNG stream is modelled by giving both writers the
         // same blob salt — the only random derivation input. Writer identity
@@ -37,8 +41,11 @@ public sealed class BlobKeySeparationTests
         return !Derive(classKey, salt, writerA, 7).AsSpan().SequenceEqual(Derive(classKey, salt, writerB, 7));
     }
 
-    [Property]
-    public bool Adjacent_counters_derive_distinct_keys(byte[]? saltSeed, ulong counter)
+    [TestMethod]
+    public void BlobKeyDerivation_AdjacentCounters_DeriveDistinctKeys() =>
+        PropertyCheck.Holds(this);
+
+    public static bool BlobKeyDerivation_AdjacentCounters_DeriveDistinctKeysProperty(byte[]? saltSeed, ulong counter)
     {
         var salt = PadTo32(saltSeed);
         var classKey = new byte[32];
@@ -49,8 +56,11 @@ public sealed class BlobKeySeparationTests
         return !Derive(classKey, salt, writer, counter).AsSpan().SequenceEqual(Derive(classKey, salt, writer, next));
     }
 
-    [Property]
-    public bool Different_class_keys_derive_distinct_keys(byte classKeyDifference)
+    [TestMethod]
+    public void BlobKeyDerivation_DifferentClassKeys_DeriveDistinctKeys() =>
+        PropertyCheck.Holds(this);
+
+    public static bool BlobKeyDerivation_DifferentClassKeys_DeriveDistinctKeysProperty(byte classKeyDifference)
     {
         var salt = new byte[32];
         var writer = WriterId.FromBytes(new byte[WriterId.Size]);

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Records;
 
@@ -26,7 +27,7 @@ public static class FooterAad
     {
         if (destination.Length != Length)
         {
-            throw new ArgumentException($"The footer AAD is exactly {Length} bytes; got {destination.Length}.", nameof(destination));
+            throw new ArgumentException(Strings.FormatFooterAad_FooterAADExactlyBytesGot(Length, destination.Length), nameof(destination));
         }
 
         repositoryId.CopyTo(destination);

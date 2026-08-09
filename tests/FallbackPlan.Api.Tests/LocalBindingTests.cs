@@ -10,6 +10,7 @@ namespace FallbackPlan.Api.Tests;
 /// pipe, authenticated by the operating system. No password, no token file, and
 /// — the assertion that matters most — no port.
 /// </summary>
+[TestClass]
 public sealed class LocalBindingTests : IDisposable
 {
     private readonly string _state = Path.Combine(
@@ -22,8 +23,8 @@ public sealed class LocalBindingTests : IDisposable
 
     private CancellationToken Timeout => _timeout.Token;
 
-    [Fact]
-    public async Task A_command_travels_to_the_service_and_its_result_comes_back()
+    [TestMethod]
+    public async Task LocalBinding_CommandSentOverTheEndpoint_ReturnsTheServicesResult()
     {
         var service = new FakeService
         {
@@ -36,14 +37,14 @@ public sealed class LocalBindingTests : IDisposable
         var result = await client.ExecuteAsync(
             new RunBackupCommand("documents", Full: false), Timeout);
 
-        var accepted = Assert.IsType<JobAcceptedResult>(result);
-        Assert.Equal("job-1", accepted.JobId);
-        var received = Assert.IsType<RunBackupCommand>(Assert.Single(service.Received));
-        Assert.Equal("documents", received.SetName);
+        Assert.IsInstanceOfType<JobAcceptedResult>(result, out var accepted);
+        Assert.AreEqual("job-1", accepted.JobId);
+        Assert.IsInstanceOfType<RunBackupCommand>(Assert.ContainsSingle(service.Received), out var received);
+        Assert.AreEqual("documents", received.SetName);
     }
 
-    [Fact]
-    public async Task Several_commands_travel_over_one_connection_in_order()
+    [TestMethod]
+    public async Task LocalBinding_SeveralCommandsOnOneConnection_PreservesTheirOrder()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -52,14 +53,14 @@ public sealed class LocalBindingTests : IDisposable
         for (var i = 0; i < 5; i++)
         {
             var result = await client.ExecuteAsync(new ListSnapshotsCommand(), Timeout);
-            Assert.IsType<AcknowledgedResult>(result);
+            Assert.IsInstanceOfType<AcknowledgedResult>(result);
         }
 
-        Assert.Equal(5, service.Received.Count);
+        Assert.AreEqual(5, service.Received.Count);
     }
 
-    [Fact]
-    public async Task An_error_result_crosses_the_boundary_as_a_result_not_an_exception()
+    [TestMethod]
+    public async Task LocalBinding_ServiceReturnsAnError_CrossesTheBoundaryAsAResult()
     {
         // NFR-PORT-004. An exception thrown on the far side loses its type and
         // its stack means nothing here, so every outcome a caller might handle
@@ -75,13 +76,13 @@ public sealed class LocalBindingTests : IDisposable
         var result = await client.ExecuteAsync(
             new ListDirectoryCommand("abcd", null), Timeout);
 
-        var error = Assert.IsType<ServiceError>(result);
-        Assert.Equal(ServiceErrorReason.NotFound, error.Reason);
+        Assert.IsInstanceOfType<ServiceError>(result, out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
         Assert.Contains("abcd", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Progress_events_stream_to_a_watching_client()
+    [TestMethod]
+    public async Task LocalBinding_ClientIsWatching_StreamsProgressEvents()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -90,25 +91,46 @@ public sealed class LocalBindingTests : IDisposable
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(Timeout);
         stopping.CancelAfter(TimeSpan.FromSeconds(20));
 
+        // The list is written by the watching task and read by this one, so
+        // every touch is under the lock. Reading a List<T> while another thread
+        // appends to it is undefined, not merely stale.
         var seen = new List<JobProgressEvent>();
+        int SeenCount()
+        {
+            lock (seen)
+            {
+                return seen.Count;
+            }
+        }
+
+        // Connecting happens on this thread: WatchAsync opens the watch
+        // connection when called, not when first enumerated, so the service is
+        // already streaming to it by the time the emit loop below starts.
+        var progressEvents = client.WatchAsync(stopping.Token);
+
         var watching = Task.Run(
             async () =>
             {
-                await foreach (var progress in client.WatchAsync(stopping.Token))
+                await foreach (var progress in progressEvents)
                 {
-                    seen.Add(progress);
-                    if (seen.Count == 3)
+                    lock (seen)
                     {
-                        return;
+                        seen.Add(progress);
+                        if (seen.Count == 3)
+                        {
+                            return;
+                        }
                     }
                 }
             },
             stopping.Token);
 
-        // The watch takes its own connection, so give it a moment to be
-        // accepted before emitting — otherwise this test races the transport
-        // rather than testing it.
-        while (!watching.IsCompleted && seen.Count < 3)
+        // Emission still repeats. Opening the connection eagerly closes the
+        // window on this side, but the service accepts it asynchronously, so an
+        // event emitted before the accept completes would still be sent to
+        // nobody — a real property of the transport rather than something to
+        // assert away.
+        while (!watching.IsCompleted && SeenCount() < 3)
         {
             service.Emit(new JobProgress("job-1", JobState.Scanning, 10, 4, 1, 0, 4096, 2048));
             await Task.Delay(50, stopping.Token);
@@ -116,22 +138,25 @@ public sealed class LocalBindingTests : IDisposable
 
         await watching;
 
-        Assert.Equal(3, seen.Count);
-        Assert.Equal(JobState.Scanning, seen[0].Progress.State);
-        Assert.True(seen[1].Sequence > seen[0].Sequence, "progress sequence must be monotonic so a client can spot a gap");
+        lock (seen)
+        {
+            Assert.AreEqual(3, seen.Count);
+            Assert.AreEqual(JobState.Scanning, seen[0].Progress.State);
+            Assert.IsTrue(seen[1].Sequence > seen[0].Sequence, "progress sequence must be monotonic so a client can spot a gap");
+        }
     }
 
-    [Fact]
-    public async Task Connecting_when_no_service_is_listening_fails_with_a_stated_reason()
+    [TestMethod]
+    public async Task Connect_WhenNoServiceIsListening_ShouldThrowWithAStatedReason()
     {
-        var failure = await Assert.ThrowsAsync<ServiceConnectionException>(
+        var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(
             () => LocalServiceClient.ConnectAsync(_state, "test", Timeout).AsTask());
 
         Assert.Contains("No service is listening", failure.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_default_service_binds_a_filesystem_endpoint_and_never_a_port()
+    [TestMethod]
+    public async Task ServiceBinding_DefaultConfiguration_BindsAFilesystemEndpointAndNoPort()
     {
         // FR-SVC-003, and the property this whole binding exists for:
         // topologies 1 and 2 carry no port and no credential to talk to your
@@ -146,7 +171,7 @@ public sealed class LocalBindingTests : IDisposable
         await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
         await client.ExecuteAsync(new DescribeServiceCommand(), Timeout);
 
-        Assert.False(IPEndPoint.TryParse(listener.Address, out _));
+        Assert.IsFalse(IPEndPoint.TryParse(listener.Address, out _));
 
         if (OperatingSystem.IsWindows())
         {
@@ -156,25 +181,25 @@ public sealed class LocalBindingTests : IDisposable
         else
         {
             // A real filesystem object, in a directory only its owner may write.
-            Assert.True(File.Exists(listener.Address));
-            Assert.Equal(
+            Assert.IsTrue(File.Exists(listener.Address));
+            Assert.AreEqual(
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
                 File.GetUnixFileMode(_state));
         }
     }
 
-    [Fact]
-    public void The_remote_binding_is_absent_until_enabled_and_refuses_without_pairing()
+    [TestMethod]
+    public void RemoteBinding_NotEnabledOrUnpaired_RefusesToListen()
     {
-        Assert.True(RemoteBindingOptions.Disabled.TryValidate(out var noReason));
-        Assert.Null(noReason);
+        Assert.IsTrue(RemoteBindingOptions.Disabled.TryValidate(out var noReason));
+        Assert.IsNull(noReason);
 
         var unnamed = new RemoteBindingOptions { Enabled = true, Port = 8443 };
-        Assert.False(unnamed.TryValidate(out var unnamedReason));
+        Assert.IsFalse(unnamed.TryValidate(out var unnamedReason));
         Assert.Contains("name the interface", unnamedReason!, StringComparison.Ordinal);
 
         var wellFormed = new RemoteBindingOptions { Enabled = true, Interface = "0.0.0.0", Port = 8443 };
-        Assert.False(wellFormed.TryValidate(out var pairingReason));
+        Assert.IsFalse(wellFormed.TryValidate(out var pairingReason));
         Assert.Contains("paired device identity", pairingReason!, StringComparison.Ordinal);
     }
 

@@ -14,6 +14,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// against whichever implementation that leg has.
 /// </remarks>
 [PlatformTrait(TestPlatforms.Any)]
+[TestClass]
 public sealed class KeystoreTests : IDisposable
 {
     private readonly string _state = Path.Combine(
@@ -21,39 +22,39 @@ public sealed class KeystoreTests : IDisposable
 
     public KeystoreTests() => Directory.CreateDirectory(_state);
 
-    [Fact]
-    public void A_passphrase_round_trips_through_this_platforms_keystore()
+    [TestMethod]
+    public void Keystore_APassphrase_RoundTripsThroughThisPlatformsStore()
     {
         var store = PlatformKeystore.For(_state);
         var account = _state;
 
-        Assert.False(store.TryRead(account, out _));
+        Assert.IsFalse(store.TryRead(account, out _));
 
         store.Write(account, "correct horse battery staple");
-        Assert.True(store.TryRead(account, out var read));
-        Assert.Equal("correct horse battery staple", read);
+        Assert.IsTrue(store.TryRead(account, out var read));
+        Assert.AreEqual("correct horse battery staple", read);
 
         // Rotation must replace, not accumulate. A stale passphrase that
         // survives a rotation is the failure that stops backups weeks later,
         // silently.
         store.Write(account, "a different passphrase");
-        Assert.True(store.TryRead(account, out var rotated));
-        Assert.Equal("a different passphrase", rotated);
+        Assert.IsTrue(store.TryRead(account, out var rotated));
+        Assert.AreEqual("a different passphrase", rotated);
 
         store.Delete(account);
-        Assert.False(store.TryRead(account, out _));
+        Assert.IsFalse(store.TryRead(account, out _));
     }
 
-    [Fact]
-    public void Removing_what_is_not_stored_is_not_an_error()
+    [TestMethod]
+    public void Remove_WhenNothingIsStored_ShouldSucceedWithoutError()
     {
         var store = PlatformKeystore.For(_state);
         store.Delete(_state);
         store.Delete(_state);
     }
 
-    [Fact]
-    public void Distinct_state_directories_hold_distinct_entries()
+    [TestMethod]
+    public void Keystore_TwoStateDirectories_HoldDistinctEntries()
     {
         var other = Path.Combine(_state, "other");
         Directory.CreateDirectory(other);
@@ -62,37 +63,39 @@ public sealed class KeystoreTests : IDisposable
         store.Write(_state, "first");
         store.Write(other, "second");
 
-        Assert.True(store.TryRead(_state, out var first));
-        Assert.True(store.TryRead(other, out var second));
-        Assert.Equal("first", first);
-        Assert.Equal("second", second);
+        Assert.IsTrue(store.TryRead(_state, out var first));
+        Assert.IsTrue(store.TryRead(other, out var second));
+        Assert.AreEqual("first", first);
+        Assert.AreEqual("second", second);
 
         store.Delete(_state);
         store.Delete(other);
     }
 
-    [PlatformFact(TestPlatforms.Posix, "Unix file modes decide who can read the stored material.")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Unix file modes decide who can read the stored material.")]
     [UnsupportedOSPlatform("windows")]
-    public void On_posix_the_stored_material_is_owner_only()
+    public void Write_OnPosix_StoresTheMaterialReadableByItsOwnerOnly()
     {
         var store = PlatformKeystore.For(_state);
         store.Write(_state, "secret");
 
         var files = Directory.EnumerateFiles(_state, "*", SearchOption.AllDirectories).ToList();
-        Assert.NotEmpty(files);
+        Assert.IsNotEmpty(files);
 
         foreach (var file in files)
         {
             var mode = File.GetUnixFileMode(file);
-            Assert.Equal(UnixFileMode.None, mode & (UnixFileMode.GroupRead | UnixFileMode.OtherRead));
+            Assert.AreEqual(UnixFileMode.None, mode & (UnixFileMode.GroupRead | UnixFileMode.OtherRead));
         }
 
         store.Delete(_state);
     }
 
-    [PlatformFact(TestPlatforms.Linux, "The Linux store's only protection is its permissions, so it checks them.")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "The Linux store's only protection is its permissions, so it checks them.")]
     [UnsupportedOSPlatform("windows")]
-    public void On_linux_material_whose_permissions_drifted_is_refused_not_read()
+    public void TryRead_OnLinuxWhenPermissionsDrifted_RefusesRatherThanReads()
     {
         var store = PlatformKeystore.For(_state);
         store.Write(_state, "secret");
@@ -102,7 +105,7 @@ public sealed class KeystoreTests : IDisposable
 
         // Reading it anyway would keep working while the only property
         // protecting it had already been lost.
-        var refused = Assert.Throws<KeystoreException>(() => store.TryRead(_state, out _));
+        var refused = Assert.ThrowsExactly<KeystoreException>(() => store.TryRead(_state, out _));
         Assert.Contains("readable beyond its owner", refused.Message, StringComparison.Ordinal);
     }
 

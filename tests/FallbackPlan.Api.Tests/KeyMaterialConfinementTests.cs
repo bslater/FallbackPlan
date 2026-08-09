@@ -22,6 +22,7 @@ namespace FallbackPlan.Api.Tests;
 /// service insufficient to mint a recovery kit (ADR-0028 §9).
 /// </para>
 /// </remarks>
+[TestClass]
 public sealed class KeyMaterialConfinementTests
 {
     private static readonly string[] ForbiddenFragments =
@@ -30,8 +31,8 @@ public sealed class KeyMaterialConfinementTests
         "kek", "masterkey", "blobkey", "classkey", "seed", "credential", "token",
     ];
 
-    [Fact]
-    public void No_command_or_result_carries_a_member_that_looks_like_key_material()
+    [TestMethod]
+    public void ContractSurface_MemberNameSuggestsKeyMaterial_ExposesNone()
     {
         var offenders = new List<string>();
 
@@ -47,14 +48,14 @@ public sealed class KeyMaterialConfinementTests
             }
         }
 
-        Assert.True(
+        Assert.IsTrue(
             offenders.Count == 0,
             "These contract members name key material, which must never cross the command surface "
             + $"(NFR-SEC-009): {string.Join(", ", offenders)}");
     }
 
-    [Fact]
-    public void No_command_or_result_carries_raw_bytes()
+    [TestMethod]
+    public void ContractSurface_CommandsAndResults_CarryNoRawByteMembers()
     {
         // A byte array on the wire is how key material arrives without being
         // named as such. Identifiers cross as hex strings for exactly this
@@ -74,11 +75,11 @@ public sealed class KeyMaterialConfinementTests
             }
         }
 
-        Assert.True(offenders.Count == 0, $"These contract members carry raw bytes: {string.Join(", ", offenders)}");
+        Assert.IsTrue(offenders.Count == 0, $"These contract members carry raw bytes: {string.Join(", ", offenders)}");
     }
 
-    [Fact]
-    public void There_is_no_command_that_exports_key_material()
+    [TestMethod]
+    public void ContractSurface_CommandVocabulary_OffersNoKeyExport()
     {
         var exporting = ContractTypes()
             .Where(type => typeof(ServiceCommand).IsAssignableFrom(type))
@@ -88,14 +89,14 @@ public sealed class KeyMaterialConfinementTests
             .Select(type => type.Name)
             .ToList();
 
-        Assert.True(
+        Assert.IsTrue(
             exporting.Count == 0,
             "Key export re-derives the KEK from a passphrase supplied per invocation and therefore runs locally, "
             + $"never as a command: {string.Join(", ", exporting)}");
     }
 
-    [Fact]
-    public void The_contract_assembly_reaches_none_of_the_projects_cryptography()
+    [TestMethod]
+    public void ContractAssembly_DependencyClosure_ReachesNoCryptography()
     {
         // The platform's SHA-256 is referenced and allowed: the endpoint derives
         // a named-pipe identity from the state directory path, which is naming,
@@ -107,9 +108,9 @@ public sealed class KeyMaterialConfinementTests
             .Select(assembly => assembly.Name ?? string.Empty)
             .ToList();
 
-        Assert.DoesNotContain(referenced, name => name.StartsWith("FallbackPlan.Repository", StringComparison.Ordinal));
-        Assert.DoesNotContain(referenced, name => name.StartsWith("FallbackPlan.Application", StringComparison.Ordinal));
-        Assert.DoesNotContain(referenced, name => name.StartsWith("Bodu.Security", StringComparison.Ordinal));
+        Assert.DoesNotContain(name => name.StartsWith("FallbackPlan.Repository", StringComparison.Ordinal), referenced);
+        Assert.DoesNotContain(name => name.StartsWith("FallbackPlan.Application", StringComparison.Ordinal), referenced);
+        Assert.DoesNotContain(name => name.StartsWith("Bodu.Security", StringComparison.Ordinal), referenced);
     }
 
     private static IEnumerable<Type> ContractTypes() =>

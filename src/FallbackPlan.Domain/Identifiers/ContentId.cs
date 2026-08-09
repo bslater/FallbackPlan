@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using FallbackPlan.Domain.Resources;
 
 namespace FallbackPlan.Domain.Identifiers;
 
@@ -40,7 +41,7 @@ public readonly struct ContentId : IEquatable<ContentId>
     {
         if (bytes.Length != Size)
         {
-            throw new ArgumentException($"A content identifier is exactly {Size} bytes; got {bytes.Length}.", nameof(bytes));
+            throw new ArgumentException(Strings.FormatContentId_ContentIdentifierExactlyBytesGot(Size, bytes.Length), nameof(bytes));
         }
 
         return new ContentId(
@@ -58,7 +59,7 @@ public readonly struct ContentId : IEquatable<ContentId>
     {
         if (destination.Length < Size)
         {
-            throw new ArgumentException($"Destination must hold at least {Size} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobId_DestinationMustHoldLeastBytes(Size), nameof(destination));
         }
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, _a);

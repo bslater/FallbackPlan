@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 
 namespace FallbackPlan.Repository.Crypto;
@@ -28,7 +29,7 @@ public static class KeyWrapping
         Span<byte> ciphertext,
         Span<byte> tag)
     {
-        ArgumentNullException.ThrowIfNull(kek);
+        ThrowHelper.ThrowIfNull(kek);
 
         using var aes = new AesGcm(kek.Bytes, TagLength);
         aes.Encrypt(nonce, bundleCbor, ciphertext, tag, aad);
@@ -49,7 +50,7 @@ public static class KeyWrapping
         ReadOnlySpan<byte> ciphertext,
         ReadOnlySpan<byte> tag)
     {
-        ArgumentNullException.ThrowIfNull(kek);
+        ThrowHelper.ThrowIfNull(kek);
 
         var plaintext = new byte[ciphertext.Length];
 

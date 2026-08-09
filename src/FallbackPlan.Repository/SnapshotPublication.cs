@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
@@ -8,8 +9,10 @@ using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -55,7 +58,8 @@ public sealed record SnapshotJob
     /// for a full backup. An unchanged file — same identity, size, and
     /// modification time as this snapshot's version of the same path
     /// (NFR-PERF-003) — re-emits the prior file-version reference without
-    /// its content ever being read.
+    /// its content ever being read; one that only moved gets a new manifest
+    /// rewritten from the prior one, still without reading its content.
     /// </summary>
     public ReadOnlyMemory<byte>? PriorSnapshotId { get; init; }
 
@@ -77,6 +81,13 @@ public sealed record SnapshotJob
 /// marks the NFR-PERF-003 short-circuit: the object identifier names the
 /// prior snapshot's version and no content was read.
 /// </summary>
+/// <remarks>
+/// <c>Inherited</c> carries the manifest a renamed file's version was
+/// rewritten from, when its content was inherited rather than captured.
+/// <c>Archive</c> is null in that case — nothing was archived — so the
+/// inherited manifest is what states the version's real length and hash to
+/// the catalogue.
+/// </remarks>
 public sealed record PublishedFileVersion(
     string RelativePath,
     ReadOnlyMemory<byte> NameBytes,
@@ -86,7 +97,8 @@ public sealed record PublishedFileVersion(
     ulong? ModifiedAt = null,
     ulong? IdentityDevice = null,
     ulong? IdentityFileId = null,
-    bool Reused = false);
+    bool Reused = false,
+    FileVersionManifest? Inherited = null);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -116,7 +128,7 @@ public sealed partial class PublicationOrchestrator
     /// <summary>Runs one tree publication end to end.</summary>
     public async ValueTask<PublishedTreeSnapshot> PublishAsync(SnapshotJob job, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(job);
+        ThrowHelper.ThrowIfNull(job);
 
         using var activity = EngineDiagnostics.Activities.StartActivity("publish");
         var publicationStarted = Stopwatch.GetTimestamp();
@@ -160,18 +172,52 @@ public sealed partial class PublicationOrchestrator
 
         var archiver = new FileArchiver(
             _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+
+        // One targeted reader serves both things this publication reads back:
+        // a renamed file's prior manifest (architecture 06 §4.2) and the
+        // verify-on-reuse confirmation (ADR-0006). Both want the same blob
+        // cache, and neither exists without a catalogue to resolve a location.
+        // Every catalogue call made while the pipeline is running goes
+        // through one gate, because the pipeline is concurrent and a SQLite
+        // connection is not (CatalogueGate).
+        var gated = _catalogue is { } concurrentCatalogue ? new CatalogueGate(concurrentCatalogue) : null;
+
+        using var reader = gated is not null
+            ? new TargetedRecordReader(_store, _repositoryId, _keys, gated)
+            : null;
+
+        // The reuse decision, trust domain included (09 §5; FR-DED-002).
+        // Without a catalogue there is no index to reuse from at all, so the
+        // question never arises and the gate is absent rather than permissive.
+        var trust = gated is not null
+            ? new DedupTrustGate(_policy.DedupTrustDomain, _writerId, gated, reader!)
+            : null;
+        var dedup = trust is null ? null : (ReusePredicate)trust.MayReuseAsync;
+
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope);
+            _policy.BlobWriteProfile, scope, dedup);
 
-        var session = archiver.OpenSession(
-            _catalogue is { } dedupCatalogue ? dedupCatalogue.HasLocation : null);
+        var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))
         await using (session.ConfigureAwait(false))
         {
             using var grouper = new HardlinkGrouper(_keys.ContentIdKey);
+            using var sourceKeys = new SourceIdentityKeyDeriver(_keys.ContentIdKey);
 
-            var walker = new TreeWalkPublisher(job, options, session, builder, grouper, _catalogue);
+            // The durable half of rename detection (06 §11), and the gate on
+            // ever touching it: a catalogue that still holds identities has
+            // already answered, so the hints are consulted only in the window
+            // a rebuild opens — where identity is gone and paths are not.
+            var hintBound = job.PriorSnapshotId is { } priorForIdentity && _catalogue is { } identityCatalogue
+                && !identityCatalogue.HasIdentities(priorForIdentity.Span)
+                ? identityCatalogue.LookupSnapshotCaptureTime(priorForIdentity.Span)
+                : null;
+
+            var walker = new TreeWalkPublisher(
+                job, options, session, builder, grouper, gated, sourceKeys,
+                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
+                reader);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -194,7 +240,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var rootTreeId = walker.RootTreeId
-                ?? throw new InvalidOperationException("The scan produced no root directory.");
+                ?? throw new InvalidOperationException(Strings.PublicationOrchestrator_ScanProducedNoRootDirectory);
             _observer?.AfterStep(PublicationStep.ScanSource);
 
             reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
@@ -278,9 +324,17 @@ public sealed partial class PublicationOrchestrator
             // Step 6: index deltas referencing the now-durable blobs.
             var entries = new List<IndexEntry>();
             var covered = new List<BlobId>();
+
+            // The blob digest's durable home (07 §2.2). It is published
+            // beside the blob it names, inside the signature, so a
+            // participant receiving that blob can check the bytes against
+            // something the writer signed rather than against a record kept
+            // on the writer's own machine.
+            var digests = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in session.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
+                digests.Add(blob.Digest.ToArray());
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -295,10 +349,16 @@ public sealed partial class PublicationOrchestrator
             }
 
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, cancellationToken).ConfigureAwait(false);
+                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
-            // Step 7: the snapshot's discoverable standalone copy.
+            // Step 7: the snapshot's discoverable standalone copy — preceded
+            // by the advisory source-identity hints, so a hint the next
+            // publication wants is never published after the snapshot that
+            // makes it findable (06 §11).
+            await builder.WriteSourceIdentityHintsAsync(
+                walker.SourceIdentities, intentSequence, cancellationToken).ConfigureAwait(false);
+
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, _sequence.AllocateNext(), cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
@@ -392,15 +452,22 @@ public sealed partial class PublicationOrchestrator
                 continue;
             }
 
+            // A renamed file archived nothing, so its content facts come from
+            // the manifest it inherited. Recording zeroes there would leave
+            // the next incremental unable to short-circuit a file that has not
+            // changed since before it moved.
             var archive = file.Archive;
+            var inherited = file.Inherited;
             _catalogue.RecordFileVersion(
                 file.ObjectId,
                 file.NameBytes.Span,
                 file.EntryKind,
-                (ulong)(archive?.LogicalLength ?? 0),
-                archive is null ? TreeWalkPublisher.EmptyHash : [.. archive.WholeFileHash],
+                (ulong)(archive?.LogicalLength ?? (long?)inherited?.LogicalLength ?? 0),
+                archive is not null ? [.. archive.WholeFileHash]
+                    : inherited is not null ? inherited.WholeFileHash.ToArray()
+                    : TreeWalkPublisher.EmptyHash,
                 parentVersion: null,
-                archive?.SegmentReferences.Count ?? 0,
+                archive?.SegmentReferences.Count ?? inherited?.SegmentReferences.Count ?? 0,
                 file.ModifiedAt,
                 file.IdentityDevice,
                 file.IdentityFileId);
@@ -430,7 +497,10 @@ public sealed partial class PublicationOrchestrator
         ArchiveSession session,
         ManifestBuilder builder,
         HardlinkGrouper grouper,
-        Catalogue.Catalogue? catalogue)
+        CatalogueGate? catalogue,
+        SourceIdentityKeyDeriver sourceKeys,
+        HintSource? hints,
+        TargetedRecordReader? manifests)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -438,6 +508,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
+        private readonly Dictionary<SourceKey, SourceIdentityHint?> _hints = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -449,6 +520,28 @@ public sealed partial class PublicationOrchestrator
 
         /// <summary>Every published subdirectory (path, head tree id); the root is the snapshot's own row.</summary>
         public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
+
+        /// <summary>
+        /// The 06 §11 hints this snapshot owes: one per file version it
+        /// <em>created</em>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A version that was reused was created by an earlier snapshot and
+        /// already has its hint, which still names it — re-publishing that is
+        /// the whole per-snapshot cost this layout exists to remove. A rename
+        /// does produce a new manifest, because a manifest states its own
+        /// name, so a rename does get a hint.
+        /// </para>
+        /// <para>
+        /// A source key claimed by two versions in one snapshot is dropped
+        /// rather than resolved: that is a hardlink group's two names, and
+        /// asserting either as the other's ancestor would be a coin toss a
+        /// manifest keeps forever.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<SourceIdentityHint> SourceIdentities =>
+            [.. _hints.Values.Where(static hint => hint is not null).Select(static hint => hint!)];
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
         {
@@ -471,7 +564,7 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 default:
-                    throw new InvalidOperationException($"Unknown scan event {scanEvent.GetType().Name}.");
+                    throw new InvalidOperationException(Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name));
             }
         }
 
@@ -499,27 +592,37 @@ public sealed partial class PublicationOrchestrator
 
         private async ValueTask PublishLeafAsync(ScanEntry entry, CancellationToken cancellationToken)
         {
-            // The NFR-PERF-003 short-circuit: same identity, size, and
-            // modification time as the prior snapshot's version of this path
-            // — re-emit its reference; the content is never opened. All
-            // three keys must be present and equal; a rebuilt catalogue has
-            // no identities, so it disables this rather than weakening it.
-            if (entry.Kind == ScanEntryKind.File &&
-                catalogue is not null &&
-                job.PriorSnapshotId is { } priorSnapshot &&
-                catalogue.LookupPath(priorSnapshot.Span, entry.RelativePath) is
-                    { EntryKind: EntryKind.File } prior &&
-                prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
-                prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
-                prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
-                entry.Identity is { } identity &&
-                identity.Device == priorDevice && identity.FileId == priorFileId)
+            // The prior version of THIS file, found by path where the path is
+            // unchanged and by stable identity where it moved. Identity is
+            // what makes a rename the same file rather than a delete plus a
+            // create (architecture 06 §1) — both for the content
+            // short-circuits below and for the ancestry the manifest records.
+            var prior = FindPriorVersion(entry);
+            var unchanged = IsContentUnchanged(entry, prior);
+
+            // The NFR-PERF-003 short-circuit: nothing about the file changed
+            // and it is still where it was — re-emit the prior version's
+            // reference; the content is never opened.
+            if (unchanged && string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
-                    priorModified, priorDevice, priorFileId, Reused: true));
+                    prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true));
+                return;
+            }
+
+            // The same file, moved. Its reference cannot be re-emitted — a
+            // manifest states its own name (06 §4), so a tree entry under the
+            // new name pointing at the old manifest would restore the file
+            // under the name it no longer has. It needs a new manifest, but
+            // not a new read: the bytes are unchanged and already durable, so
+            // the prior manifest is fetched and rewritten with the new name.
+            if (unchanged &&
+                await ReadPriorManifestAsync(prior!.ObjectId, cancellationToken).ConfigureAwait(false) is { } moved)
+            {
+                await PublishRenameAsync(entry, prior, moved, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -530,7 +633,7 @@ public sealed partial class PublicationOrchestrator
                     ScanEntryKind.File => await CaptureFileAsync(entry, cancellationToken).ConfigureAwait(false),
                     ScanEntryKind.Symlink => ZeroContentVersion(entry, EntryKind.Symlink),
                     ScanEntryKind.Special => ZeroContentVersion(entry, EntryKind.Special),
-                    _ => throw new InvalidOperationException($"A {entry.Kind} entry cannot be a leaf."),
+                    _ => throw new InvalidOperationException(Strings.FormatFrame_EntryCannotLeaf(entry.Kind)),
                 };
 
                 if (manifest is null)
@@ -538,8 +641,19 @@ public sealed partial class PublicationOrchestrator
                     return; // the failure was already recorded
                 }
 
+                // The ancestor, when there is one. A file version whose parent
+                // is null claims to be the first version of that file; saying
+                // so about the fourth edit of a document, or about a file the
+                // user merely renamed, is the history loss FR-MAN-003 exists
+                // to prevent.
+                var ancestor = prior?.ObjectId
+                    ?? await FindPriorVersionByHintAsync(entry, cancellationToken).ConfigureAwait(false);
+                var withParent = ancestor is { } parentVersion
+                    ? manifest with { ParentVersion = parentVersion }
+                    : manifest;
+
                 var objectId = await builder.AppendManifestAsync(
-                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(manifest), cancellationToken)
+                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(withParent), cancellationToken)
                     .ConfigureAwait(false);
 
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
@@ -548,6 +662,7 @@ public sealed partial class PublicationOrchestrator
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId));
+                RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -555,6 +670,170 @@ public sealed partial class PublicationOrchestrator
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="entry"/>'s content is provably the same as
+        /// <paramref name="prior"/>'s — identity, size, and modification time
+        /// all present and all equal.
+        /// </summary>
+        /// <remarks>
+        /// All three must be present, not merely non-contradictory. A rebuilt
+        /// catalogue holds no identities, so it disables both short-circuits
+        /// rather than weakening either: without identity, size and time alone
+        /// cannot tell an unchanged file from a different file at the same
+        /// path.
+        /// </remarks>
+        private static bool IsContentUnchanged(ScanEntry entry, CatalogueTreeEntry? prior) =>
+            entry.Kind == ScanEntryKind.File &&
+            prior is { EntryKind: EntryKind.File } &&
+            prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
+            prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
+            prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
+            entry.Identity is { } identity &&
+            identity.Device == priorDevice && identity.FileId == priorFileId;
+
+        /// <summary>
+        /// The prior version's manifest, when this publication can read one
+        /// (architecture 06 §4.2). Null disables the rename rewrite and the
+        /// file is captured normally.
+        /// </summary>
+        private ValueTask<FileVersionManifest?> ReadPriorManifestAsync(
+            ObjectId objectId, CancellationToken cancellationToken) =>
+            manifests is null
+                ? ValueTask.FromResult<FileVersionManifest?>(null)
+                : manifests.TryReadFileVersionAsync(objectId, cancellationToken);
+
+        /// <summary>
+        /// Publishes a moved file by rewriting its prior manifest under the
+        /// new name, without reading a byte of its content.
+        /// </summary>
+        /// <remarks>
+        /// Exactly three fields change: the name, its normalisation, and the
+        /// ancestry. Everything else — the segment references, the whole-file
+        /// hash, the length, the sparse extents, the segmentation profile, the
+        /// metadata map, the hardlink group, the capture diagnostics — is
+        /// inherited verbatim, because it describes bytes that were not
+        /// re-examined and must not be re-stated as though they had been. That
+        /// is the same fidelity the unchanged-path short-circuit above already
+        /// gives, which re-emits the prior manifest whole.
+        /// </remarks>
+        private async ValueTask PublishRenameAsync(
+            ScanEntry entry,
+            CatalogueTreeEntry prior,
+            FileVersionManifest priorManifest,
+            CancellationToken cancellationToken)
+        {
+            var renamed = priorManifest with
+            {
+                Name = entry.NameBytes,
+                NameNormalisation = entry.NameNormalisation,
+                ParentVersion = prior.ObjectId,
+            };
+
+            var objectId = await builder.AppendManifestAsync(
+                ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(renamed), cancellationToken)
+                .ConfigureAwait(false);
+
+            EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "renamed"));
+            _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, EntryKind.File));
+            _files.Add(new PublishedFileVersion(
+                entry.RelativePath, entry.NameBytes, objectId, EntryKind.File, Archive: null,
+                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: renamed));
+            RecordSourceIdentity(entry, objectId);
+        }
+
+        /// <summary>
+        /// The prior snapshot's version of this entry — by path first, then by
+        /// stable identity.
+        /// </summary>
+        /// <param name="entry">The entry being captured.</param>
+        /// <returns>The prior version, or <see langword="null"/> when this is a new file.</returns>
+        /// <remarks>
+        /// Path first because it is the overwhelmingly common case and the
+        /// cheaper index. Identity second because a rename or a move changes
+        /// the path and changes nothing else, and treating that as a new file
+        /// costs a full re-read of unchanged bytes and severs the version
+        /// history the user was trying to keep.
+        /// </remarks>
+        private CatalogueTreeEntry? FindPriorVersion(ScanEntry entry)
+        {
+            if (catalogue is null || job.PriorSnapshotId is not { } priorSnapshot)
+            {
+                return null;
+            }
+
+            if (catalogue.Read(c => c.LookupPath(priorSnapshot.Span, entry.RelativePath)) is { } byPath)
+            {
+                return byPath;
+            }
+
+            return entry.Identity is { } identity
+                ? catalogue.Read(c => c.LookupIdentity(priorSnapshot.Span, identity.Device, identity.FileId))
+                : null;
+        }
+
+        /// <summary>
+        /// The prior version named by the source-identity hints (specification
+        /// 06 §11), when the catalogue could not answer.
+        /// </summary>
+        /// <remarks>
+        /// This is the case a rebuilt catalogue produces: paths survive a
+        /// forensic rebuild, identities do not, so a file that was renamed
+        /// since the last snapshot matches neither index. Without the hints
+        /// its new version would claim to be the file's first — a durable loss
+        /// caused by a transient cache state. It yields <b>ancestry only</b>;
+        /// the content short-circuit above still needs size and modification
+        /// time, which a hint does not carry.
+        /// </remarks>
+        private async ValueTask<ObjectId?> FindPriorVersionByHintAsync(
+            ScanEntry entry, CancellationToken cancellationToken)
+        {
+            if (hints is null || entry.Identity is not { } identity)
+            {
+                return null;
+            }
+
+            return await hints
+                .FindAsync(sourceKeys.Derive(job.DeviceId.Span, identity.FileId), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records this snapshot's own hint for <paramref name="objectId"/>,
+        /// so the next publication can find it after a catalogue rebuild.
+        /// </summary>
+        private void RecordSourceIdentity(ScanEntry entry, ObjectId objectId)
+        {
+            if (entry.Identity is not { } identity)
+            {
+                return;
+            }
+
+            var sourceKey = sourceKeys.Derive(job.DeviceId.Span, identity.FileId);
+            var key = SourceKey.From(sourceKey);
+
+            if (_hints.TryGetValue(key, out var existing))
+            {
+                // Two versions, one inode, one snapshot: a hardlink group's
+                // two names. Neither is the other's ancestor and nothing here
+                // can tell which the next rename will mean, so the source key
+                // answers nothing at all.
+                if (existing is null || existing.ObjectId != objectId)
+                {
+                    _hints[key] = null;
+                }
+
+                return;
+            }
+
+            _hints[key] = new SourceIdentityHint
+            {
+                SourceKey = sourceKey,
+                SnapshotId = job.SnapshotId,
+                ObjectId = objectId,
+                CapturedAt = job.NowUnixMilliseconds,
+            };
         }
 
         private ArchiveResult? LastArchive { get; set; }
@@ -566,6 +845,7 @@ public sealed partial class PublicationOrchestrator
             ArchiveResult? archive = null;
             var attempts = 0;
             var consistent = false;
+            var substituted = false;
 
             // Read, then revalidate: a file that changed mid-read is read
             // again, up to the option's bound; content is always a complete
@@ -584,6 +864,20 @@ public sealed partial class PublicationOrchestrator
                 }
 
                 var probe = job.Source.Revalidate(entry);
+
+                // Identity first. Size and modification time detect an
+                // ordinary edit; they do not detect the object at this name
+                // being replaced by another one, which is what a
+                // time-of-check-to-time-of-use attack does — and re-reading
+                // would only read the substitute again, so it is recorded and
+                // the loop stops rather than retrying.
+                if (probe?.Identity is { } observed && entry.Identity is { } expected &&
+                    (observed.Device != expected.Device || observed.FileId != expected.FileId))
+                {
+                    substituted = true;
+                    break;
+                }
+
                 if (probe is null ||
                     (probe.Length == archive.LogicalLength &&
                      (probe.ModifiedAtMs is null || entry.Metadata.ModifiedAt is null ||
@@ -594,7 +888,11 @@ public sealed partial class PublicationOrchestrator
                 }
             }
 
-            if (!consistent)
+            if (substituted)
+            {
+                diagnostics.Add("captured-identity-changed");
+            }
+            else if (!consistent)
             {
                 diagnostics.Add($"captured-inconsistent: {attempts}");
             }

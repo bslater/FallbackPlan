@@ -1,3 +1,4 @@
+using Bodu;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -98,8 +99,8 @@ public sealed class StateDirectoryLock : IDisposable
     /// <exception cref="ClientStateException">Another process holds the role.</exception>
     public static StateDirectoryLock Acquire(string stateDirectory, string role)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(role);
 
         Directory.CreateDirectory(stateDirectory);
         var lockPath = PathFor(stateDirectory);
@@ -166,7 +167,7 @@ public sealed class StateDirectoryLock : IDisposable
     /// <returns>A sentence naming the holder, or <see langword="null"/> when the role looks free.</returns>
     public static string? DescribeHolderOrNull(string stateDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         if (TryAcquire(stateDirectory, DirectRole, out var probe))
         {

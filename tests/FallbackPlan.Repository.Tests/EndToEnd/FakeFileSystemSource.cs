@@ -40,6 +40,13 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         /// <summary>How many times revalidation still reports "changed" before settling.</summary>
         public int RevalidationChangesRemaining { get; set; }
+
+        /// <summary>
+        /// When set, revalidation reports this identity instead of the
+        /// node's — the name now refers to a different object, which is a
+        /// substitution rather than an edit.
+        /// </summary>
+        public ScanIdentity? SubstitutedIdentity { get; set; }
     }
 
     private readonly Dictionary<string, Node> _nodes = [];
@@ -78,6 +85,11 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         return node;
     }
 
+    /// <summary>Drops an entry — the user deleted the file between two backups.</summary>
+    /// <param name="relativePath">The path that is gone.</param>
+    /// <returns><see langword="true"/> when it was there to remove.</returns>
+    public bool Remove(string relativePath) => _nodes.Remove(relativePath);
+
     public SourceFilesystemInfo Probe(string rootPath) => Info;
 
     public RevalidationProbe? Revalidate(ScanEntry entry)
@@ -90,10 +102,13 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         if (node.RevalidationChangesRemaining > 0)
         {
             node.RevalidationChangesRemaining--;
-            return new RevalidationProbe(node.Content.Length, (node.Metadata.ModifiedAt ?? 0) + 999);
+            return new RevalidationProbe(
+                node.Content.Length, (node.Metadata.ModifiedAt ?? 0) + 999,
+                node.SubstitutedIdentity ?? node.Identity);
         }
 
-        return new RevalidationProbe(node.Content.Length, node.Metadata.ModifiedAt);
+        return new RevalidationProbe(
+            node.Content.Length, node.Metadata.ModifiedAt, node.SubstitutedIdentity ?? node.Identity);
     }
 
     public async IAsyncEnumerable<ScanEvent> ScanAsync(

@@ -3,6 +3,7 @@ using System.Numerics;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using ZstdSharp;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Compression;
 
@@ -73,7 +74,7 @@ public sealed class ZstdSegmentCodec : IDisposable
 
         if (maximumSegmentBytes <= 0)
         {
-            throw new ArgumentException("The maximum segment size is unset.", nameof(maximumSegmentBytes));
+            throw new ArgumentException(Strings.ZstdSegmentCodec_MaximumSegmentSizeUnset, nameof(maximumSegmentBytes));
         }
 
         _compressor = new Compressor(level);
@@ -106,8 +107,7 @@ public sealed class ZstdSegmentCodec : IDisposable
 
         if (destination.Length < plaintext.Length)
         {
-            throw new ArgumentException(
-                "The destination must hold at least the plaintext length — a stored-compressed frame is never larger.",
+            throw new ArgumentException(Strings.ZstdSegmentCodec_DestinationMustHoldLeastPlaintext,
                 nameof(destination));
         }
 

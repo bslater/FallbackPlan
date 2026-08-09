@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
+**Built:** Contract and local provider built; cloud providers are phase 3 — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Principles
@@ -109,7 +111,7 @@ Durable file creation with explicit flush · atomic temp-to-final rename where t
 
 ### 4.2 FallbackPlan peer
 
-Speaks the repository protocol rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)).
+Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)).
 
 ### 4.3 Azure Blob Storage
 

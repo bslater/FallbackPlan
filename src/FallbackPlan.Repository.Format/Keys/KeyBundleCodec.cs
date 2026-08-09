@@ -1,5 +1,7 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Keys;
 
@@ -19,7 +21,7 @@ public static class KeyBundleCodec
     /// <summary>Encodes the bundle as deterministic CBOR.</summary>
     public static byte[] Encode(KeyBundle bundle)
     {
-        ArgumentNullException.ThrowIfNull(bundle);
+        ThrowHelper.ThrowIfNull(bundle);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(4);
@@ -47,8 +49,7 @@ public static class KeyBundleCodec
     {
         if (cbor.Length > FormatLimits.MaxKeyBundleCborLength)
         {
-            throw new KeyObjectFormatException(
-                $"Key bundle is {cbor.Length} bytes; the limit is {FormatLimits.MaxKeyBundleCborLength} (specification 00 §8).");
+            throw new KeyObjectFormatException(Strings.FormatKeyBundleCodec_KeyBundleBytesLimit(cbor.Length, FormatLimits.MaxKeyBundleCborLength));
         }
 
         var reader = new CanonicalCborReader(cbor);
@@ -92,7 +93,7 @@ public static class KeyBundleCodec
 
         if (masterKey is null || dataGeneration is null || metadataGeneration is null || createdAt is null)
         {
-            throw new KeyObjectFormatException("Key bundle is missing a required field (specification 03 §3.1).");
+            throw new KeyObjectFormatException(Strings.KeyBundleCodec_KeyBundleMissingRequiredField);
         }
 
         var bundle = new KeyBundle(masterKey, dataGeneration.Value, metadataGeneration.Value, createdAt.Value);

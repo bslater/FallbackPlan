@@ -79,7 +79,7 @@ public sealed class CliHarness : IDisposable
     public async Task<Invocation> InitAsync()
     {
         var result = await RunWithoutStateAsync("init");
-        Assert.True(result.ExitCode == 0, $"init failed: {result.All}");
+        Assert.IsTrue(result.ExitCode == 0, $"init failed: {result.All}");
         return result;
     }
 

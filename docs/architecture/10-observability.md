@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
+**Built:** Yes — the status model, job states and instrumentation are all implemented — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. User-level status

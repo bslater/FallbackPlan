@@ -2,7 +2,7 @@
 
 Encrypted, versioned backup from one computer to another — with no vendor cloud in the middle.
 
-> **Status: Phases 0 and 1 implemented; Phase 2 in progress.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md). **Phase 2 is under way** — the service holds the writer role exclusively, hosts a versioned command contract on a local socket or named pipe, and unlocks itself from the platform keystore ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)); blob upload has left the archive loop ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §2). What is built, what is not, and **where to pick up next** are in the [phase-2 plan](phase-2-execution-plan.md#where-to-pick-up); measurements are in [phase-2-benchmarks.md](phase-2-benchmarks.md).
+> **Status: Phases 0 and 1 implemented; Phase 2 in progress.** The engine vertical slice is complete — all eleven phase-0 exit criteria trace to named tests ([phase-0 plan](phase-0-execution-plan.md)) — and [Phase 1](phase-1-execution-plan.md) is done: push 1 (filesystem capture, multi-file incremental snapshots, CLI, restore planning, recovery kit and standalone recovery tool) with every exit criterion traced to a named test, and push 2 (Agent scheduling, the job-state journal, the 10 §1 status model, and privacy-bounded OpenTelemetry instrumentation) per [ADR-0027](adr/0027-services-scheduling-status-telemetry.md). Lookup measurements: [phase-1-benchmarks.md](phase-1-benchmarks.md). **Phase 2 is under way** — the service holds the writer role exclusively, hosts a versioned command contract on a local socket or named pipe, and unlocks itself from the platform keystore ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)); blob upload has left the archive loop ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §2). What is built, what is not, and **where to pick up next** are in the [phase-2 plan](phase-2-execution-plan.md#where-to-pick-up); measurements are in [phase-2-benchmarks.md](phase-2-benchmarks.md). Decision by decision, what the code actually does is in [implementation status](implementation-status.md), and every architecture document now opens by saying whether it describes code that exists.
 
 ---
 
@@ -15,6 +15,9 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | Know what a word means | [Domain model](architecture/01-domain-model.md) — normative glossary |
 | See what changed and why | [Architecture review](review/2026-08-architecture-review.md), then the [pressure test](review/2026-08-fix-pressure-test.md) |
 | Know what is still undecided | [Open questions](open-questions.md) |
+| Know what is actually built | [Implementation status](implementation-status.md) |
+| Know why something *isn't* the design | [Abandoned choices](decisions-abandoned.md) |
+| See the calls the format freeze forced | [Freeze-gate decisions](freeze-gate-decisions-2026-08.md) |
 | See the delivery plan | [Roadmap](roadmap.md) |
 | Pick up where the last round stopped | [Phase 2 plan — where to pick up](phase-2-execution-plan.md#where-to-pick-up) |
 | Start building | [Phase 2 execution plan](phase-2-execution-plan.md) (in progress) · [Phase 1 execution plan](phase-1-execution-plan.md) · [Phase 0 execution plan](phase-0-execution-plan.md) (implemented) · [format specification](../specifications/repository-format/README.md) |
@@ -46,7 +49,15 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accepted** following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 are **Accepted** on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 is **Accepted** — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); the rest remain `Proposed`.
+Status per record. **Twenty-five of the thirty are Accepted.** 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); and, at the freeze-gate pass, 0003, 0010, 0013 and 0030 (0030 amended once when RFC 7250 proved unreachable on the platform).
+
+**Five remain `Proposed`, each for a stated reason rather than by neglect:** 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--plan-c-licence-and-reuse-posture).
+
+**A decision's status is not its implementation state**, and the two are tracked separately on purpose: `Status:` says whether the decision was accepted, and [implementation status](implementation-status.md) says whether the code does it. The two can differ in both directions, and do: three of the five records still marked `Proposed` are built and tested, and 0030 is Accepted while the transport that would carry it does not exist.
+
+- **[Implementation status](implementation-status.md)** — every ADR mapped to the code and tests that establish it, with the partly-built ones saying which half is missing
+- **[Abandoned choices](decisions-abandoned.md)** — what was rejected and why, and separately, what was *the plan* and was given up
+- **[Freeze-gate decisions](freeze-gate-decisions-2026-08.md)** — two calls that had to be made before v1 froze rather than when the code reached them: where verify-on-reuse outcomes live, and how a filename with no valid decoding is rendered
 
 | ADR | Decision |
 |-----|----------|
@@ -79,12 +90,13 @@ Status per record. ADRs 0005, 0006, 0008, 0009, 0011 and 0016–0018 are **Accep
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Push-2 service shapes: scheduling, job-state store, status model, instrumentation |
 | [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary: deployment topologies, process ownership, transport, unlock |
 | [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency: the ordering barrier, the bound, the order of work |
+| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing: a transport keypair the repository knows nothing about |
 
 Template: [0000](adr/0000-template.md)
 
 ## Specification
 
-The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md). The [recovery-kit format](../specifications/recovery-kit/README.md) is specified alongside it.
+The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md). The [recovery-kit format](../specifications/recovery-kit/README.md) is specified alongside it, and the [peer protocol](../specifications/peer-protocol/README.md) — how two devices come to trust one another and open a session — is specified as far as pairing and the session layer, with replication, verification and quotas still to write.
 
 Architecture documents explain *why*; the specification says *what bytes*. Where they disagree about format, the specification wins.
 
@@ -96,6 +108,7 @@ Architecture documents explain *why*; the specification says *what bytes*. Where
 
 - [Architecture review, August 2026](review/2026-08-architecture-review.md) — 6 critical, 7 high, 8 medium findings against the original proposal
 - [Pressure test, August 2026](review/2026-08-fix-pressure-test.md) — the six fixes read back as an implementation contract: 3 critical, 7 high, 5 medium. No fix reversed; two were unsound as written
+- [Duplicati learnings, August 2026](review/2026-08-duplicati-learnings.md) — another engine's fifteen years of field defects read as a test-design input: 14 themes, 22 tests to add, one gap serious enough to fix before Phase 2 closes
 - [Original proposal](review/2026-08-original-proposal.md) — preserved verbatim, superseded
 
 ---

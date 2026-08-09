@@ -209,3 +209,49 @@ Application layer they live in is exactly what the service now hosts.
   wants after reopening a laptop.
 - Job history is deliberately sacrificial; anything that must survive
   belongs to the engine's journal or the repository itself.
+
+## Alternatives considered
+
+**Cron expressions for `schedule`.** Familiar to the operators who already know
+them, and wrong for this audience: the product's schedule is "every few hours"
+or "overnight", and a five-field expression makes the common case expressible
+in several ways and the uncommon case expressible at all. Rejected in favour of
+the two strict forms of §1 — a grammar small enough that an error message can
+state the whole of it.
+
+**Replay every missed run after downtime.** The literal reading of a schedule,
+and it produces a backlog storm after two offline weeks. Rejected because a
+backup is idempotent state capture rather than an event log: five missed runs
+and one missed run leave the repository in the same place, so four of them are
+pure cost.
+
+**Queue overlapping runs of the same set.** Rejected for the same reason. A run
+that overruns its own next scheduled time has nothing to hand to a successor;
+letting it define the new anchor when it completes is both simpler and what the
+user meant.
+
+**Keep the schedule arithmetic hand-rolled.** This was the original decision,
+and the [amendment to §1](#amendment-2026-08-05-the-arithmetic-moves-to-a-shared-library)
+records why it was abandoned: the daily branch mixed the argument's clock with
+a machine-timezone conversion, so it was right on a UTC machine and a day wrong
+everywhere else — invisible to a UTC-only CI matrix. Taking a dependency for
+calendar arithmetic bought a library that is tested in timezones this project's
+CI does not run in.
+
+**A durable, transactional job history.** Rejected: it would make the Agent
+own a second store with its own consistency obligations, to hold data that is
+explicitly disposable. What must survive a crash belongs to the engine's
+journal, and conflating the two would make the journal's guarantees harder to
+reason about, not the history's stronger.
+
+**Ship an OpenTelemetry exporter in the box.** Rejected for §3's reason: an
+exporter is a deployment decision with a package identity and a network
+destination, and the phase that ships a UI or an ops deployment is the phase
+that can make it. The API is in-box so the instrumentation exists and costs
+nothing until someone wires it up.
+
+**Derive user-facing status directly from the job state machine.** Tempting,
+because the states are right there. Rejected: `Running` is not `Protected`, and
+a status model that says what the software is *doing* rather than whether the
+user's data is *safe* answers a question nobody asked. §4 keeps them separate
+for that reason.

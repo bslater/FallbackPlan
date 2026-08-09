@@ -86,9 +86,81 @@ In any domain other than `device`, a member can determine whether another member
 
 **Always verify on reuse, no domains.** Rejected — it removes the hardened option for users who do not want their device reading another member's data at all, and it forecloses `repository-unverified` for uniformly trusted fleets. Note that with `repository` as the default, this is now close to the shipped behaviour; what the domains add is the two ends of the range, not the middle.
 
+## Implementation status (2026-08)
+
+**Built.** The domain is consulted at the reuse decision, and the three domains
+now differ.
+
+`DedupTrustGate` decides every reuse — segments and metadata objects alike,
+because referencing another writer's manifest is the same trust question as
+referencing their segment. It reads **writer attribution first, domain
+second**, and that ordering is what makes the default affordable:
+
+- **A segment this writer wrote is reused in every domain, with no read.** No
+  device needs to confirm bytes it wrote itself. This is the whole of
+  FR-DED-002's "a fresh single-device repository performs no verification
+  reads", and it is measured rather than asserted — the second backup of an
+  unchanged single-writer tree issues **zero** store reads.
+- **`device`** refuses another writer's object outright and stores its own
+  copy. Duplicate storage across a user's devices is what this domain sells.
+- **`repository`** (the default) fetches, decrypts, and confirms the content
+  identifier before referencing. The confirmation *is* 04 §6 step 7 — the
+  record read already re-hashes the plaintext and compares the identifier it
+  implies — so there is no separate verification path to get wrong.
+- **`repository-unverified`** references without reading, for a uniformly
+  trusted fleet.
+
+Attribution comes from `writer_id` on the winning index entry, which is durable
+and recovered by a rebuild, so the gate does not depend on cache state to tell
+a device's own bytes from a stranger's. The read itself does not depend on the
+catalogue's blob rows either: the store blob key is derived from the blob
+identifier (02 §4.3) and the class follows from the object type, because the
+device that needs to verify is exactly the device whose catalogue was rebuilt
+from index deltas and has no blob rows at all.
+
+**A confirmation that fails is a finding, and the backup still succeeds.** A
+record that reads and does not verify is recorded as `CorruptRecord` against
+the object and written again from the bytes this device has in hand — which is
+[C3](../review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s
+remedy doing what it was written for: detection at write time, while the source
+data is still there, rather than at restore time when it is gone.
+[T-10](../threat-model.md) is mitigated under the default and closed outright
+under `device`. A record that could not be *reached* is not a finding — nothing
+is known about its content — and only refuses the reuse.
+
+### The cost, measured
+
+The read is paid **once per object per catalogue**, not once per backup:
+confirmed objects are recorded in the catalogue's `verified_objects` and the
+gate consults it first. In the two-writer end-to-end fixture the confirming
+publication issues **9 range reads** and the next publication of the same tree
+issues **0** — held by a test that corrupts the blob between the two, so a
+reuse that still succeeds can only mean the bytes were not read again.
+
+NFR-PERF-003's fast path is untouched: an unchanged file short-circuits on
+identity, size and modification time before any segment is considered, so no
+verification read is reachable from it. What the default costs is bounded by
+the objects that are *new to this device and old to the repository* — which is
+the set cross-device deduplication exists to exploit, and each member of it is
+read once, ever.
+
+### What is deliberately not solved
+
+**Verification memory does not survive a catalogue rebuild.** The two ways out
+were a durable repository object recording verification outcomes, or accepting
+re-verification and saying so
+([PT-12](../review/2026-08-fix-pressure-test.md#pt-12--device-attribution-and-verify-on-reuse-state-live-only-in-a-disposable-cache)).
+**This takes the second.** A verification-record object designed before
+anything consumes it is format surface frozen into v1 on speculation, and the
+cost it avoids only exists in a multi-writer repository, which does not exist
+yet. Losing the catalogue therefore re-imposes verification once, and the
+schema's own comment says so where an implementer will read it. Adding the
+durable object later is a minor-version change, so nothing is foreclosed.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Default changed from `device` to `repository` — the original rationale did not distinguish the two (PT-11). Writer-attribution and verification-state recovery specified (PT-12). Three-domain model itself unchanged. |
+| 2026-08 | Accepted (amended) | Built. PT-12's open half resolved the second way: verification outcomes are catalogue state and a rebuild re-imposes the read, rather than a durable repository object designed before anything consumes it. |

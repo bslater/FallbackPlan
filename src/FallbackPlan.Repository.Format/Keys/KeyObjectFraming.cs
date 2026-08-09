@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Keys;
 
@@ -61,18 +62,17 @@ public static class KeyObjectFraming
     {
         if (wrapNonce.Length != WrapNonceLength)
         {
-            throw new ArgumentException($"The wrap nonce is exactly {WrapNonceLength} bytes.", nameof(wrapNonce));
+            throw new ArgumentException(Strings.FormatKeyObjectFraming_WrapNonceExactlyBytes(WrapNonceLength), nameof(wrapNonce));
         }
 
         if (tag.Length != WrapTagLength)
         {
-            throw new ArgumentException($"The wrap tag is exactly {WrapTagLength} bytes.", nameof(tag));
+            throw new ArgumentException(Strings.FormatKeyObjectFraming_WrapTagExactlyBytes(WrapTagLength), nameof(tag));
         }
 
         if (wrapped.Length > FormatLimits.MaxKeyBundleCborLength)
         {
-            throw new ArgumentException(
-                $"The wrapped bundle is {wrapped.Length} bytes; the limit is {FormatLimits.MaxKeyBundleCborLength} (specification 00 §8).",
+            throw new ArgumentException(Strings.FormatKeyObjectFraming_WrappedBundleBytesLimit(wrapped.Length, FormatLimits.MaxKeyBundleCborLength),
                 nameof(wrapped));
         }
 
@@ -102,13 +102,12 @@ public static class KeyObjectFraming
     {
         if (data.Length < HeaderLength + WrapTagLength)
         {
-            throw new KeyObjectFormatException(
-                $"Key object is {data.Length} bytes; the framing alone requires {HeaderLength + WrapTagLength}.");
+            throw new KeyObjectFormatException(Strings.FormatKeyObjectFraming_KeyObjectBytesFramingAlone(data.Length, HeaderLength + WrapTagLength));
         }
 
         if (!data[..8].SequenceEqual(Magic))
         {
-            throw new KeyObjectFormatException("Not a key object: the FBPKKEYS magic is absent.");
+            throw new KeyObjectFormatException(Strings.KeyObjectFraming_NotKeyObjectFBPKKEYSMagic);
         }
 
         var formatVersion = BinaryPrimitives.ReadUInt16BigEndian(data[8..]);
@@ -116,24 +115,21 @@ public static class KeyObjectFraming
 
         if (kekProfile != KekProfileAes256GcmV1)
         {
-            throw new KeyObjectFormatException(
-                $"Wrap profile 0x{kekProfile:x4} is not permitted: format v1 requires aes-256-gcm-v1 (0x0001) (specification 03 §3).");
+            throw new KeyObjectFormatException(Strings.FormatKeyObjectFraming_WrapProfileXNotPermitted(kekProfile));
         }
 
         var cborLength = BinaryPrimitives.ReadUInt32BigEndian(data[40..]);
 
         if (cborLength > FormatLimits.MaxKeyBundleCborLength)
         {
-            throw new KeyObjectFormatException(
-                $"Wrapped bundle declares {cborLength} bytes; the limit is {FormatLimits.MaxKeyBundleCborLength} (specification 00 §8).");
+            throw new KeyObjectFormatException(Strings.FormatKeyObjectFraming_WrappedBundleDeclaresBytesLimit(cborLength, FormatLimits.MaxKeyBundleCborLength));
         }
 
         var expectedLength = HeaderLength + (int)cborLength + WrapTagLength;
 
         if (data.Length != expectedLength)
         {
-            throw new KeyObjectFormatException(
-                $"Key object is {data.Length} bytes; the declared bundle length implies exactly {expectedLength}.");
+            throw new KeyObjectFormatException(Strings.FormatKeyObjectFraming_KeyObjectBytesDeclaredBundle(data.Length, expectedLength));
         }
 
         return new KeyObject(

@@ -11,13 +11,21 @@ public static class CatalogueSchema
 {
     /// <summary>The current schema version; a mismatch rebuilds.</summary>
     /// <remarks>
+    /// <para>
+    /// v4 over v3: <c>verified_objects</c>, the verify-on-reuse memory
+    /// ([ADR-0006](../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)).
+    /// It is deliberately not recoverable by a rebuild — see the table's own
+    /// note.
+    /// </para>
+    /// <para>
     /// v3 over v2: <c>ix_tree_entries_parent</c> became a covering index —
     /// without it SQLite prefers the primary key's free ordering and scans
     /// the whole snapshot per directory listing (measured 15 ms/op at 100k
     /// files; covered, 0.28 ms). A version bump because a cache is never
     /// migrated, only rebuilt.
+    /// </para>
     /// </remarks>
-    public const int Version = 3;
+    public const int Version = 4;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -104,6 +112,12 @@ public static class CatalogueSchema
 
         CREATE INDEX ix_file_versions_hash ON file_versions (whole_file_hash);
 
+        -- Finds a prior version by the file's stable identity rather than by
+        -- its path, which is what makes a rename or a move recognisable as
+        -- the same file instead of a delete plus a create (architecture 06 §1).
+        CREATE INDEX ix_file_versions_identity
+            ON file_versions (identity_device, identity_file_id);
+
         CREATE TABLE tree_entries (
             snapshot_id   BLOB NOT NULL,
             path          TEXT NOT NULL,
@@ -121,6 +135,19 @@ public static class CatalogueSchema
         CREATE TABLE segment_dedup (
             content_id BLOB PRIMARY KEY,
             object_id  BLOB NOT NULL
+        ) WITHOUT ROWID;
+
+        -- Objects another writer stored that this device has fetched,
+        -- decrypted, and confirmed (ADR-0006). Reuse in the `repository`
+        -- domain consults it so the verification read is paid once per
+        -- object rather than once per backup.
+        --
+        -- A rebuild does not restore it, and that is the accepted cost: the
+        -- alternative is a durable repository object recording verification
+        -- outcomes, which is format surface designed before anything consumes
+        -- it. Losing the catalogue therefore re-imposes verification, once.
+        CREATE TABLE verified_objects (
+            object_id BLOB PRIMARY KEY
         ) WITHOUT ROWID;
 
         CREATE TABLE damage_findings (

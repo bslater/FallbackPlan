@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -55,8 +56,8 @@ public sealed class RepositoryReader : IDisposable
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync"/> before reading.</summary>
     public RepositoryReader(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
     {
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
 
         _repositoryId = repositoryId;
         _keys = keys;
@@ -146,8 +147,8 @@ public sealed class RepositoryReader : IDisposable
         Stream destination,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(references);
-        ArgumentNullException.ThrowIfNull(destination);
+        ThrowHelper.ThrowIfNull(references);
+        ThrowHelper.ThrowIfNull(destination);
 
         var spoolPath = Path.Combine(Path.GetTempPath(), $"fbp-restore-{Guid.NewGuid():n}.spool");
 

@@ -1,6 +1,6 @@
+using FallbackPlan.TestSupport;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Segmentation;
-using FsCheck.Xunit;
 
 namespace FallbackPlan.Repository.FuzzTests;
 
@@ -10,6 +10,7 @@ namespace FallbackPlan.Repository.FuzzTests;
 /// input exactly, obey the min/max bounds, and are a pure function of the
 /// content — never of how the stream doles bytes out.
 /// </summary>
+[TestClass]
 public sealed class CdcPropertyTests
 {
     private static readonly CdcParameters Parameters =
@@ -38,8 +39,11 @@ public sealed class CdcPropertyTests
         return segments;
     }
 
-    [Property(MaxTest = 50)]
-    public async Task Segments_are_contiguous_cover_the_input_and_obey_the_bounds(int seed, byte sizeSeed)
+    [TestMethod]
+    public void CdcSegmentation_AnyInput_ProducesContiguousSegmentsWithinTheBounds() =>
+        PropertyCheck.Holds(this, maxTest: 50);
+
+    public static async Task CdcSegmentation_AnyInput_ProducesContiguousSegmentsWithinTheBoundsProperty(int seed, byte sizeSeed)
     {
         var data = Expand(seed, sizeSeed);
 
@@ -50,26 +54,29 @@ public sealed class CdcPropertyTests
         var index = 0L;
         foreach (var segment in segments)
         {
-            Assert.Equal(index, segment.Index);
-            Assert.Equal(offset, segment.Offset);
-            Assert.InRange(segment.Length, 1, Parameters.MaxSize);
+            Assert.AreEqual(index, segment.Index);
+            Assert.AreEqual(offset, segment.Offset);
+            Assert.IsInRange(1, Parameters.MaxSize, segment.Length);
             offset += segment.Length;
             index++;
         }
 
-        Assert.Equal(data.Length, offset);
+        Assert.AreEqual(data.Length, offset);
 
         // Every segment but the last respects min_size (09 §3.1); only the
         // final short segment may fall under it.
         foreach (var segment in segments.Take(segments.Count - 1))
         {
-            Assert.True(segment.Length >= Parameters.MinSize,
+            Assert.IsTrue(segment.Length >= Parameters.MinSize,
                 $"segment {segment.Index} is {segment.Length} bytes, under min {Parameters.MinSize}");
         }
     }
 
-    [Property(MaxTest = 30)]
-    public async Task Boundaries_are_deterministic_and_independent_of_stream_chunking(
+    [TestMethod]
+    public void CdcSegmentation_TheSameContentChunkedDifferently_ProducesIdenticalBoundaries() =>
+        PropertyCheck.Holds(this, maxTest: 30);
+
+    public static async Task CdcSegmentation_TheSameContentChunkedDifferently_ProducesIdenticalBoundariesProperty(
         int seed, byte sizeSeed, ushort chunkSeed)
     {
         var data = Expand(seed, sizeSeed);
@@ -78,10 +85,10 @@ public sealed class CdcPropertyTests
         var expected = await SegmentAsync(oneShot);
 
         using var again = new MemoryStream(data);
-        Assert.Equal(expected, await SegmentAsync(again));
+        SequenceAssert.AreEqual(expected, await SegmentAsync(again));
 
         using var trickle = new TrickleStream(data, chunkSize: 1 + chunkSeed % 8192);
-        Assert.Equal(expected, await SegmentAsync(trickle));
+        SequenceAssert.AreEqual(expected, await SegmentAsync(trickle));
     }
 
     /// <summary>A stream that returns at most <paramref name="chunkSize"/> bytes per read.</summary>

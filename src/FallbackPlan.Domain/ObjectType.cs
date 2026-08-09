@@ -38,6 +38,21 @@ public enum ObjectType : byte
 
     /// <summary>A journal record (specification 08 §2; ADR-0022 §Decision 1).</summary>
     JournalRecord = 0x0A,
+
+    /// <summary>An advisory placement hint (specification 06 §10).</summary>
+    PlacementHint = 0x0B,
+
+    /// <summary>An advisory source-identity hint (specification 06 §11).</summary>
+    SourceIdentityHint = 0x0C,
+
+    /// <summary>An advisory collector lease (specification 11 §2).</summary>
+    Lease = 0x0D,
+
+    /// <summary>A signed tombstone authorising one deletion (specification 11 §3).</summary>
+    Tombstone = 0x0E,
+
+    /// <summary>A repository-scoped audit-period record (specification 11 §4).</summary>
+    AuditPeriodRecord = 0x0F,
 }
 
 /// <summary>
@@ -49,11 +64,11 @@ public static class ObjectTypes
     /// Returns whether <paramref name="value"/> is an assigned object type.
     /// Rejects zero, the reserved store-key domain separator <c>0x07</c> —
     /// which stays reserved forever (specification 02 §3.1) — and everything
-    /// unassigned above <c>0x0A</c>: an unknown type in an object the reader
+    /// unassigned above <c>0x0F</c>: an unknown type in an object the reader
     /// must interpret is refused, never guessed (specification 00 §3).
     /// </summary>
     public static bool IsValid(byte value) =>
-        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0A);
+        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0F);
 
     /// <summary>
     /// Converts a byte read from untrusted input into an

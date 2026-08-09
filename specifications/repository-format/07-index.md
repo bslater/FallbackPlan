@@ -29,7 +29,10 @@ Stored at `/index/delta/<generation>/<delta-id>`, encrypted as a metadata record
 | 6 | array | `covered_blob_ids` — array of bytes[16] |
 | 7 | array | `entries` (§2.1) |
 | 8 | bool | `is_void` — present and true only for a void delta (§4) |
-| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
+| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of **every other key present**; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
+| 10 | array | `covered_blob_digests` — array of bytes[32], parallel to `covered_blob_ids` (§2.2) |
+
+The signature covers every key except itself, stated that way rather than as a numeric range so that a key added later is signed by construction. Key 10 is the first such key; nothing sorts a signed key after the signature by accident.
 
 > **Erratum (phase 0).** Three resolutions pending normative edits, all per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) "encrypted as a metadata record" is under-specified for an object outside a blob — the `FBPKSREC` standalone framing (Decision 1) supplies the encryption context, with object type `0x08`; (2) `<delta-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); (3) key 5 `shard` is **optional** — present only when every entry falls in that one shard, absent otherwise (Decision 4), since §8 permits multi-shard deltas that a scalar cannot describe.
 
@@ -49,6 +52,18 @@ entry = [ object_id, blob_id, physical_offset, stored_length, profiles, entry_ty
 | 3 | u32 | `stored_length` |
 | 4 | u32 | `profiles` — compression in the high 16 bits, encryption in the low 16 |
 | 5 | u8 | `entry_type` — 1 insertion, 2 supersession |
+
+### 2.2 Covered blob digests
+
+`covered_blob_digests` is OPTIONAL. When present it MUST have exactly the length of `covered_blob_ids`, and element *i* MUST be the SHA-256 digest of the blob named by `covered_blob_ids[i]`, computed as [05 §5](05-blob.md#5-sealing) defines it — over bytes `[0, blob_length − 16)`, everything up to but excluding the locator.
+
+A reader that holds a blob and a delta carrying its digest can establish that the bytes it has are the bytes the writer sealed, **without trusting the store and without decrypting anything**. That is what a replication receipt needs: a participant receiving a blob checks it against a digest that is signed, published, and discoverable in the same object that declares the blob covered. A device-local record cannot serve that purpose, because the participant checking it is not the device that wrote it.
+
+It is optional because a writer that publishes no digest is not wrong — the format's integrity rests on per-record AEAD tags, and the digest adds a cheaper whole-blob check rather than a necessary one. A reader MUST NOT treat absence as damage. A reader MUST treat a **present** digest that does not match the blob as a damage finding, and MUST NOT fall back to the record tags to decide the blob is fine: the tags authenticate records, and a blob whose sealed bytes differ from what was signed is a different question.
+
+A length mismatch between the two arrays is a malformed object, and a reader MUST refuse the delta rather than pair the elements it can.
+
+> **Erratum resolved (phase 1).** [05 §5](05-blob.md#5-sealing) said the digest was "recorded in the index" when no index field carried it, and [Q16](../../docs/open-questions.md#closed) tracked the gap. This section is the field. The device-local catalogue keeps its copy as a cache; this is the durable one.
 
 ## 3 Precedence
 

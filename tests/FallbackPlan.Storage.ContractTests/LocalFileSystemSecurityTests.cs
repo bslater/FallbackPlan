@@ -1,6 +1,6 @@
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Storage.ContractTests;
 
@@ -10,6 +10,7 @@ namespace FallbackPlan.Storage.ContractTests;
 /// refused, the write spool is invisible, and a completed put is durably
 /// readable.
 /// </summary>
+[TestClass]
 public sealed class LocalFileSystemSecurityTests : IDisposable
 {
     private readonly string _root =
@@ -21,8 +22,8 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
     private static Func<CancellationToken, ValueTask<Stream>> Content(byte[] bytes) =>
         _ => ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false));
 
-    [Fact]
-    public async Task A_symlinked_directory_inside_the_root_refuses_the_operation()
+    [TestMethod]
+    public async Task Store_ASymlinkedDirectoryInsideTheRoot_RefusesTheOperation()
     {
         var store = new LocalFileSystemObjectStore(_root);
         Directory.CreateDirectory(_outside);
@@ -39,18 +40,18 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
 
         // Writing through the symlinked component would land outside the
         // repository root: a genuine fault, reported as an exception.
-        await Assert.ThrowsAsync<IOException>(async () =>
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await store.PutAsync(
                 ObjectKey.Parse("blobs/data/escape"),
                 Content([0x01]),
                 PutConditions.None,
                 CancellationToken.None));
 
-        Assert.Empty(Directory.EnumerateFileSystemEntries(_outside));
+        Assert.IsEmpty(Directory.EnumerateFileSystemEntries(_outside));
     }
 
-    [Fact]
-    public async Task The_write_spool_never_appears_in_listings()
+    [TestMethod]
+    public async Task List_WhileAPutIsSpooling_OmitsTheSpoolFile()
     {
         var store = new LocalFileSystemObjectStore(_root);
         await store.PutAsync(ObjectKey.Parse("repository-format"), Content([0x01]), PutConditions.None, CancellationToken.None);
@@ -65,30 +66,30 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
             listed.Add(entry.Key.Value);
         }
 
-        Assert.Equal(["repository-format"], listed);
+        SequenceAssert.AreEqual(["repository-format"], listed);
     }
 
-    [Fact]
-    public async Task A_completed_put_is_immediately_readable_with_the_correct_length()
+    [TestMethod]
+    public async Task Put_OnceComplete_IsImmediatelyReadableAtItsFullLength()
     {
         var store = new LocalFileSystemObjectStore(_root);
         var payload = new byte[65_536];
         payload[^1] = 0x5A;
 
         var put = await store.PutAsync(ObjectKey.Parse("blobs/data/abcd/durable"), Content(payload), PutConditions.None, CancellationToken.None);
-        Assert.Equal(PutOutcome.Created, put.Outcome);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
 
         var metadata = await store.GetMetadataAsync(ObjectKey.Parse("blobs/data/abcd/durable"), CancellationToken.None);
-        Assert.True(metadata.Found);
-        Assert.Equal(payload.Length, metadata.Metadata!.Length);
+        Assert.IsTrue(metadata.Found);
+        Assert.AreEqual(payload.Length, metadata.Metadata!.Length);
     }
 
-    [Fact]
-    public async Task A_failed_content_factory_leaves_no_spool_residue()
+    [TestMethod]
+    public async Task Put_WhenTheContentFactoryThrows_LeavesNoSpoolResidue()
     {
         var store = new LocalFileSystemObjectStore(_root);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
             await store.PutAsync(
                 ObjectKey.Parse("blobs/data/abcd/failed"),
                 _ => throw new InvalidOperationException("source vanished"),
@@ -96,10 +97,10 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
                 CancellationToken.None));
 
         var spool = Path.Combine(_root, ".fbp-tmp");
-        Assert.True(!Directory.Exists(spool) || !Directory.EnumerateFileSystemEntries(spool).Any());
+        Assert.IsTrue(!Directory.Exists(spool) || !Directory.EnumerateFileSystemEntries(spool).Any());
 
         var metadata = await store.GetMetadataAsync(ObjectKey.Parse("blobs/data/abcd/failed"), CancellationToken.None);
-        Assert.False(metadata.Found);
+        Assert.IsFalse(metadata.Found);
     }
 
     /// <inheritdoc />

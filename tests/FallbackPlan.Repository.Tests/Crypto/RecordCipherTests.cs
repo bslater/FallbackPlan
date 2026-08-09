@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Crypto;
 
@@ -11,6 +12,7 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// AAD binds repository, format version, object type, object identifier, and
 /// ordinal — each variation must break the tag.
 /// </summary>
+[TestClass]
 public sealed class RecordCipherTests
 {
     private static readonly byte[] BlobKey = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
@@ -42,35 +44,35 @@ public sealed class RecordCipherTests
         return RecordCipher.TryOpen(BlobKey, nonce, aad, ciphertext, tag, destination);
     }
 
-    [Fact]
-    public void A_record_opens_at_its_own_ordinal_and_repository()
+    [TestMethod]
+    public void RecordCipher_AtItsOwnOrdinalAndRepository_Opens()
     {
         var plaintext = "segment plaintext"u8.ToArray();
         var (ciphertext, tag) = SealAt(47, RepoA, plaintext);
         var restored = new byte[plaintext.Length];
 
-        Assert.True(OpenAt(47, RepoA, ciphertext, tag, restored));
-        Assert.Equal(plaintext, restored);
+        Assert.IsTrue(OpenAt(47, RepoA, ciphertext, tag, restored));
+        SequenceAssert.AreEqual(plaintext, restored);
     }
 
-    [Fact]
-    public void A_record_moved_to_a_different_ordinal_fails_authentication()
+    [TestMethod]
+    public void RecordCipher_MovedToADifferentOrdinal_FailsAuthentication()
     {
         var (ciphertext, tag) = SealAt(47, RepoA, "segment plaintext"u8.ToArray());
 
-        Assert.False(OpenAt(48, RepoA, ciphertext, tag, new byte[ciphertext.Length]));
+        Assert.IsFalse(OpenAt(48, RepoA, ciphertext, tag, new byte[ciphertext.Length]));
     }
 
-    [Fact]
-    public void A_record_moved_to_a_different_repository_fails_authentication()
+    [TestMethod]
+    public void RecordCipher_MovedToADifferentRepository_FailsAuthentication()
     {
         var (ciphertext, tag) = SealAt(47, RepoA, "segment plaintext"u8.ToArray());
 
-        Assert.False(OpenAt(47, RepoB, ciphertext, tag, new byte[ciphertext.Length]));
+        Assert.IsFalse(OpenAt(47, RepoB, ciphertext, tag, new byte[ciphertext.Length]));
     }
 
-    [Fact]
-    public void Tampered_ciphertext_fails_and_no_plaintext_is_emitted()
+    [TestMethod]
+    public void RecordCipher_CiphertextIsTampered_FailsAndEmitsNoPlaintext()
     {
         var plaintext = "segment plaintext"u8.ToArray();
         var (ciphertext, tag) = SealAt(0, RepoA, plaintext);
@@ -79,7 +81,10 @@ public sealed class RecordCipherTests
         var destination = new byte[plaintext.Length];
         destination.AsSpan().Fill(0xEE);
 
-        Assert.False(OpenAt(0, RepoA, ciphertext, tag, destination));
-        Assert.All(destination, value => Assert.Equal(0, value));
+        Assert.IsFalse(OpenAt(0, RepoA, ciphertext, tag, destination));
+        foreach (var value in destination)
+        {
+            Assert.AreEqual(0, value);
+        }
     }
 }

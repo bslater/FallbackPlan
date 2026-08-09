@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Records;
 
@@ -29,7 +30,7 @@ public static class RecordAad
     {
         if (destination.Length != Length)
         {
-            throw new ArgumentException($"The record AAD is exactly {Length} bytes; got {destination.Length}.", nameof(destination));
+            throw new ArgumentException(Strings.FormatRecordAad_RecordAADExactlyBytesGot(Length, destination.Length), nameof(destination));
         }
 
         repositoryId.CopyTo(destination);

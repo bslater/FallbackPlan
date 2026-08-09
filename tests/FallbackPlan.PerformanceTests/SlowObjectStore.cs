@@ -1,5 +1,7 @@
 using FallbackPlan.Storage.Abstractions;
 
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.PerformanceTests;
 
 /// <summary>
@@ -8,7 +10,7 @@ namespace FallbackPlan.PerformanceTests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="NullObjectStore"/> consumes and discards, so a PUT costs nothing
+/// <see cref="DiscardingObjectStore"/> consumes and discards, so a PUT costs nothing
 /// and cannot stall anything. That makes it the right instrument for measuring
 /// the pipeline and the wrong one for measuring ADR-0029 §2, whose whole claim
 /// is about destinations that are <i>not</i> free: a spinning disk, a LAN peer,

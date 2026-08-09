@@ -1,3 +1,4 @@
+using Bodu;
 using System.Globalization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -29,7 +30,7 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
     /// <summary>Creates a store at <paramref name="path"/>.</summary>
     public FileSequenceStateStore(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
         _path = path;
     }
 
@@ -78,7 +79,7 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
     /// <inheritdoc />
     public void Save(SequenceState state)
     {
-        ArgumentNullException.ThrowIfNull(state);
+        ThrowHelper.ThrowIfNull(state);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path))!);
 
@@ -113,7 +114,7 @@ public sealed class WriterSequence : IBlobCounterAllocator
     /// <summary>Loads the writer's state; anything pending at load is a crash leftover.</summary>
     public WriterSequence(ISequenceStateStore store)
     {
-        ArgumentNullException.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(store);
         _store = store;
 
         var state = store.Load();

@@ -56,8 +56,51 @@ Bodu enters the build as **prebuilt NuGet packages committed to this repository*
 
 **Publish Bodu to nuget.org and consume normally.** The cleanest end state, but not this repository's decision to make — upstream publishing cadence and ownership are the maintainer's. The committed feed is forward-compatible with it: if the packages appear on nuget.org, the migration is a source-mapping change.
 
+## Amendment 1 (2026-08) — Bodu.Core is a solution-wide vocabulary, not a contained dependency
+
+The original decision left `Bodu.Core` where it happened to land: one
+`PackageReference`, in `Repository.Packing`, with a canary test asserting it
+stayed there and a comment telling whoever moved it to think first. This is
+that thinking.
+
+**`Bodu.Core` is now referenced by every project that validates an argument**
+— eighteen of the twenty-one — and `ThrowHelper` replaces the BCL's
+`ArgumentNullException.ThrowIfNull` and its relatives at all 291 guard sites.
+
+**Why the containment rule was worth losing.** It was never protecting
+anything about `Bodu.Core`; it was protecting the habit of not spreading a
+third-party dependency without an argument. That habit is still correct for
+`Bodu.Security.Cryptography`, where the blast radius is the user's stored
+bytes and the rule stays exactly as it was, and for
+`Bodu.Globalization.Recurrence`, which stays in `Application`. Guard clauses
+are the opposite case: the cost of *not* sharing them is a validation
+vocabulary that differs per project, which is how a parameter check ends up
+throwing the wrong exception type in one layer and nothing at all in another.
+
+**What this costs, stated rather than discovered later.** `Repository.Format`
+is what the standalone recovery tool links, and its closure is now
+`Bodu.Core` and `Bodu.Text.Encoding` rather than the latter alone. Both are
+pure managed libraries with no native assets and both restore from the
+committed feed, so the clean-machine property NFR-PORT-001 asks for survives —
+but the closure grew, and that is the kind of growth that happens once per
+convenience until the recovery tool needs a package manager. The old canary is
+replaced by a rule that tests the thing actually at risk:
+`Recovery_tool_closure_admits_only_the_two_intended_bodu_packages`. A third
+Bodu package reaching `Repository.Format` now fails a test rather than passing
+review.
+
+**Behaviour is unchanged at the call sites.** `ThrowHelper.ThrowIfNull` infers
+the parameter name through `CallerArgumentExpression` and produces the same
+`ArgumentNullException` with the same `ParamName` and message as the BCL
+helper, verified before the migration rather than assumed. Three calls had no
+one-to-one equivalent and were rewritten rather than approximated:
+`ThrowIfZero` became `ThrowIfEqual(value, 0)`, `ThrowIfNegativeOrZero` became
+`ThrowIfZeroOrNegative`, and `ObjectDisposedException.ThrowIf(flag, this)`
+became `ThrowHelper.ThrowIfDisposed(flag, nameof(BlobWriter))`.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Submodule replaced by committed `external/packages` feed; ADR-0019 §6 mechanics superseded, dependency policy unchanged |
+| 2026-08 | Accepted (amended) | Amendment 1: `Bodu.Core` becomes the solution-wide guard-clause vocabulary; its containment canary is replaced by a rule on the recovery tool's closure |

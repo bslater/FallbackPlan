@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
-using Xunit.Abstractions;
-using Xunit.Sdk;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace FallbackPlan.TestSupport;
 
@@ -62,58 +61,64 @@ public static class TestPlatform
 }
 
 /// <summary>
-/// A test that only applies to some platforms. Elsewhere it is reported as
-/// skipped with its reason, never as a pass — see <see cref="TestPlatform"/>.
+/// Restricts a test to the platforms its subject exists on. Elsewhere the
+/// run reports it as skipped with its reason, never as a pass — see
+/// <see cref="TestPlatform"/>.
 /// </summary>
-[AttributeUsage(AttributeTargets.Method)]
-public sealed class PlatformFactAttribute : FactAttribute
+/// <remarks>
+/// A condition rather than a test attribute, which is what lets one type
+/// serve a plain test and a data-driven one alike. Under xUnit these were two
+/// attributes, <c>PlatformFact</c> and <c>PlatformTheory</c>, because skipping
+/// lived on the attribute that declared the test; MSTest evaluates a condition
+/// independently of how the test is fed, so the pair collapses into this.
+/// </remarks>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false)]
+public sealed class PlatformConditionAttribute : ConditionBaseAttribute
 {
+    private readonly string? _skipReason;
+
     /// <summary>Restricts the test to <paramref name="platforms"/>.</summary>
     /// <param name="platforms">The platforms the test's subject exists on.</param>
     /// <param name="because">Why the subject is platform-specific.</param>
-    public PlatformFactAttribute(TestPlatforms platforms, string because)
+    public PlatformConditionAttribute(TestPlatforms platforms, string because)
+        : base(ConditionMode.Include)
     {
         Platforms = platforms;
-        Skip = TestPlatform.SkipReason(platforms, because);
+        _skipReason = TestPlatform.SkipReason(platforms, because);
     }
 
     /// <summary>The platforms this test applies to.</summary>
     public TestPlatforms Platforms { get; }
-}
 
-/// <summary>A <see cref="TheoryAttribute"/> restricted to some platforms.</summary>
-[AttributeUsage(AttributeTargets.Method)]
-public sealed class PlatformTheoryAttribute : TheoryAttribute
-{
-    /// <summary>Restricts the theory to <paramref name="platforms"/>.</summary>
-    /// <param name="platforms">The platforms the theory's subject exists on.</param>
-    /// <param name="because">Why the subject is platform-specific.</param>
-    public PlatformTheoryAttribute(TestPlatforms platforms, string because)
-    {
-        Platforms = platforms;
-        Skip = TestPlatform.SkipReason(platforms, because);
-    }
+    /// <inheritdoc />
+    public override bool ShouldRun => _skipReason is null;
 
-    /// <summary>The platforms this theory applies to.</summary>
-    public TestPlatforms Platforms { get; }
+    /// <inheritdoc />
+    public override string? IgnoreMessage => _skipReason;
+
+    /// <inheritdoc />
+    public override string GroupName => "Platform";
 }
 
 /// <summary>
-/// A test whose subject only holds for an unprivileged process — permission
+/// Restricts a test to an unprivileged run on the given platforms — permission
 /// denial is unobservable as root, which is the normal identity inside a
 /// container. Skipped rather than silently vacuous, for the same reason as
-/// the platform attributes.
+/// <see cref="PlatformConditionAttribute"/>.
 /// </summary>
-[AttributeUsage(AttributeTargets.Method)]
-public sealed class UnprivilegedPlatformFactAttribute : FactAttribute
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false)]
+public sealed class UnprivilegedPlatformConditionAttribute : ConditionBaseAttribute
 {
+    private readonly string? _skipReason;
+
     /// <summary>Restricts the test to unprivileged runs on <paramref name="platforms"/>.</summary>
     /// <param name="platforms">The platforms the test's subject exists on.</param>
     /// <param name="because">Why the subject is platform-specific.</param>
-    public UnprivilegedPlatformFactAttribute(TestPlatforms platforms, string because)
+    public UnprivilegedPlatformConditionAttribute(TestPlatforms platforms, string because)
+        : base(ConditionMode.Include)
     {
         Platforms = platforms;
-        Skip = TestPlatform.SkipReason(platforms, because)
+        _skipReason = TestPlatform.SkipReason(platforms, because)
             ?? (Environment.IsPrivilegedProcess
                 ? "Requires an unprivileged process — a privileged one ignores permission bits."
                 : null);
@@ -121,16 +126,29 @@ public sealed class UnprivilegedPlatformFactAttribute : FactAttribute
 
     /// <summary>The platforms this test applies to.</summary>
     public TestPlatforms Platforms { get; }
+
+    /// <inheritdoc />
+    public override bool ShouldRun => _skipReason is null;
+
+    /// <inheritdoc />
+    public override string? IgnoreMessage => _skipReason;
+
+    /// <inheritdoc />
+    public override string GroupName => "Platform";
 }
 
 /// <summary>
-/// Marks a test class or method with the platform it targets, so a run can be
-/// filtered to one platform's surface (<c>--filter Platform=Posix</c>) rather
-/// than by guessing at test names.
+/// Records the platform a test targets so a run can be filtered to one
+/// platform's surface (<c>--filter TestCategory=Posix</c>) rather than by
+/// guessing at test names.
 /// </summary>
-[TraitDiscoverer("FallbackPlan.TestSupport.PlatformTraitDiscoverer", "FallbackPlan.TestSupport")]
+/// <remarks>
+/// Under xUnit this needed a trait attribute and a discoverer to publish it.
+/// MSTest reads categories directly, so the discoverer is gone and this is a
+/// thin alias over the built-in category.
+/// </remarks>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
-public sealed class PlatformTraitAttribute : Attribute, ITraitAttribute
+public sealed class PlatformTraitAttribute : TestCategoryBaseAttribute
 {
     /// <summary>Records the platform this test targets.</summary>
     /// <param name="platforms">The platforms the test's subject exists on.</param>
@@ -138,19 +156,9 @@ public sealed class PlatformTraitAttribute : Attribute, ITraitAttribute
 
     /// <summary>The platforms this test applies to.</summary>
     public TestPlatforms Platforms { get; }
-}
 
-/// <summary>Publishes <see cref="PlatformTraitAttribute"/> as the <c>Platform</c> trait.</summary>
-public sealed class PlatformTraitDiscoverer : ITraitDiscoverer
-{
     /// <inheritdoc />
-    public IEnumerable<KeyValuePair<string, string>> GetTraits(IAttributeInfo traitAttribute)
-    {
-        ArgumentNullException.ThrowIfNull(traitAttribute);
-
-        var platforms = (TestPlatforms)traitAttribute.GetConstructorArguments().First()!;
-        yield return new KeyValuePair<string, string>("Platform", platforms.ToString());
-    }
+    public override IList<string> TestCategories => [Platforms.ToString()];
 }
 
 /// <summary>

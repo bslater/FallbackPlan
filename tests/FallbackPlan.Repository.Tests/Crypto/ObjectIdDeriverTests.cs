@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Crypto;
 
@@ -8,31 +9,32 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// Exercises the object-identifier deriver's validation and keying rules
 /// (specification 02 §3; NFR-SEC-004).
 /// </summary>
+[TestClass]
 public sealed class ObjectIdDeriverTests
 {
     private static readonly ContentId SomeContent = ContentHasher.Hash("segment plaintext"u8);
 
-    [Theory]
-    [InlineData((byte)0x00)]
-    [InlineData((byte)0x07)] // reserved store-key domain separator
-    [InlineData((byte)0x0B)]
-    public void Unassigned_object_types_are_refused(byte value)
+    [TestMethod]
+    [DataRow((byte)0x00)]
+    [DataRow((byte)0x07)] // reserved store-key domain separator
+    [DataRow((byte)0x10)]
+    public void Derive_WhenTheObjectTypeIsUnassigned_ShouldThrow(byte value)
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => deriver.Derive((ObjectType)value, SomeContent));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => deriver.Derive((ObjectType)value, SomeContent));
     }
 
-    [Fact]
-    public void The_key_is_exactly_thirty_two_bytes()
+    [TestMethod]
+    public void ObjectIdDeriver_WhenTheKeyIsNotThirtyTwoBytes_ShouldThrow()
     {
-        Assert.Throws<ArgumentException>(() => new ObjectIdDeriver(new byte[31]));
-        Assert.Throws<ArgumentException>(() => new ObjectIdDeriver(new byte[33]));
-        Assert.Throws<ArgumentException>(() => new StoreBlobKeyDeriver(new byte[16]));
+        Assert.ThrowsExactly<ArgumentException>(() => new ObjectIdDeriver(new byte[31]));
+        Assert.ThrowsExactly<ArgumentException>(() => new ObjectIdDeriver(new byte[33]));
+        Assert.ThrowsExactly<ArgumentException>(() => new StoreBlobKeyDeriver(new byte[16]));
     }
 
-    [Fact]
-    public void Different_keys_produce_unrelated_identifiers()
+    [TestMethod]
+    public void Derive_DifferentContentIdKeys_ProduceUnrelatedIdentifiers()
     {
         var keyA = new byte[32];
         var keyB = new byte[32];
@@ -41,23 +43,23 @@ public sealed class ObjectIdDeriverTests
         using var deriverA = new ObjectIdDeriver(keyA);
         using var deriverB = new ObjectIdDeriver(keyB);
 
-        Assert.NotEqual(
+        Assert.AreNotEqual(
             deriverA.Derive(ObjectType.SegmentRecord, SomeContent),
             deriverB.Derive(ObjectType.SegmentRecord, SomeContent));
     }
 
-    [Fact]
-    public void Different_object_types_produce_unrelated_identifiers()
+    [TestMethod]
+    public void Derive_DifferentObjectTypes_ProduceUnrelatedIdentifiers()
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);
 
-        Assert.NotEqual(
+        Assert.AreNotEqual(
             deriver.Derive(ObjectType.SegmentRecord, SomeContent),
             deriver.Derive(ObjectType.FileVersionManifest, SomeContent));
     }
 
-    [Fact]
-    public void Incremental_and_one_shot_hashing_agree()
+    [TestMethod]
+    public void ContentHasher_IncrementalAndOneShotHashing_Agree()
     {
         var plaintext = Enumerable.Range(0, 100_000).Select(value => (byte)value).ToArray();
 
@@ -66,6 +68,6 @@ public sealed class ObjectIdDeriverTests
         hasher.Append(plaintext.AsSpan(1, 99));
         hasher.Append(plaintext.AsSpan(100));
 
-        Assert.Equal(ContentHasher.Hash(plaintext), hasher.FinishAndReset());
+        Assert.AreEqual(ContentHasher.Hash(plaintext), hasher.FinishAndReset());
     }
 }

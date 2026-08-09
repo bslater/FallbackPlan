@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -17,6 +18,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// byte-identically, and stripped of key 13 its manifest is byte-identical
 /// to what a native publication of the same bytes produces.
 /// </summary>
+[TestClass]
 public sealed class LegacyImportTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -55,8 +57,8 @@ public sealed class LegacyImportTests : ArchiveTestHarness
         return data;
     }
 
-    [Fact]
-    public async Task A_synthetic_legacy_archive_imports_through_the_native_pipeline_and_restores()
+    [TestMethod]
+    public async Task LegacyImport_ASyntheticArchive_ImportsThroughTheNativePipelineAndRestores()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -76,7 +78,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
             expiryGeneration: 5,
             CancellationToken.None);
 
-        Assert.Equal(2, imported.Count);
+        Assert.AreEqual(2, imported.Count);
 
         // Each imported version restores byte-identically through the
         // ordinary read path — no import-specific reader exists to diverge.
@@ -86,13 +88,13 @@ public sealed class LegacyImportTests : ArchiveTestHarness
         foreach (var (expected, version) in new[] { (first, imported[0]), (second, imported[1]) })
         {
             var manifestRead = await reader.ReadSegmentAsync(version.Published.FileVersionObjectId, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
             var manifest = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
 
             using var restored = new MemoryStream();
             var result = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
-            Assert.True(result.Success, result.FailureDetail);
-            Assert.Equal(expected, restored.ToArray());
+            Assert.IsTrue(result.Success, result.FailureDetail);
+            SequenceAssert.AreEqual(expected, restored.ToArray());
 
             // Provenance rides in key 13 and nowhere else (FR-CP-002).
             Assert.Contains("imported-from: synthetic-legacy", manifest.CaptureDiagnostics);
@@ -100,8 +102,8 @@ public sealed class LegacyImportTests : ArchiveTestHarness
         }
     }
 
-    [Fact]
-    public async Task An_imported_manifest_stripped_of_provenance_is_byte_identical_to_a_native_one()
+    [TestMethod]
+    public async Task LegacyImport_AManifestStrippedOfProvenance_IsByteIdenticalToANativeOne()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -139,8 +141,8 @@ public sealed class LegacyImportTests : ArchiveTestHarness
 
         var importedRead = await reader.ReadSegmentAsync(imported[0].Published.FileVersionObjectId, CancellationToken.None);
         var nativeRead = await reader.ReadSegmentAsync(native.FileVersionObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, importedRead.Outcome);
-        Assert.Equal(RecordReadOutcome.Ok, nativeRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, importedRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, nativeRead.Outcome);
 
         var importedManifest = FileVersionManifestCodec.Decode(importedRead.Plaintext!);
         var nativeManifest = FileVersionManifestCodec.Decode(nativeRead.Plaintext!);
@@ -148,9 +150,9 @@ public sealed class LegacyImportTests : ArchiveTestHarness
         // FR-CP-002's teeth: remove key 13 and the imported manifest encodes
         // to the native manifest's exact bytes — provenance is the ONLY
         // difference the format can see.
-        Assert.NotEmpty(importedManifest.CaptureDiagnostics);
-        Assert.Empty(nativeManifest.CaptureDiagnostics);
-        Assert.Equal(
+        Assert.IsNotEmpty(importedManifest.CaptureDiagnostics);
+        Assert.IsEmpty(nativeManifest.CaptureDiagnostics);
+        SequenceAssert.AreEqual(
             FileVersionManifestCodec.Encode(nativeManifest),
             FileVersionManifestCodec.Encode(importedManifest with { CaptureDiagnostics = [] }));
     }

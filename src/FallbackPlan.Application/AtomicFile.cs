@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Application;
 
 /// <summary>
@@ -26,7 +28,7 @@ public static class AtomicFile
     /// <param name="contents">The text to write.</param>
     public static void WriteAllText(string path, string contents)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory))
@@ -48,12 +50,57 @@ public static class AtomicFile
                 stream.Flush(flushToDisk: true);
             }
 
-            File.Move(temporary, path, overwrite: true);
+            Replace(temporary, path);
         }
         catch
         {
             TryDelete(temporary);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// The number of replace attempts before a contended destination is
+    /// reported as a failure rather than retried again.
+    /// </summary>
+    private const int ReplaceAttempts = 10;
+
+    /// <summary>
+    /// Replaces <paramref name="path"/> with <paramref name="temporary"/>,
+    /// absorbing the contention Windows reports and POSIX does not.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="File.Move(string, string, bool)"/> is
+    /// <c>MoveFileEx(MOVEFILE_REPLACE_EXISTING)</c> on Windows, which fails with
+    /// <c>ERROR_ACCESS_DENIED</c> while another thread is replacing the same
+    /// destination; <c>rename(2)</c> is atomic and simply wins or loses the
+    /// race. Each attempt here is still atomic, so the guarantee is unchanged —
+    /// the retry absorbs contention, it does not weaken replacement.
+    /// <para>
+    /// Two writers to one state file are a bug the writer role prevents
+    /// (ADR-0028 §2), which is exactly why this is worth handling: an
+    /// assumption that holds until it does not is the kind this file already
+    /// exists to remove.
+    /// </para>
+    /// </remarks>
+    private static void Replace(string temporary, string path)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temporary, path, overwrite: true);
+                return;
+            }
+            catch (Exception exception) when (
+                attempt < ReplaceAttempts &&
+                exception is UnauthorizedAccessException
+                    or (IOException and not (FileNotFoundException or DirectoryNotFoundException)))
+            {
+                // A missing source or directory is not contention and is not
+                // retried — it is a defect, and delaying it only hides it.
+                Thread.Sleep(attempt);
+            }
         }
     }
 

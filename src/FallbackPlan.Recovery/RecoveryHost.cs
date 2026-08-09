@@ -1,7 +1,9 @@
+using Bodu;
 using System.Globalization;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.Recovery.Resources;
 
 namespace FallbackPlan.Recovery;
 
@@ -28,9 +30,9 @@ public static class RecoveryHost
     public static async Task<int> RunAsync(
         string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(args);
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(error);
+        ThrowHelper.ThrowIfNull(args);
+        ThrowHelper.ThrowIfNull(output);
+        ThrowHelper.ThrowIfNull(error);
         // The standalone recovery tool (architecture 08 §5; FR-KIT-006): opens a
         // repository with nothing but a store location, a recovery kit, and the
         // passphrase. Argument parsing is by hand on purpose — the smallest
@@ -67,7 +69,7 @@ public static class RecoveryHost
         }
 
         string Require(string name) => Get(name)
-            ?? throw new RecoveryFailureException($"Missing required option {name}.");
+            ?? throw new RecoveryFailureException(Strings.FormatRecoveryHost_MissingRequiredOption(name));
 
         try
         {
@@ -80,8 +82,7 @@ public static class RecoveryHost
             var passphraseValue = Environment.GetEnvironmentVariable(passphraseVariable);
             if (string.IsNullOrEmpty(passphraseValue))
             {
-                throw new RecoveryFailureException(
-                    $"Environment variable '{passphraseVariable}' is unset — the passphrase is passed by name, never on the command line.");
+                throw new RecoveryFailureException(Strings.FormatRecoveryHost_EnvironmentVariableUnset(passphraseVariable));
             }
 
             // The kit: binary or transcribed text, detected by content.
@@ -136,7 +137,7 @@ public static class RecoveryHost
                     await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
                     var snapshots = await session.ListSnapshotsAsync(cancellationToken).ConfigureAwait(false);
                     var snapshot = snapshots.FirstOrDefault(row => row.Manifest.SnapshotId.Span.SequenceEqual(wanted))
-                        ?? throw new RecoveryFailureException($"No snapshot {snapshotHex} is discoverable in this store.");
+                        ?? throw new RecoveryFailureException(Strings.FormatRecoveryHost_NoSnapshotDiscoverableStore(snapshotHex));
 
                     if (!snapshot.SignatureVerified)
                     {
@@ -157,7 +158,7 @@ public static class RecoveryHost
                 }
 
                 default:
-                    throw new RecoveryFailureException($"Unknown command '{command}'. Run with --help.");
+                    throw new RecoveryFailureException(Strings.FormatRecoveryHost_UnknownCommandRunWithHelp(command));
             }
         }
         catch (RecoveryFailureException exception)

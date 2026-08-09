@@ -7,6 +7,7 @@ namespace FallbackPlan.Api.Tests;
 /// Version negotiation (FR-SVC-007). The failure this prevents has a name: an
 /// unexplained blank window, which is how CrashPlan users met a version skew.
 /// </summary>
+[TestClass]
 public sealed class ContractVersionTests : IDisposable
 {
     private readonly string _state = Path.Combine(
@@ -19,36 +20,36 @@ public sealed class ContractVersionTests : IDisposable
 
     private CancellationToken Timeout => _timeout.Token;
 
-    [Theory]
-    [InlineData("1.0", 1, 0)]
-    [InlineData("2.17", 2, 17)]
-    public void A_version_round_trips_through_its_rendering(string text, int major, int minor)
+    [TestMethod]
+    [DataRow("1.0", 1, 0)]
+    [DataRow("2.17", 2, 17)]
+    public void TryParse_WellFormedVersionText_RoundTripsThroughItsRendering(string text, int major, int minor)
     {
-        Assert.True(ContractVersion.TryParse(text, out var parsed));
-        Assert.Equal(new ContractVersion(major, minor), parsed);
-        Assert.Equal(text, parsed.ToString());
+        Assert.IsTrue(ContractVersion.TryParse(text, out var parsed));
+        Assert.AreEqual(new ContractVersion(major, minor), parsed);
+        Assert.AreEqual(text, parsed.ToString());
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("1")]
-    [InlineData(".1")]
-    [InlineData("one.zero")]
-    public void Anything_that_is_not_a_version_is_refused_rather_than_guessed(string? text)
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("1")]
+    [DataRow(".1")]
+    [DataRow("one.zero")]
+    public void TryParse_TextIsNotAVersion_RefusesRatherThanGuesses(string? text)
     {
-        Assert.False(ContractVersion.TryParse(text, out _));
+        Assert.IsFalse(ContractVersion.TryParse(text, out _));
     }
 
-    [Fact]
-    public void Compatibility_is_by_major_so_additive_changes_do_not_break_a_peer()
+    [TestMethod]
+    public void IsCompatibleWith_WhenOnlyTheMinorDiffers_ShouldReturnTrue()
     {
-        Assert.True(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(1, 9)));
-        Assert.False(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(2, 0)));
+        Assert.IsTrue(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(1, 9)));
+        Assert.IsFalse(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(2, 0)));
     }
 
-    [Fact]
-    public void A_mismatch_message_names_both_versions()
+    [TestMethod]
+    public void DescribeMismatch_WhenMajorsDiffer_ShouldNameBothVersions()
     {
         var message = ContractVersion.DescribeMismatch(new ContractVersion(1, 0), new ContractVersion(3, 4));
 
@@ -56,8 +57,8 @@ public sealed class ContractVersionTests : IDisposable
         Assert.Contains("3.4", message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_client_speaking_an_incompatible_contract_is_refused_by_name_not_disconnected()
+    [TestMethod]
+    public async Task ContractNegotiation_ClientSpeaksIncompatibleMajor_RefusesByNameRatherThanDisconnecting()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -70,20 +71,20 @@ public sealed class ContractVersionTests : IDisposable
 
         var reply = await FrameCodec.ReadAsync(stream, Timeout);
 
-        var acknowledgement = Assert.IsType<HelloAcknowledgementFrame>(reply);
-        Assert.False(acknowledgement.Accepted);
+        Assert.IsInstanceOfType<HelloAcknowledgementFrame>(reply, out var acknowledgement);
+        Assert.IsFalse(acknowledgement.Accepted);
         Assert.Contains("99.0", acknowledgement.Message!, StringComparison.Ordinal);
         Assert.Contains(ContractVersion.Current.ToString(), acknowledgement.Message!, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_connected_client_learns_the_version_the_service_speaks()
+    [TestMethod]
+    public async Task ContractNegotiation_ClientConnects_ReportsTheVersionTheServiceSpeaks()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
         await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
 
-        Assert.Equal(ContractVersion.Current, client.ServiceContractVersion);
+        Assert.AreEqual(ContractVersion.Current, client.ServiceContractVersion);
     }
 
     public void Dispose()

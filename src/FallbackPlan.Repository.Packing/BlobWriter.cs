@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -5,6 +6,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -81,6 +83,14 @@ public sealed class BlobWriter : IAsyncDisposable
     /// <summary>The number of records appended so far.</summary>
     public int RecordCount => _entries.Count;
 
+    /// <summary>
+    /// The records held so far, in ordinal order. A resumed writer arrives
+    /// holding records the resuming session did not produce, so the caller
+    /// rebuilds its own view — dedup set, pending index entries — from this
+    /// rather than assuming the blob is empty.
+    /// </summary>
+    public IReadOnlyList<RecordTableEntry> Entries => _entries;
+
     /// <summary>The current spool length in bytes.</summary>
     public long CurrentLength { get; private set; }
 
@@ -110,14 +120,13 @@ public sealed class BlobWriter : IAsyncDisposable
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null)
     {
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(profile);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         if (encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
-            throw new ArgumentException(
-                "Only aes-256-gcm-v1 is implemented; xchacha20-poly1305-v1 has no platform primitive (open question Q12) and is refused, not guessed.",
+            throw new ArgumentException(Strings.BlobWriter_FormatVersionAdmitsOneRecord,
                 nameof(encryptionProfile));
         }
 
@@ -132,7 +141,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
         else
         {
-            throw new ArgumentException($"A blob salt is exactly {BlobKeyDeriver.BlobSaltLength} bytes.", nameof(blobSalt));
+            throw new ArgumentException(Strings.FormatBlobWriter_BlobSaltExactlyBytes(BlobKeyDeriver.BlobSaltLength), nameof(blobSalt));
         }
 
         var envelope = new BlobEnvelope(
@@ -171,12 +180,22 @@ public sealed class BlobWriter : IAsyncDisposable
     /// <summary>
     /// Attempts to resume the checkpointed spool in
     /// <paramref name="spoolDirectory"/> (specification 05 §6.3; C1;
-    /// FR-ARCH-011). Resume re-emits the checkpointed sealed bytes verbatim
-    /// and continues at the next ordinal; <b>any</b> mismatch between the
+    /// FR-ARCH-011). Resume re-emits the spooled sealed bytes verbatim and
+    /// continues at the next ordinal; <b>any</b> mismatch between the
     /// checkpoint's pinned fields and the current configuration — codec
     /// version included — discards the spool and reports restart, because a
     /// restarted blob draws a fresh salt and reuses nothing (05 §6.2).
     /// </summary>
+    /// <remarks>
+    /// The resume point is found by <b>authenticating</b> every record, not by
+    /// trusting a durable watermark. A record whose tag verifies under
+    /// <c>(blob_key, ordinal)</c> is one this writer sealed and the disk holds
+    /// whole; anything else — a torn tail, a flipped ciphertext byte, a gap in
+    /// the ordinals, a spool from another repository — fails and forces a
+    /// restart. So no ordinal is ever re-used under one salt, which is the
+    /// property 05 §6.1 exists to protect, and it holds without writing
+    /// anything per record.
+    /// </remarks>
     public static ResumeResult TryResume(
         string spoolDirectory,
         RepositoryId repositoryId,
@@ -188,10 +207,10 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         SpoolPinnedConfiguration current)
     {
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentNullException.ThrowIfNull(current);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(profile);
+        ThrowHelper.ThrowIfNull(current);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         if (!Directory.Exists(spoolDirectory))
         {
@@ -279,28 +298,22 @@ public sealed class BlobWriter : IAsyncDisposable
             return Discard("spool_missing");
         }
 
-        var spoolLength = new FileInfo(spoolPath).Length;
-        if (spoolLength < (long)checkpoint.SealedWatermark ||
-            checkpoint.SealedWatermark < BlobEnvelope.Length)
-        {
-            return Discard("spool_shorter_than_watermark");
-        }
+        // The spool's own bytes are the resume state (05 §6.1). Verify the
+        // envelope, then walk the records authenticating each one: a record
+        // whose tag verifies reached the disk whole, so the tags themselves
+        // bound the resume. Nothing has to be kept in step with the bytes,
+        // which is what lets the sidecar be written once at create.
+        var spoolBytes = File.ReadAllBytes(spoolPath);
 
-        // Read the checkpointed prefix, verify the envelope, and walk the
-        // sealed records to rebuild the table — the bytes themselves are the
-        // checkpoint state (05 §6.1); nothing is recompressed or re-encrypted.
-        var watermark = (int)checkpoint.SealedWatermark;
-        byte[] prefix;
-        using (var read = new FileStream(spoolPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        if (spoolBytes.Length < BlobEnvelope.Length)
         {
-            prefix = new byte[watermark];
-            read.ReadExactly(prefix);
+            return Discard("spool_shorter_than_envelope");
         }
 
         BlobEnvelope envelope;
         try
         {
-            envelope = BlobEnvelope.Parse(prefix.AsSpan(0, BlobEnvelope.Length));
+            envelope = BlobEnvelope.Parse(spoolBytes.AsSpan(0, BlobEnvelope.Length));
         }
         catch (BlobFormatException)
         {
@@ -317,29 +330,85 @@ public sealed class BlobWriter : IAsyncDisposable
             return Discard("envelope_checkpoint_mismatch");
         }
 
+        // Derived before the walk rather than after it: the key is now walk
+        // input, because authenticating a record is what proves it.
+        var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(classKey, envelope.BlobSalt, envelope.WriterId, envelope.BlobCounter, blobKey);
+
         var entries = new List<RecordTableEntry>();
         var offset = BlobEnvelope.Length;
+        var scratch = Array.Empty<byte>();
 
-        while (offset < watermark)
+        // One reason for every way the walk can fail. Structural damage and a
+        // failed tag are the same finding — these bytes are not a dense
+        // sequence of records this key sealed — and both resolve to restart,
+        // which draws a fresh salt and so reuses no ordinal (05 §6.2:
+        // "Restart is always the safe failure. A writer in any doubt MUST
+        // restart.").
+        ResumeResult.MustRestart DiscardTail()
         {
-            if (offset + RecordHeader.Length > watermark)
+            CryptographicOperations.ZeroMemory(blobKey);
+            CryptographicOperations.ZeroMemory(scratch);
+            return Discard("spool_tail_unauthenticated");
+        }
+
+        Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
+        Span<byte> aad = stackalloc byte[RecordAad.Length];
+
+        while (offset < spoolBytes.Length)
+        {
+            if (offset + RecordHeader.Length > spoolBytes.Length)
             {
-                return Discard("spool_walk_mismatch");
+                return DiscardTail();
             }
 
             RecordHeader header;
             try
             {
-                header = RecordHeader.Parse(prefix.AsSpan(offset, RecordHeader.Length));
+                header = RecordHeader.Parse(spoolBytes.AsSpan(offset, RecordHeader.Length));
             }
             catch (RecordFormatException)
             {
-                return Discard("spool_walk_mismatch");
+                return DiscardTail();
             }
 
+            // Ordinals are dense and ascending (05 §3.1, 04 §2.1) — and the
+            // ordinal is the nonce, so a gap would name a nonce this key
+            // never covered.
             if (header.Ordinal != entries.Count)
             {
-                return Discard("spool_walk_mismatch");
+                return DiscardTail();
+            }
+
+            // Parse already refused a stored_length past the 64 MiB limit;
+            // this bounds the record against the file before allocating.
+            var recordLength = RecordHeader.Length + (long)header.StoredLength + RecordCipher.TagLength;
+            if (offset + recordLength > spoolBytes.Length)
+            {
+                return DiscardTail();
+            }
+
+            var storedLength = (int)header.StoredLength;
+            if (scratch.Length < storedLength)
+            {
+                scratch = new byte[storedLength];
+            }
+
+            RecordNonce.Write(header.Ordinal, nonce);
+            RecordAad.Write(repositoryId, envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
+
+            // The AAD binds the repository, the object and the ordinal, so
+            // this also refuses a spool belonging to another repository or a
+            // record moved between ordinals (04 §4).
+            if (!RecordCipher.TryOpen(
+                    blobKey,
+                    nonce,
+                    aad,
+                    spoolBytes.AsSpan(offset + RecordHeader.Length, storedLength),
+                    spoolBytes.AsSpan(offset + RecordHeader.Length + storedLength, RecordCipher.TagLength),
+                    scratch.AsSpan(0, storedLength)))
+            {
+                return DiscardTail();
             }
 
             entries.Add(new RecordTableEntry(
@@ -352,32 +421,22 @@ public sealed class BlobWriter : IAsyncDisposable
                 header.EncryptionProfile.Value,
                 header.ObjectType));
 
-            var recordLength = RecordHeader.Length + (long)header.StoredLength + RecordCipher.TagLength;
-            if (offset + recordLength > watermark)
-            {
-                return Discard("spool_walk_mismatch");
-            }
-
             offset += (int)recordLength;
         }
 
-        if (offset != watermark)
-        {
-            return Discard("spool_walk_mismatch");
-        }
+        // The plaintext was read only to prove the tag; it is nobody's output
+        // and does not outlive the walk.
+        CryptographicOperations.ZeroMemory(scratch);
 
-        var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
-        BlobKeyDeriver.Derive(classKey, envelope.BlobSalt, envelope.WriterId, envelope.BlobCounter, blobKey);
-
-        // Drop any torn tail beyond the watermark and reopen for append.
+        // Nothing is truncated. The walk either consumed the file exactly —
+        // every record bounded within it — or it restarted.
         var spool = new FileStream(spoolPath, FileMode.Open, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
-        spool.SetLength(watermark);
         spool.Seek(0, SeekOrigin.End);
 
         var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current);
-        writer._digest.AppendData(prefix);
+        writer._digest.AppendData(spoolBytes);
         writer._entries.AddRange(entries);
-        writer.CurrentLength = watermark;
+        writer.CurrentLength = spoolBytes.Length;
 
         return new ResumeResult.Resumed(writer);
     }
@@ -390,7 +449,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public bool CanAppend(int storedLength)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(storedLength);
+        ThrowHelper.ThrowIfNegative(storedLength);
 
         if (_entries.Count >= _profile.MaximumRecordCount || _entries.Count >= FormatLimits.MaxRecordsPerBlob)
         {
@@ -417,12 +476,11 @@ public sealed class BlobWriter : IAsyncDisposable
         ReadOnlyMemory<byte> storedPayload,
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
 
         if (!CanAppend(storedPayload.Length))
         {
-            throw new InvalidOperationException(
-                "The record does not fit this blob; seal and start a new one — records are never split (specification 04 §8).");
+            throw new InvalidOperationException(Strings.BlobWriter_RecordDoesNotFitBlob);
         }
 
         var ordinal = (uint)_entries.Count;
@@ -454,14 +512,6 @@ public sealed class BlobWriter : IAsyncDisposable
         await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(record);
 
-        if (_pinned is not null)
-        {
-            // The sealed bytes reach the disk before the watermark that
-            // covers them — a checkpoint claiming bytes the disk may not
-            // hold would resume into a torn record (05 §6.1).
-            _spool.Flush(flushToDisk: true);
-        }
-
         _entries.Add(new RecordTableEntry(
             objectId,
             ordinal,
@@ -474,11 +524,12 @@ public sealed class BlobWriter : IAsyncDisposable
 
         CurrentLength += record.Length;
 
-        if (_pinned is not null)
-        {
-            WriteCheckpoint();
-        }
-
+        // No fsync and no sidecar rewrite here. Durability of the tail is not
+        // what makes resume safe — authentication is (see TryResume) — and a
+        // record that never reached the disk simply is not resumed. What the
+        // per-record pair used to cost was ~128 fsyncs and ~128 whole-file
+        // sidecar rewrites per 128 MiB blob, both blocking, for a guarantee
+        // the tags already give (ADR-0029 §6, serial cost 1).
         return ordinal;
     }
 
@@ -490,7 +541,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask AbandonAsync()
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
         _abandoned = true;
 
         _cipher.Dispose();
@@ -510,11 +561,11 @@ public sealed class BlobWriter : IAsyncDisposable
             _envelope.WriterId,
             _envelope.BlobCounter,
             _envelope.BlobId,
-            _pinned!,
-            (ulong)CurrentLength);
+            _pinned!);
 
-        // Replace atomically so a crash mid-rewrite leaves the previous
-        // checkpoint intact rather than a torn one.
+        // Written once, at create. Every field is fixed for the blob's life
+        // (05 §6.2), so there is nothing to keep current. Still replaced
+        // atomically: a crash mid-write leaves no torn sidecar.
         var checkpointPath = SpoolCheckpoint.PathFor(_spoolPath);
         var temporary = checkpointPath + ".tmp";
         File.WriteAllBytes(temporary, checkpoint.Serialize());
@@ -528,7 +579,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask<SealedBlob> SealAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_sealed, this);
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
         _sealed = true;
 
         var table = BlobFooter.EncodeRecordTable(_entries);

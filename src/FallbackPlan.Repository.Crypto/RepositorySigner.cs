@@ -1,3 +1,4 @@
+using Bodu;
 using Bodu.Security.Cryptography;
 using FallbackPlan.Domain;
 
@@ -49,7 +50,7 @@ public sealed class RepositorySigner : IDisposable
     /// </summary>
     public static RepositorySigner Create(KeyHierarchy hierarchy, KeyGeneration generation)
     {
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         var seed = hierarchy.DeriveSigningKeySeed(generation);
 

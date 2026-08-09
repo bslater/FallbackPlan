@@ -200,3 +200,11 @@ jobs:
       # tested, and never architecture-checked - silently.
       - name: Every project is in the solution
         run: python3 eng/check-solution.py
+      # A decision record is never wrong after the fact - nothing in it goes
+      # red when the thing it decided turns out to be half-built.
+      - name: Implementation status cites code that exists
+        run: python3 eng/check-adr-status.py
+      # A generated accessor that has drifted from its resx compiles fine and
+      # then throws the resource key at a user instead of the message.
+      - name: Resource accessors match their resx
+        run: python3 eng/generate-resources.py --check

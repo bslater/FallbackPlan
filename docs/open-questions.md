@@ -32,14 +32,6 @@ This is a flag rather than a legal opinion. It should be assessed alongside Q2 �
 
 ---
 
-## Q4 — Canonical metadata encoding
-
-**Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0003](adr/0003-canonical-metadata-encoding.md)
-
-Canonical CBOR is the candidate. Confirm with cross-language determinism tests and an encoding-size benchmark on realistic manifests before the format freezes. The requirement it has to satisfy is that an independent implementer, in another language, produces byte-identical output from the same logical input.
-
----
-
 ## Q5 — Segmentation default
 
 **Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0002](adr/0002-segmentation-strategy.md)
@@ -92,46 +84,11 @@ Repository-server mode is described as an ownership model but its administrative
 
 ## Q11 — Physical hints in segment references
 
-**Owner:** project maintainer · **Blocks:** format v1 freeze · **ADR:** [0007](adr/0007-logical-object-identifiers-in-manifests.md) · **Finding:** [PT-10](review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)
+**Closed (2026-08): a hint exists, and it is not in the manifest.** See [ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md) and [specification 06 §10](../specifications/repository-format/06-manifests.md).
 
-Manifests carry logical object identifiers only, and that decision is confirmed. What is open is whether a segment reference should *also* carry a non-authoritative `last_known_blob` hint.
+The question assumed the only place to put a hint was beside the segment reference, and neither it nor ADR-0007 recorded what that would cost. A manifest is identified by its own bytes, and the specification states that identical bytes for identical content across devices is what makes cross-device deduplication possible — so a device-specific hint inside a manifest would have disabled that quietly, in a way no single-device test could catch.
 
-**Why it matters.** With no index, recovering a single file means scanning blob footers — hours at scale **M** for one document, against roughly one fetch if a hint were present. That is the emergency-recovery path, so it is the worst place to be slow.
-
-**Why the original rejection does not hold.** ADR-0007 dismissed hints as "a correctness question dressed up as an optimisation". Record headers are independently authenticated and carry the object identifier, so a reader following a stale hint **detects** it and falls back to the index. Detectably stale is not silently wrong.
-
-**What still argues against it.** It partially re-couples manifests to physical layout, and invites implementations that trust the hint without validating. The mitigation is a mandatory stale-hint conformance fixture.
-
-Either answer preserves the core decision: because the hint may go stale, compaction still touches no manifest.
-
-| Option | Trade |
-|--------|-------|
-| **Add the hint** | O(1) first-byte recovery with no index; a few bytes per segment reference; a stale-hint fixture becomes mandatory |
-| **No hint** | Manifests stay purely logical; emergency single-file recovery relies on prioritised footer scanning (NFR-PERF-015) |
-
-**Recommendation:** add it, with mandatory validation and a conformance fixture. The cost is small and bounded; the benefit lands exactly when the user is in the worst position.
-
----
-
-## Q12 — XChaCha20-Poly1305 has no second implementation to check against
-
-**Owner:** engineering, with security review · **Blocks:** format v1 freeze · **ADR:** [0019](adr/0019-third-party-dependency-policy.md) · **Specification:** [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)
-
-The format admits two AEAD profiles. `aes-256-gcm-v1` uses a platform primitive. `xchacha20-poly1305-v1` cannot: .NET provides `ChaCha20Poly1305` (RFC 8439, 12-byte nonce) and **not** the 24-byte extended-nonce variant, so that profile requires a third-party implementation.
-
-Argon2id is in the same position and is handled: it is cross-verified against a second independent implementation on every CI run, which is how the empty-passphrase gap in [03 §2.1](../specifications/repository-format/03-keys.md#21-the-passphrase-is-constrained-too-and-the-primitive-will-not-do-it-for-you) was found. **XChaCha20-Poly1305 has no such check**, because no second implementation was available to check against.
-
-An unverified AEAD is worse than an unverified KDF. A KDF defect makes keys weaker; an AEAD defect can make ciphertext forgeable or, with a nonce-handling bug, make plaintext recoverable — and by the time anyone notices, it is in the user's stored bytes.
-
-| Option | Trade |
-|--------|-------|
-| **Find a second implementation and cross-verify** | Matches the Argon2id posture. Depends on one existing and being maintained. |
-| **Drop the profile before freeze** | `aes-256-gcm-v1` alone is sufficient and 03 §6.1 already lets an implementer omit the extended-nonce profile. Costs the non-AES-hardware performance case. |
-| **Ship it unverified, flagged** | Cheapest now, and the option that ages worst — an unverified primitive is hardest to remove after repositories exist that use it. |
-
-**Recommendation:** decide at the freeze gate, and prefer dropping the profile over shipping it unverified. It costs nothing while unused, but a format version cannot un-admit a profile once written repositories depend on it.
-
-**Not decided.**
+The hint is a separate optional object per snapshot instead. Emergency recovery gets its fast path, manifests stay byte-identical across devices, and absence is the normal case a reader already handles.
 
 ---
 
@@ -166,18 +123,6 @@ A related build decision is recorded here so it is not silently re-made: `Invari
 
 ---
 
-## Q16 — The blob digest has no home in the index
-
-**Owner:** engineering · **Blocks:** replication receipts (verify level 2 at scale) · **Gates:** Phase 2 replication — Phase 1 is unaffected · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) · **Spec:** [05 §5](../specifications/repository-format/05-blob.md#5-sealing), [07 §2](../specifications/repository-format/07-index.md#2-index-delta)
-
-05 §5 says the blob digest is "recorded in the index and used for end-to-end verification during replication", but no index delta or checkpoint field carries it — 07's entry array has no digest position and its object-level keys have none either. Phase 0 records the digest in the **catalogue** (`blobs.digest`, populated at seal and by verify level 2), which serves single-machine verification but is device-local and disposable — it cannot serve as a replication receipt another participant can check.
-
-The candidate format fix is an optional parallel array on the delta (`covered_blob_digests`, aligned with `covered_blob_ids`, inside the signed prefix), which would make digests durable, signed, and discoverable exactly where the covered blobs are declared. That is a format change and waits for a format-change window; the 05 §5 sentence carries an erratum note meanwhile.
-
-**Not decided** (the format-level carriage; the catalogue-domain recording is implemented).
-
----
-
 ## Q18 — Streaming restored content to a remote client
 
 **Owner:** product · **Blocks:** Phase 2 console work
@@ -194,29 +139,17 @@ A console pairs with each service it manages, and pairing is revocable at the se
 
 ---
 
-## Q20 — Where the concurrency default sits, and whether pinning survives measurement
-
-**Owner:** maintainer · **Blocks:** the throughput work in [ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6
-
-Two numbers cannot be chosen from the armchair. **The first is now answered:** `CapturePolicy.Concurrency` defaults to **2**, deliberately below a 4-core laptop's capacity, because a backup that makes the machine unpleasant to use gets switched off and a switched-off backup protects nothing. It is validated to 1..64 and nothing consumes it yet, so the number will be revisited when the staged pipeline makes it mean something. The second is whether per-record spool pinning — an `fsync` plus a checkpoint rewrite per record, currently unconditional for data blobs — earns its cost once measured; it buys resumability of an interrupted blob, and `BlobWriter.TryResume` has no production caller today, so the benefit is currently unrealised while the cost is paid on every record.
-
----
-
-## Q17 — Lease, tombstone, and audit-period object formats
-
-**Owner:** engineering · **Blocks:** garbage collection implementation (post-phase-0) · **Gates:** Phase 4 retention/GC — Phase 1's retention selection without physical pruning is unaffected · **ADR:** [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md)
-
-Three namespaces in [01 §2](../specifications/repository-format/01-object-layout.md#2-namespace) have no object format anywhere in the specification: `/leases/<scope>/<lease-id>` (semantics in [08 §9](../specifications/repository-format/08-journal.md#9-leases) — advisory only, the sole mutable namespace — but no record shape), `/tombstones/<object-type>/<object-id>` (named by the deletion discipline in 01 §5 and 07 §7, shape undefined), and `/audit/<period>/<record-id>` (distinct from audit *journal* records, which live at `/journal/<writer-id>/<sequence>`; nothing defines the period rendering or the object). None are needed by phase 0 — no phase-0 component takes a lease, tombstones an object, or writes the audit-period namespace — so their formats are deliberately not invented here. They must be specified before the garbage collector exists, since all three belong to its surface.
-
-**Not decided.**
-
----
-
 ## Closed
 
 | Question | Resolution |
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
+| Q21 — the source-identity hint grew with the repository, not with the change | Resolved by keying it on the **source key** rather than the snapshot: `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, one small object per file version created, found by listing one prefix whose entries are chronological. The per-snapshot map it replaced described the whole tree every run, at a measured ~52 bytes per file; a one-file change to a 1 024-file tree now adds 7 386 bytes to the store against ~57 200 before. The accepted price is object count — one store object, and on a metered store one request, per changed file — which is the per-object overhead blobs exist to amortise, and it is the cheaper side from the second capture onward ([ADR-0007 Amendment 2](adr/0007-logical-object-identifiers-in-manifests.md), [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) |
+| Q12 — should `xchacha20-poly1305-v1` ship while unverified? | No — the profile is **withdrawn** and `0x0002` is reserved, never to be assigned to another suite. Cross-verification against a second independent implementation is the condition on which a third-party primitive is admitted here, and none existed for XChaCha20-Poly1305. An unverified AEAD is a different order of risk from an unverified KDF, and it would be discovered inside bytes the user had already stored; a format version can add a profile but cannot un-admit one that written repositories depend on. The cost — slower on hardware without AES acceleration — is accepted ([ADR-0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md), [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)) |
+| Q16 — where does the blob digest live? | On the index delta, as `covered_blob_digests` — an optional array parallel to `covered_blob_ids`, inside the signature ([07 §2.2](../specifications/repository-format/07-index.md#22-covered-blob-digests)). A replication receipt has to be checkable by the participant receiving the blob, and the catalogue is device-local, so it stays as a cache and this is the durable copy. Optional because the format's integrity rests on per-record AEAD tags; a **present** digest that does not match is a damage finding, and absence is not |
+| Q17 — what shape are leases, tombstones and audit-period records? | Specified as [11 — Lifecycle objects](../specifications/repository-format/11-lifecycle-objects.md), with types `0x0D`, `0x0E`, `0x0F`. Only the **tombstone** is signed, because only it authorises anything; its grace is counted in index generations rather than wall time, since the format has no trusted clock. A lease authorises nothing and may be ignored. An audit-period record carries counts and keyed identifiers and no path, name or content hash, because it is the object most likely to be exported in a diagnostic bundle |
+| Q4 — is canonical CBOR the right metadata encoding, and what does it cost? | Yes, and the cost is measured: **8.6 %** over a floor computed to flatter a bespoke binary format, and **1.50× cheaper** than canonical JSON ([benchmark](metadata-encoding-benchmark.md)). [ADR-0003](adr/0003-canonical-metadata-encoding.md) is Accepted. The benchmark also corrected the ADR's own reasoning: JSON's size penalty is real but modest, and determinism — not size — is what disqualifies it, because object identifiers derive from encoded bytes. The remaining confirmation, an independent reader from the published specification, is [freeze-gate item 2](roadmap.md#format-v1-freeze-gate) rather than a separate question |
+| Q11 — should a segment reference carry a `last_known_blob` hint? | No. A hint exists, as a separate optional object per snapshot; in the manifest it would have made the same content encode differently per device and broken cross-device dedup ([ADR-0007 Amendment](adr/0007-logical-object-identifiers-in-manifests.md), [06 §10](../specifications/repository-format/06-manifests.md)) |
 | How is nonce uniqueness guaranteed? | Per-blob key derivation, record ordinal as nonce ([ADR-0005](adr/0005-aead-suite-and-nonce-construction.md)) |
 | Is cross-device dedup safe by default? | Yes — `repository` is the default and verifies on reuse; `device` is the hardened opt-in ([ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md)) |
 | How does GC avoid deleting in-flight blobs? | Write-intent journal records; leases are advisory ([ADR-0009](adr/0009-garbage-collection-safety.md)) |
@@ -229,3 +162,4 @@ Three namespaces in [01 §2](../specifications/repository-format/01-object-layou
 | Is the local database disposable? | The catalogue is; device identity and pairings are not ([ADR-0010](adr/0010-local-store-separation.md)) |
 | Can compaction relocate records byte-identically? | No — compaction decrypts and re-seals; the AAD and its ordinal are unchanged ([ADR-0025](adr/0025-compaction-reseals-records.md)) |
 | What licence does the project carry? | Dual: code AGPL-3.0-only + commercial licences from the maintainer; `specifications/` Apache-2.0 so independent readers stay unencumbered ([ADR-0001](adr/0001-licence-and-contribution-model.md)) |
+| Where does the concurrency default sit, and does per-record spool pinning survive measurement? | Both answered by measurement, not opinion. `Concurrency` stays at **2**: 360.8 MiB/s at 2 against 356.9 at 4, because a single-threaded reader and a single-threaded ordering barrier leave four logical cores little to spare. Pinning **survives**, moved from per record to per blob — one `fsync` and one sidecar write per blob, at which price the question of whether it earns its cost does not arise ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md) §6, [phase-2 benchmarks](phase-2-benchmarks.md)) |

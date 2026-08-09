@@ -1,3 +1,4 @@
+using Bodu;
 using System.Buffers;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
@@ -60,11 +61,11 @@ public sealed class FileArchiver
         string spoolDirectory,
         IIntentScope? intentScope = null)
     {
-        ArgumentNullException.ThrowIfNull(policy);
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(counters);
-        ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
+        ThrowHelper.ThrowIfNull(policy);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(counters);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         var validation = policy.ValidateAgainstStore(store.Capabilities.MaximumObjectSize);
         if (!validation.IsValid)
@@ -109,7 +110,7 @@ public sealed class FileArchiver
     /// </remarks>
     public async ValueTask<ArchiveResult> ArchiveAsync(Stream source, ArchiveResult? priorVersion, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var session = OpenSession();
         await using (session.ConfigureAwait(false))
@@ -134,12 +135,13 @@ public sealed class FileArchiver
     /// <summary>
     /// Opens a session for archiving many files with blob continuity across
     /// file boundaries (specification 05 §5) — the multi-file publication
-    /// path. <paramref name="segmentExists"/>, when supplied, answers
-    /// whether an object identifier is already located by the index — the
-    /// cross-snapshot segment-reuse test (09 §6). The caller flushes and
+    /// path. <paramref name="mayReuseSegment"/>, when supplied, answers
+    /// whether an existing segment record may be referenced instead of
+    /// written again — the cross-snapshot reuse test (09 §6) as the
+    /// configured trust domain decides it (09 §5). The caller flushes and
     /// disposes the session.
     /// </summary>
-    public ArchiveSession OpenSession(Func<Domain.Identifiers.ObjectId, bool>? segmentExists = null) => new(
+    public ArchiveSession OpenSession(ReusePredicate? mayReuseSegment = null) => new(
         _policy, _repositoryId, _writerId, _generation, _keys, _store, _counters, _spoolDirectory, _pinned, _intentScope,
-        segmentExists);
+        mayReuseSegment);
 }

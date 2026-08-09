@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Repository.Packing;
 
 /// <summary>How reading one record resolved (specification 04 §6–§7).</summary>
@@ -52,14 +54,14 @@ public sealed record RecordReadResult
     /// <summary>Creates a success result carrying the verified plaintext.</summary>
     public static RecordReadResult Success(byte[] plaintext)
     {
-        ArgumentNullException.ThrowIfNull(plaintext);
+        ThrowHelper.ThrowIfNull(plaintext);
         return new(RecordReadOutcome.Ok, plaintext, null);
     }
 
     /// <summary>Creates a failure result naming its finding.</summary>
     public static RecordReadResult Failure(RecordReadOutcome outcome, string detail)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(detail);
         return new(outcome, null, detail);
     }
 }

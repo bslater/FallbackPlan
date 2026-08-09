@@ -1,7 +1,6 @@
 using System.Text.Json;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Segmentation;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -11,13 +10,14 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// streaming reader over actual bytes — Wave B1's acceptance criterion
 /// (specification 09 §2; FR-ARCH-001).
 /// </summary>
+[TestClass]
 public sealed class SegmentationConformanceTests
 {
     private static JsonDocument Vectors { get; } =
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "segmentation.json")));
 
-    [Fact]
-    public void Boundary_arithmetic_matches_every_committed_case()
+    [TestMethod]
+    public void SegmentationBoundaries_EveryCommittedCase_Match()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("cases").EnumerateArray())
         {
@@ -25,7 +25,7 @@ public sealed class SegmentationConformanceTests
             var segmentSize = SegmentSize.Create(vectorCase.GetProperty("segment_size").GetInt32());
             var expectedSegments = vectorCase.GetProperty("segments").EnumerateArray().ToArray();
 
-            Assert.Equal(
+            Assert.AreEqual(
                 vectorCase.GetProperty("segment_count").GetInt64(),
                 FixedSegmentation.SegmentCount(fileLength, segmentSize));
 
@@ -33,14 +33,14 @@ public sealed class SegmentationConformanceTests
             {
                 var (offset, length) = FixedSegmentation.GetSegment(index, fileLength, segmentSize);
 
-                Assert.Equal(expectedSegments[index].GetProperty("offset").GetInt64(), offset);
-                Assert.Equal(expectedSegments[index].GetProperty("length").GetInt64(), length);
+                Assert.AreEqual(expectedSegments[index].GetProperty("offset").GetInt64(), offset);
+                Assert.AreEqual(expectedSegments[index].GetProperty("length").GetInt64(), length);
             }
         }
     }
 
-    [Fact]
-    public async Task The_streaming_reader_reproduces_every_materializable_case()
+    [TestMethod]
+    public async Task StreamingSegmentReader_EveryMaterialisableCase_Reproduces()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("cases").EnumerateArray())
         {
@@ -61,18 +61,18 @@ public sealed class SegmentationConformanceTests
             var index = 0;
             while (await reader.ReadNextAsync(buffer, CancellationToken.None) is { } segment)
             {
-                Assert.Equal(expectedSegments[index].GetProperty("offset").GetInt64(), segment.Offset);
-                Assert.Equal(expectedSegments[index].GetProperty("length").GetInt64(), segment.Length);
-                Assert.Equal(index, segment.Index);
+                Assert.AreEqual(expectedSegments[index].GetProperty("offset").GetInt64(), segment.Offset);
+                Assert.AreEqual(expectedSegments[index].GetProperty("length").GetInt64(), segment.Length);
+                Assert.AreEqual(index, segment.Index);
                 index++;
             }
 
-            Assert.Equal(expectedSegments.Length, index);
+            Assert.AreEqual(expectedSegments.Length, index);
         }
     }
 
-    [Fact]
-    public void Cdc_tables_derived_from_the_polynomial_match_the_committed_tables()
+    [TestMethod]
+    public void CdcTables_DerivedFromThePolynomial_MatchTheCommittedTables()
     {
         // The vectors commit the polynomial, the derivation rule, and the
         // computed tables; the engine derives its tables from the polynomial
@@ -80,24 +80,24 @@ public sealed class SegmentationConformanceTests
         // tables — regenerate or embed — describe one function (ADR-0023).
         var cdc = Vectors.RootElement.GetProperty("cdc_v1");
 
-        Assert.Equal("0x000000000000001b", cdc.GetProperty("polynomial").GetString());
-        Assert.Equal(RabinFingerprint.WindowSize, cdc.GetProperty("window_size").GetInt32());
+        Assert.AreEqual("0x000000000000001b", cdc.GetProperty("polynomial").GetString());
+        Assert.AreEqual(RabinFingerprint.WindowSize, cdc.GetProperty("window_size").GetInt32());
 
         var push = cdc.GetProperty("push_table").EnumerateArray().Select(e => e.GetString()).ToArray();
         var pop = cdc.GetProperty("pop_table").EnumerateArray().Select(e => e.GetString()).ToArray();
 
-        Assert.Equal(256, push.Length);
-        Assert.Equal(256, pop.Length);
+        Assert.AreEqual(256, push.Length);
+        Assert.AreEqual(256, pop.Length);
 
         for (var b = 0; b < 256; b++)
         {
-            Assert.Equal(push[b], RabinFingerprint.PushTable[b].ToString("x16", System.Globalization.CultureInfo.InvariantCulture));
-            Assert.Equal(pop[b], RabinFingerprint.PopTable[b].ToString("x16", System.Globalization.CultureInfo.InvariantCulture));
+            Assert.AreEqual(push[b], RabinFingerprint.PushTable[b].ToString("x16", System.Globalization.CultureInfo.InvariantCulture));
+            Assert.AreEqual(pop[b], RabinFingerprint.PopTable[b].ToString("x16", System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 
-    [Fact]
-    public async Task The_cdc_reader_reproduces_every_committed_boundary()
+    [TestMethod]
+    public async Task CdcSegmentReader_EveryCommittedBoundary_Reproduces()
     {
         var cdc = Vectors.RootElement.GetProperty("cdc_v1");
 
@@ -117,13 +117,13 @@ public sealed class SegmentationConformanceTests
             var index = 0;
             while (await reader.ReadNextAsync(buffer, CancellationToken.None) is { } segment)
             {
-                Assert.True(index < expectedSegments.Length, $"{name}: more segments than committed");
-                Assert.Equal(expectedSegments[index].GetProperty("offset").GetInt64(), segment.Offset);
-                Assert.Equal(expectedSegments[index].GetProperty("length").GetInt64(), segment.Length);
+                Assert.IsTrue(index < expectedSegments.Length, $"{name}: more segments than committed");
+                Assert.AreEqual(expectedSegments[index].GetProperty("offset").GetInt64(), segment.Offset);
+                Assert.AreEqual(expectedSegments[index].GetProperty("length").GetInt64(), segment.Length);
                 index++;
             }
 
-            Assert.Equal(expectedSegments.Length, index);
+            Assert.AreEqual(expectedSegments.Length, index);
         }
     }
 

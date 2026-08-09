@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 
@@ -42,7 +43,7 @@ public static class Scheduler
     public static async ValueTask<AgentPassResult> RunPassAsync(
         ServiceRuntime runtime, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(runtime);
 
         var outcomes = new List<AgentSetOutcome>();
         var running = new List<Task<BackupOutcome>>();
@@ -102,8 +103,8 @@ public static class Scheduler
     public static Task<BackupOutcome> Enqueue(
         ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated)
     {
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(set);
+        ThrowHelper.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(set);
 
         var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var completion = new TaskCompletionSource<BackupOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -136,7 +137,7 @@ public static class Scheduler
     /// <returns>The job identity, or null.</returns>
     public static string? LatestJobFor(ServiceRuntime runtime, string backupSetId)
     {
-        ArgumentNullException.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(runtime);
         return runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == backupSetId)?.Id;
     }
 }

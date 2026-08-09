@@ -1,3 +1,4 @@
+using Bodu;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
@@ -48,7 +49,7 @@ internal sealed partial class WindowsDataProtectionStore(string stateDirectory) 
 
     public void Write(string account, string passphrase)
     {
-        ArgumentException.ThrowIfNullOrEmpty(passphrase);
+        ThrowHelper.ThrowIfNullOrEmpty(passphrase);
 
         Directory.CreateDirectory(stateDirectory);
         var plain = Encoding.UTF8.GetBytes(passphrase);
@@ -73,7 +74,7 @@ internal sealed partial class WindowsDataProtectionStore(string stateDirectory) 
 
     private string PathFor(string account)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
         return Path.Combine(stateDirectory, $"unlock-{Sanitise(account)}.dpapi");
     }
 

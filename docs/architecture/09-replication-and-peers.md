@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
+**Built:** Identity, pairing and the session layer built; no transport, no replication — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. What replication moves
@@ -22,9 +24,15 @@ Steps 3–6 are ordered so the cheapest discovery happens first: a filter exchan
 
 ## 2. Transport
 
+Specified in [`specifications/peer-protocol/02`](../../specifications/peer-protocol/02-session.md).
+
 Direct QUIC or TLS · mutually authenticated peer identity · relay fallback where the relay cannot decrypt · restart from verified ranges · dynamic concurrency · bandwidth schedules · source selection across multiple replicas · end-to-end content verification · optional local-network preference · fairness between backup sets.
 
 Fairness matters more than it sounds: without it, one large backup set starves every other set on the same link indefinitely, and the user sees a set that has simply stopped making progress with no explanation.
+
+**TLS carries the session; it does not establish who is on it.** Both sides present a certificate generated for that connection and discarded with it, and neither makes a trust decision about it. Identity is proved inside the protocol, by each side signing a transcript that binds its pinned Ed25519 key to the certificates this connection actually used — so a man in the middle, who must terminate TLS with certificates of its own, cannot produce or relay a proof that verifies. The original design put this in the transport with RFC 7250 raw public keys; that is unreachable on the platform, and [ADR-0030 Amendment 1](../adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls) records the move and why the guarantee survives it.
+
+A consequence worth stating where an architect will look for it: **a completed handshake is not an authenticated peer**, and the session's states are named so that no code can quietly assume otherwise ([02 §2](../../specifications/peer-protocol/02-session.md#2-session-states)).
 
 ### 2.1 Version skew
 
@@ -34,10 +42,12 @@ Repository format compatibility is negotiated separately from protocol compatibi
 
 ## 3. Pairing
 
-- Both sides see short authentication words and a QR code, and both must approve.
+Specified in [`specifications/peer-protocol/01`](../../specifications/peer-protocol/01-identity-and-pairing.md); the decisions behind it in [ADR-0030](../adr/0030-peer-identity-and-pairing.md). The properties this section fixes are the ones that specification is written to satisfy:
+
+- Both sides see the same short authentication string — six base32 characters, per [01 §2.3](../../specifications/peer-protocol/01-identity-and-pairing.md) — and both must approve. An earlier draft specified words from a wordlist and shipped no wordlist; the characters say what they mean and need nothing carried.
 - Identity is pinned on approval; a changed identity is a hard failure requiring explicit re-approval, not a prompt that can be clicked through.
 - Direct connection is negotiated first; relay is a fallback and is reported as such.
-- The **destination** sets quota, storage path, schedule window, and retention floor. These are its terms, and a source cannot reduce them.
+- The **destination** sets quota, storage path, schedule window, and retention floor. These are its terms: a source may operate under narrower ones of its own choosing and can never ask for more generous. The storage path is deliberately not on the wire at all — a source that knew it would be a source that could name it.
 - A source never receives unrestricted filesystem access to a destination — it speaks the repository protocol ([`05-storage-providers.md` §4.2](05-storage-providers.md#42-fallbackplan-peer)).
 - A destination cannot read source content. Holding blobs conveys no ability to decrypt them.
 

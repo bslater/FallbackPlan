@@ -4,6 +4,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -14,10 +15,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// and restore the file from the manifest's own references — plus the
 /// standalone snapshot object sealed under FBPKSREC at its bounded prefix.
 /// </summary>
+[TestClass]
 public sealed class ManifestRoundTripTests : ArchiveTestHarness
 {
-    [Fact]
-    public async Task A_file_version_manifest_written_to_a_metadata_blob_reads_back_and_restores_the_file()
+    [TestMethod]
+    public async Task FileVersionManifest_WrittenToAMetadataBlob_ReadsBackAndRestoresTheFile()
     {
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
@@ -41,7 +43,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
             manifestId = await builder.AppendManifestAsync(ObjectType.FileVersionManifest, encoded, CancellationToken.None);
             await builder.FlushAsync(CancellationToken.None);
 
-            Assert.Single(builder.Blobs);
+            Assert.ContainsSingle(builder.Blobs);
             Assert.StartsWith("blobs/meta/", builder.Blobs[0].StoreKey.Value, StringComparison.Ordinal);
         }
 
@@ -50,25 +52,25 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(manifestId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
 
         var decoded = FileVersionManifestCodec.Decode(read.Plaintext!);
 
-        Assert.Equal((ulong)data.Length, decoded.LogicalLength);
-        Assert.Equal(archived.SegmentReferences, decoded.SegmentReferences);
+        Assert.AreEqual((ulong)data.Length, decoded.LogicalLength);
+        SequenceAssert.AreEqual(archived.SegmentReferences, decoded.SegmentReferences);
 
         // Restore from the DECODED manifest's references — the manifest is
         // now the authority, exactly as a real restore would use it.
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(decoded.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(data, restored.ToArray());
-        Assert.Equal(decoded.WholeFileHash.ToArray(), restore.WholeFileHash!.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
+        SequenceAssert.AreEqual(decoded.WholeFileHash.ToArray(), restore.WholeFileHash!.ToArray());
     }
 
-    [Fact]
-    public async Task A_standalone_snapshot_seals_under_its_bounded_prefix_and_opens_back()
+    [TestMethod]
+    public async Task StandaloneSnapshot_SealedUnderItsBoundedPrefix_OpensBack()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -109,7 +111,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
             entries.Add(entry);
         }
 
-        var stored = Assert.Single(entries);
+        var stored = Assert.ContainsSingle(entries);
 
         using var open = await store.OpenReadAsync(stored.Key, range: null, CancellationToken.None);
         using var memory = new MemoryStream();
@@ -118,9 +120,9 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
         var record = StandaloneRecordFraming.Parse(memory.ToArray());
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
 
-        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
 
         var decoded = SnapshotManifestCodec.Decode(plaintext);
-        Assert.Equal(snapshot.SnapshotId.ToArray(), decoded.Manifest.SnapshotId.ToArray());
+        SequenceAssert.AreEqual(snapshot.SnapshotId.ToArray(), decoded.Manifest.SnapshotId.ToArray());
     }
 }

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using FallbackPlan.Domain.Resources;
 
 namespace FallbackPlan.Domain.Identifiers;
 
@@ -30,7 +31,7 @@ public readonly struct WriterId : IEquatable<WriterId>
     {
         if (bytes.Length != Size)
         {
-            throw new ArgumentException($"A writer identifier is exactly {Size} bytes; got {bytes.Length}.", nameof(bytes));
+            throw new ArgumentException(Strings.FormatWriterId_WriterIdentifierExactlyBytesGot(Size, bytes.Length), nameof(bytes));
         }
 
         return new WriterId(
@@ -46,7 +47,7 @@ public readonly struct WriterId : IEquatable<WriterId>
     {
         if (destination.Length < Size)
         {
-            throw new ArgumentException($"Destination must hold at least {Size} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobId_DestinationMustHoldLeastBytes(Size), nameof(destination));
         }
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, _high);

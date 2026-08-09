@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -27,7 +28,7 @@ public readonly record struct FooterLocator(ulong FooterOffset, ulong DigestPref
     {
         if (destination.Length != Length)
         {
-            throw new ArgumentException($"A footer locator is exactly {Length} bytes; got {destination.Length}.", nameof(destination));
+            throw new ArgumentException(Strings.Formatstruct_FooterLocatorExactlyBytesGot(Length, destination.Length), nameof(destination));
         }
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, FooterOffset);
@@ -44,15 +45,14 @@ public readonly record struct FooterLocator(ulong FooterOffset, ulong DigestPref
     {
         if (data.Length != Length)
         {
-            throw new BlobFormatException($"A footer locator is {Length} bytes; got {data.Length}.");
+            throw new BlobFormatException(Strings.Formatstruct_FooterLocatorBytesGot(Length, data.Length));
         }
 
         var footerOffset = BinaryPrimitives.ReadUInt64BigEndian(data);
 
         if (footerOffset < BlobEnvelope.Length || footerOffset >= (ulong)(blobLength - Length))
         {
-            throw new BlobFormatException(
-                $"Footer offset {footerOffset} does not fall inside a {blobLength}-byte blob — the locator is damaged (specification 05 §4).");
+            throw new BlobFormatException(Strings.Formatstruct_FooterOffsetDoesNotFall(footerOffset, blobLength));
         }
 
         return new FooterLocator(footerOffset, BinaryPrimitives.ReadUInt64BigEndian(data[8..]));

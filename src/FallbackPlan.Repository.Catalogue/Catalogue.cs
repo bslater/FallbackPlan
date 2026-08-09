@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
@@ -35,7 +36,22 @@ public sealed record CatalogueTreeEntry(
     ulong? IdentityDevice,
     ulong? IdentityFileId);
 
+/// <summary>
+/// What the reuse decision needs to know about an object the index already
+/// locates ([ADR-0006](../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)):
+/// who wrote the winning entry, and whether this device has already confirmed
+/// its content.
+/// </summary>
+public sealed record ReuseCandidate(WriterId WriterId, bool Verified);
+
 /// <summary>A resolved physical location: everything a targeted read needs to open one blob and one record.</summary>
+/// <remarks>
+/// <see cref="StoreBlobKey"/> comes from the blob row rather than the location
+/// row and is null when no blob row exists — an index delta names locations
+/// whether or not this catalogue has seen the blob that holds them, which is
+/// the ordinary state of a rebuilt catalogue. A reader that needs to address
+/// the blob derives its store key from <see cref="BlobId"/> instead.
+/// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
     StoreBlobKey? StoreBlobKey,
@@ -70,7 +86,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public static Catalogue Open(string path, RepositoryId repositoryId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         var connection = Connect(path);
 
@@ -158,7 +174,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public void ApplyDelta(DeltaId deltaId, IndexDelta delta)
     {
-        ArgumentNullException.ThrowIfNull(delta);
+        ThrowHelper.ThrowIfNull(delta);
 
         using var transaction = _connection.BeginTransaction();
 
@@ -194,7 +210,7 @@ public sealed class Catalogue : IDisposable
     /// <summary>Applies one checkpoint idempotently, entries carrying the checkpoint's provenance.</summary>
     public void ApplyCheckpoint(CheckpointId checkpointId, Checkpoint checkpoint)
     {
-        ArgumentNullException.ThrowIfNull(checkpoint);
+        ThrowHelper.ThrowIfNull(checkpoint);
 
         using var transaction = _connection.BeginTransaction();
 
@@ -288,7 +304,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public static string Casefold(string path)
     {
-        ArgumentNullException.ThrowIfNull(path);
+        ThrowHelper.ThrowIfNull(path);
         return path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
     }
 
@@ -299,7 +315,7 @@ public sealed class Catalogue : IDisposable
         EntryKind entryKind,
         ObjectId objectId)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path);
+        ThrowHelper.ThrowIfNullOrEmpty(path);
 
         var slash = path.LastIndexOf('/');
         var parent = slash < 0 ? string.Empty : path[..slash];
@@ -348,14 +364,104 @@ public sealed class Catalogue : IDisposable
         return snapshots;
     }
 
+    /// <summary>One snapshot's capture time, or <see langword="null"/> when it is unknown here.</summary>
+    /// <param name="snapshotId">The snapshot, 16 bytes.</param>
+    /// <remarks>
+    /// Snapshot rows survive a catalogue rebuild — the projector reads the
+    /// standalone snapshot objects — so this answers even when file-version
+    /// identities do not.
+    /// </remarks>
+    public ulong? LookupSnapshotCaptureTime(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT captured_at FROM snapshots WHERE snapshot_id = $snapshot LIMIT 1;";
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+
+        var value = command.ExecuteScalar();
+        return value is null or DBNull ? null : (ulong)Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Whether this snapshot's file versions carry the scan-time identity the
+    /// incremental path compares.
+    /// </summary>
+    /// <param name="snapshotId">The snapshot, 16 bytes.</param>
+    /// <remarks>
+    /// The gate on consulting the durable source-identity hints (06 §11).
+    /// Identity is scan-time local fact and is not durable (02 §2), so a
+    /// rebuilt catalogue has none and the hints are the only remaining answer;
+    /// a warm one has them all and answering from the store would be a
+    /// round trip to learn what is already in hand.
+    /// </remarks>
+    public bool HasIdentities(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM tree_entries t
+            JOIN file_versions f ON f.object_id = t.object_id
+            WHERE t.snapshot_id = $snapshot AND f.identity_file_id IS NOT NULL
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+
+        return command.ExecuteScalar() is not (null or DBNull);
+    }
+
     /// <summary>
     /// Resolves one path within a snapshot — the NFR-PERF-004 lookup.
     /// Case-insensitive resolution folds through the ADR-0026 §Decision 8
     /// key; an exact match always wins over a folded one.
     /// </summary>
+    /// <summary>
+    /// Finds a snapshot's version of a file by the source's **stable
+    /// identity** rather than by its path.
+    /// </summary>
+    /// <param name="snapshotId">The snapshot to look in.</param>
+    /// <param name="device">The source device number or volume identifier.</param>
+    /// <param name="fileId">The inode or file identifier.</param>
+    /// <returns>The prior entry, or <see langword="null"/> when this snapshot has no file with that identity.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is what makes a rename or a move recognisable as the same file
+    /// rather than a delete plus a create (architecture 06 §1). Keyed on path,
+    /// a moved file misses entirely, and the engine re-reads and re-hashes
+    /// every byte of a file whose content did not change — and writes a
+    /// version with no ancestor, permanently severing the history a user
+    /// renamed rather than replaced.
+    /// </para>
+    /// <para>
+    /// Identity alone is not sufficient to reuse content, and this does not
+    /// claim it is: an inode is reused after its file is deleted. The caller
+    /// still checks size and modification time, exactly as it does for a
+    /// path match.
+    /// </para>
+    /// </remarks>
+    public CatalogueTreeEntry? LookupIdentity(ReadOnlySpan<byte> snapshotId, ulong device, ulong fileId)
+    {
+        var started = Stopwatch.GetTimestamp();
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+            FROM file_versions f
+            JOIN tree_entries t ON t.object_id = f.object_id AND t.snapshot_id = $snapshot
+            WHERE f.identity_device = $device AND f.identity_file_id = $fileId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$device", (long)device);
+        command.Parameters.AddWithValue("$fileId", (long)fileId);
+
+        using var reader = command.ExecuteReader();
+        var entry = reader.Read() ? ReadTreeEntry(reader) : null;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return entry;
+    }
+
     public CatalogueTreeEntry? LookupPath(ReadOnlySpan<byte> snapshotId, string path, bool caseInsensitive = false)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path);
+        ThrowHelper.ThrowIfNullOrEmpty(path);
         var started = Stopwatch.GetTimestamp();
 
         using var command = _connection.CreateCommand();
@@ -393,7 +499,7 @@ public sealed class Catalogue : IDisposable
     /// </summary>
     public IReadOnlyList<CatalogueTreeEntry> ListDirectory(ReadOnlySpan<byte> snapshotId, string parentPath)
     {
-        ArgumentNullException.ThrowIfNull(parentPath);
+        ThrowHelper.ThrowIfNull(parentPath);
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
@@ -470,7 +576,7 @@ public sealed class Catalogue : IDisposable
     /// <summary>Appends a damage finding (FR-MAN-011).</summary>
     public void RecordFinding(DamageFinding finding, ObjectId? objectId = null, BlobId? blobId = null)
     {
-        ArgumentNullException.ThrowIfNull(finding);
+        ThrowHelper.ThrowIfNull(finding);
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
@@ -548,6 +654,59 @@ public sealed class Catalogue : IDisposable
         var exists = (long)command.ExecuteScalar()! > 0;
         EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
         return exists;
+    }
+
+    /// <summary>
+    /// The reuse candidate for <paramref name="objectId"/>, or
+    /// <see langword="null"/> when no live index entry locates it — the
+    /// trust-domain-aware form of <see cref="HasLocation"/> (ADR-0006;
+    /// specification 09 §5).
+    /// </summary>
+    /// <remarks>
+    /// The winner is chosen by the 07 §3 precedence order, the same order
+    /// <see cref="ResolveLocation"/> uses, so the writer reported here is the
+    /// writer of the entry a read would resolve to. One query rather than
+    /// <see cref="ResolveLocation"/>'s two, and no damage finding: this runs
+    /// once per segment on the NFR-PERF-010 path.
+    /// </remarks>
+    public ReuseCandidate? FindReuseCandidate(ObjectId objectId)
+    {
+        var started = Stopwatch.GetTimestamp();
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT l.writer_id,
+                   EXISTS (SELECT 1 FROM verified_objects v WHERE v.object_id = l.object_id)
+            FROM object_locations l
+            LEFT JOIN blobs b ON b.blob_id = l.blob_id
+            WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3
+            ORDER BY l.generation DESC, l.writer_id DESC, l.sequence DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+
+        using var reader = command.ExecuteReader();
+        var candidate = reader.Read()
+            ? new ReuseCandidate(WriterId.FromBytes((byte[])reader.GetValue(0)), reader.GetInt64(1) > 0)
+            : null;
+
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return candidate;
+    }
+
+    /// <summary>
+    /// Remembers that <paramref name="objectId"/> was fetched, decrypted, and
+    /// confirmed, so the next reuse does not pay for the read again.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, because two segments in flight can verify the same object
+    /// at once. Not restored by a rebuild — see <see cref="CatalogueSchema"/>.
+    /// </remarks>
+    public void RecordVerified(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "INSERT OR IGNORE INTO verified_objects (object_id) VALUES ($object);";
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        command.ExecuteNonQuery();
     }
 
     /// <summary>Looks up a prior segment by content identifier — the dedup path (NFR-PERF-010).</summary>

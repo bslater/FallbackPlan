@@ -194,7 +194,7 @@ Remote clients are **paired, not passworded**, reusing the machinery
 architecture 09 §3 already defines for peers rather than inventing a second
 credential system:
 
-- Both sides display short authentication words and a QR code, and both approve.
+- Both sides display the same short authentication string and a QR code, and both approve. (Written here as "words"; [peer-protocol 01 §2.3](../../specifications/peer-protocol/01-identity-and-pairing.md) settled it as six base32 characters, for the reasons recorded there.)
 - The identity is **pinned on approval**; a changed identity is a hard failure
   requiring explicit re-approval, never a prompt that can be clicked through.
 - Approval is revocable at the service, which is the party at risk.
@@ -424,11 +424,16 @@ contract and its versioning (§7), status aggregation (§8), and unlock (§9). T
 CLI takes the writer role deliberately and says so; a second writer is refused
 naming the holder.
 
+Also built: restore, verify and check over the surface (§7). They had been
+answered with a stated "read path, run it directly" refusal, which was honest
+but left a console able to ask the service to make a backup and not to check
+one. They run on the job queue's reader lane (ADR-0029 §4), so a read path never
+takes the writer role and a restore runs alongside a scheduled backup rather
+than behind it.
+
 Not built: the remote binding (§5) — it validates and binds nothing, because
 pairing reuses architecture 09 §3's machinery and that does not exist yet — and
-therefore topologies 3 and 4 of §1, and the restore/verify/check commands over
-the surface, which this service build answers with a stated refusal rather than
-a silence.
+therefore topologies 3 and 4 of §1.
 
 ## Status history
 
@@ -436,3 +441,4 @@ a silence.
 |------|--------|------|
 | 2026-08 | Proposed | Written after the multi-process hazard was found while designing the service split |
 | 2026-08 | Accepted (amended) | Implemented for the local binding; the Linux keystore question decided in the amendment above |
+| 2026-08 | Accepted | Restore, verify and check served over the surface on the reader lane; the CLI routes them and backup to a running service |

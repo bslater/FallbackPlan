@@ -1,6 +1,14 @@
+using Bodu;
+using System.Globalization;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Status;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Restore;
+using FallbackPlan.Storage.Abstractions;
+using RestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Agent;
 
@@ -24,25 +32,98 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     : IFallbackPlanService
 {
     /// <inheritdoc/>
-    public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
+    public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(command);
+        ThrowHelper.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
-            return ValueTask.FromResult(Dispatch(command));
+            // The read paths are the only commands that do open-ended work, so
+            // they are the only ones that go through the queue. Everything else
+            // answers from state already in hand and would gain nothing but a
+            // hand-off from being scheduled.
+            return command switch
+            {
+                PlanRestoreCommand plan => PlanRestore(plan),
+                RunRestoreCommand restore => await OnReaderLaneAsync(
+                    $"restore {restore.SnapshotId}",
+                    token => RunRestoreAsync(restore, token),
+                    cancellationToken).ConfigureAwait(false),
+                VerifyCommand verify => await OnReaderLaneAsync(
+                    $"verify {verify.Level}",
+                    token => VerifyAsync(verify, token),
+                    cancellationToken).ConfigureAwait(false),
+                CheckCommand check => await OnReaderLaneAsync(
+                    $"check {check.Level}",
+                    token => CheckAsync(check, token),
+                    cancellationToken).ConfigureAwait(false),
+                _ => Dispatch(command),
+            };
         }
         catch (ClientStateException exception)
         {
-            return ValueTask.FromResult<ServiceResult>(
-                new ServiceError(ServiceErrorReason.Failed, exception.Message));
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return ValueTask.FromResult<ServiceResult>(
-                new ServiceError(ServiceErrorReason.Failed, exception.Message));
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
         }
+        catch (OperationCanceledException)
+        {
+            return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+        }
+    }
+
+    /// <summary>Runs a read path on the queue's reader lane and waits for it.</summary>
+    /// <remarks>
+    /// <para>
+    /// ADR-0029 §4: restore and verification are separately queued and may run
+    /// alongside a backup, because someone waiting on a restore must not wait
+    /// for a scheduled backup and a read path never takes the writer role. The
+    /// reader lane has one worker, so two heavy reads serialise against each
+    /// other rather than competing for the same disk — which is what that lane
+    /// was built for and has until now had nothing to carry.
+    /// </para>
+    /// <para>
+    /// No job-journal entry is written. The journal is keyed by backup set, and
+    /// a restore has no set; inventing one would put a synthetic identity in the
+    /// same table the scheduler reads back as "last completed" for a real set.
+    /// The consequence is that these jobs are not reachable by
+    /// <see cref="CancelJobCommand"/> — the commands return no job id to cancel
+    /// — so cancellation rides the caller's token instead, which is the reach a
+    /// synchronous result gives it.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<ServiceResult> OnReaderLaneAsync(
+        string description,
+        Func<CancellationToken, ValueTask<ServiceResult>> work,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var jobId = $"read-{Guid.NewGuid():n}";
+
+        runtime.Queue.Enqueue(new QueuedJob(
+            jobId,
+            JobLane.Reader,
+            UserInitiated: true,
+            description,
+            async token =>
+            {
+                try
+                {
+                    completion.SetResult(await work(token).ConfigureAwait(false));
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            }));
+
+        // A caller that gives up releases the lane rather than leaving it held
+        // by work nobody is waiting for.
+        using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
+        return await completion.Task.ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -62,23 +143,218 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
 
-        // Named rather than silently missing: the contract carries these so a
-        // client can be written against them, and this build serves the writer
-        // path — where the multi-process hazard lived — while restore, verify
-        // and check remain read paths a client runs in direct mode.
-        PlanRestoreCommand or RunRestoreCommand => NotServed("restore"),
-        VerifyCommand => NotServed("verify"),
-        CheckCommand => NotServed("check"),
-
+        // The read paths are handled before Dispatch, on the reader lane.
         _ => new ServiceError(ServiceErrorReason.InvalidArgument, $"Unknown command '{command.GetType().Name}'."),
     };
 
-    private static ServiceError NotServed(string what) =>
-        new ServiceError(
-            ServiceErrorReason.Unavailable,
-            $"This service build does not serve '{what}' over the command surface. It is a read path: run it "
-            + "against the repository directly. The contract carries the command so a client written today keeps "
-            + "working when the service does serve it.");
+    /// <summary>Parses a verify level, or says what the vocabulary is.</summary>
+    private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
+    {
+        (level, canonical, error) = text switch
+        {
+            "locator" => (VerifyLevel.LocatorAndFooter, "locator", (ServiceError?)null),
+            "digest" => (VerifyLevel.FooterAndDigest, "digest", null),
+            "records" => (VerifyLevel.EveryRecord, "records", null),
+            _ => (default, string.Empty, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"'{text}' is not a verify level (locator | digest | records).")),
+        };
+
+        return error is null;
+    }
+
+    /// <summary>Parses a hex snapshot id, or says why it is not one.</summary>
+    private static bool TryParseSnapshotId(string text, out byte[] snapshotId, out ServiceError? error)
+    {
+        try
+        {
+            snapshotId = Convert.FromHexString(text);
+            error = null;
+            return true;
+        }
+        catch (FormatException)
+        {
+            snapshotId = [];
+            error = new ServiceError(ServiceErrorReason.InvalidArgument, $"'{text}' is not a hex snapshot identifier.");
+            return false;
+        }
+    }
+
+    /// <summary>Plans a restore without performing it — a catalogue walk, so it answers inline.</summary>
+    private ServiceResult PlanRestore(PlanRestoreCommand command)
+    {
+        if (!TryParseSnapshotId(command.SnapshotId, out var snapshotId, out var invalid))
+        {
+            return invalid!;
+        }
+
+        using var catalogue = runtime.OpenReadCatalogue();
+        var plan = RestorePlanner.Plan(
+            catalogue, snapshotId, command.Path ?? string.Empty, RestoreTargetProfile.ForLocalPlatform());
+
+        if (plan.Items.Count == 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"The catalogue knows nothing under snapshot {command.SnapshotId}"
+                + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
+        }
+
+        // What a plan is for: the objects it needs and cannot find, reported
+        // before any byte moves rather than discovered part-way through.
+        var missing = plan.Items
+            .Where(item => item.Kind != EntryKind.DirectoryPlaceholder && !catalogue.HasLocation(item.ObjectId))
+            .Select(item => item.Path)
+            .ToList();
+
+        return new RestorePlanResult(
+            plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
+            (long)plan.SpaceEstimateBytes,
+            missing);
+    }
+
+    /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
+    private async ValueTask<ServiceResult> RunRestoreAsync(RunRestoreCommand command, CancellationToken cancellationToken)
+    {
+        if (!TryParseSnapshotId(command.SnapshotId, out var snapshotId, out var invalid))
+        {
+            return invalid!;
+        }
+
+        if (string.IsNullOrWhiteSpace(command.OutputDirectory))
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, "A restore needs an output directory.");
+        }
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        using var catalogue = runtime.OpenReadCatalogue();
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, command.Path ?? string.Empty, target);
+        if (plan.Items.Count == 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
+        }
+
+        using var reader = new RepositoryReader(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        // The output directory is a path on the machine running the service:
+        // a restore commanded from elsewhere writes here and the caller is told
+        // what happened, never sent the files (ADR-0028 §6).
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan,
+            command.OutputDirectory,
+            new RestoreExecutionOptions
+            {
+                // The job identifier, so a displaced file can be traced back to
+                // the run that moved it.
+                RunId = Convert.ToHexString(plan.SnapshotId.Span)[..16].ToLowerInvariant(),
+                NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        // Files, not entries. The receipt records a created directory as
+        // "restored" too, but the contract documents this field as files
+        // written — and PlanRestore counts the same way, so a caller comparing
+        // the plan against the outcome is comparing like with like.
+        var directories = plan.Items
+            .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+            .Select(item => item.Path)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return new RestoreResult(
+            receipt.Items.Count(item => item.Outcome == "restored" && !directories.Contains(item.Path)),
+            receipt.Items.Count(item => item.Outcome == "failed"),
+            // Where the files actually are, not where the caller pointed.
+            // Historical content quarantines by default (FR-RST-006), so the
+            // two differ, and a caller told the wrong one cannot find its data.
+            receipt.WrittenTo);
+    }
+
+    /// <summary>Verifies every stored blob at the requested level.</summary>
+    private async ValueTask<ServiceResult> VerifyAsync(VerifyCommand command, CancellationToken cancellationToken)
+    {
+        if (!TryParseLevel(command.Level, out var level, out var canonical, out var invalid))
+        {
+            return invalid!;
+        }
+
+        using var verifier = new VerifyEngine(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store);
+        var examined = 0L;
+        var failures = 0L;
+
+        await foreach (var entry in runtime.Store
+            .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            examined++;
+            var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.Ok)
+            {
+                failures++;
+            }
+        }
+
+        return new VerificationResult(examined, failures, canonical);
+    }
+
+    /// <summary>Repository health: the blob sweep, the journal survey, and the catalogue's damage findings.</summary>
+    private async ValueTask<ServiceResult> CheckAsync(CheckCommand command, CancellationToken cancellationToken)
+    {
+        if (!TryParseLevel(command.Level, out var level, out _, out var invalid))
+        {
+            return invalid!;
+        }
+
+        // Findings only. A count of what was healthy is not a finding, and the
+        // contract says this list is "the findings, in the order they matter" —
+        // so an empty list is the answer "nothing is wrong", not "nothing ran".
+        var findings = new List<string>();
+
+        using (var verifier = new VerifyEngine(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store))
+        {
+            await foreach (var entry in runtime.Store
+                .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!result.Ok)
+                {
+                    findings.Add($"blob {entry.Key.Value}: {result.Detail}");
+                }
+            }
+        }
+
+        using (var journalReader = new JournalReader(
+            runtime.Store, runtime.Repository.RepositoryId, runtime.Repository.Hierarchy))
+        {
+            var generation = runtime.Repository.CurrentDataGeneration.Value >= runtime.Repository.CurrentMetadataGeneration.Value
+                ? runtime.Repository.CurrentDataGeneration.Value
+                : runtime.Repository.CurrentMetadataGeneration.Value;
+
+            var (_, unparseable, journalFindings) = await journalReader
+                .LoadAsync(generation, cancellationToken).ConfigureAwait(false);
+
+            if (unparseable > 0)
+            {
+                findings.Add(string.Create(
+                    CultureInfo.InvariantCulture, $"journal: {unparseable} unparseable record(s)"));
+            }
+
+            findings.AddRange(journalFindings.Select(finding => $"journal {finding.Kind}: {finding.Detail}"));
+        }
+
+        using (var catalogue = runtime.OpenReadCatalogue())
+        {
+            findings.AddRange(catalogue.Findings().Select(finding => $"catalogue {finding.Kind}: {finding.Detail}"));
+        }
+
+        return new CheckResult(findings);
+    }
 
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(

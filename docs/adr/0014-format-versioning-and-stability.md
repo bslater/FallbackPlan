@@ -1,6 +1,6 @@
 # ADR-0014 — Format versioning and pre-1.0 stability posture
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-COMP-001..004, NFR-COMP-006, NFR-COMP-007, NFR-REL-008
 **Review finding:** [M6](../review/2026-08-architecture-review.md#m6--no-stability-posture-for-pre-10-repositories)

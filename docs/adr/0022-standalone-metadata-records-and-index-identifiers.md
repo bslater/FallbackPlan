@@ -123,7 +123,7 @@ The following maps and enums have no key assignments in the specification. Phase
 
 **Checkpoint key 5 `shard_hashes`** (07 §5): `shard_hashes[i]` is **SHA-256 over the deterministic CBOR encoding of the array of shard `shard_set[i]`'s post-precedence entries, each in §2.1 six-element form, sorted by `object_id` bytes ascending**. Deterministic and reader-recomputable from the checkpoint's own `entries`, which is what makes it usable as a cross-replica comparison.
 
-**Out of phase-0 scope entirely:** the lease record format (08 §9), `/tombstones/…`, and `/audit/<period>/…` object formats. Recorded in [open questions Q17](../open-questions.md#q17--lease-tombstone-and-audit-period-object-formats).
+**Out of phase-0 scope entirely:** the lease record format (08 §9), `/tombstones/…`, and `/audit/<period>/…` object formats. Recorded in [open questions Q17](../open-questions.md#closed).
 
 ## Decision 7 — Sequence accounting across the shared space
 
@@ -135,6 +135,12 @@ The following maps and enums have no key assignments in the specification. Phase
 4. a blob whose structured identifier embeds counter *n* (`blob_id = writer_id[0..8] ‖ u64(n)`, ADR-0016) **named by any intent's** `intended_blob_ids` or `additional_blob_ids`.
 
 A number satisfying none of these after the reader's configured bounded number of generations is a damage finding, per 07 §4. The writer's own recovery obligation is unchanged: a number it knows it skipped gets a void delta.
+
+**Advisory hint objects consume no number.** The placement hint (06 §10) and the source-identity hint (06 §11) are sealed under the same standalone framing, and each carries the sequence of the **write intent it was published under** rather than one of its own. The four cases above stay exhaustive because a hint never enters the space.
+
+The reason is arithmetic rather than taste. A source-identity hint is written per file version created, so a number apiece would mean one durable sequence-state write and one unaccounted obligation — and therefore one void delta on the next run — for every changed file in every backup. Spending a gapless space on objects whose absence is *by construction* never damage would also invert what the space is for: it exists so a missing object is detectable, and a missing hint is a fallback to matching by path.
+
+Nothing is weakened. No gap scan enumerates `/hints/`. Record-key uniqueness rests on the per-object CSPRNG salt in the `FBPKSREC` prefix, not on the counter, so several hints sharing the intent's number still derive distinct keys and distinct nonces (Decision 1; 03 §5).
 
 ## Decision 8 — Ed25519 conformance vectors, and the Bodu verifier's strictness
 

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Records;
 
@@ -91,12 +92,12 @@ public static class StandaloneRecordFraming
     {
         if (blobSalt.Length != BlobSaltLength)
         {
-            throw new ArgumentException($"The blob salt is exactly {BlobSaltLength} bytes.", nameof(blobSalt));
+            throw new ArgumentException(Strings.FormatStandaloneRecordFraming_BlobSaltExactlyBytes(BlobSaltLength), nameof(blobSalt));
         }
 
         if (destination.Length < PrefixLength)
         {
-            throw new ArgumentException($"The destination must hold {PrefixLength} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatStandaloneRecordFraming_DestinationMustHoldBytes(PrefixLength), nameof(destination));
         }
 
         Magic.CopyTo(destination);
@@ -122,13 +123,12 @@ public static class StandaloneRecordFraming
 
         if (span.Length < PrefixLength + RecordHeader.Length + 16)
         {
-            throw new RecordFormatException(
-                $"A standalone record is at least {PrefixLength + RecordHeader.Length + 16} bytes; got {span.Length} (ADR-0022).");
+            throw new RecordFormatException(Strings.FormatStandaloneRecordFraming_StandaloneRecordLeastBytesGot(PrefixLength + RecordHeader.Length + 16, span.Length));
         }
 
         if (!span[..8].SequenceEqual(Magic))
         {
-            throw new RecordFormatException("Not a FallbackPlan standalone metadata record — the FBPKSREC magic is absent.");
+            throw new RecordFormatException(Strings.StandaloneRecordFraming_NotFallbackPlanStandaloneMetadataRecord);
         }
 
         var formatVersion = BinaryPrimitives.ReadUInt16BigEndian(span[8..]);
@@ -141,21 +141,18 @@ public static class StandaloneRecordFraming
 
         if (header.Ordinal != 0)
         {
-            throw new RecordFormatException(
-                $"A standalone record's ordinal is exactly 0; got {header.Ordinal} (ADR-0022 §Decision 1).");
+            throw new RecordFormatException(Strings.FormatStandaloneRecordFraming_StandaloneRecordSOrdinalExactly(header.Ordinal));
         }
 
         if (header.StoredLength > (ulong)FormatLimits.MaxMetadataObjectSize)
         {
-            throw new RecordFormatException(
-                $"stored_length {header.StoredLength} exceeds the 16 MiB metadata bound (specification 00 §8) — refused before allocation.");
+            throw new RecordFormatException(Strings.FormatStandaloneRecordFraming_StoredLengthExceedsMiBMetadata(header.StoredLength));
         }
 
         var expectedLength = PrefixLength + RecordHeader.Length + (long)header.StoredLength + 16;
         if (span.Length != expectedLength)
         {
-            throw new RecordFormatException(
-                $"The object is {span.Length} bytes; the header declares {expectedLength} — data beyond the sealed layout is a damage finding.");
+            throw new RecordFormatException(Strings.FormatStandaloneRecordFraming_ObjectBytesHeaderDeclares(span.Length, expectedLength));
         }
 
         return new StandaloneRecord(

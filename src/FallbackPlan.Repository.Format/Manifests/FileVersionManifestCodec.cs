@@ -1,6 +1,8 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
@@ -22,7 +24,7 @@ public static class FileVersionManifestCodec
     /// <exception cref="ManifestValidationException">The manifest violates specification 06.</exception>
     public static byte[] Encode(FileVersionManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         var writer = new CanonicalCborWriter();
@@ -110,8 +112,7 @@ public static class FileVersionManifestCodec
 
         if (encoded.Length > FormatLimits.MaxMetadataObjectSize)
         {
-            throw new ManifestValidationException(
-                $"The encoded manifest is {encoded.Length} bytes; the metadata limit is 16 MiB (specification 00 §8).");
+            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_EncodedManifestBytesMetadataLimit(encoded.Length));
         }
 
         return encoded;
@@ -127,7 +128,7 @@ public static class FileVersionManifestCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException($"The manifest is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_ManifestNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -158,7 +159,7 @@ public static class FileVersionManifestCodec
                     var kind = reader.ReadUInt16();
                     if (kind is < 1 or > 4)
                     {
-                        throw new ManifestValidationException($"entry_kind {kind} is unassigned (specification 06 §4).");
+                        throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_EntryKindUnassigned(kind));
                     }
 
                     entryKind = (EntryKind)kind;
@@ -170,7 +171,7 @@ public static class FileVersionManifestCodec
                     var norm = reader.ReadByte();
                     if (norm > 2)
                     {
-                        throw new ManifestValidationException($"name_normalisation {norm} is unassigned (specification 06 §4).");
+                        throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_NameNormalisationUnassigned(norm));
                     }
 
                     normalisation = (NameNormalisation)norm;
@@ -208,8 +209,7 @@ public static class FileVersionManifestCodec
                 default:
                     // 06 §3.1's enforcement point: an unknown key is exactly
                     // where a physical-location field would hide.
-                    throw new ManifestValidationException(
-                        "The manifest carries an unknown key; specification 06 §4 assigns keys 1-13 only, and a reader MUST reject rather than skip (06 §3.1).");
+                    throw new ManifestValidationException(Strings.FileVersionManifestCodec_ManifestCarriesUnknownKeySpecification);
             }
         }
 
@@ -219,7 +219,7 @@ public static class FileVersionManifestCodec
         if (entryKind is null || name is null || normalisation is null || logicalLength is null ||
             references is null || wholeFileHash is null || segmentationProfile is null || metadata is null)
         {
-            throw new ManifestValidationException("The manifest omits a mandatory key (specification 06 §4).");
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_ManifestOmitsMandatoryKey);
         }
 
         var manifest = new FileVersionManifest
@@ -254,8 +254,7 @@ public static class FileVersionManifestCodec
     {
         if (manifest.SegmentReferences.Count > MaxSegmentReferences)
         {
-            throw new ManifestValidationException(
-                $"{manifest.SegmentReferences.Count} segment references exceed the 1 048 576 maximum — a file this large requires a larger segment size (specification 06 §3.2).");
+            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_SegmentReferencesExceedMaximum(manifest.SegmentReferences.Count));
         }
 
         var pieces = new List<(ulong Offset, ulong Length)>(manifest.SegmentReferences.Count + manifest.SparseExtents.Count);
@@ -263,8 +262,7 @@ public static class FileVersionManifestCodec
         {
             if (reference.LogicalOffset < 0 || reference.LogicalLength <= 0)
             {
-                throw new ManifestValidationException(
-                    "A segment reference's offset must be non-negative and its length positive (specification 06 §3).");
+                throw new ManifestValidationException(Strings.FileVersionManifestCodec_SegmentReferenceSOffsetMust);
             }
 
             pieces.Add(((ulong)reference.LogicalOffset, (ulong)reference.LogicalLength));
@@ -274,7 +272,7 @@ public static class FileVersionManifestCodec
         {
             if (extent.Length == 0)
             {
-                throw new ManifestValidationException("A sparse extent's length must be positive (specification 06 §4).");
+                throw new ManifestValidationException(Strings.FileVersionManifestCodec_SparseExtentSLengthMust);
             }
 
             pieces.Add((extent.Offset, extent.Length));
@@ -287,8 +285,7 @@ public static class FileVersionManifestCodec
         {
             if (offset != expected)
             {
-                throw new ManifestValidationException(
-                    $"Coverage breaks at offset {expected}: the next piece starts at {offset}. References and sparse extents MUST cover [0, logical_length) exactly, without gaps or overlap (specification 06 §3.2).");
+                throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_CoverageBreaksOffsetNextPiece(expected, offset));
             }
 
             expected = checked(offset + length);
@@ -296,8 +293,7 @@ public static class FileVersionManifestCodec
 
         if (expected != manifest.LogicalLength)
         {
-            throw new ManifestValidationException(
-                $"References and sparse extents cover {expected} bytes; logical_length declares {manifest.LogicalLength} (specification 06 §3.2).");
+            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_ReferencesSparseExtentsCoverBytes(expected, manifest.LogicalLength));
         }
 
         // Ascending order of the references themselves (not just the merged
@@ -306,14 +302,13 @@ public static class FileVersionManifestCodec
         {
             if (manifest.SegmentReferences[i].LogicalOffset <= manifest.SegmentReferences[i - 1].LogicalOffset)
             {
-                throw new ManifestValidationException(
-                    "Segment references MUST be ordered by ascending logical_offset (specification 06 §3.2).");
+                throw new ManifestValidationException(Strings.FileVersionManifestCodec_SegmentReferencesMUSTOrderedAscending);
             }
         }
 
         if (manifest.WholeFileHash.Length != 32)
         {
-            throw new ManifestValidationException("whole_file_hash is exactly 32 bytes (specification 06 §4).");
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_WholeFileHashExactlyBytes);
         }
     }
 
@@ -338,8 +333,7 @@ public static class FileVersionManifestCodec
             var elements = reader.ReadStartArray(maxCount: 8);
             if (elements != 3)
             {
-                throw new ManifestValidationException(
-                    $"A segment reference is exactly three elements; got {elements} — a fourth element is where physical location would smuggle in (specification 06 §3, §3.1).");
+                throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_SegmentReferenceExactlyThreeElements(elements));
             }
 
             var offset = reader.ReadUnsignedInteger();
@@ -364,8 +358,7 @@ public static class FileVersionManifestCodec
             var elements = reader.ReadStartArray(maxCount: 2);
             if (elements != 2)
             {
-                throw new ManifestValidationException(
-                    $"A sparse extent is exactly two elements; got {elements} (specification 06 §4).");
+                throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_SparseExtentExactlyTwoElements(elements));
             }
 
             var offset = reader.ReadUnsignedInteger();
@@ -383,8 +376,7 @@ public static class FileVersionManifestCodec
         var count = reader.ReadStartArray(maxCount: 4096);
         if (count == 0)
         {
-            throw new ManifestValidationException(
-                "capture_diagnostics is present only when non-empty (specification 06 §4).");
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_CaptureDiagnosticsPresentOnlyWhen);
         }
 
         var diagnostics = new List<string>(count);
@@ -538,8 +530,7 @@ public static class FileVersionManifestCodec
                         var pair = reader.ReadStartArray(maxCount: 2);
                         if (pair != 2)
                         {
-                            throw new ManifestValidationException(
-                                "An extended attribute is exactly two byte strings (specification 06 §4.1).");
+                            throw new ManifestValidationException(Strings.FileVersionManifestCodec_ExtendedAttributeExactlyTwoByte);
                         }
 
                         attributes.Add(new ExtendedAttributeEntry(
@@ -557,8 +548,7 @@ public static class FileVersionManifestCodec
                         var triple = reader.ReadStartArray(maxCount: 3);
                         if (triple != 3)
                         {
-                            throw new ManifestValidationException(
-                                "An alternate stream is exactly three elements (specification 06 §4.1).");
+                            throw new ManifestValidationException(Strings.FileVersionManifestCodec_AlternateStreamExactlyThreeElements);
                         }
 
                         streams.Add(new AlternateStreamEntry(
@@ -574,8 +564,7 @@ public static class FileVersionManifestCodec
                     fileAttributes = reader.ReadUInt32();
                     break;
                 default:
-                    throw new ManifestValidationException(
-                        "The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-10 only.");
+                    throw new ManifestValidationException(Strings.FileVersionManifestCodec_MetadataMapCarriesUnknownKey);
             }
         }
 

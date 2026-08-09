@@ -1,3 +1,4 @@
+using Bodu;
 using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -35,11 +36,11 @@ public sealed class CatalogueProjector
         KeyHierarchy hierarchy,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(reader);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(keys);
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(target);
+        ThrowHelper.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         var snapshots = 0;

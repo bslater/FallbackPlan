@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Status;
 
 namespace FallbackPlan.Application;
@@ -57,7 +58,7 @@ public static class StatusDeriver
     /// <returns>The derived status with its warnings.</returns>
     public static BackupSetStatus Derive(StatusInputs inputs)
     {
-        ArgumentNullException.ThrowIfNull(inputs);
+        ThrowHelper.ThrowIfNull(inputs);
 
         var warnings = new List<string>();
 

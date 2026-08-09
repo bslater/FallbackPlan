@@ -12,6 +12,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// exactly once through the real engine, a not-due set is skipped, missed
 /// runs coalesce, and failures land in the journal with the right class.
 /// </summary>
+[TestClass]
 public sealed class AgentPassTests : IDisposable
 {
     private readonly string _root =
@@ -64,8 +65,8 @@ public sealed class AgentPassTests : IDisposable
         return await AgentPass.RunAsync(RepoPath, passphrase, StateDirectory, now, CancellationToken.None);
     }
 
-    [Fact]
-    public async Task A_due_set_runs_once_and_the_next_pass_skips_it()
+    [TestMethod]
+    public async Task AgentPass_ABackupSetIsDue_RunsItOnceAndSkipsItOnTheNextPass()
     {
         await CreateRepositoryAsync();
         WriteConfiguration("every 4h");
@@ -73,49 +74,51 @@ public sealed class AgentPassTests : IDisposable
 
         // Never run: due — the pass backs it up through the real engine.
         var first = await RunPassAsync(now);
-        var ran = Assert.Single(first.Sets);
-        Assert.Equal("ran", ran.Outcome);
-        Assert.Equal(1, first.Ran);
+        var ran = Assert.ContainsSingle(first.Sets);
+        Assert.AreEqual("ran", ran.Outcome);
+        Assert.AreEqual(1, first.Ran);
 
         // The journal anchors the schedule; minutes later nothing is due.
         var second = await RunPassAsync(now.AddMinutes(5));
-        Assert.Equal("not-due", Assert.Single(second.Sets).Outcome);
+        Assert.AreEqual("not-due", Assert.ContainsSingle(second.Sets).Outcome);
 
         // Past the interval — one run again, no backlog however late
         // (missed runs coalesce, ADR-0027 §1). The second run is
         // incremental: everything unchanged.
         var third = await RunPassAsync(now.AddDays(3));
-        var caughtUp = Assert.Single(third.Sets);
-        Assert.Equal("ran", caughtUp.Outcome);
+        var caughtUp = Assert.ContainsSingle(third.Sets);
+        Assert.AreEqual("ran", caughtUp.Outcome);
+        Assert.IsNotNull(caughtUp.Detail);
         Assert.Contains("2 unchanged", caughtUp.Detail);
 
         // The journal shows exactly two completed jobs with snapshots.
         var jobs = JobStateStore.Open(StateDirectory);
-        Assert.Equal(2, jobs.Jobs.Count(job => job.State == JobState.Complete));
-        Assert.All(
-            jobs.Jobs.Where(job => job.State == JobState.Complete),
-            job => Assert.NotNull(job.SnapshotId));
+        Assert.AreEqual(2, jobs.Jobs.Count(job => job.State == JobState.Complete));
+        foreach (var job in jobs.Jobs.Where(job => job.State == JobState.Complete))
+        {
+            Assert.IsNotNull(job.SnapshotId);
+        }
 
         // And the catalogue really holds both snapshots.
         using var passphrase = Passphrase.Create(PassphraseText);
         using var repository = await RepositoryLifecycle.OpenAsync(
             new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
         using var catalogue = CatalogueDb.Open(Path.Combine(StateDirectory, "catalogue.db"), repository.RepositoryId);
-        Assert.Equal(2, catalogue.EnumerateSnapshots().Count);
+        Assert.AreEqual(2, catalogue.EnumerateSnapshots().Count);
     }
 
-    [Fact]
-    public async Task An_unscheduled_set_is_manual_only_never_an_error()
+    [TestMethod]
+    public async Task AgentPass_ABackupSetHasNoSchedule_ReportsManualOnlyRatherThanAnError()
     {
         await CreateRepositoryAsync();
         WriteConfiguration(schedule: null!);
         var result = await RunPassAsync(DateTimeOffset.UtcNow);
-        Assert.Equal("manual-only", Assert.Single(result.Sets).Outcome);
-        Assert.Empty(JobStateStore.Open(StateDirectory).Jobs);
+        Assert.AreEqual("manual-only", Assert.ContainsSingle(result.Sets).Outcome);
+        Assert.IsEmpty(JobStateStore.Open(StateDirectory).Jobs);
     }
 
-    [Fact]
-    public async Task A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent()
+    [TestMethod]
+    public async Task AgentPass_AMissingRootAndABadSchedule_AreClassifiedRecoverableAndPermanent()
     {
         await CreateRepositoryAsync();
 
@@ -138,14 +141,14 @@ public sealed class AgentPassTests : IDisposable
         }.Save(Path.Combine(StateDirectory, "config.json"));
 
         var result = await RunPassAsync(DateTimeOffset.UtcNow);
-        Assert.Equal(2, result.Failed);
+        Assert.AreEqual(2, result.Failed);
 
         // The classes differ because the user action differs (10 §3): an
         // unmounted drive resolves itself; a typo'd schedule needs a human.
         var jobs = JobStateStore.Open(StateDirectory);
-        Assert.Single(jobs.RecoverableFailures(new string('b', 32)));
-        Assert.Contains(jobs.Jobs, job =>
-            job.BackupSetId == new string('c', 32) && job.State == JobState.FailedPermanent);
+        Assert.ContainsSingle(jobs.RecoverableFailures(new string('b', 32)));
+        Assert.Contains(job =>
+            job.BackupSetId == new string('c', 32) && job.State == JobState.FailedPermanent, jobs.Jobs);
     }
 
     /// <inheritdoc />

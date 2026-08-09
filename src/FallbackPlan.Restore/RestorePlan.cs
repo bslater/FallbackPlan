@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Catalogue;
@@ -80,9 +81,9 @@ public static class RestorePlanner
         string pathPrefix,
         RestoreTargetProfile target)
     {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        ArgumentNullException.ThrowIfNull(pathPrefix);
-        ArgumentNullException.ThrowIfNull(target);
+        ThrowHelper.ThrowIfNull(catalogue);
+        ThrowHelper.ThrowIfNull(pathPrefix);
+        ThrowHelper.ThrowIfNull(target);
 
         var snapshotId = snapshotIdSpan.ToArray();
         var items = new List<RestorePlanItem>();

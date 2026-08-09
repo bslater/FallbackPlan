@@ -5,6 +5,8 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.PerformanceTests;
 
 /// <summary>
@@ -157,7 +159,7 @@ public static class ThroughputBenchmarks
     private static async Task<(ulong Counter, TimeSpan Imposed)> ArchiveAsync(
         byte[] data, CapturePolicy policy, RepositoryKeySet keys, string spool, ulong counter, TimeSpan latency)
     {
-        Storage.Abstractions.IObjectStore store = new NullObjectStore();
+        Storage.Abstractions.IObjectStore store = new DiscardingObjectStore();
         SlowObjectStore? slow = null;
         if (latency > TimeSpan.Zero)
         {

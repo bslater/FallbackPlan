@@ -2,64 +2,67 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §15, §22 · **Resolves:** [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
+**Built:** Describes the tree as it stands — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Layout
 
 ```text
 FallbackPlan.slnx
-├── src/
-│   ├── FallbackPlan.Domain/                  entities, value objects, no infrastructure
-│   ├── FallbackPlan.Application/             use cases over domain abstractions
-│   ├── FallbackPlan.Repository/              repository engine composition
-│   ├── FallbackPlan.Repository.Format/       canonical encodings, manifests, versioning
-│   ├── FallbackPlan.Repository.Crypto/       key hierarchy, AEAD, identifiers
-│   ├── FallbackPlan.Repository.Segmentation/ segmentation profiles
-│   ├── FallbackPlan.Repository.Packing/      blob spool, seal, read, recovery footer
-│   ├── FallbackPlan.Repository.Index/        deltas, checkpoints, rebuild
-│   ├── FallbackPlan.Repository.Catalogue/    disposable local catalogue
-│   ├── FallbackPlan.Filesystem/              scanner contracts
-│   ├── FallbackPlan.Filesystem.Local/        local scanner, per-platform interop inside
-│   ├── FallbackPlan.Protocol/                peer protocol
+├── src/                           ✓ = exists today; the rest arrive with their phase
+│   ├── FallbackPlan.Domain/                  ✓ entities, value objects, no infrastructure
+│   ├── FallbackPlan.Application/             ✓ use cases over domain abstractions
+│   ├── FallbackPlan.Repository/              ✓ repository engine composition
+│   ├── FallbackPlan.Repository.Format/       ✓ canonical encodings, manifests, versioning
+│   ├── FallbackPlan.Repository.Crypto/       ✓ key hierarchy, AEAD, identifiers
+│   ├── FallbackPlan.Repository.Segmentation/ ✓ segmentation profiles
+│   ├── FallbackPlan.Repository.Packing/      ✓ blob spool, seal, read, recovery footer
+│   ├── FallbackPlan.Repository.Index/        ✓ deltas, checkpoints, rebuild
+│   ├── FallbackPlan.Repository.Catalogue/    ✓ disposable local catalogue
+│   ├── FallbackPlan.Filesystem/              ✓ scanner contracts
+│   ├── FallbackPlan.Filesystem.Local/        ✓ local scanner, per-platform interop inside
+│   ├── FallbackPlan.Protocol/                ✓ peer identity, pairing, session, authentication (ADR-0030)
 │   ├── FallbackPlan.Protocol.Grpc/
 │   ├── FallbackPlan.Discovery/
 │   ├── FallbackPlan.Replication/
-│   ├── FallbackPlan.Restore/
+│   ├── FallbackPlan.Restore/                 ✓ restore planner and executor
 │   ├── FallbackPlan.Retention/
 │   ├── FallbackPlan.Verification/
-│   ├── FallbackPlan.Storage.Abstractions/    IObjectStore, capabilities
-│   ├── FallbackPlan.Storage.{Local,Peer,AzureBlob,S3}/
-│   ├── FallbackPlan.Import.Abstractions/     neutral legacy model
+│   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
+│   ├── FallbackPlan.Storage.{Local ✓,Peer,AzureBlob,S3}/
+│   ├── FallbackPlan.Import.Abstractions/     ✓ neutral legacy model
 │   ├── FallbackPlan.Import.CrashPlan/        optional, separately licensed
-│   ├── FallbackPlan.Agent/                   the service host (ADR-0028)
-│   ├── FallbackPlan.Api/                     command contract + local transport,
+│   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028)
+│   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
-│   ├── FallbackPlan.Keystore/                platform unlock (ADR-0028 §9)
+│   ├── FallbackPlan.Keystore/                ✓ platform unlock (ADR-0028 §9)
 │   ├── FallbackPlan.Web/
 │   ├── FallbackPlan.Desktop/
-│   ├── FallbackPlan.Cli/
-│   ├── FallbackPlan.Recovery/                standalone emergency restore
+│   ├── FallbackPlan.Cli/                     ✓
+│   ├── FallbackPlan.Recovery/                ✓ standalone emergency restore
 │   ├── FallbackPlan.Relay/
 │   ├── FallbackPlan.Discovery.Server/
 │   └── FallbackPlan.Repository.Server/
-├── tests/
-│   ├── FallbackPlan.Domain.Tests/
-│   ├── FallbackPlan.Repository.Tests/
-│   ├── FallbackPlan.Repository.ConformanceTests/
-│   ├── FallbackPlan.Repository.FuzzTests/
+├── tests/                         ✓ = exists today; the rest arrive with their phase
+│   ├── FallbackPlan.Domain.Tests/            ✓
+│   ├── FallbackPlan.Application.Tests/       ✓
+│   ├── FallbackPlan.Api.Tests/               ✓ command contract and local binding
+│   ├── FallbackPlan.Repository.Tests/        ✓ also holds the end-to-end suites
+│   ├── FallbackPlan.Repository.ConformanceTests/ ✓
+│   ├── FallbackPlan.Repository.FuzzTests/    ✓
+│   ├── FallbackPlan.Filesystem.Tests/        ✓
 │   ├── FallbackPlan.Restore.Tests/
 │   ├── FallbackPlan.Retention.Tests/
-│   ├── FallbackPlan.Protocol.Tests/
-│   ├── FallbackPlan.Storage.ContractTests/
+│   ├── FallbackPlan.Protocol.Tests/          ✓ pairing, grants, framing, negotiation, channel binding
+│   ├── FallbackPlan.Storage.ContractTests/   ✓
 │   ├── FallbackPlan.Import.CrashPlan.Tests/
-│   ├── FallbackPlan.ArchitectureTests/       enforces §2
-│   ├── FallbackPlan.IntegrationTests/
-│   ├── FallbackPlan.InterruptionTests/
-│   ├── FallbackPlan.PerformanceTests/
-│   ├── FallbackPlan.TestSupport/            platform gating, shared by test projects
-│   ├── FallbackPlan.Cli.Tests/              drives real commands in process
-│   ├── FallbackPlan.Hosts.Tests/            drives the Agent and Recovery hosts
-│   └── FallbackPlan.EndToEndTests/
+│   ├── FallbackPlan.ArchitectureTests/       ✓ enforces §2
+│   ├── FallbackPlan.InterruptionTests/       ✓
+│   ├── FallbackPlan.PerformanceTests/        ✓
+│   ├── FallbackPlan.TestSupport/             ✓ platform gating, shared by test projects
+│   ├── FallbackPlan.Cli.Tests/               ✓ drives real commands in process
+│   └── FallbackPlan.Hosts.Tests/             ✓ drives the Agent and Recovery hosts
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
 ├── specifications/                repository-format, peer-protocol, discovery-protocol,
@@ -74,6 +77,8 @@ Two changes from the original list. `Repository.Segmentation` and `Repository.Ca
 
 Projects are created when the phase that needs them arrives, not up front. Empty placeholder projects make the boundary map look complete while enforcing nothing.
 
+That policy needs the map to say which half is which, and for a while it did not. The `tests/` tree was read as a statement of fact by [`requirements/traceability.md`](../requirements/traceability.md), which named test classes inside projects this list had merely promised — and 73 of its 86 citations ended up naming nothing at all. Hence the ✓ marks, now on both trees: they cost a character each and they are the difference between a plan and a claim. Two entries dropped rather than gained a mark. `IntegrationTests` and `EndToEndTests` were never built as separate projects because the suites that would have filled them live in `Repository.Tests/EndToEnd/`, next to the engine they exercise; splitting them out now would move code to satisfy a diagram.
+
 ## 2. Dependency rules
 
 - `Domain` has **no** infrastructure dependencies.
@@ -84,7 +89,7 @@ Projects are created when the phase that needs them arrives, not up front. Empty
 - `Import.CrashPlan` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
-- **Third-party cryptography lives only in `Repository.Crypto`.** The two primitives .NET does not supply — Argon2id and XChaCha20-Poly1305 — do not inherit the platform's audit posture, so the exposure is confined to one project rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md)).
+- **Third-party cryptography lives only where it is named.** The primitives .NET does not supply do not inherit the platform's audit posture, so each is confined rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §3 and Amendment 2): Argon2id and XChaCha20-Poly1305 to `Repository.Crypto`, where a defect is already in the user's stored bytes; Ed25519 and X25519 to `Protocol`, where a defect costs a re-pairing. The allowlist is two projects by name, not a tier — widening it should take an argument.
 - **User interfaces depend on the client contract, never on the engine.** `Desktop` and `Web` reference `Api`'s client surface and nothing below it — not `Application`, not `Repository`, not a store provider. A UI that could open the repository directly would be a second writer, which [`04-concurrency-and-publication.md` §9](04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous) forbids, and it would let a front end derive status by its own rules rather than the service's.
 - **`Cli` is a client too**, with one exception: its direct mode ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §3) takes the writer role when no service is running, so it alone among the front ends may reference `Application`. That exception is why the CLI is the one place the rule must be checked rather than assumed.
 - **`Recovery` references neither `Api` nor `Application`.** It speaks to no service in any topology (NFR-OPS-005).

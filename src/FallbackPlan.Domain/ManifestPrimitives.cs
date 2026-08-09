@@ -58,4 +58,19 @@ public enum CaptureFailureReason : ushort
 
     /// <summary>Excluded by a size or count limit — not by policy, which is never a failure (06 §8).</summary>
     ExcludedByLimit = 7,
+
+    /// <summary>
+    /// The entry's name cannot be represented on this host, so the entry
+    /// cannot be captured under the name it actually has.
+    /// </summary>
+    /// <remarks>
+    /// A POSIX filename is any byte sequence without NUL or <c>/</c>, and is
+    /// under no obligation to be valid UTF-8. The host runtime decodes such a
+    /// name to U+FFFD replacement characters, which is irreversible — and a
+    /// path built from that string does not open the file either. Recording
+    /// the failure is the honest outcome: the alternative, and what happened
+    /// before this reason existed, was to capture the entry under a name that
+    /// was not its name and whose content could not be read.
+    /// </remarks>
+    NameNotRepresentable = 8,
 }

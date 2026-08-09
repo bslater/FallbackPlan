@@ -1,6 +1,8 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
@@ -44,14 +46,13 @@ public static class TreeManifestCodec
     /// <exception cref="ManifestValidationException">The manifest violates specification 06 §5.</exception>
     public static byte[] Encode(TreeManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         ValidateEntryOrder(manifest.Entries);
 
         var isFirst = manifest.Name is not null;
         if (isFirst != (manifest.NameNormalisation is not null) || (manifest.Metadata is not null && !isFirst))
         {
-            throw new ManifestValidationException(
-                "metadata, name, and name_normalisation ride together on the first manifest of a chain and are absent from continuations (specification 06 §9).");
+            throw new ManifestValidationException(Strings.TreeManifestCodec_MetadataNameNameNormalisationRide);
         }
 
         var writer = new CanonicalCborWriter();
@@ -104,8 +105,7 @@ public static class TreeManifestCodec
         var encoded = writer.Encode();
         if (encoded.Length > FormatLimits.MaxMetadataObjectSize)
         {
-            throw new ManifestValidationException(
-                $"The encoded tree manifest is {encoded.Length} bytes; a directory this large MUST shard (specification 06 §9).");
+            throw new ManifestValidationException(Strings.FormatTreeManifestCodec_EncodedTreeManifestBytesDirectory(encoded.Length));
         }
 
         return encoded;
@@ -121,7 +121,7 @@ public static class TreeManifestCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException($"The tree manifest is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatTreeManifestCodec_TreeManifestNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -148,8 +148,7 @@ public static class TreeManifestCodec
                         var elements = reader.ReadStartArray(maxCount: 3);
                         if (elements != 3)
                         {
-                            throw new ManifestValidationException(
-                                $"A tree entry is exactly three elements; got {elements} (specification 06 §5).");
+                            throw new ManifestValidationException(Strings.FormatTreeManifestCodec_TreeEntryExactlyThreeElements(elements));
                         }
 
                         var entryName = reader.ReadByteString(maxLength: 1024);
@@ -157,7 +156,7 @@ public static class TreeManifestCodec
                         var kind = reader.ReadUInt16();
                         if (kind is < 1 or > 4)
                         {
-                            throw new ManifestValidationException($"entry_kind {kind} is unassigned (specification 06 §4).");
+                            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_EntryKindUnassigned(kind));
                         }
 
                         reader.ReadEndArray();
@@ -176,7 +175,7 @@ public static class TreeManifestCodec
                     var norm = reader.ReadByte();
                     if (norm > 2)
                     {
-                        throw new ManifestValidationException($"name_normalisation {norm} is unassigned (specification 06 §4).");
+                        throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_NameNormalisationUnassigned(norm));
                     }
 
                     normalisation = (NameNormalisation)norm;
@@ -185,8 +184,7 @@ public static class TreeManifestCodec
                     continuation = ObjectId.FromBytes(reader.ReadFixedByteString(32));
                     break;
                 default:
-                    throw new ManifestValidationException(
-                        "The tree manifest carries an unknown key; specification 06 §5 assigns keys 1-5 only.");
+                    throw new ManifestValidationException(Strings.TreeManifestCodec_TreeManifestCarriesUnknownKey);
             }
         }
 
@@ -195,7 +193,7 @@ public static class TreeManifestCodec
 
         if (entries is null)
         {
-            throw new ManifestValidationException("The tree manifest omits its entries (specification 06 §5).");
+            throw new ManifestValidationException(Strings.TreeManifestCodec_TreeManifestOmitsEntries);
         }
 
         ValidateEntryOrder(entries);
@@ -225,14 +223,12 @@ public static class TreeManifestCodec
 
             if (comparison > 0)
             {
-                throw new ManifestValidationException(
-                    "Tree entries MUST be sorted by the raw bytes of name, ascending (specification 06 §5).");
+                throw new ManifestValidationException(Strings.TreeManifestCodec_TreeEntriesMUSTSortedRaw);
             }
 
             if (comparison == 0)
             {
-                throw new ManifestValidationException(
-                    "A tree MUST NOT contain two entries with the same name bytes (specification 06 §5).");
+                throw new ManifestValidationException(Strings.TreeManifestCodec_TreeMUSTNOTContainTwo);
             }
         }
     }
@@ -255,17 +251,16 @@ public static class TreeChain
     /// <exception cref="ManifestValidationException">The chain violates 06 §9 — a damage finding.</exception>
     public static IReadOnlyList<TreeEntry> ValidateAndFlatten(IReadOnlyList<TreeManifest> chain)
     {
-        ArgumentNullException.ThrowIfNull(chain);
+        ThrowHelper.ThrowIfNull(chain);
 
         if (chain.Count == 0)
         {
-            throw new ManifestValidationException("A tree chain has at least one manifest (specification 06 §9).");
+            throw new ManifestValidationException(Strings.TreeChain_TreeChainLeastOneManifest);
         }
 
         if (chain[0].Name is null)
         {
-            throw new ManifestValidationException(
-                "The first manifest of a chain carries name, name_normalisation, and metadata (specification 06 §9).");
+            throw new ManifestValidationException(Strings.TreeChain_FirstManifestChainCarriesName);
         }
 
         var entries = new List<TreeEntry>();
@@ -277,21 +272,18 @@ public static class TreeChain
 
             if (isLast != (manifest.Continuation is null))
             {
-                throw new ManifestValidationException(
-                    "Each manifest except the last carries continuation; the last omits it (specification 06 §9).");
+                throw new ManifestValidationException(Strings.TreeChain_EachManifestExceptLastCarries);
             }
 
             if (i > 0 && (manifest.Name is not null || manifest.NameNormalisation is not null || manifest.Metadata is not null))
             {
-                throw new ManifestValidationException(
-                    "Continuations MUST NOT carry metadata, name, or name_normalisation (specification 06 §9).");
+                throw new ManifestValidationException(Strings.TreeChain_ContinuationsMUSTNOTCarryMetadata);
             }
 
             if (i > 0 && entries.Count > 0 && manifest.Entries.Count > 0 &&
                 entries[^1].Name.Span.SequenceCompareTo(manifest.Entries[0].Name.Span) >= 0)
             {
-                throw new ManifestValidationException(
-                    "Every entry in a manifest MUST sort strictly after every entry in its predecessor (specification 06 §9).");
+                throw new ManifestValidationException(Strings.TreeChain_EveryEntryManifestMUSTSort);
             }
 
             entries.AddRange(manifest.Entries);

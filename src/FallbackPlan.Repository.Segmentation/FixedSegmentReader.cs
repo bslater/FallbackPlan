@@ -1,4 +1,6 @@
+using Bodu;
 using FallbackPlan.Domain;
+using FallbackPlan.Repository.Segmentation.Resources;
 
 namespace FallbackPlan.Repository.Segmentation;
 
@@ -28,17 +30,16 @@ public sealed class FixedSegmentReader : ISegmentReader
     /// <exception cref="ArgumentException">The source is not readable or the segment size unset.</exception>
     public FixedSegmentReader(Stream source, SegmentSize segmentSize)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         if (!source.CanRead)
         {
-            throw new ArgumentException("The source stream must be readable.", nameof(source));
+            throw new ArgumentException(Strings.CdcSegmentReader_SourceStreamMustReadable, nameof(source));
         }
 
         if (segmentSize.Bytes == 0)
         {
-            throw new ArgumentException(
-                "The segment size is unset; construct it via SegmentSize.Create (specification 09 §2.2).",
+            throw new ArgumentException(Strings.FixedSegmentReader_SegmentSizeUnsetConstructVia,
                 nameof(segmentSize));
         }
 
@@ -59,8 +60,7 @@ public sealed class FixedSegmentReader : ISegmentReader
     {
         if (buffer.Length < _segmentSize.Bytes)
         {
-            throw new ArgumentException(
-                $"The buffer must hold at least one segment ({_segmentSize.Bytes} bytes); got {buffer.Length}.",
+            throw new ArgumentException(Strings.FormatFixedSegmentReader_BufferMustHoldLeastOne(_segmentSize.Bytes, buffer.Length),
                 nameof(buffer));
         }
 

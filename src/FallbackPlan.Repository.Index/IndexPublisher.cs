@@ -1,9 +1,11 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -32,9 +34,9 @@ public sealed class IndexPublisher : IDisposable
         KeyHierarchy hierarchy,
         WriterSequence sequence)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
-        ArgumentNullException.ThrowIfNull(sequence);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(sequence);
 
         _store = store;
         _repositoryId = repositoryId;
@@ -54,8 +56,8 @@ public sealed class IndexPublisher : IDisposable
         IReadOnlyList<IndexEntry> entries,
         CancellationToken cancellationToken)
     {
-        var (deltaId, _) = await PublishDeltaDetailedAsync(generation, coveredBlobIds, entries, cancellationToken)
-            .ConfigureAwait(false);
+        var (deltaId, _) = await PublishDeltaDetailedAsync(
+            generation, coveredBlobIds, entries, coveredBlobDigests: [], cancellationToken).ConfigureAwait(false);
         return deltaId;
     }
 
@@ -64,10 +66,21 @@ public sealed class IndexPublisher : IDisposable
     /// delta itself — what a live catalogue applies without re-reading the
     /// store (architecture 02 §7).
     /// </summary>
+    /// <param name="generation">The publication generation.</param>
+    /// <param name="coveredBlobIds">The blobs this delta's entries live in.</param>
+    /// <param name="entries">The entries.</param>
+    /// <param name="coveredBlobDigests">
+    /// SHA-256 of each covered blob's sealed bytes, parallel to
+    /// <paramref name="coveredBlobIds"/>, or empty to publish none
+    /// (specification 07 §2.2). This is what makes a blob's digest checkable
+    /// by a participant other than the device that sealed it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the publication.</param>
     public async ValueTask<(DeltaId DeltaId, IndexDelta Delta)> PublishDeltaDetailedAsync(
         ulong generation,
         IReadOnlyList<BlobId> coveredBlobIds,
         IReadOnlyList<IndexEntry> entries,
+        IReadOnlyList<ReadOnlyMemory<byte>> coveredBlobDigests,
         CancellationToken cancellationToken)
     {
         var sequence = _sequence.AllocateNext();
@@ -79,6 +92,7 @@ public sealed class IndexPublisher : IDisposable
             PredecessorDeltaId = _sequence.LastDeltaId,
             Generation = generation,
             CoveredBlobIds = coveredBlobIds,
+            CoveredBlobDigests = coveredBlobDigests,
             Entries = entries,
         };
 
@@ -214,7 +228,7 @@ public sealed class IndexPublisher : IDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused index object '{key}' with a failed precondition.");
+            throw new IOException(Strings.FormatIndexPublisher_StoreRefusedIndexObjectWith(key));
         }
     }
 
@@ -222,8 +236,7 @@ public sealed class IndexPublisher : IDisposable
     {
         if (generation > uint.MaxValue)
         {
-            throw new IndexFormatException(
-                $"Generation {generation} exceeds the key hierarchy's u32 generation space (specification 03 §4).");
+            throw new IndexFormatException(Strings.FormatIndexPublisher_GenerationExceedsKeyHierarchyS(generation));
         }
 
         return new KeyGeneration((uint)generation);

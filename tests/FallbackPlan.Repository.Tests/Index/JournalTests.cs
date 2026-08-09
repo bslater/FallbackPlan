@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Index;
 
@@ -12,6 +13,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// conditions, and the collector's survey treats unparseable intents as
 /// live.
 /// </summary>
+[TestClass]
 public sealed class JournalTests
 {
     private static readonly WriterId Writer =
@@ -28,21 +30,17 @@ public sealed class JournalTests
         return BlobId.FromBytes(bytes);
     }
 
-    public static TheoryData<JournalRecord> EveryKind() => new()
-    {
-        new JournalRecord(JournalRecordKind.WriteIntent, Writer, 1, 1000,
-            new JournalPayload.WriteIntent(BackupSet, [Blob(1), Blob(2)], 60_000, 5, IntentPurpose.Backup)),
-        new JournalRecord(JournalRecordKind.IntentExtension, Writer, 2, 1500,
-            new JournalPayload.IntentExtension(1, [Blob(3)], 90_000)),
-        new JournalRecord(JournalRecordKind.IntentRetirement, Writer, 3, 2000,
-            new JournalPayload.IntentRetirement(1, IntentOutcome.Completed)),
-        new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
-            new JournalPayload.Audit(AuditAction.GcPass, "operator@example", 42)),
-    };
+    public static IEnumerable<object[]> EveryKind() =>
+    [
+        [new JournalRecord(JournalRecordKind.WriteIntent, Writer, 1, 1000, new JournalPayload.WriteIntent(BackupSet, [Blob(1), Blob(2)], 60_000, 5, IntentPurpose.Backup))],
+        [new JournalRecord(JournalRecordKind.IntentExtension, Writer, 2, 1500, new JournalPayload.IntentExtension(1, [Blob(3)], 90_000))],
+        [new JournalRecord(JournalRecordKind.IntentRetirement, Writer, 3, 2000, new JournalPayload.IntentRetirement(1, IntentOutcome.Completed))],
+        [new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500, new JournalPayload.Audit(AuditAction.GcPass, "operator@example", 42))],
+    ];
 
-    [Theory]
-    [MemberData(nameof(EveryKind))]
-    public void Every_record_kind_round_trips_through_the_two_pass_signature(JournalRecord record)
+    [TestMethod]
+    [DynamicData(nameof(EveryKind))]
+    public void JournalRecord_EveryKind_RoundTripsThroughTheTwoPassSignature(JournalRecord record)
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, new KeyGeneration(1));
@@ -52,18 +50,18 @@ public sealed class JournalTests
 
         var decoded = JournalRecordCodec.Decode(stored);
 
-        Assert.Equal(signedBytes, decoded.SignedBytes.ToArray());
-        Assert.Equal(record.Kind, decoded.Record.Kind);
-        Assert.Equal(record.Sequence, decoded.Record.Sequence);
-        Assert.Equal(record.Payload, decoded.Record.Payload,
+        SequenceAssert.AreEqual(signedBytes, decoded.SignedBytes.ToArray());
+        Assert.AreEqual(record.Kind, decoded.Record.Kind);
+        Assert.AreEqual(record.Sequence, decoded.Record.Sequence);
+        Assert.AreEqual(record.Payload, decoded.Record.Payload,
             EqualityComparer<JournalPayload>.Create((left, right) =>
                 left is not null && right is not null &&
                 JournalRecordCodec.EncodeForSigning(record with { Payload = left })
                     .SequenceEqual(JournalRecordCodec.EncodeForSigning(record with { Payload = right }))));
     }
 
-    [Fact]
-    public void Verification_descends_generations_and_finds_the_signing_one()
+    [TestMethod]
+    public void JournalVerification_TheSigningGenerationIsOlder_DescendsGenerationsToFindIt()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
 
@@ -80,23 +78,23 @@ public sealed class JournalTests
         // The record has no generation field (08 §2 key 6): the reader tries
         // the current generation downward and accepts the first that
         // verifies — here, 3 → 2 → 1 succeeds.
-        Assert.Equal(1u, JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
+        Assert.AreEqual(1u, JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
 
         // A forged signature verifies at no generation.
         signature[0] ^= 0x01;
-        Assert.Null(JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
+        Assert.IsNull(JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
     }
 
-    [Theory]
-    [InlineData(3UL, 50_000UL, false)]  // neither condition holds
-    [InlineData(9UL, 50_000UL, false)]  // generation alone — a slow writer must not expire on siblings' activity
-    [InlineData(3UL, 120_000UL, false)] // duration alone — wall clock alone reintroduces the clock dependency
-    [InlineData(9UL, 120_000UL, true)]  // both — expired
-    public void Expiry_requires_both_conditions(ulong currentGeneration, ulong nowMs, bool expected)
+    [TestMethod]
+    [DataRow(3UL, 50_000UL, false)]  // neither condition holds
+    [DataRow(9UL, 50_000UL, false)]  // generation alone — a slow writer must not expire on siblings' activity
+    [DataRow(3UL, 120_000UL, false)] // duration alone — wall clock alone reintroduces the clock dependency
+    [DataRow(9UL, 120_000UL, true)]  // both — expired
+    public void IntentExpiry_OnlyOneConditionIsMet_DoesNotExpire(ulong currentGeneration, ulong nowMs, bool expected)
     {
         // Intent: expiry_generation 5, declared 100 000 ms, issued at 0,
         // skew margin 10 000 ms → duration door opens at 110 000 ms.
-        Assert.Equal(expected, IntentLifecycle.IsExpired(
+        Assert.AreEqual(expected, IntentLifecycle.IsExpired(
             expiryGeneration: 5,
             declaredMaxDurationMs: 100_000,
             issuedAtMs: 0,
@@ -105,16 +103,16 @@ public sealed class JournalTests
             skewMarginMs: 10_000));
     }
 
-    [Fact]
-    public void The_skew_margin_delays_the_duration_door()
+    [TestMethod]
+    public void IntentExpiry_WithinTheSkewMargin_DelaysTheDurationCondition()
     {
         // Duration elapsed exactly, but the skew margin has not — not expired.
-        Assert.False(IntentLifecycle.IsExpired(5, 100_000, 0, 9, 100_000, 10_000));
-        Assert.True(IntentLifecycle.IsExpired(5, 100_000, 0, 9, 110_000, 10_000));
+        Assert.IsFalse(IntentLifecycle.IsExpired(5, 100_000, 0, 9, 100_000, 10_000));
+        Assert.IsTrue(IntentLifecycle.IsExpired(5, 100_000, 0, 9, 110_000, 10_000));
     }
 
-    [Fact]
-    public void The_survey_unions_extensions_honours_retirement_and_treats_unparseable_as_live()
+    [TestMethod]
+    public void IntentSurvey_ExtensionsRetirementsAndUnparseableRecords_UnionsCoverageAndTreatsUnparseableAsLive()
     {
         var records = new List<JournalRecord>
         {
@@ -132,17 +130,17 @@ public sealed class JournalTests
 
         // Intent 1 is live and covers its own blobs plus the extension's;
         // intent 3 was retired — an event, not a heartbeat (08 §5).
-        var live = Assert.Single(survey.LiveIntents);
-        Assert.Equal(1UL, live.Sequence);
-        Assert.True(survey.IsCovered(Blob(1)));
-        Assert.True(survey.IsCovered(Blob(2)));
-        Assert.False(survey.IsCovered(Blob(9)));
+        var live = Assert.ContainsSingle(survey.LiveIntents);
+        Assert.AreEqual(1UL, live.Sequence);
+        Assert.IsTrue(survey.IsCovered(Blob(1)));
+        Assert.IsTrue(survey.IsCovered(Blob(2)));
+        Assert.IsFalse(survey.IsCovered(Blob(9)));
 
         // An unparseable intent means the collector is older than the writer
         // or the record is damaged — both call for the conservative reading:
         // everything is reachable (08 §8).
         var conservative = IntentSurveyor.Survey(records, unparseableCount: 1, 0, 0, 0);
-        Assert.True(conservative.IsCovered(Blob(9)));
-        Assert.True(conservative.IsCovered(Blob(0xEE)));
+        Assert.IsTrue(conservative.IsCovered(Blob(9)));
+        Assert.IsTrue(conservative.IsCovered(Blob(0xEE)));
     }
 }

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -45,7 +46,7 @@ public sealed class RepositoryKeySet : IDisposable
     {
         BlobClass.Data => _hierarchy.DeriveDataKey(generation),
         BlobClass.Metadata => _hierarchy.DeriveMetadataKey(generation),
-        _ => throw new ArgumentException($"Blob class 0x{(ushort)blobClass:x4} is not defined (specification 05 §2).", nameof(blobClass)),
+        _ => throw new ArgumentException(Strings.FormatRepositoryKeySet_BlobClassXNotDefined((ushort)blobClass), nameof(blobClass)),
     };
 
     /// <inheritdoc />

@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -6,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -22,6 +24,13 @@ namespace FallbackPlan.Repository.Packing;
 /// reader that skips that step restores corrupt data and reports success.
 /// Corruption is local: each record resolves to its own
 /// <see cref="RecordReadResult"/>.
+/// <para>
+/// One reader may be read from several threads at once, which is the whole
+/// point of caching it: the objects a publication wants cluster into a few
+/// blobs. Everything a record read touches is either immutable or local to
+/// the call, with one exception — the zstd context, which is a stateful
+/// native decoder and is guarded below.
+/// </para>
 /// </remarks>
 public sealed class BlobReader : IDisposable
 {
@@ -32,6 +41,7 @@ public sealed class BlobReader : IDisposable
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly byte[] _blobKey;
     private readonly ZstdSegmentDecompressor _decompressor = new();
+    private readonly Lock _decompressorGate = new();
 
     private BlobReader(
         IObjectStore store,
@@ -84,13 +94,13 @@ public sealed class BlobReader : IDisposable
         ObjectIdDeriver objectIdDeriver,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(classKeyProvider);
-        ArgumentNullException.ThrowIfNull(objectIdDeriver);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(classKeyProvider);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
 
         if (blobLength < BlobEnvelope.Length + BlobFooter.HeaderLength + RecordCipher.TagLength + FooterLocator.Length)
         {
-            throw new BlobFormatException($"A {blobLength}-byte object is too short to be a sealed blob (specification 05 §1).");
+            throw new BlobFormatException(Strings.FormatBlobReader_ByteObjectTooShortSealed(blobLength));
         }
 
         // Range read one: the locator — the last 16 bytes.
@@ -108,8 +118,7 @@ public sealed class BlobReader : IDisposable
 
         if (footerLength != BlobFooter.HeaderLength + cborLength + RecordCipher.TagLength)
         {
-            throw new BlobFormatException(
-                "The footer's declared table length does not reach the locator exactly — data beyond the sealed layout is a damage finding (specification 05 §5).");
+            throw new BlobFormatException(Strings.BlobReader_FooterSDeclaredTableLength);
         }
 
         // One further small read: the envelope's key-derivation selectors.
@@ -137,8 +146,7 @@ public sealed class BlobReader : IDisposable
         if (!authenticated)
         {
             CryptographicOperations.ZeroMemory(blobKey);
-            throw new BlobFormatException(
-                "The recovery footer failed authentication — the blob is damaged or does not belong to this repository (specification 05 §3).");
+            throw new BlobFormatException(Strings.BlobReader_RecoveryFooterFailedAuthentication);
         }
 
         var entries = BlobFooter.DecodeRecordTable(table, recordCount, blobLength);
@@ -221,7 +229,16 @@ public sealed class BlobReader : IDisposable
             plaintext = new byte[header.LogicalLength];
             try
             {
-                _decompressor.Decompress(storedPayload, plaintext);
+                // The one piece of shared mutable state in a record read.
+                // Concurrent calls on one native decoder do not fail loudly —
+                // they produce plausible garbage, which then fails step 7
+                // below and reads as corruption in the repository rather than
+                // as a bug here. Held only across the decompress: the range
+                // read above and the hash below stay outside it.
+                lock (_decompressorGate)
+                {
+                    _decompressor.Decompress(storedPayload, plaintext);
+                }
             }
             catch (CompressionFormatException exception)
             {
@@ -265,8 +282,7 @@ public sealed class BlobReader : IDisposable
 
         if (result.Outcome != OpenReadOutcome.Found)
         {
-            throw new BlobFormatException(
-                $"Range [{offset}, {offset + length}) of blob object '{key}' could not be read: {result.Outcome}.");
+            throw new BlobFormatException(Strings.FormatBlobReader_RangeBlobObjectCouldNot(offset, offset + length, key, result.Outcome));
         }
 
         var buffer = new byte[length];
@@ -278,7 +294,7 @@ public sealed class BlobReader : IDisposable
 
             if (read == 0)
             {
-                throw new BlobFormatException($"Range read of '{key}' ended {buffer.Length - filled} bytes early.");
+                throw new BlobFormatException(Strings.FormatBlobReader_RangeReadEndedBytesEarly(key, buffer.Length - filled));
             }
 
             filled += read;

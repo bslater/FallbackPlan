@@ -43,6 +43,34 @@ public readonly record struct StatResult(
 }
 
 /// <summary>
+/// The NUL-separated name list both platforms' xattr listing calls return.
+/// </summary>
+internal static class PosixXattrNames
+{
+    internal static List<string> Split(byte[] buffer, int size)
+    {
+        var names = new List<string>();
+        var start = 0;
+        for (var i = 0; i < size && i < buffer.Length; i++)
+        {
+            if (buffer[i] != 0)
+            {
+                continue;
+            }
+
+            if (i > start)
+            {
+                names.Add(System.Text.Encoding.UTF8.GetString(buffer, start, i - start));
+            }
+
+            start = i + 1;
+        }
+
+        return names;
+    }
+}
+
+/// <summary>
 /// Linux interop: <c>statx</c> (a fixed kernel ABI, identical on every
 /// architecture — the reason it is used instead of <c>struct stat</c>,
 /// whose layout varies), xattrs, and hole enumeration. Confined to this
@@ -92,14 +120,91 @@ internal static partial class LinuxInterop
     private const uint StatxBasicStats = 0x7FF;
     private const uint StatxBtime = 0x800;
 
+    private const int AtEmptyPath = 0x1000;
+
     [LibraryImport("libc", EntryPoint = "statx", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int NativeStatx(int dirfd, string pathname, int flags, uint mask, out Statx buf);
+
+    [LibraryImport("libc", EntryPoint = "statx", SetLastError = true)]
+    private static unsafe partial int NativeStatxBytes(int dirfd, byte* pathname, int flags, uint mask, out Statx buf);
+
+    /// <summary>Stats a child by name bytes, relative to an open directory.</summary>
+    public static unsafe bool TryStatAt(int directoryFd, ReadOnlySpan<byte> name, out StatResult result)
+    {
+        var terminated = new byte[name.Length + 1];
+        name.CopyTo(terminated);
+
+        int status;
+        Statx stx;
+        fixed (byte* pathname = terminated)
+        {
+            status = NativeStatxBytes(
+                directoryFd, pathname, AtSymlinkNofollow, StatxBasicStats | StatxBtime, out stx);
+        }
+
+        result = status == 0 ? ToResult(stx) : default;
+        return status == 0;
+    }
+
+    /// <summary>
+    /// Stats the object an open descriptor names — the one stat that cannot
+    /// be raced, because a descriptor names an inode and nothing can move it
+    /// to another one.
+    /// </summary>
+    public static unsafe bool TryStatHandle(int fd, out StatResult result)
+    {
+        var empty = new byte[1];
+
+        int status;
+        Statx stx;
+        fixed (byte* pathname = empty)
+        {
+            status = NativeStatxBytes(
+                fd, pathname, AtEmptyPath | AtSymlinkNofollow, StatxBasicStats | StatxBtime, out stx);
+        }
+
+        result = status == 0 ? ToResult(stx) : default;
+        return status == 0;
+    }
 
     [LibraryImport("libc", EntryPoint = "llistxattr", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint NativeListXattr(string path, byte[]? list, nuint size);
 
     [LibraryImport("libc", EntryPoint = "lgetxattr", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint NativeGetXattr(string path, string name, byte[]? value, nuint size);
+
+    [LibraryImport("libc", EntryPoint = "flistxattr", SetLastError = true)]
+    private static partial nint NativeListXattrAt(int fd, byte[]? list, nuint size);
+
+    [LibraryImport("libc", EntryPoint = "fgetxattr", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint NativeGetXattrAt(int fd, string name, byte[]? value, nuint size);
+
+    /// <summary>Lists extended attribute names on an open descriptor.</summary>
+    public static IReadOnlyList<string> ListXattrNamesAt(int fd)
+    {
+        var size = NativeListXattrAt(fd, null, 0);
+        if (size <= 0)
+        {
+            return [];
+        }
+
+        var buffer = new byte[size];
+        size = NativeListXattrAt(fd, buffer, (nuint)buffer.Length);
+        return size <= 0 ? [] : PosixXattrNames.Split(buffer, (int)size);
+    }
+
+    /// <summary>Reads one extended attribute from an open descriptor; null on failure.</summary>
+    public static byte[]? GetXattrAt(int fd, string name)
+    {
+        var size = NativeGetXattrAt(fd, name, null, 0);
+        if (size < 0)
+        {
+            return null;
+        }
+
+        var buffer = new byte[size];
+        return NativeGetXattrAt(fd, name, buffer, (nuint)buffer.Length) == size ? buffer : null;
+    }
 
     public static bool TryStat(string path, out StatResult result)
     {
@@ -109,21 +214,23 @@ internal static partial class LinuxInterop
             return false;
         }
 
-        result = new StatResult(
-            Device: ((ulong)stx.DevMajor << 32) | stx.DevMinor,
-            FileId: stx.Inode,
-            LinkCount: stx.LinkCount,
-            Mode: stx.Mode,
-            Uid: stx.Uid,
-            Gid: stx.Gid,
-            Size: (long)stx.Size,
-            ModifiedAtMs: ToMilliseconds(stx.ModifyTime),
-            CreatedAtMs: (stx.Mask & StatxBtime) != 0 ? ToMilliseconds(stx.BirthTime) : null,
-            AccessedAtMs: ToMilliseconds(stx.AccessTime),
-            RdevMajor: stx.RdevMajor,
-            RdevMinor: stx.RdevMinor);
+        result = ToResult(stx);
         return true;
     }
+
+    private static StatResult ToResult(in Statx stx) => new(
+        Device: ((ulong)stx.DevMajor << 32) | stx.DevMinor,
+        FileId: stx.Inode,
+        LinkCount: stx.LinkCount,
+        Mode: stx.Mode,
+        Uid: stx.Uid,
+        Gid: stx.Gid,
+        Size: (long)stx.Size,
+        ModifiedAtMs: ToMilliseconds(stx.ModifyTime),
+        CreatedAtMs: (stx.Mask & StatxBtime) != 0 ? ToMilliseconds(stx.BirthTime) : null,
+        AccessedAtMs: ToMilliseconds(stx.AccessTime),
+        RdevMajor: stx.RdevMajor,
+        RdevMinor: stx.RdevMinor);
 
     private static ulong? ToMilliseconds(StatxTimestamp timestamp) =>
         timestamp.Seconds < 0
@@ -146,22 +253,7 @@ internal static partial class LinuxInterop
             return [];
         }
 
-        var names = new List<string>();
-        var start = 0;
-        for (var i = 0; i < size; i++)
-        {
-            if (buffer[i] == 0)
-            {
-                if (i > start)
-                {
-                    names.Add(System.Text.Encoding.UTF8.GetString(buffer, start, i - start));
-                }
-
-                start = i + 1;
-            }
-        }
-
-        return names;
+        return PosixXattrNames.Split(buffer, (int)size);
     }
 
     /// <summary>Reads one extended attribute value; null on failure.</summary>
@@ -214,9 +306,52 @@ internal static partial class DarwinInterop
     }
 
     private const int XattrNofollow = 0x0001;
+    private const int AtSymlinkNofollow = 0x0020;
 
     [LibraryImport("libSystem", EntryPoint = "lstat$INODE64", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int NativeLstatX64(string path, out DarwinStat buf);
+
+    [LibraryImport("libSystem", EntryPoint = "fstatat$INODE64", SetLastError = true)]
+    private static unsafe partial int NativeFstatatX64(int dirfd, byte* path, out DarwinStat buf, int flag);
+
+    [LibraryImport("libSystem", EntryPoint = "fstatat", SetLastError = true)]
+    private static unsafe partial int NativeFstatatArm64(int dirfd, byte* path, out DarwinStat buf, int flag);
+
+    [LibraryImport("libSystem", EntryPoint = "fstat$INODE64", SetLastError = true)]
+    private static partial int NativeFstatX64(int fd, out DarwinStat buf);
+
+    [LibraryImport("libSystem", EntryPoint = "fstat", SetLastError = true)]
+    private static partial int NativeFstatArm64(int fd, out DarwinStat buf);
+
+    /// <summary>Stats a child by name bytes, relative to an open directory.</summary>
+    public static unsafe bool TryStatAt(int directoryFd, ReadOnlySpan<byte> name, out StatResult result)
+    {
+        var terminated = new byte[name.Length + 1];
+        name.CopyTo(terminated);
+
+        int status;
+        DarwinStat stat;
+        fixed (byte* path = terminated)
+        {
+            status = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+                ? NativeFstatatArm64(directoryFd, path, out stat, AtSymlinkNofollow)
+                : NativeFstatatX64(directoryFd, path, out stat, AtSymlinkNofollow);
+        }
+
+        result = status == 0 ? ToResult(stat) : default;
+        return status == 0;
+    }
+
+    /// <summary>Stats the object an open descriptor names.</summary>
+    public static bool TryStatHandle(int fd, out StatResult result)
+    {
+        var status = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+            ? NativeFstatArm64(fd, out var stat)
+            : NativeFstatX64(fd, out stat);
+
+        result = status == 0 ? ToResult(stat) : default;
+        return status == 0;
+    }
 
     [LibraryImport("libSystem", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int NativeLstatArm64(string path, out DarwinStat buf);
@@ -226,6 +361,39 @@ internal static partial class DarwinInterop
 
     [LibraryImport("libSystem", EntryPoint = "getxattr", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint NativeGetXattr(string path, string name, byte[]? value, nuint size, uint position, int options);
+
+    [LibraryImport("libSystem", EntryPoint = "flistxattr", SetLastError = true)]
+    private static partial nint NativeListXattrAt(int fd, byte[]? list, nuint size, int options);
+
+    [LibraryImport("libSystem", EntryPoint = "fgetxattr", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint NativeGetXattrAt(int fd, string name, byte[]? value, nuint size, uint position, int options);
+
+    /// <summary>Lists extended attribute names on an open descriptor.</summary>
+    public static IReadOnlyList<string> ListXattrNamesAt(int fd)
+    {
+        var size = NativeListXattrAt(fd, null, 0, 0);
+        if (size <= 0)
+        {
+            return [];
+        }
+
+        var buffer = new byte[size];
+        size = NativeListXattrAt(fd, buffer, (nuint)buffer.Length, 0);
+        return size <= 0 ? [] : PosixXattrNames.Split(buffer, (int)size);
+    }
+
+    /// <summary>Reads one extended attribute from an open descriptor; null on failure.</summary>
+    public static byte[]? GetXattrAt(int fd, string name)
+    {
+        var size = NativeGetXattrAt(fd, name, null, 0, 0, 0);
+        if (size < 0)
+        {
+            return null;
+        }
+
+        var buffer = new byte[size];
+        return NativeGetXattrAt(fd, name, buffer, (nuint)buffer.Length, 0, 0) == size ? buffer : null;
+    }
 
     public static bool TryStat(string path, out StatResult result)
     {
@@ -239,21 +407,23 @@ internal static partial class DarwinInterop
             return false;
         }
 
-        result = new StatResult(
-            Device: unchecked((ulong)(uint)stat.Dev),
-            FileId: stat.Inode,
-            LinkCount: stat.LinkCount,
-            Mode: stat.Mode,
-            Uid: stat.Uid,
-            Gid: stat.Gid,
-            Size: stat.Size,
-            ModifiedAtMs: ToMilliseconds(stat.ModifySeconds, stat.ModifyNanoseconds),
-            CreatedAtMs: ToMilliseconds(stat.BirthSeconds, stat.BirthNanoseconds),
-            AccessedAtMs: ToMilliseconds(stat.AccessSeconds, stat.AccessNanoseconds),
-            RdevMajor: (uint)((stat.Rdev >> 24) & 0xFF),
-            RdevMinor: (uint)(stat.Rdev & 0xFFFFFF));
+        result = ToResult(stat);
         return true;
     }
+
+    private static StatResult ToResult(in DarwinStat stat) => new(
+        Device: unchecked((ulong)(uint)stat.Dev),
+        FileId: stat.Inode,
+        LinkCount: stat.LinkCount,
+        Mode: stat.Mode,
+        Uid: stat.Uid,
+        Gid: stat.Gid,
+        Size: stat.Size,
+        ModifiedAtMs: ToMilliseconds(stat.ModifySeconds, stat.ModifyNanoseconds),
+        CreatedAtMs: ToMilliseconds(stat.BirthSeconds, stat.BirthNanoseconds),
+        AccessedAtMs: ToMilliseconds(stat.AccessSeconds, stat.AccessNanoseconds),
+        RdevMajor: (uint)((stat.Rdev >> 24) & 0xFF),
+        RdevMinor: (uint)(stat.Rdev & 0xFFFFFF));
 
     private static ulong? ToMilliseconds(long seconds, long nanoseconds) =>
         seconds < 0 ? null : (ulong)seconds * 1_000 + (ulong)nanoseconds / 1_000_000;
@@ -274,22 +444,7 @@ internal static partial class DarwinInterop
             return [];
         }
 
-        var names = new List<string>();
-        var start = 0;
-        for (var i = 0; i < size; i++)
-        {
-            if (buffer[i] == 0)
-            {
-                if (i > start)
-                {
-                    names.Add(System.Text.Encoding.UTF8.GetString(buffer, start, i - start));
-                }
-
-                start = i + 1;
-            }
-        }
-
-        return names;
+        return PosixXattrNames.Split(buffer, (int)size);
     }
 
     /// <summary>Reads one extended attribute value; null on failure.</summary>

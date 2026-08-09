@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -35,7 +36,7 @@ public sealed class KeyHierarchy : IDisposable
     {
         if (masterKey.Length != MasterKeyLength)
         {
-            throw new ArgumentException($"The master key is exactly {MasterKeyLength} bytes.", nameof(masterKey));
+            throw new ArgumentException(Strings.FormatKeyHierarchy_MasterKeyExactlyBytes(MasterKeyLength), nameof(masterKey));
         }
 
         _masterKey = masterKey.ToArray();

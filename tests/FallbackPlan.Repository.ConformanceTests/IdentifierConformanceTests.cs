@@ -2,7 +2,7 @@ using System.Text.Json;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -18,6 +18,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// <c>keys.json</c>; the key-hierarchy conformance suite separately proves
 /// those derive from the master key, closing the chain.
 /// </remarks>
+[TestClass]
 public sealed class IdentifierConformanceTests
 {
     private static JsonDocument LoadVectors(string fileName) =>
@@ -40,8 +41,8 @@ public sealed class IdentifierConformanceTests
         _ => throw new InvalidOperationException($"Unknown vector case '{name}' — the fixture and this test have diverged."),
     };
 
-    [Fact]
-    public void Content_and_object_identifiers_match_every_committed_case()
+    [TestMethod]
+    public void ContentAndObjectIdentifiers_EveryCommittedCase_Match()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var deriver = new ObjectIdDeriver(ContentIdKey());
@@ -51,7 +52,7 @@ public sealed class IdentifierConformanceTests
             var name = vectorCase.GetProperty("name").GetString()!;
             var plaintext = CasePlaintext(name);
 
-            Assert.Equal(vectorCase.GetProperty("plaintext_length").GetInt64(), plaintext.LongLength);
+            Assert.AreEqual(vectorCase.GetProperty("plaintext_length").GetInt64(), plaintext.LongLength);
 
             // The one-MiB cases exercise the incremental path in bounded
             // slices; the small cases exercise the one-shot path. Both agree.
@@ -63,22 +64,22 @@ public sealed class IdentifierConformanceTests
 
             var contentId = hasher.FinishAndReset();
 
-            Assert.Equal(ContentHasher.Hash(plaintext), contentId);
-            Assert.Equal(
+            Assert.AreEqual(ContentHasher.Hash(plaintext), contentId);
+            SequenceAssert.AreEqual(
                 vectorCase.GetProperty("content_id").GetString(),
                 Convert.ToHexStringLower(contentId.ToArray()));
 
             var objectId = deriver.Derive(ObjectType.SegmentRecord, contentId);
 
-            Assert.Equal(
+            SequenceAssert.AreEqual(
                 vectorCase.GetProperty("object_id_segment").GetString(),
                 Convert.ToHexStringLower(objectId.ToArray()));
-            Assert.Equal(vectorCase.GetProperty("object_id_base32").GetString(), objectId.ToBase32());
+            Assert.AreEqual(vectorCase.GetProperty("object_id_base32").GetString(), objectId.ToBase32());
         }
     }
 
-    [Fact]
-    public void Object_identifiers_separate_by_object_type()
+    [TestMethod]
+    public void ObjectIdentifier_TheSameContentUnderDifferentTypes_Differs()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var deriver = new ObjectIdDeriver(ContentIdKey());
@@ -88,19 +89,19 @@ public sealed class IdentifierConformanceTests
         var contentId = ContentHasher.Hash(System.Text.Encoding.ASCII.GetBytes(plaintext));
         var expected = separation.GetProperty("object_ids");
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             expected.GetProperty("segment").GetString(),
             Convert.ToHexStringLower(deriver.Derive(ObjectType.SegmentRecord, contentId).ToArray()));
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             expected.GetProperty("file_version").GetString(),
             Convert.ToHexStringLower(deriver.Derive(ObjectType.FileVersionManifest, contentId).ToArray()));
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             expected.GetProperty("tree").GetString(),
             Convert.ToHexStringLower(deriver.Derive(ObjectType.TreeManifest, contentId).ToArray()));
     }
 
-    [Fact]
-    public void Blob_identifier_and_store_key_match_the_committed_vector()
+    [TestMethod]
+    public void BlobIdentifierAndStoreKey_TheCommittedVector_Match()
     {
         using var vectors = LoadVectors("identifiers.json");
         using var keys = LoadVectors("keys.json");
@@ -111,7 +112,7 @@ public sealed class IdentifierConformanceTests
 
         var blobId = BlobId.FromWriterCounter(writer, counter);
 
-        Assert.Equal(group.GetProperty("blob_id").GetString(), Convert.ToHexStringLower(blobId.ToArray()));
+        SequenceAssert.AreEqual(group.GetProperty("blob_id").GetString(), Convert.ToHexStringLower(blobId.ToArray()));
 
         var keyIdKey = Convert.FromHexString(
             keys.RootElement.GetProperty("derived").GetProperty("key_id_key").GetString()!);
@@ -119,7 +120,7 @@ public sealed class IdentifierConformanceTests
 
         var storeKey = deriver.Derive(blobId);
 
-        Assert.Equal(group.GetProperty("store_blob_key").GetString(), Convert.ToHexStringLower(storeKey.ToArray()));
-        Assert.Equal(group.GetProperty("store_blob_key_base32").GetString(), storeKey.ToBase32());
+        SequenceAssert.AreEqual(group.GetProperty("store_blob_key").GetString(), Convert.ToHexStringLower(storeKey.ToArray()));
+        Assert.AreEqual(group.GetProperty("store_blob_key_base32").GetString(), storeKey.ToBase32());
     }
 }

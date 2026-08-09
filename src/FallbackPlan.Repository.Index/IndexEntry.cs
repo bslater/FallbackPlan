@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 
@@ -100,9 +101,9 @@ public static class IndexPrecedence
         Func<BlobId, BlobState> blobState,
         ICollection<DamageFinding> findings)
     {
-        ArgumentNullException.ThrowIfNull(candidates);
-        ArgumentNullException.ThrowIfNull(blobState);
-        ArgumentNullException.ThrowIfNull(findings);
+        ThrowHelper.ThrowIfNull(candidates);
+        ThrowHelper.ThrowIfNull(blobState);
+        ThrowHelper.ThrowIfNull(findings);
 
         ProvenancedEntry? winner = null;
 
@@ -141,8 +142,8 @@ public static class IndexPrecedence
     /// <summary>Rules 1 and 2 as a total order: positive when <paramref name="left"/> wins.</summary>
     public static int Compare(ProvenancedEntry left, ProvenancedEntry right)
     {
-        ArgumentNullException.ThrowIfNull(left);
-        ArgumentNullException.ThrowIfNull(right);
+        ThrowHelper.ThrowIfNull(left);
+        ThrowHelper.ThrowIfNull(right);
 
         var byGeneration = left.Generation.CompareTo(right.Generation);
         if (byGeneration != 0)

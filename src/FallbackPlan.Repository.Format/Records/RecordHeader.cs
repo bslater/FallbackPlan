@@ -1,7 +1,9 @@
+using Bodu;
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Records;
 
@@ -43,22 +45,21 @@ public readonly struct RecordHeader
         uint storedLength,
         ObjectId objectId)
     {
-        ArgumentNullException.ThrowIfNull(compressionProfile);
-        ArgumentNullException.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(compressionProfile);
+        ThrowHelper.ThrowIfNull(encryptionProfile);
 
         if (!ObjectTypes.IsValid((byte)objectType))
         {
-            throw new ArgumentException("Not an assigned object type (specification 02 §3.1).", nameof(objectType));
+            throw new ArgumentException(Strings.RecordHeader_NotAssignedObjectType, nameof(objectType));
         }
 
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(ordinal, MaxOrdinal);
-        ArgumentOutOfRangeException.ThrowIfZero(logicalLength);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(storedLength, (uint)FormatLimits.MaxRecordStoredLength);
+        ThrowHelper.ThrowIfGreaterThan(ordinal, MaxOrdinal);
+        ThrowHelper.ThrowIfEqual(logicalLength, 0UL);
+        ThrowHelper.ThrowIfGreaterThan(storedLength, (uint)FormatLimits.MaxRecordStoredLength);
 
         if (compressionProfile == CompressionProfile.None && storedLength != logicalLength)
         {
-            throw new ArgumentException(
-                "With compression profile none, stored_length equals logical_length (specification 04 §2.1).",
+            throw new ArgumentException(Strings.RecordHeader_WithCompressionProfileNoneStored,
                 nameof(storedLength));
         }
 
@@ -98,7 +99,7 @@ public readonly struct RecordHeader
     {
         if (destination.Length != Length)
         {
-            throw new ArgumentException($"A record header is exactly {Length} bytes; got {destination.Length}.", nameof(destination));
+            throw new ArgumentException(Strings.FormatRecordHeader_RecordHeaderExactlyBytesGot(Length, destination.Length), nameof(destination));
         }
 
         destination[0] = Marker;
@@ -120,58 +121,52 @@ public readonly struct RecordHeader
     {
         if (data.Length < Length)
         {
-            throw new RecordFormatException($"A record header is {Length} bytes; got {data.Length}.");
+            throw new RecordFormatException(Strings.FormatRecordHeader_RecordHeaderBytesGot(Length, data.Length));
         }
 
         if (data[0] != Marker)
         {
-            throw new RecordFormatException("The record marker 0x52 is absent (specification 04 §2.1).");
+            throw new RecordFormatException(Strings.RecordHeader_RecordMarkerXAbsent);
         }
 
         if (!ObjectTypes.TryFromValue(data[1], out var objectType))
         {
-            throw new RecordFormatException(
-                $"Object type 0x{data[1]:x2} is not assigned — including the reserved 0x07 (specification 02 §3.1).");
+            throw new RecordFormatException(Strings.FormatRecordHeader_ObjectTypeXNotAssigned(data[1]));
         }
 
         var compressionValue = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
         if (!CompressionProfile.TryFromValue(compressionValue, out var compressionProfile))
         {
-            throw new RecordFormatException(
-                $"Compression profile 0x{compressionValue:x4} is unknown; refused, not guessed (specification 00 §3).");
+            throw new RecordFormatException(Strings.FormatRecordHeader_CompressionProfileXUnknownRefused(compressionValue));
         }
 
         var encryptionValue = BinaryPrimitives.ReadUInt16BigEndian(data[4..]);
         if (!EncryptionProfile.TryFromValue(encryptionValue, out var encryptionProfile))
         {
-            throw new RecordFormatException(
-                $"Encryption profile 0x{encryptionValue:x4} is unknown; refused, not guessed (specification 00 §3).");
+            throw new RecordFormatException(Strings.FormatRecordHeader_EncryptionProfileXUnknownRefused(encryptionValue));
         }
 
         var ordinal = BinaryPrimitives.ReadUInt32BigEndian(data[6..]);
         if (ordinal > MaxOrdinal)
         {
-            throw new RecordFormatException($"Ordinal {ordinal} exceeds {MaxOrdinal} (specification 04 §2.1).");
+            throw new RecordFormatException(Strings.FormatRecordHeader_OrdinalExceeds(ordinal, MaxOrdinal));
         }
 
         var logicalLength = BinaryPrimitives.ReadUInt64BigEndian(data[10..]);
         if (logicalLength == 0)
         {
-            throw new RecordFormatException(
-                "logical_length is zero — a damage finding: zero-length files produce no records (specification 04 §2.1).");
+            throw new RecordFormatException(Strings.RecordHeader_LogicalLengthZero);
         }
 
         var storedLength = BinaryPrimitives.ReadUInt32BigEndian(data[18..]);
         if (storedLength > FormatLimits.MaxRecordStoredLength)
         {
-            throw new RecordFormatException(
-                $"stored_length {storedLength} exceeds the 64 MiB record limit (specification 00 §8) — refused before allocation.");
+            throw new RecordFormatException(Strings.FormatRecordHeader_StoredLengthExceedsMiBRecord(storedLength));
         }
 
         if (compressionProfile == CompressionProfile.None && storedLength != logicalLength)
         {
-            throw new RecordFormatException(
-                "With compression profile none, stored_length must equal logical_length (specification 04 §2.1).");
+            throw new RecordFormatException(Strings.RecordHeader_WithCompressionProfileNoneStored2);
         }
 
         return new RecordHeader(

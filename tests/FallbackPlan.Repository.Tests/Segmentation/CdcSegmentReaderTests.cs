@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Segmentation;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Segmentation;
 
@@ -9,6 +10,7 @@ namespace FallbackPlan.Repository.Tests.Segmentation;
 /// boundaries obey min/max, cover the input contiguously, are independent of
 /// how the stream doles out bytes, and resynchronise after an insertion.
 /// </summary>
+[TestClass]
 public sealed class CdcSegmentReaderTests
 {
     private static readonly CdcParameters Parameters =
@@ -35,8 +37,8 @@ public sealed class CdcSegmentReaderTests
         return segments;
     }
 
-    [Fact]
-    public async Task Segments_are_contiguous_cover_the_input_and_obey_the_bounds()
+    [TestMethod]
+    public async Task CdcSegmentReader_AnyInput_ProducesContiguousSegmentsWithinTheBounds()
     {
         var data = RandomBytes(3_000_000, seed: 42);
 
@@ -46,23 +48,23 @@ public sealed class CdcSegmentReaderTests
         var offset = 0L;
         foreach (var segment in segments)
         {
-            Assert.Equal(offset, segment.Offset);
-            Assert.InRange(segment.Length, 1, Parameters.MaxSize);
+            Assert.AreEqual(offset, segment.Offset);
+            Assert.IsInRange(1, Parameters.MaxSize, segment.Length);
             offset += segment.Length;
         }
 
-        Assert.Equal(data.Length, offset);
+        Assert.AreEqual(data.Length, offset);
 
         // Every segment but the last respects min_size (09 §3.1); the final
         // short segment is emitted as-is.
         foreach (var segment in segments.Take(segments.Count - 1))
         {
-            Assert.True(segment.Length >= Parameters.MinSize);
+            Assert.IsTrue(segment.Length >= Parameters.MinSize);
         }
     }
 
-    [Fact]
-    public async Task Boundaries_do_not_depend_on_how_the_stream_doles_out_bytes()
+    [TestMethod]
+    public async Task CdcSegmentReader_TheStreamDolesOutBytesDifferently_ProducesIdenticalBoundaries()
     {
         var data = RandomBytes(1_200_000, seed: 7);
 
@@ -72,11 +74,11 @@ public sealed class CdcSegmentReaderTests
         using var trickle = new TrickleStream(data, chunkSize: 4093);
         var actual = await SegmentAsync(trickle, Parameters);
 
-        Assert.Equal(expected, actual);
+        SequenceAssert.AreEqual(expected, actual);
     }
 
-    [Fact]
-    public async Task A_one_byte_insertion_realigns_every_downstream_boundary()
+    [TestMethod]
+    public async Task CdcSegmentReader_AOneByteInsertion_RealignsOnlyTheBoundariesAfterIt()
     {
         var data = RandomBytes(2_000_000, seed: 11);
         var inserted = new byte[data.Length + 1];
@@ -92,11 +94,11 @@ public sealed class CdcSegmentReaderTests
 
         // Boundaries are a pure function of the local 64-byte window
         // (09 §3.2), so a front insertion shifts every cut by exactly one.
-        Assert.Equal(baseCuts[..^1], shiftedCuts[..^1]);
+        SequenceAssert.AreEqual(baseCuts[..^1], shiftedCuts[..^1]);
     }
 
-    [Fact]
-    public async Task An_all_zero_input_cuts_at_exactly_min_size()
+    [TestMethod]
+    public async Task CdcSegmentReader_AnAllZeroInput_CutsAtExactlyTheMinimumSize()
     {
         using var source = new MemoryStream(new byte[100_000]);
         var segments = await SegmentAsync(source, Parameters);
@@ -105,20 +107,20 @@ public sealed class CdcSegmentReaderTests
         // passes the moment min_size is reached.
         foreach (var segment in segments.Take(segments.Count - 1))
         {
-            Assert.Equal(Parameters.MinSize, segment.Length);
+            Assert.AreEqual(Parameters.MinSize, segment.Length);
         }
     }
 
-    [Fact]
-    public async Task An_empty_source_yields_no_segments()
+    [TestMethod]
+    public async Task CdcSegmentReader_TheSourceIsEmpty_YieldsNoSegments()
     {
         using var source = new MemoryStream([]);
 
-        Assert.Empty(await SegmentAsync(source, Parameters));
+        Assert.IsEmpty(await SegmentAsync(source, Parameters));
     }
 
-    [Fact]
-    public async Task The_rolling_state_matches_the_direct_window_reduction()
+    [TestMethod]
+    public async Task RabinFingerprint_TheRollingState_MatchesTheDirectWindowReduction()
     {
         // Hash 200 bytes through Advance and compare position 63 and 199
         // against the definitional form: the 64-byte window as a big-endian
@@ -142,27 +144,27 @@ public sealed class CdcSegmentReaderTests
 
             if (p is 63 or 199)
             {
-                Assert.Equal(DirectReduction(stretched.AsSpan(p - 63, 64)), state);
+                Assert.AreEqual(DirectReduction(stretched.AsSpan(p - 63, 64)), state);
             }
         }
     }
 
-    [Fact]
-    public async Task A_buffer_smaller_than_the_maximum_segment_is_refused()
+    [TestMethod]
+    public async Task CdcSegmentReader_TheBufferIsSmallerThanTheMaximumSegment_IsRefused()
     {
         using var source = new MemoryStream(new byte[16]);
         var reader = new CdcSegmentReader(source, Parameters);
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
             await reader.ReadNextAsync(new byte[Parameters.MaxSize - 1], CancellationToken.None));
     }
 
-    [Fact]
-    public void Unset_parameters_are_refused_at_construction()
+    [TestMethod]
+    public void CdcSegmentReader_ParametersAreUnset_IsRefusedAtConstruction()
     {
         using var source = new MemoryStream([]);
 
-        Assert.Throws<ArgumentException>(() => new CdcSegmentReader(source, default));
+        Assert.ThrowsExactly<ArgumentException>(() => new CdcSegmentReader(source, default));
     }
 
     /// <summary>Definitional reduction: 64 window bytes, MSB-first, mod P(x) = x⁶⁴ + x⁴ + x³ + x + 1.</summary>

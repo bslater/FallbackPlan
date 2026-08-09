@@ -1,5 +1,6 @@
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Keys;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Format;
 
@@ -8,6 +9,7 @@ namespace FallbackPlan.Repository.Tests.Format;
 /// field offsets, the v1 wrap-profile restriction, the pre-allocation length
 /// limit, and the AAD bytes.
 /// </summary>
+[TestClass]
 public sealed class KeyObjectFramingTests
 {
     private static readonly KeyId SomeKeyId = KeyId.FromBytes(Convert.FromHexString("101112131415161718191a1b1c1d1e1f"));
@@ -20,57 +22,57 @@ public sealed class KeyObjectFramingTests
         return KeyObjectFraming.Serialize(1, SomeKeyId, nonce, wrapped, tag);
     }
 
-    [Fact]
-    public void Field_offsets_are_byte_exact()
+    [TestMethod]
+    public void KeyObjectFraming_ASerialisedObject_PlacesEveryFieldAtItsSpecifiedOffset()
     {
         var wrapped = new byte[] { 0xAA, 0xBB, 0xCC };
         var bytes = SerializeSample(wrapped);
 
-        Assert.Equal("FBPKKEYS"u8.ToArray(), bytes[..8]);                       // magic
-        Assert.Equal(new byte[] { 0x00, 0x01 }, bytes[8..10]);                  // format_version u16
-        Assert.Equal(new byte[] { 0x00, 0x01 }, bytes[10..12]);                 // kek_profile u16
-        Assert.Equal(0x20, bytes[12]);                                          // wrap_nonce @12
-        Assert.Equal(0x10, bytes[24]);                                          // key_id @24
-        Assert.Equal(new byte[] { 0x00, 0x00, 0x00, 0x03 }, bytes[40..44]);     // cbor_length u32
-        Assert.Equal(wrapped, bytes[44..47]);                                   // wrapped
-        Assert.Equal(0x40, bytes[47]);                                          // tag
-        Assert.Equal(44 + 3 + 16, bytes.Length);
+        SequenceAssert.AreEqual("FBPKKEYS"u8.ToArray(), bytes[..8]);                       // magic
+        SequenceAssert.AreEqual(new byte[] { 0x00, 0x01 }, bytes[8..10]);                  // format_version u16
+        SequenceAssert.AreEqual(new byte[] { 0x00, 0x01 }, bytes[10..12]);                 // kek_profile u16
+        Assert.AreEqual(0x20, bytes[12]);                                          // wrap_nonce @12
+        Assert.AreEqual(0x10, bytes[24]);                                          // key_id @24
+        SequenceAssert.AreEqual(new byte[] { 0x00, 0x00, 0x00, 0x03 }, bytes[40..44]);     // cbor_length u32
+        SequenceAssert.AreEqual(wrapped, bytes[44..47]);                                   // wrapped
+        Assert.AreEqual(0x40, bytes[47]);                                          // tag
+        Assert.AreEqual(44 + 3 + 16, bytes.Length);
     }
 
-    [Fact]
-    public void Parse_round_trips_serialize()
+    [TestMethod]
+    public void KeyObjectFraming_SerialisedThenParsed_RoundTrips()
     {
         var wrapped = "wrapped-bundle"u8.ToArray();
         var parsed = KeyObjectFraming.Parse(SerializeSample(wrapped));
 
-        Assert.Equal(1, parsed.FormatVersion);
-        Assert.Equal(KeyObjectFraming.KekProfileAes256GcmV1, parsed.KekProfile);
-        Assert.Equal(SomeKeyId, parsed.KeyId);
-        Assert.Equal(wrapped, parsed.Wrapped.ToArray());
+        Assert.AreEqual(1, parsed.FormatVersion);
+        Assert.AreEqual(KeyObjectFraming.KekProfileAes256GcmV1, parsed.KekProfile);
+        Assert.AreEqual(SomeKeyId, parsed.KeyId);
+        SequenceAssert.AreEqual(wrapped, parsed.Wrapped.ToArray());
     }
 
-    [Fact]
-    public void Wrong_magic_is_named_as_not_a_key_object()
+    [TestMethod]
+    public void KeyObjectFraming_MagicIsWrong_SaysItIsNotAKeyObject()
     {
         var bytes = SerializeSample([0x01]);
         bytes[0] = (byte)'X';
 
-        var exception = Assert.Throws<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
+        var exception = Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
 
         Assert.Contains("Not a key object", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void A_wrap_profile_other_than_aes_gcm_is_refused_in_v1()
+    [TestMethod]
+    public void KeyObjectFraming_WrapProfileIsNotAesGcm_IsRefusedInV1()
     {
         var bytes = SerializeSample([0x01]);
         bytes[11] = 0x02; // xchacha20-poly1305-v1 — its 24-byte nonce cannot fit the field
 
-        Assert.Throws<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
+        Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
     }
 
-    [Fact]
-    public void A_bundle_length_over_the_limit_is_refused_before_allocation()
+    [TestMethod]
+    public void KeyObjectFraming_BundleLengthExceedsTheLimit_IsRefusedBeforeAllocation()
     {
         var bytes = SerializeSample([0x01]);
         bytes[40] = 0xFF;
@@ -78,26 +80,26 @@ public sealed class KeyObjectFramingTests
         bytes[42] = 0xFF;
         bytes[43] = 0xFF; // declares ~4 GiB — must be refused from the prefix alone
 
-        Assert.Throws<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
+        Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes));
     }
 
-    [Fact]
-    public void A_total_length_mismatching_the_declared_bundle_is_refused()
+    [TestMethod]
+    public void KeyObjectFraming_TotalLengthDisagreesWithTheDeclaredBundle_IsRefused()
     {
         var bytes = SerializeSample([0x01, 0x02]);
 
-        Assert.Throws<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes.AsSpan()[..^1]));
-        Assert.Throws<KeyObjectFormatException>(() => KeyObjectFraming.Parse([.. bytes, 0x00]));
+        Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyObjectFraming.Parse(bytes.AsSpan()[..^1]));
+        Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyObjectFraming.Parse([.. bytes, 0x00]));
     }
 
-    [Fact]
-    public void The_aad_is_magic_version_profile_and_key_id()
+    [TestMethod]
+    public void KeyObjectFraming_TheAssociatedData_IsMagicVersionProfileAndKeyId()
     {
         var aad = KeyObjectFraming.BuildAad(1, KeyObjectFraming.KekProfileAes256GcmV1, SomeKeyId);
 
-        Assert.Equal(28, aad.Length);
-        Assert.Equal("FBPKKEYS"u8.ToArray(), aad[..8]);
-        Assert.Equal(new byte[] { 0x00, 0x01, 0x00, 0x01 }, aad[8..12]);
-        Assert.Equal(SomeKeyId.ToArray(), aad[12..28]);
+        Assert.AreEqual(28, aad.Length);
+        SequenceAssert.AreEqual("FBPKKEYS"u8.ToArray(), aad[..8]);
+        SequenceAssert.AreEqual(new byte[] { 0x00, 0x01, 0x00, 0x01 }, aad[8..12]);
+        SequenceAssert.AreEqual(SomeKeyId.ToArray(), aad[12..28]);
     }
 }

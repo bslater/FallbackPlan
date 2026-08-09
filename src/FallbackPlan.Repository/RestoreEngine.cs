@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
@@ -20,7 +21,7 @@ public sealed class RestoreEngine
     /// <summary>Creates an engine over a loaded reader.</summary>
     public RestoreEngine(RepositoryReader reader)
     {
-        ArgumentNullException.ThrowIfNull(reader);
+        ThrowHelper.ThrowIfNull(reader);
         _reader = reader;
     }
 
@@ -34,8 +35,8 @@ public sealed class RestoreEngine
         Stream destination,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
-        ArgumentNullException.ThrowIfNull(destination);
+        ThrowHelper.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(destination);
 
         var spoolPath = Path.Combine(Path.GetTempPath(), $"fbp-restore-{Guid.NewGuid():n}.spool");
 

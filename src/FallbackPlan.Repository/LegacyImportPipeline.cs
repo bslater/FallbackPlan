@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Import.Abstractions;
 
@@ -25,7 +26,7 @@ public sealed class LegacyImportPipeline
     /// <summary>Creates the pipeline over the one and only publication path.</summary>
     public LegacyImportPipeline(PublicationOrchestrator orchestrator)
     {
-        ArgumentNullException.ThrowIfNull(orchestrator);
+        ThrowHelper.ThrowIfNull(orchestrator);
         _orchestrator = orchestrator;
     }
 
@@ -43,7 +44,7 @@ public sealed class LegacyImportPipeline
         ulong expiryGeneration,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var imported = new List<ImportedVersion>();
 

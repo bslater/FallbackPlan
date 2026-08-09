@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §12 · **Resolves:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified), [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
+**Built:** Yes — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Restore paths
@@ -40,9 +42,24 @@ Every restore:
 
 The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a failed restore that recovered 9 999 files, and it is reported that way.
 
+**The receipt therefore reports an outcome, not a success flag** — `complete`, `partial`, `failed` or `cancelled`. A boolean cannot express "nothing went wrong and the tree is not the tree that was captured", which is exactly what happens when the target cannot materialise a symlink or a device node. A skipped required item makes the restore **partial**: the plan declaring the shortfall in advance is a reason it was expected, never a reason to report that nothing is missing.
+
+**Repository path text is untrusted.** A restore materialises only paths that are a sequence of plain name components resolving under the restore root; anything else — a traversal, an absolute path, a drive marker, an empty or dotted component — is refused and recorded as a failed item. The store is written by other participants and holds historical data, both of which the threat model treats as adversarial ([`../threat-model.md`](../threat-model.md)), so containment is a property of the executor rather than of whoever wrote the manifest.
+
 ### 3.1 Quarantine by default
 
-Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter.
+Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006
+
+**This is about where restored content lands, and it is a separate control from what happens to a file already there.** The two were conflated once, in the direction that matters: an option named for this section moved the *existing* file aside and put unscanned historical content at the live path — the inverse of the rule above, implemented under its name.
+
+They are now distinct:
+
+| Control | Question it answers | Default |
+|---------|--------------------|---------|
+| Destination mode | Where does restored historical content go? | A quarantine path, per this section |
+| Existing-destination policy | What happens to a file already at a destination? | Preserve it — moved into this run's own displaced store |
+
+A displaced file goes into a directory namespaced by the restore run. A single shared refuge is worse than none: restoring the same path twice silently destroys the first displaced copy, which is precisely the data the policy exists to keep.
 
 ## 4. Recovery kit
 

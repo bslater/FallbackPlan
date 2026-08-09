@@ -1,8 +1,10 @@
+using Bodu;
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -27,7 +29,7 @@ public static class BlobFooter
     /// </summary>
     public static byte[] EncodeRecordTable(IReadOnlyList<RecordTableEntry> entries)
     {
-        ArgumentNullException.ThrowIfNull(entries);
+        ThrowHelper.ThrowIfNull(entries);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartArray(entries.Count);
@@ -81,8 +83,7 @@ public static class BlobFooter
 
         if (count != declaredRecordCount)
         {
-            throw new BlobFormatException(
-                $"The record table holds {count} entries; the footer declares {declaredRecordCount} — a damage finding (specification 05 §3.1).");
+            throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableHoldsEntriesFooter(count, declaredRecordCount));
         }
 
         var entries = new List<RecordTableEntry>(count);
@@ -93,7 +94,7 @@ public static class BlobFooter
             var entryCount = reader.ReadStartMap();
             if (entryCount != 8)
             {
-                throw new BlobFormatException($"A record-table entry has 8 fields; entry {position} has {entryCount}.");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableEntryFieldsEntry(position, entryCount));
             }
 
             ObjectId? objectId = null;
@@ -144,34 +145,30 @@ public static class BlobFooter
             if (objectId is null || ordinal is null || physicalOffset is null || storedLength is null ||
                 logicalLength is null || compressionValue is null || encryptionValue is null || objectTypeValue is null)
             {
-                throw new BlobFormatException($"Record-table entry {position} is missing a required field (specification 05 §3.1).");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableEntryMissingRequired(position));
             }
 
             if (ordinal.Value != position)
             {
-                throw new BlobFormatException(
-                    $"Record-table ordinals must ascend from zero; entry {position} carries ordinal {ordinal} (specification 05 §3.1).");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableOrdinalsMustAscend(position, ordinal));
             }
 
             if (physicalOffset.Value < previousEnd)
             {
-                throw new BlobFormatException(
-                    $"Record-table offsets must strictly increase without overlap; entry {position} at {physicalOffset} overlaps the previous record (specification 05 §3.1).");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableOffsetsMustStrictly(position, physicalOffset));
             }
 
             var recordEnd = physicalOffset.Value + Format.Records.RecordHeader.Length + storedLength.Value + (ulong)Crypto.RecordCipher.TagLength;
             if (recordEnd > (ulong)blobLength)
             {
-                throw new BlobFormatException(
-                    $"Record-table entry {position} extends to byte {recordEnd}, past the {blobLength}-byte blob — a damage finding (specification 05 §3.1).");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableEntryExtendsByte(position, recordEnd, blobLength));
             }
 
             if (!CompressionProfile.TryFromValue(compressionValue.Value, out _) ||
                 !EncryptionProfile.TryFromValue(encryptionValue.Value, out _) ||
                 !ObjectTypes.TryFromValue(objectTypeValue.Value, out var objectType))
             {
-                throw new BlobFormatException(
-                    $"Record-table entry {position} carries an unassigned profile or object type; refused, not guessed (specification 00 §3).");
+                throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableEntryCarriesUnassigned(position));
             }
 
             previousEnd = recordEnd;
@@ -197,7 +194,7 @@ public static class BlobFooter
     {
         if (destination.Length != HeaderLength)
         {
-            throw new ArgumentException($"The footer header is exactly {HeaderLength} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobFooter_FooterHeaderExactlyBytes(HeaderLength), nameof(destination));
         }
 
         Magic.CopyTo(destination);
@@ -214,26 +211,24 @@ public static class BlobFooter
     {
         if (data.Length < HeaderLength)
         {
-            throw new BlobFormatException($"A footer header is {HeaderLength} bytes; got {data.Length}.");
+            throw new BlobFormatException(Strings.FormatBlobFooter_FooterHeaderBytesGot(HeaderLength, data.Length));
         }
 
         if (!data[..8].SequenceEqual(Magic))
         {
-            throw new BlobFormatException("The FBPKFOOT magic is absent — the locator points at something that is not a footer.");
+            throw new BlobFormatException(Strings.BlobFooter_FBPKFOOTMagicAbsent);
         }
 
         var recordCount = BinaryPrimitives.ReadUInt32BigEndian(data[8..]);
         if (recordCount > FormatLimits.MaxRecordsPerBlob)
         {
-            throw new BlobFormatException(
-                $"The footer declares {recordCount} records; the limit is {FormatLimits.MaxRecordsPerBlob} (specification 00 §8).");
+            throw new BlobFormatException(Strings.FormatBlobFooter_FooterDeclaresRecordsLimit(recordCount, FormatLimits.MaxRecordsPerBlob));
         }
 
         var cborLength = BinaryPrimitives.ReadUInt32BigEndian(data[12..]);
         if (cborLength > FormatLimits.MaxMetadataObjectSize)
         {
-            throw new BlobFormatException(
-                $"The footer declares a {cborLength}-byte record table; the limit is {FormatLimits.MaxMetadataObjectSize} (specification 00 §8) — refused before allocation.");
+            throw new BlobFormatException(Strings.FormatBlobFooter_FooterDeclaresByteRecordTable(cborLength, FormatLimits.MaxMetadataObjectSize));
         }
 
         return (recordCount, cborLength);

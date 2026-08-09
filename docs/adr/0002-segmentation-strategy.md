@@ -1,6 +1,6 @@
 # ADR-0002 — Segmentation strategy
 
-**Status:** Proposed
+**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-ARCH-001, FR-ARCH-014, NFR-PERF-007
 **Review finding:** [H1](../review/2026-08-architecture-review.md#h1--fixed-size-segmentation-is-under-argued-and-its-review-is-scheduled-after-the-point-of-no-return)

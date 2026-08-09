@@ -1,5 +1,7 @@
+using Bodu;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local.Resources;
 
 namespace FallbackPlan.Storage.Local;
 
@@ -37,7 +39,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     /// </summary>
     public LocalFileSystemObjectStore(string rootPath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
 
         _root = Path.GetFullPath(rootPath);
         _spool = Path.Combine(_root, SpoolDirectoryName);
@@ -118,8 +120,8 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         PutConditions conditions,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(openContent);
-        ArgumentNullException.ThrowIfNull(conditions);
+        ThrowHelper.ThrowIfNull(openContent);
+        ThrowHelper.ThrowIfNull(conditions);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "put"));
 
         var finalPath = ResolvePath(key);
@@ -191,7 +193,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         ListOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ThrowHelper.ThrowIfNull(options);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "list"));
 
         await Task.Yield();
@@ -201,11 +203,26 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             yield break;
         }
 
+        // Only the subtree the prefix names is walked. A prefix is a string
+        // over the whole flat namespace and may end mid-component, so the
+        // walk starts at the deepest directory the prefix fully names and the
+        // ordinary string match still decides every candidate — narrowing
+        // changes what is *visited*, never what matches. Walking the whole
+        // store and filtering afterwards made one prefix listing cost the
+        // entire repository, which is the difference between a per-file hint
+        // lookup being cheap and being unusable.
+        var searchRoot = ResolvePrefixRoot(prefix);
+
+        if (!Directory.Exists(searchRoot))
+        {
+            yield break;
+        }
+
         // The local filesystem holds everything at hand, so listing collects
         // and sorts eagerly: ordinal key order is part of the contract.
         var entries = new List<ObjectEntry>();
 
-        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        foreach (var path in Directory.EnumerateFiles(searchRoot, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -244,7 +261,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     /// <inheritdoc />
     public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(conditions);
+        ThrowHelper.ThrowIfNull(conditions);
         FallbackPlan.Domain.Diagnostics.EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", "delete"));
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -261,6 +278,41 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     }
 
     /// <summary>
+    /// The deepest directory a prefix fully names, as a filesystem path under
+    /// the root; the store root when the prefix names none.
+    /// </summary>
+    /// <remarks>
+    /// Only components the prefix <em>completes</em> — those followed by a
+    /// <c>/</c> — can narrow the walk: a prefix ending mid-component names a
+    /// filename fragment, not a directory, and its parent is as deep as the
+    /// walk may start. Anything the prefix cannot be proven to sit under
+    /// falls back to the store root, so narrowing can only ever visit fewer
+    /// files, never fewer matches.
+    /// </remarks>
+    private string ResolvePrefixRoot(ObjectPrefix prefix)
+    {
+        var value = prefix.Value;
+        var lastSeparator = value.LastIndexOf('/');
+
+        if (lastSeparator <= 0)
+        {
+            return _root;
+        }
+
+        var directoryPart = value[..lastSeparator];
+
+        // The grammar admits '.' and '-', so ".." is spellable and traversal
+        // has to be refused rather than assumed away — the same rule
+        // ResolvePath applies to keys.
+        var candidate = Path.GetFullPath(Path.Combine(
+            _root, directoryPart.Replace('/', Path.DirectorySeparatorChar)));
+
+        return candidate.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? candidate
+            : _root;
+    }
+
+    /// <summary>
     /// Maps a key to a filesystem path with defence in depth: the grammar
     /// makes traversal unconstructible, the resolved path is verified to stay
     /// under the root, and any symlinked directory component inside the root
@@ -271,7 +323,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     {
         if (key.Value.Length == 0)
         {
-            throw new ArgumentException("The object key is empty.", nameof(key));
+            throw new ArgumentException(Strings.LocalFileSystemObjectStore_ObjectKeyEmpty, nameof(key));
         }
 
         var path = Path.GetFullPath(Path.Combine(
@@ -280,7 +332,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 
         if (!path.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
-            throw new IOException($"Key '{key}' resolves outside the store root.");
+            throw new IOException(Strings.FormatLocalFileSystemObjectStore_KeyResolvesOutsideStoreRoot(key));
         }
 
         // Walk every ancestor up to the root, not stopping at levels that do
@@ -292,7 +344,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             if (Directory.Exists(directory) &&
                 Directory.ResolveLinkTarget(directory, returnFinalTarget: false) is not null)
             {
-                throw new IOException($"Refusing to traverse the symlinked directory '{directory}' inside the store root.");
+                throw new IOException(Strings.FormatLocalFileSystemObjectStore_RefusingTraverseSymlinkedDirectoryInside(directory));
             }
 
             directory = Path.GetDirectoryName(directory);

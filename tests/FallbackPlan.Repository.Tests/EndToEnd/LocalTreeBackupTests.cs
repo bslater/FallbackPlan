@@ -8,6 +8,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -17,6 +18,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// reader — the wave-S scanner and the wave-T1 publisher joined with no
 /// fake in between.
 /// </summary>
+[TestClass]
 public sealed class LocalTreeBackupTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -31,8 +33,8 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         File.WriteAllBytes(full, content);
     }
 
-    [Fact]
-    public async Task A_real_directory_tree_publishes_and_every_file_restores_byte_identical()
+    [TestMethod]
+    public async Task BackupAndRestore_ARealDirectoryTree_RestoresEveryFileByteIdentically()
     {
         var random = new Random(7);
         var files = new Dictionary<string, byte[]>
@@ -72,8 +74,8 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
 
         var published = await orchestrator.PublishAsync(job, CancellationToken.None);
 
-        Assert.Equal(files.Count, published.Files.Count);
-        Assert.Empty(published.Failures);
+        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.IsEmpty(published.Failures);
 
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -83,7 +85,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         var restoredPaths = new List<string>();
         await WalkAndRestoreAsync(reader, published.RootTreeObjectId, string.Empty, restoredPaths, files);
 
-        Assert.Equal(files.Keys.OrderBy(path => path, StringComparer.Ordinal), restoredPaths.OrderBy(path => path, StringComparer.Ordinal));
+        SequenceAssert.AreEqual(files.Keys.OrderBy(path => path, StringComparer.Ordinal), restoredPaths.OrderBy(path => path, StringComparer.Ordinal));
     }
 
     private static async Task WalkAndRestoreAsync(
@@ -98,7 +100,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         while (next is { } id)
         {
             var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
             var manifest = TreeManifestCodec.Decode(read.Plaintext!);
             chain.Add(manifest);
             next = manifest.Continuation;
@@ -116,13 +118,13 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
             }
 
             var manifestRead = await reader.ReadSegmentAsync(entry.ObjectId, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
             var fileVersion = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
 
             using var restored = new MemoryStream();
             var restore = await new RestoreEngine(reader).RestoreFileAsync(fileVersion, restored, CancellationToken.None);
-            Assert.True(restore.Success, restore.FailureDetail);
-            Assert.Equal(expected[path], restored.ToArray());
+            Assert.IsTrue(restore.Success, restore.FailureDetail);
+            SequenceAssert.AreEqual(expected[path], restored.ToArray());
             restoredPaths.Add(path);
         }
     }

@@ -1,6 +1,8 @@
+using Bodu;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Keystore.Resources;
 
 namespace FallbackPlan.Keystore;
 
@@ -56,9 +58,7 @@ internal sealed class LinuxOwnerOnlyFileStore(string stateDirectory) : IPassphra
         var mode = File.GetUnixFileMode(path);
         if ((mode & ~OwnerOnlyFile) != 0)
         {
-            throw new KeystoreException(
-                $"'{path}' is readable beyond its owner ({mode}). It is refused rather than used: the only thing "
-                + "protecting it is its permissions.");
+            throw new KeystoreException(Strings.FormatLinuxOwnerOnlyFileStore_ReadableBeyondOwnerRefusedRather(path, mode));
         }
 
         passphrase = File.ReadAllText(path);
@@ -67,7 +67,7 @@ internal sealed class LinuxOwnerOnlyFileStore(string stateDirectory) : IPassphra
 
     public void Write(string account, string passphrase)
     {
-        ArgumentException.ThrowIfNullOrEmpty(passphrase);
+        ThrowHelper.ThrowIfNullOrEmpty(passphrase);
 
         var directory = Directory();
         System.IO.Directory.CreateDirectory(directory);
@@ -117,7 +117,7 @@ internal sealed class LinuxOwnerOnlyFileStore(string stateDirectory) : IPassphra
 
     private string PathFor(string account)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(account);
         var name = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)).AsSpan(0, 8))
             .ToLowerInvariant();
         return Path.Combine(Directory(), $"{name}.key");

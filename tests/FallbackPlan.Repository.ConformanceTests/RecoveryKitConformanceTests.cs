@@ -7,7 +7,7 @@ using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -19,6 +19,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// byte-identically — opens the fixture repository with nothing but the
 /// passphrase.
 /// </summary>
+[TestClass]
 public sealed class RecoveryKitConformanceTests
 {
     private static JsonDocument Vectors { get; } =
@@ -26,25 +27,25 @@ public sealed class RecoveryKitConformanceTests
 
     private static JsonElement Kit => Vectors.RootElement.GetProperty("kit");
 
-    [Fact]
-    public void The_vector_kit_parses_with_every_committed_field()
+    [TestMethod]
+    public void RecoveryKit_TheVectorKit_ParsesWithEveryCommittedField()
     {
         var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
         var kit = RecoveryKitCodec.Parse(framed);
         var fields = Kit.GetProperty("fields");
 
-        Assert.Equal(fields.GetProperty("kit_format_version").GetUInt16(), kit.KitFormatVersion);
-        Assert.Equal(fields.GetProperty("minimum_tool_version").GetString(), kit.MinimumToolVersion);
-        Assert.Equal(
+        Assert.AreEqual(fields.GetProperty("kit_format_version").GetUInt16(), kit.KitFormatVersion);
+        Assert.AreEqual(fields.GetProperty("minimum_tool_version").GetString(), kit.MinimumToolVersion);
+        SequenceAssert.AreEqual(
             fields.GetProperty("repository_id").GetString(),
             Convert.ToHexString(kit.RepositoryId.ToArray()).ToLowerInvariant());
-        Assert.Equal(fields.GetProperty("issued_at").GetUInt64(), kit.IssuedAt);
-        Assert.Equal(fields.GetProperty("destination_count").GetInt32(), kit.Destinations.Count);
-        Assert.Equal(fields.GetProperty("kdf").GetProperty("memory_kib").GetUInt32(), kit.KdfMemoryKiB);
+        Assert.AreEqual(fields.GetProperty("issued_at").GetUInt64(), kit.IssuedAt);
+        Assert.AreEqual(fields.GetProperty("destination_count").GetInt32(), kit.Destinations.Count);
+        Assert.AreEqual(fields.GetProperty("kdf").GetProperty("memory_kib").GetUInt32(), kit.KdfMemoryKiB);
     }
 
-    [Fact]
-    public void The_text_form_renders_canonically_and_parses_back()
+    [TestMethod]
+    public void RecoveryKitText_AnyKit_RendersCanonicallyAndParsesBack()
     {
         var framed = Convert.FromHexString(Kit.GetProperty("framed_hex").GetString()!);
 
@@ -52,31 +53,31 @@ public sealed class RecoveryKitConformanceTests
         // header — compare payload lines exactly, then round-trip.
         var expected = Kit.GetProperty("text_form").GetString()!;
         var rendered = RecoveryKitText.Render(framed);
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             expected.Split('\n').Where(line => line.Length > 2 && char.IsAsciiDigit(line[0])),
             rendered.Split('\n').Where(line => line.Length > 2 && char.IsAsciiDigit(line[0])));
 
-        Assert.Equal(framed, RecoveryKitText.ParseToFramed(expected));
-        Assert.Equal(framed, RecoveryKitText.ParseToFramed(rendered));
+        SequenceAssert.AreEqual(framed, RecoveryKitText.ParseToFramed(expected));
+        SequenceAssert.AreEqual(framed, RecoveryKitText.ParseToFramed(rendered));
     }
 
-    [Fact]
-    public void A_transcription_error_is_caught_by_its_line()
+    [TestMethod]
+    public void RecoveryKitText_ATranscriptionError_IsCaughtAndItsLineNamed()
     {
         var damaged = Kit.GetProperty("damaged_text_form").GetString()!;
 
-        var exception = Assert.Throws<RecoveryKitFormatException>(() => RecoveryKitText.ParseToFramed(damaged));
+        var exception = Assert.ThrowsExactly<RecoveryKitFormatException>(() => RecoveryKitText.ParseToFramed(damaged));
         Assert.Contains("Line 02", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Every_refusal_case_is_refused()
+    [TestMethod]
+    public void RecoveryKit_EveryCommittedRefusalCase_IsRefused()
     {
         foreach (var refusal in Vectors.RootElement.GetProperty("refusal_cases").EnumerateArray())
         {
             var framed = Convert.FromHexString(refusal.GetProperty("framed_hex").GetString()!);
 
-            Assert.Throws<RecoveryKitFormatException>(() => RecoveryKitCodec.Parse(framed));
+            Assert.ThrowsExactly<RecoveryKitFormatException>(() => RecoveryKitCodec.Parse(framed));
         }
     }
 
@@ -88,7 +89,7 @@ public sealed class RecoveryKitConformanceTests
         // maps [CallerFilePath] to /_/…, which does not exist on a CI
         // runner; the source path remains the fallback.
         var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
-        Assert.NotNull(root);
+        Assert.IsNotNull(root);
         return Path.Combine(
             root, "specifications", "repository-format", "conformance", "fixtures", "fixture-repository-v1-kit");
     }
@@ -112,8 +113,8 @@ public sealed class RecoveryKitConformanceTests
     private static string FixtureStorePath(string kitDirectory) =>
         Path.Combine(Path.GetDirectoryName(kitDirectory)!, "fixture-repository-v1");
 
-    [Fact]
-    public async Task The_committed_fixture_kit_is_byte_identical_to_regeneration()
+    [TestMethod]
+    public async Task RecoveryKit_TheCommittedFixture_IsByteIdenticalToRegeneration()
     {
         var directory = FixtureKitDirectory();
         var binPath = Path.Combine(directory, "kit.bin");
@@ -127,12 +128,12 @@ public sealed class RecoveryKitConformanceTests
             Assert.Fail($"The committed fixture kit was absent and has been generated at {directory} — review and commit it.");
         }
 
-        Assert.Equal(await File.ReadAllBytesAsync(binPath), FixtureRepository.BuildKitFramed());
-        Assert.Equal(await File.ReadAllTextAsync(textPath), FixtureRepository.BuildKitText());
+        SequenceAssert.AreEqual(await File.ReadAllBytesAsync(binPath), FixtureRepository.BuildKitFramed());
+        Assert.AreEqual(await File.ReadAllTextAsync(textPath), FixtureRepository.BuildKitText());
     }
 
-    [Fact]
-    public async Task The_fixture_kit_plus_passphrase_opens_the_fixture_repository()
+    [TestMethod]
+    public async Task RecoveryKit_TheFixtureKitAndItsPassphrase_OpenTheFixtureRepository()
     {
         // FR-KIT-001, the clean-machine premise: no catalogue, no state
         // directory, no /keys/ listing — the kit supplies the key object and
@@ -163,7 +164,7 @@ public sealed class RecoveryKitConformanceTests
         try
         {
             using var bundle = KeyBundleCodec.Decode(bundleCbor);
-            Assert.Equal(FixtureRepository.MasterKey, bundle.MasterKey.ToArray());
+            SequenceAssert.AreEqual(FixtureRepository.MasterKey, bundle.MasterKey.ToArray());
 
             // With the unwrapped keys, restore the fixture file through the
             // ordinary read path — the kit was the only key source.
@@ -176,14 +177,14 @@ public sealed class RecoveryKitConformanceTests
             var manifestEntry = reader.AllRecords.Single(
                 record => record.ObjectType == Domain.ObjectType.FileVersionManifest);
             var read = await reader.ReadSegmentAsync(manifestEntry.ObjectId, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
 
             var manifest = Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext!);
             using var restored = new MemoryStream();
             var result = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
 
-            Assert.True(result.Success, result.FailureDetail);
-            Assert.Equal(FixtureRepository.FileContent(), restored.ToArray());
+            Assert.IsTrue(result.Success, result.FailureDetail);
+            SequenceAssert.AreEqual(FixtureRepository.FileContent(), restored.ToArray());
         }
         finally
         {
@@ -191,13 +192,13 @@ public sealed class RecoveryKitConformanceTests
         }
     }
 
-    [Fact]
-    public async Task The_fixture_kit_text_form_round_trips_to_the_binary()
+    [TestMethod]
+    public async Task RecoveryKitText_TheFixtureKit_RoundTripsToTheBinaryForm()
     {
         var directory = FixtureKitDirectory();
         var framed = await File.ReadAllBytesAsync(Path.Combine(directory, "kit.bin"));
         var text = await File.ReadAllTextAsync(Path.Combine(directory, "kit.txt"));
 
-        Assert.Equal(framed, RecoveryKitText.ParseToFramed(text));
+        SequenceAssert.AreEqual(framed, RecoveryKitText.ParseToFramed(text));
     }
 }

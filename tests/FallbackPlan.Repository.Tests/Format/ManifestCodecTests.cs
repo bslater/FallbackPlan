@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Format;
 
@@ -13,6 +14,7 @@ namespace FallbackPlan.Repository.Tests.Format;
 /// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the
 /// snapshot signature survives the two-pass construction.
 /// </summary>
+[TestClass]
 public sealed class ManifestCodecTests
 {
     private static ObjectId TestObjectId(byte seed)
@@ -45,20 +47,20 @@ public sealed class ManifestCodecTests
         },
     };
 
-    [Fact]
-    public void A_file_version_manifest_round_trips_byte_identically()
+    [TestMethod]
+    public void FileVersionManifest_EncodedAndDecoded_RoundTripsByteIdentically()
     {
         var encoded = FileVersionManifestCodec.Encode(SampleFileVersion());
         var decoded = FileVersionManifestCodec.Decode(encoded);
 
-        Assert.Equal(encoded, FileVersionManifestCodec.Encode(decoded));
-        Assert.Equal(3, decoded.SegmentReferences.Count);
-        Assert.Equal("ben", decoded.Metadata.OwnerName);
-        Assert.Equal((ulong)1_722_600_000_000, decoded.Metadata.ModifiedAt);
+        SequenceAssert.AreEqual(encoded, FileVersionManifestCodec.Encode(decoded));
+        Assert.AreEqual(3, decoded.SegmentReferences.Count);
+        Assert.AreEqual("ben", decoded.Metadata.OwnerName);
+        Assert.AreEqual((ulong)1_722_600_000_000, decoded.Metadata.ModifiedAt);
     }
 
-    [Fact]
-    public void An_unknown_manifest_key_is_rejected_not_skipped()
+    [TestMethod]
+    public void FileVersionManifest_CarriesAnUnknownKey_IsRejectedRatherThanSkipped()
     {
         // Hand-build a manifest carrying key 14 — exactly where a physical
         // hint would smuggle in (06 §3.1; exit criterion 2's teeth).
@@ -68,13 +70,13 @@ public sealed class ManifestCodecTests
         writer.WriteUnsignedInteger(1);
         writer.WriteEndMap();
 
-        var exception = Assert.Throws<ManifestValidationException>(() =>
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
             FileVersionManifestCodec.Decode(writer.Encode()));
         Assert.Contains("unknown key", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void A_four_element_segment_reference_is_rejected()
+    [TestMethod]
+    public void FileVersionManifest_SegmentReferenceHasFourElements_IsRejected()
     {
         // A fourth array position is the other place a blob id could hide
         // (06 §3: "an array of exactly three elements").
@@ -91,13 +93,13 @@ public sealed class ManifestCodecTests
         writer.WriteEndArray();
         writer.WriteEndMap();
 
-        var exception = Assert.Throws<ManifestValidationException>(() =>
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
             FileVersionManifestCodec.Decode(writer.Encode()));
         Assert.Contains("three elements", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void A_coverage_gap_is_rejected()
+    [TestMethod]
+    public void FileVersionManifest_SegmentReferencesLeaveAGap_IsRejected()
     {
         var manifest = SampleFileVersion() with
         {
@@ -109,12 +111,12 @@ public sealed class ManifestCodecTests
             ],
         };
 
-        var exception = Assert.Throws<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
         Assert.Contains("Coverage breaks", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Overlapping_references_are_rejected()
+    [TestMethod]
+    public void FileVersionManifest_SegmentReferencesOverlap_IsRejected()
     {
         var manifest = SampleFileVersion() with
         {
@@ -126,11 +128,11 @@ public sealed class ManifestCodecTests
             ],
         };
 
-        Assert.Throws<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
+        Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(manifest));
     }
 
-    [Fact]
-    public void Sparse_extents_complete_the_coverage()
+    [TestMethod]
+    public void FileVersionManifest_SparseExtentsFillTheGaps_IsAccepted()
     {
         var manifest = SampleFileVersion() with
         {
@@ -145,12 +147,12 @@ public sealed class ManifestCodecTests
 
         var decoded = FileVersionManifestCodec.Decode(FileVersionManifestCodec.Encode(manifest));
 
-        Assert.Single(decoded.SparseExtents);
-        Assert.Equal((ulong)168_928, decoded.SparseExtents[0].Length);
+        Assert.ContainsSingle(decoded.SparseExtents);
+        Assert.AreEqual((ulong)168_928, decoded.SparseExtents[0].Length);
     }
 
-    [Fact]
-    public void A_zero_length_file_has_empty_references_and_the_hash_of_the_empty_string()
+    [TestMethod]
+    public void FileVersionManifest_AZeroLengthFile_HasNoReferencesAndTheEmptyHash()
     {
         var manifest = SampleFileVersion() with
         {
@@ -161,12 +163,12 @@ public sealed class ManifestCodecTests
 
         var decoded = FileVersionManifestCodec.Decode(FileVersionManifestCodec.Encode(manifest));
 
-        Assert.Empty(decoded.SegmentReferences);
-        Assert.Equal(SHA256.HashData([]), decoded.WholeFileHash.ToArray());
+        Assert.IsEmpty(decoded.SegmentReferences);
+        SequenceAssert.AreEqual(SHA256.HashData([]), decoded.WholeFileHash.ToArray());
     }
 
-    [Fact]
-    public void Tree_entries_out_of_byte_order_are_rejected()
+    [TestMethod]
+    public void TreeManifest_EntriesAreOutOfByteOrder_IsRejected()
     {
         var tree = new TreeManifest
         {
@@ -180,11 +182,11 @@ public sealed class ManifestCodecTests
             Metadata = EntryMetadata.Empty,
         };
 
-        Assert.Throws<ManifestValidationException>(() => TreeManifestCodec.Encode(tree));
+        Assert.ThrowsExactly<ManifestValidationException>(() => TreeManifestCodec.Encode(tree));
     }
 
-    [Fact]
-    public void Duplicate_tree_names_are_rejected_but_case_variants_are_legitimate()
+    [TestMethod]
+    public void TreeManifest_DuplicateNames_AreRejectedWhileCaseVariantsAreAccepted()
     {
         var duplicate = new TreeManifest
         {
@@ -197,7 +199,7 @@ public sealed class ManifestCodecTests
             NameNormalisation = NameNormalisation.Nfc,
         };
 
-        Assert.Throws<ManifestValidationException>(() => TreeManifestCodec.Encode(duplicate));
+        Assert.ThrowsExactly<ManifestValidationException>(() => TreeManifestCodec.Encode(duplicate));
 
         // Case variants differ in raw bytes — a legitimate state on a
         // case-sensitive source (06 §5).
@@ -211,11 +213,11 @@ public sealed class ManifestCodecTests
         };
 
         var decoded = TreeManifestCodec.Decode(TreeManifestCodec.Encode(caseVariants));
-        Assert.Equal(2, decoded.Entries.Count);
+        Assert.AreEqual(2, decoded.Entries.Count);
     }
 
-    [Fact]
-    public void A_tree_chain_validates_and_flattens_in_chain_order()
+    [TestMethod]
+    public void TreeChain_AValidChain_ValidatesAndFlattensInChainOrder()
     {
         var head = new TreeManifest
         {
@@ -232,12 +234,12 @@ public sealed class ManifestCodecTests
 
         var flattened = TreeChain.ValidateAndFlatten([head, tail]);
 
-        Assert.Equal(2, flattened.Count);
-        Assert.Equal("aaa"u8.ToArray(), flattened[0].Name.ToArray());
+        Assert.AreEqual(2, flattened.Count);
+        SequenceAssert.AreEqual("aaa"u8.ToArray(), flattened[0].Name.ToArray());
     }
 
-    [Fact]
-    public void A_chain_whose_shards_interleave_is_a_damage_finding()
+    [TestMethod]
+    public void TreeChain_ShardsInterleave_IsADamageFinding()
     {
         var head = new TreeManifest
         {
@@ -252,11 +254,11 @@ public sealed class ManifestCodecTests
         };
 
         // Every entry must sort strictly after every predecessor entry (06 §9).
-        Assert.Throws<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
+        Assert.ThrowsExactly<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
     }
 
-    [Fact]
-    public void A_continuation_carrying_head_fields_is_rejected()
+    [TestMethod]
+    public void TreeChain_AContinuationCarriesHeadFields_IsRejected()
     {
         var head = new TreeManifest
         {
@@ -272,7 +274,7 @@ public sealed class ManifestCodecTests
             NameNormalisation = NameNormalisation.Nfc,
         };
 
-        Assert.Throws<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
+        Assert.ThrowsExactly<ManifestValidationException>(() => TreeChain.ValidateAndFlatten([head, tail]));
     }
 
     private static SnapshotManifest SampleSnapshot() => new()
@@ -294,8 +296,8 @@ public sealed class ManifestCodecTests
         Tags = ["nightly"],
     };
 
-    [Fact]
-    public void A_signed_snapshot_round_trips_and_verifies_through_the_two_pass_construction()
+    [TestMethod]
+    public void SnapshotManifest_SignedAndRoundTripped_VerifiesThroughTheTwoPassConstruction()
     {
         using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -308,14 +310,14 @@ public sealed class ManifestCodecTests
 
         // The verifier re-encodes keys 1-16 — it can never strip a suffix,
         // because adding key 17 changed the map header's count (06 §6.1).
-        Assert.Equal(signedBytes, decoded.SignedBytes.ToArray());
-        Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
-        Assert.Equal(manifest.RootTree, decoded.Manifest.RootTree);
-        Assert.Equal(-125, decoded.Manifest.ObservedClockSkewMs);
+        SequenceAssert.AreEqual(signedBytes, decoded.SignedBytes.ToArray());
+        Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        Assert.AreEqual(manifest.RootTree, decoded.Manifest.RootTree);
+        Assert.AreEqual(-125, decoded.Manifest.ObservedClockSkewMs);
     }
 
-    [Fact]
-    public void A_tampered_snapshot_field_fails_verification_as_a_security_finding()
+    [TestMethod]
+    public void SnapshotManifest_AFieldIsTampered_FailsVerificationAsASecurityFinding()
     {
         using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -330,23 +332,23 @@ public sealed class ManifestCodecTests
             SnapshotManifestCodec.Decode(stored).Signature.Span);
 
         var decoded = SnapshotManifestCodec.Decode(forged);
-        Assert.False(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        Assert.IsFalse(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
     }
 
-    [Fact]
-    public void Absent_optional_snapshot_keys_are_omitted_not_nulled()
+    [TestMethod]
+    public void SnapshotManifest_OptionalKeysAreAbsent_AreOmittedRatherThanNulled()
     {
         var manifest = SampleSnapshot() with { ErrorManifest = null, ObservedClockSkewMs = null };
 
         var decoded = SnapshotManifestCodec.Decode(
             SnapshotManifestCodec.Encode(manifest, new byte[64]));
 
-        Assert.Null(decoded.Manifest.ErrorManifest);
-        Assert.Null(decoded.Manifest.ObservedClockSkewMs);
+        Assert.IsNull(decoded.Manifest.ErrorManifest);
+        Assert.IsNull(decoded.Manifest.ObservedClockSkewMs);
     }
 
-    [Fact]
-    public void A_policy_manifest_round_trips_under_both_segmentation_profiles()
+    [TestMethod]
+    public void PolicyManifest_UnderBothSegmentationProfiles_RoundTrips()
     {
         var fixedPolicy = new PolicyManifest
         {
@@ -366,9 +368,9 @@ public sealed class ManifestCodecTests
         // properties by reference, and the bytes are the actual contract.
         var fixedBytes = PolicyManifestCodec.Encode(fixedPolicy);
         var decodedFixed = PolicyManifestCodec.Decode(fixedBytes);
-        Assert.Equal(fixedBytes, PolicyManifestCodec.Encode(decodedFixed));
-        Assert.Equal(["**/.cache/**"], decodedFixed.ExcludeRules);
-        Assert.Null(decodedFixed.CdcMinSize);
+        SequenceAssert.AreEqual(fixedBytes, PolicyManifestCodec.Encode(decodedFixed));
+        SequenceAssert.AreEqual(["**/.cache/**"], decodedFixed.ExcludeRules);
+        Assert.IsNull(decodedFixed.CdcMinSize);
 
         var cdcPolicy = fixedPolicy with
         {
@@ -381,13 +383,13 @@ public sealed class ManifestCodecTests
 
         var cdcBytes = PolicyManifestCodec.Encode(cdcPolicy);
         var decodedCdc = PolicyManifestCodec.Decode(cdcBytes);
-        Assert.Equal(cdcBytes, PolicyManifestCodec.Encode(decodedCdc));
-        Assert.Equal((ulong)8_192, decodedCdc.CdcMinSize);
-        Assert.Equal((byte)64, decodedCdc.CdcWindowSize);
+        SequenceAssert.AreEqual(cdcBytes, PolicyManifestCodec.Encode(decodedCdc));
+        Assert.AreEqual((ulong)8_192, decodedCdc.CdcMinSize);
+        Assert.AreEqual((byte)64, decodedCdc.CdcWindowSize);
     }
 
-    [Fact]
-    public void An_error_manifest_round_trips()
+    [TestMethod]
+    public void ErrorManifest_EncodedAndDecoded_RoundTrips()
     {
         var manifest = new ErrorManifest(
         [
@@ -399,8 +401,8 @@ public sealed class ManifestCodecTests
 
         var decoded = ErrorManifestCodec.Decode(ErrorManifestCodec.Encode(manifest));
 
-        Assert.Single(decoded.Failures);
-        Assert.Equal(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
-        Assert.Equal(2, decoded.Failures[0].PathComponents.Count);
+        Assert.ContainsSingle(decoded.Failures);
+        Assert.AreEqual(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
+        Assert.AreEqual(2, decoded.Failures[0].PathComponents.Count);
     }
 }

@@ -71,8 +71,8 @@ G · Decisions on paper ──▶ S · Scanner ──▶ T · Publication ──
 
 | # | Item | Spec / Arch | Acceptance |
 |---|------|-------------|-----------|
-| R1 | `FallbackPlan.Restore`: plan before transfer (conflicts incl. case collisions, metadata degradation per target, space, privileges), quarantine default, metadata-after-content, machine-readable receipt, never-partial-success | arch 08 §2–§3; FR-RST-001..006 | 9 999 of 10 000 files is a failed restore, and the receipt says which one |
-| R2 | Partial-rebuild restore: targeted forensic scan wired to `restore` | 07 §10; FR-MAN-010; NFR-PERF-015 | Restore of a named file begins without a full-repository scan when every index object is deleted |
+| R1 | `FallbackPlan.Restore`: plan before transfer (conflicts incl. case collisions, metadata degradation per target, space, privileges), quarantine default, displaced-file preservation, metadata-after-content, machine-readable receipt, never-partial-success | arch 08 §2–§3; FR-RST-001..006 | 9 999 of 10 000 files is a failed restore, and the receipt says which one |
+
 
 ### Wave V — Proof
 

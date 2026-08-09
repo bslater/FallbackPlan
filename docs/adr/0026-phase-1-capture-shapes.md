@@ -47,6 +47,7 @@ string — the convention import provenance already established
 | String | Meaning |
 |---|---|
 | `captured-inconsistent: <attempts>` | The file changed during read; content is the **last complete read** after `<attempts>` total attempts (architecture 06 §1's captured-inconsistent state). A file with **no** complete read is instead an error-manifest entry, reason 4 |
+| `captured-identity-changed` | The name no longer refers to the object that was classified: revalidation observed a different device and file identifier. This is a substitution, not an edit, so the read is **not** retried — re-reading the name would read the substitute again. It appears only where the source could not take a handle on the content; where it could, the read came from the handle and the object cannot have changed |
 | `special-kind: fifo\|socket\|chardev\|blockdev` | See decision 4 |
 | `device: <major>,<minor>` | Device numbers for `chardev`/`blockdev` |
 | `mount-boundary: <fstype>` | Recorded on a directory entry where traversal stopped at a mount point |
@@ -137,15 +138,40 @@ disposition.
 ### 10 Restore receipt and exportable plan are versioned JSON
 
 Client-domain documents, **not** repository format surface: JSON with a
-`"schema"` version field, UTF-8, stable lower-snake-case keys.
-The **receipt** accounts for every planned file — path, outcome
-(`restored | skipped | failed | degraded`), bytes, whole-file hash
-verified, and for `degraded` the attribute-level detail the 06 §3 matrix
-requires. The **plan** carries the selection, resolved file set, conflict
-list with per-file resolutions, size estimates, and a resume cursor.
-Full field lists live with the wave-R implementation and its tests;
-this decision pins the medium, the versioning, and the
+`schema_version` field, UTF-8, stable lower-snake-case keys.
+The **receipt** accounts for every planned file — path, per-item outcome,
+bytes, whole-file hash verified — and reports what the restore **as a
+whole** achieved. The **plan** carries the selection, resolved file set,
+conflict list with per-file resolutions, size estimates, and a resume
+cursor. Full field lists live with the wave-R implementation and its
+tests; this decision pins the medium, the versioning, and the
 receipt-accounts-for-everything obligation (FR-RST-004).
+
+#### Amendment (2026-08): what the receipt actually says
+
+Two details drifted from what shipped, and one was a defect rather than a
+naming slip.
+
+The version field is `schema_version`, not `schema`. The per-item
+vocabulary is `restored | skipped | failed` — there is no `degraded`
+outcome, because a degradation is a property of an *attribute* on a file
+that was restored, not a third fate for the file. The 06 §3 matrix
+detail the original wording asked for is carried by the plan's
+degradation list, which is declared before any byte moves.
+
+The defect: the receipt carried a `complete` boolean computed as "nothing
+failed", so a restore that skipped every symlink and special file
+reported itself complete — against architecture 08 §3's absolute rule
+that a restore of 9 999 of 10 000 files is a failed restore. Schema 2
+replaces it with an `outcome` of `complete | partial | failed |
+cancelled`; a skipped required item makes the restore partial. The
+boolean is not carried alongside, because a reader that understood it
+would still read `true` for a partial restore.
+
+The quarantine ledger is now `displaced`, and names what it holds: files
+that were already at a destination and were moved aside. It is not
+architecture 08 §3.1's quarantine control, which is about where restored
+content lands — see that section for why the two are kept apart.
 
 ## Consequences
 
@@ -159,6 +185,18 @@ streams are near-universally tiny, but the cap is a v1 limitation);
 decision 9 makes re-verification after rebuild a real, accepted cost;
 decision 7 commits to a reader-visible format addition mid-phase, which is
 only cheap because the format is pre-freeze.
+
+## Alternatives considered
+
+**Let the scanner invent each shape as it meets it.** The default, and the reason this record exists. Rejected: ten shapes decided under implementation pressure, one at a time, is ten chances to write a byte into a pre-freeze format because it was convenient that afternoon. Deciding them together made the interactions visible — decision 5's alternate-stream cap and decision 9's re-verification cost were only obviously acceptable once both were on the same page.
+
+**Derive `hardlink_group` from the source inode number.** The obvious construction, and it leaks: an inode number is a stable identifier for a file on a specific filesystem, visible to a destination that holds only ciphertext everywhere else. Rejected for the keyed derivation of decision 1, which groups the same links without naming them.
+
+**Capture special files (`entry_kind = 4`) by content.** A FIFO or a socket has no content to capture, a device node's "content" is the device, and a backup tool that opens one can block forever or read something it must not. Rejected in favour of recording the kind and metadata and restoring the node, which is what a restore actually needs.
+
+**Store alternate streams as a manifest of their own.** More general than decision 5's one-segment cap, and unnecessary: real NTFS streams are near-universally tiny, and a second manifest type is format surface that must then be specified, versioned and read by every implementation. Rejected as a v1 limitation worth taking, revisitable as a format addition rather than a format correction.
+
+**A free-text note instead of decision 2's `key: value` diagnostics.** Easier to write and impossible to consume: a restore planner deciding whether a file was captured inconsistently, or a UI explaining a degradation, would be pattern-matching English. Rejected in favour of one machine-parseable fact per string, following the convention import provenance had already set.
 
 ## Status history
 

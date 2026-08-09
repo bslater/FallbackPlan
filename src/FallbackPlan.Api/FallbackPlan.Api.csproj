@@ -20,4 +20,11 @@
     <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Prebuilt package from the committed external/packages feed: parameter
+         validation (ADR-0019 section 4 / ADR-0021). Guard clauses are one
+         vocabulary across the solution rather than per-project taste. -->
+    <PackageReference Include="Bodu.Core" />
+  </ItemGroup>
+
 </Project>

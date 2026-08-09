@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -5,6 +6,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index.Journal;
 
@@ -32,9 +34,9 @@ public sealed class JournalPublisher : IDisposable
         KeyHierarchy hierarchy,
         WriterSequence sequence)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
-        ArgumentNullException.ThrowIfNull(sequence);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(sequence);
 
         _store = store;
         _repositoryId = repositoryId;
@@ -88,7 +90,7 @@ public sealed class JournalPublisher : IDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused journal record {sequence} with a failed precondition.");
+            throw new IOException(Strings.FormatJournalPublisher_StoreRefusedJournalRecordWith(sequence));
         }
 
         _sequence.MarkAccounted(sequence);
@@ -116,8 +118,8 @@ public sealed class JournalReader : IDisposable
     /// <summary>Creates a reader.</summary>
     public JournalReader(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(hierarchy);
 
         _store = store;
         _repositoryId = repositoryId;

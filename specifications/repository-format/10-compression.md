@@ -90,4 +90,4 @@ The vectors deliberately test the **decision**, not the compressed bytes. Compre
 
 ---
 
-**Previous:** [09 — Segmentation](09-segmentation.md) · **Back to:** [specification index](README.md)
+**Previous:** [09 — Segmentation](09-segmentation.md) · **Next:** [11 — Lifecycle objects](11-lifecycle-objects.md)

@@ -5,6 +5,7 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
           "Bodu.Text.Encoding": "[0.2.0, )"
         }
       },

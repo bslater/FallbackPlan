@@ -15,12 +15,11 @@
     <!-- Already in the tree via the CLI; named here so these tests can build the
          invocation configuration that captures output without touching Console. -->
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="MSTest" />
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
   </ItemGroup>
 
   <!-- The hosts under test, plus the CLI to build the repository they act on:

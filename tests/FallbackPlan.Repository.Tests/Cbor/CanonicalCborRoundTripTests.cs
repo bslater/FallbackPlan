@@ -1,5 +1,5 @@
+using FallbackPlan.TestSupport;
 using FallbackPlan.Repository.Format.Cbor;
-using FsCheck.Xunit;
 
 namespace FallbackPlan.Repository.Tests.Cbor;
 
@@ -8,15 +8,16 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 /// reader accepts, and re-encoding what was read is byte-identical
 /// (NFR-PORT-003, NFR-COMP-004).
 /// </summary>
+[TestClass]
 public sealed class CanonicalCborRoundTripTests
 {
-    [Fact]
-    public void A_nested_document_round_trips_byte_identically()
+    [TestMethod]
+    public void CanonicalCbor_ANestedDocument_RoundTripsByteIdentically()
     {
         var first = Encode();
         var second = ReencodeByReading(first);
 
-        Assert.Equal(first, second);
+        SequenceAssert.AreEqual(first, second);
 
         static byte[] Encode()
         {
@@ -76,8 +77,8 @@ public sealed class CanonicalCborRoundTripTests
         }
     }
 
-    [Fact]
-    public void The_writer_emits_map_entries_in_canonical_order_regardless_of_write_order()
+    [TestMethod]
+    public void CanonicalCborWriter_EntriesWrittenOutOfOrder_EmitsThemInCanonicalOrder()
     {
         var sorted = new CanonicalCborWriter();
         sorted.WriteStartMap(2);
@@ -95,11 +96,11 @@ public sealed class CanonicalCborRoundTripTests
         unsorted.WriteUnsignedInteger(10);
         unsorted.WriteEndMap();
 
-        Assert.Equal(sorted.Encode(), unsorted.Encode());
+        SequenceAssert.AreEqual(sorted.Encode(), unsorted.Encode());
     }
 
-    [Fact]
-    public void Everything_the_writer_produces_validates()
+    [TestMethod]
+    public void CanonicalCborWriter_AnyDocumentItProduces_PassesTheValidator()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartArray(2);
@@ -110,8 +111,11 @@ public sealed class CanonicalCborRoundTripTests
         CanonicalCbor.Validate(writer.Encode());
     }
 
-    [Property]
-    public bool Integer_keyed_maps_round_trip_byte_identically((uint Key, ulong Value)[]? entries)
+    [TestMethod]
+    public void CanonicalCbor_AnIntegerKeyedMap_RoundTripsByteIdentically() =>
+        PropertyCheck.Holds(this);
+
+    public static bool CanonicalCbor_AnIntegerKeyedMap_RoundTripsByteIdenticallyProperty((uint Key, ulong Value)[]? entries)
     {
         entries ??= [];
         var distinct = entries
@@ -148,8 +152,11 @@ public sealed class CanonicalCborRoundTripTests
         return encoded.AsSpan().SequenceEqual(reencoder.Encode());
     }
 
-    [Property]
-    public bool Byte_string_arrays_round_trip_byte_identically(byte[][]? strings)
+    [TestMethod]
+    public void CanonicalCbor_AnArrayOfByteStrings_RoundTripsByteIdentically() =>
+        PropertyCheck.Holds(this);
+
+    public static bool CanonicalCbor_AnArrayOfByteStrings_RoundTripsByteIdenticallyProperty(byte[][]? strings)
     {
         strings ??= [];
         var items = strings.Select(item => item ?? []).ToArray();

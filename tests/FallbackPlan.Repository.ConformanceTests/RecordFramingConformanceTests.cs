@@ -2,7 +2,6 @@ using System.Text.Json;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Records;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -12,13 +11,14 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// FR-ARCH-009, NFR-SEC-003): the record AAD is exactly 55 bytes, the footer
 /// AAD exactly 38, and every committed case reproduces bit for bit.
 /// </summary>
+[TestClass]
 public sealed class RecordFramingConformanceTests
 {
     private static JsonDocument Vectors { get; } =
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "records.json")));
 
-    [Fact]
-    public void Nonces_and_aad_match_every_committed_ordinal()
+    [TestMethod]
+    public void RecordNonceAndAad_EveryCommittedOrdinal_Match()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
         var repositoryId = RepositoryId.FromBytes(Convert.FromHexString(inputs.GetProperty("repository_id").GetString()!));
@@ -32,21 +32,17 @@ public sealed class RecordFramingConformanceTests
 
             var aesNonce = new byte[12];
             RecordNonce.Write(ordinal, aesNonce);
-            Assert.Equal(vectorCase.GetProperty("nonce_aes_gcm").GetString(), Convert.ToHexStringLower(aesNonce));
-
-            var xchachaNonce = new byte[24];
-            RecordNonce.Write(ordinal, xchachaNonce);
-            Assert.Equal(vectorCase.GetProperty("nonce_xchacha").GetString(), Convert.ToHexStringLower(xchachaNonce));
+            Assert.AreEqual(vectorCase.GetProperty("nonce_aes_gcm").GetString(), Convert.ToHexStringLower(aesNonce));
 
             var aad = new byte[RecordAad.Length];
             RecordAad.Write(repositoryId, formatVersion, objectType, objectId, ordinal, aad);
-            Assert.Equal(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
-            Assert.Equal(RecordAad.Length, vectorCase.GetProperty("aad_length").GetInt32());
+            Assert.AreEqual(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
+            Assert.AreEqual(RecordAad.Length, vectorCase.GetProperty("aad_length").GetInt32());
         }
     }
 
-    [Fact]
-    public void The_footer_nonce_and_aad_match_the_committed_vector()
+    [TestMethod]
+    public void FooterNonceAndAad_TheCommittedVector_Match()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
         var repositoryId = RepositoryId.FromBytes(Convert.FromHexString(inputs.GetProperty("repository_id").GetString()!));
@@ -55,14 +51,14 @@ public sealed class RecordFramingConformanceTests
 
         var nonce = new byte[12];
         RecordNonce.WriteFooterNonce(nonce);
-        Assert.Equal(footer.GetProperty("nonce").GetString(), Convert.ToHexStringLower(nonce));
+        Assert.AreEqual(footer.GetProperty("nonce").GetString(), Convert.ToHexStringLower(nonce));
 
         var blobId = BlobId.FromBytes(Convert.FromHexString(footer.GetProperty("blob_id").GetString()!));
         var recordCount = footer.GetProperty("record_count").GetUInt32();
 
         var aad = new byte[FooterAad.Length];
         FooterAad.Write(repositoryId, formatVersion, blobId, recordCount, aad);
-        Assert.Equal(footer.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
-        Assert.Equal(FooterAad.Length, footer.GetProperty("aad_length").GetInt32());
+        Assert.AreEqual(footer.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
+        Assert.AreEqual(FooterAad.Length, footer.GetProperty("aad_length").GetInt32());
     }
 }

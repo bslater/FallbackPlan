@@ -1,3 +1,4 @@
+using Bodu;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
@@ -53,9 +54,9 @@ public sealed class RecoverySession : IDisposable
     /// <exception cref="KeyUnwrapFailedException">The passphrase does not open this kit's key object.</exception>
     public static RecoverySession Open(RecoveryKit kit, Passphrase passphrase, IObjectStore store)
     {
-        ArgumentNullException.ThrowIfNull(kit);
-        ArgumentNullException.ThrowIfNull(passphrase);
-        ArgumentNullException.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(kit);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(store);
 
         var parameters = new Argon2Parameters
         {
@@ -180,7 +181,7 @@ public sealed class RecoverySession : IDisposable
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
         ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
         Directory.CreateDirectory(outputDirectory);
 
         var notes = new List<string>();

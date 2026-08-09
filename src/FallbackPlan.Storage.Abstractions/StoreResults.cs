@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Storage.Abstractions;
 
 /// <summary>
@@ -54,7 +56,7 @@ public sealed record GetMetadataResult
     /// <summary>Creates a found result.</summary>
     public GetMetadataResult(ObjectMetadata metadata)
     {
-        ArgumentNullException.ThrowIfNull(metadata);
+        ThrowHelper.ThrowIfNull(metadata);
         Metadata = metadata;
     }
 
@@ -96,7 +98,7 @@ public sealed record OpenReadResult : IDisposable
     /// <summary>Creates a found result over an open content stream.</summary>
     public OpenReadResult(Stream content)
     {
-        ArgumentNullException.ThrowIfNull(content);
+        ThrowHelper.ThrowIfNull(content);
         Outcome = OpenReadOutcome.Found;
         Content = content;
     }

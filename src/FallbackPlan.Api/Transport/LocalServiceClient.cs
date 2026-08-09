@@ -1,6 +1,8 @@
+using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using FallbackPlan.Api.Resources;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -68,8 +70,8 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     public static async ValueTask<LocalServiceClient> ConnectAsync(
         string stateDirectory, string clientName, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(clientName);
 
         var address = LocalEndpoint.AddressFor(stateDirectory);
         var stream = await OpenAsync(address, cancellationToken).ConfigureAwait(false);
@@ -84,8 +86,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
                 is not HelloAcknowledgementFrame acknowledgement)
             {
-                throw new ServiceConnectionException(
-                    $"The service at '{address}' did not answer the contract handshake.");
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceDidNotAnswerContract(address));
             }
 
             if (!acknowledgement.Accepted)
@@ -96,8 +97,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
 
             if (!ContractVersion.TryParse(acknowledgement.ContractVersion, out var serviceVersion))
             {
-                throw new ServiceConnectionException(
-                    $"The service reported contract version '{acknowledgement.ContractVersion}', which is not a version.");
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceReportedContractVersionWhich(acknowledgement.ContractVersion));
             }
 
             return new LocalServiceClient(stream, address, serviceVersion);
@@ -112,7 +112,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     /// <inheritdoc/>
     public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(command);
+        ThrowHelper.ThrowIfNull(command);
 
         var id = Interlocked.Increment(ref _nextRequestId);
         await _exchange.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -124,10 +124,9 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             return frame switch
             {
                 ResponseFrame response when response.Id == id => response.Result,
-                ResponseFrame response => throw new ServiceConnectionException(
-                    $"The service answered request {response.Id} while {id} was outstanding."),
-                null => throw new ServiceConnectionException("The service closed the connection without answering."),
-                _ => throw new ServiceConnectionException("The service sent a frame that is not a response."),
+                ResponseFrame response => throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceAnsweredRequestWhileOutstanding(response.Id, id)),
+                null => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceClosedConnectionWithoutAnswering),
+                _ => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceSentFrameNotResponse),
             };
         }
         finally
@@ -137,27 +136,86 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <remarks>
+    /// <para>
+    /// The connection is opened and the watch registered <b>here</b>, at the
+    /// call, rather than in the streaming body below. An
+    /// <c>async IAsyncEnumerable</c> runs none of its body until something
+    /// pulls it, so a caller holding this enumerable would not yet be connected
+    /// and anything the service reported before the first pull would be sent to
+    /// nobody.
+    /// </para>
+    /// <para>
+    /// What this deliberately does <b>not</b> do is report a failure to connect
+    /// at the call. The eager half of a split iterator cannot await, because the
+    /// method must hand back an <see cref="IAsyncEnumerable{T}"/> synchronously
+    /// — the shape <c>ApiShapeTests</c> pins — so a
+    /// <see cref="ServiceConnectionException"/> still surfaces from the
+    /// consumer's first <c>await foreach</c> rather than from this call.
+    /// Answering it here would mean changing the contract's return type, which
+    /// is a decision worth taking on its own rather than as a side effect.
+    /// </para>
+    /// <para>
+    /// A caller that asks to watch and never enumerates leaves the connection
+    /// open until finalisation. That is the accepted cost of connecting when
+    /// asked; the only reason to call this is to enumerate it.
+    /// </para>
+    /// </remarks>
+    public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken)
+    {
+        var opening = OpenWatchAsync(cancellationToken);
+        return StreamAsync(opening, cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens the watch connection and completes its handshake, or returns
+    /// <see langword="null"/> when the service refused it.
+    /// </summary>
+    private async Task<Stream?> OpenWatchAsync(CancellationToken cancellationToken)
     {
         // A watch takes its own connection: a stream and a request/response
         // exchange have different lifetimes, and a client that watches must
         // still be able to issue commands.
         var stream = await OpenAsync(_address, cancellationToken).ConfigureAwait(false);
-        await using var owned = stream.ConfigureAwait(false);
 
-        await FrameCodec.WriteAsync(
-            stream,
-            new HelloFrame(ContractVersion.Current.ToString(), "watch"),
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await FrameCodec.WriteAsync(
+                stream,
+                new HelloFrame(ContractVersion.Current.ToString(), "watch"),
+                cancellationToken).ConfigureAwait(false);
 
-        if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
-            is not HelloAcknowledgementFrame { Accepted: true })
+            if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+                is not HelloAcknowledgementFrame { Accepted: true })
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+                return null;
+            }
+
+            await FrameCodec.WriteAsync(stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+            return stream;
+        }
+        catch
+        {
+            // The stream is this method's until it is handed to the enumerator,
+            // so a handshake that throws closes it here rather than leaving it
+            // to a caller who never received it.
+            await stream.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async IAsyncEnumerable<JobProgressEvent> StreamAsync(
+        Task<Stream?> opening,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var stream = await opening.ConfigureAwait(false);
+        if (stream is null)
         {
             yield break;
         }
 
-        await FrameCodec.WriteAsync(stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+        await using var owned = stream.ConfigureAwait(false);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -187,6 +245,27 @@ public sealed class LocalServiceClient : IFallbackPlanClient
         await _stream.DisposeAsync().ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// How long to wait for a Windows named pipe to appear before reporting it
+    /// absent.
+    /// </summary>
+    /// <remarks>
+    /// Windows has no "nothing is listening" error for a pipe: connecting waits
+    /// for one to be created, and with no timeout it waits for as long as the
+    /// caller allows — so a client asking a machine with no service running
+    /// would hang rather than be told, and the stated reason this method exists
+    /// to give would never be reached. A bounded wait is what turns absence
+    /// into an answer, because the timeout surfaces as
+    /// <see cref="TimeoutException"/>. The Unix path needs none: connecting to
+    /// a socket path that does not exist fails immediately.
+    /// <para>
+    /// Two seconds because a local pipe that exists is connectable at once, so
+    /// this bounds only the answer "no", and a person waiting for it should not
+    /// wait long.
+    /// </para>
+    /// </remarks>
+    private const int WindowsConnectTimeoutMilliseconds = 2_000;
+
     private static async ValueTask<Stream> OpenAsync(string address, CancellationToken cancellationToken)
     {
         if (OperatingSystem.IsWindows())
@@ -195,13 +274,13 @@ public sealed class LocalServiceClient : IFallbackPlanClient
                 ".", address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try
             {
-                await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                await pipe.ConnectAsync(WindowsConnectTimeoutMilliseconds, cancellationToken).ConfigureAwait(false);
                 return pipe;
             }
             catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException)
             {
                 await pipe.DisposeAsync().ConfigureAwait(false);
-                throw new ServiceConnectionException($"No service is listening on '{address}'.", exception);
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_NoServiceListening(address), exception);
             }
         }
 
@@ -214,7 +293,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
         catch (Exception exception) when (exception is SocketException or IOException)
         {
             socket.Dispose();
-            throw new ServiceConnectionException($"No service is listening on '{address}'.", exception);
+            throw new ServiceConnectionException(Strings.FormatLocalServiceClient_NoServiceListening(address), exception);
         }
     }
 }

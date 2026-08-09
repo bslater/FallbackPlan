@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Domain.Configuration;
 
 /// <summary>
@@ -13,7 +15,7 @@ public sealed class ConfigurationValidationResult
     /// <summary>Creates a result carrying <paramref name="defects"/>.</summary>
     public ConfigurationValidationResult(IReadOnlyList<ConfigurationDefect> defects)
     {
-        ArgumentNullException.ThrowIfNull(defects);
+        ThrowHelper.ThrowIfNull(defects);
         Defects = defects;
     }
 

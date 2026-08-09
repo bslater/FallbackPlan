@@ -13,9 +13,17 @@
     <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
     <ProjectReference Include="..\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
     <ProjectReference Include="..\FallbackPlan.Keystore\FallbackPlan.Keystore.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Prebuilt package from the committed external/packages feed: parameter
+         validation (ADR-0019 section 4 / ADR-0021). Guard clauses are one
+         vocabulary across the solution rather than per-project taste. -->
+    <PackageReference Include="Bodu.Core" />
   </ItemGroup>
 
 </Project>

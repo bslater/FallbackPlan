@@ -8,14 +8,16 @@ using FallbackPlan.Storage.Abstractions;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
+using FallbackPlan.TestSupport;
 
 /// <summary>
-/// E2/E3/E4 (specification 07 §10, 05 §8, 06 §4.2; FR-MAN-009/010/011/014,
-/// FR-RST-002; NFR-PERF-015): forensic rebuild succeeds with every index
+/// E2/E3/E4 (specification 07 §10, 05 §8, 06 §4.2; FR-MAN-009/010/011/012/014,
+/// FR-RST-002; NFR-PERF-015, NFR-REL-003/006): forensic rebuild succeeds with every index
 /// object deleted, a targeted recovery stops without a whole-repository
 /// scan, the scan leaves every store byte identical, and the whole-file
 /// hash catches assembly corruption that per-record verification cannot.
 /// </summary>
+[TestClass]
 public sealed class ForensicRebuildTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -65,8 +67,8 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         return digest;
     }
 
-    [Fact]
-    public async Task Every_index_object_deleted_the_snapshot_still_restores_via_forensic_rebuild()
+    [TestMethod]
+    public async Task ForensicRebuild_EveryIndexObjectDeleted_StillRestoresTheSnapshot()
     {
         var (data, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -88,10 +90,10 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             new ForensicTarget.Snapshot(Enumerable.Repeat((byte)0x11, 16).ToArray()),
             CancellationToken.None);
 
-        Assert.True(report.TargetSatisfied, string.Join("; ", report.Findings.Select(finding => finding.Detail)));
+        Assert.IsTrue(report.TargetSatisfied, string.Join("; ", report.Findings.Select(finding => finding.Detail)));
 
         // E3: the scan is read-only — every store byte identical.
-        Assert.Equal(fingerprintBefore, StoreFingerprint());
+        SequenceAssert.AreEqual(fingerprintBefore, StoreFingerprint());
 
         // Restore through the graph the rebuild located.
         using var reader = new RepositoryReader(Repo, keys, store);
@@ -107,12 +109,12 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         using var restored = new MemoryStream();
         var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(data, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
     }
 
-    [Fact]
-    public async Task A_targeted_rebuild_stops_before_scanning_every_data_blob()
+    [TestMethod]
+    public async Task ForensicRebuild_TargetedAtOneSnapshot_StopsBeforeScanningEveryDataBlob()
     {
         var (_, published, keys, hierarchy, store) = await PublishAsync(regions: 16);
         using var _keys = keys;
@@ -121,12 +123,21 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         var totalDataBlobs = Directory
             .EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
             .Count();
-        Assert.True(totalDataBlobs > 2, "the scenario needs several data blobs to make targeting observable");
+        Assert.IsTrue(totalDataBlobs > 2, "the scenario needs several data blobs to make targeting observable");
 
-        // Target only the FIRST segment's object — its records live in one
-        // blob, so the scan must stop early (NFR-PERF-015's direction: one
-        // named object without a whole-repository scan).
-        var target = published.Archive.SegmentReferences[0].ObjectId;
+        // The target is taken from the first blob the scan will reach, not
+        // from the first segment of the file. Which blob holds segment 0
+        // depends on which concurrent worker sealed first, and the scan order
+        // is by store key — keyed, so effectively unrelated to write order.
+        // Asserting "fewer than all" against an arbitrary target therefore
+        // fails whenever it lands in the last blob enumerated, about one run
+        // in `totalDataBlobs`, and it did: the suite went red under whole-
+        // solution load and green on its own.
+        //
+        // Pinning the target to the first blob makes the claim exact instead
+        // of probabilistic — one blob scanned, not merely "not all of them" —
+        // which is the stronger statement NFR-PERF-015 actually wants.
+        var target = await FirstSegmentInScanOrderAsync(store, keys);
 
         using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "targeted.db"), Repo);
@@ -136,14 +147,49 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             new ForensicTarget.Objects(new HashSet<Domain.Identifiers.ObjectId> { target }),
             CancellationToken.None);
 
-        Assert.True(report.TargetSatisfied);
-        Assert.True(report.DataBlobsScanned < totalDataBlobs,
-            $"targeting must stop early: scanned {report.DataBlobsScanned} of {totalDataBlobs} data blobs");
-        Assert.NotNull(catalogue.ResolveLocation(target));
+        Assert.IsTrue(report.TargetSatisfied);
+        Assert.AreEqual(1, report.DataBlobsScanned,
+            $"targeting must stop at the blob that satisfies it, of {totalDataBlobs} data blobs");
+        Assert.IsNotNull(catalogue.ResolveLocation(target));
     }
 
-    [Fact]
-    public async Task A_deleted_data_blob_surfaces_as_a_missing_blob_finding()
+    /// <summary>
+    /// A segment object living in the first data blob the forensic scan
+    /// reaches — the store enumerates <c>blobs/data/</c> in key order and the
+    /// rebuilder walks it in that order.
+    /// </summary>
+    private static async Task<Domain.Identifiers.ObjectId> FirstSegmentInScanOrderAsync(
+        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys)
+    {
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/data/"), ListOptions.Default, CancellationToken.None))
+        {
+            var metadata = await store.GetMetadataAsync(entry.Key, CancellationToken.None);
+
+            if (!metadata.Found)
+            {
+                continue;
+            }
+
+            using var deriver = new ObjectIdDeriver(keys.ContentIdKey);
+            using var reader = await FallbackPlan.Repository.Packing.BlobReader.OpenAsync(
+                store, entry.Key, metadata.Metadata!.Length, Repo, keys.DeriveClassKey, deriver,
+                CancellationToken.None);
+
+            foreach (var record in reader.RecordTable)
+            {
+                if (record.ObjectType == ObjectType.SegmentRecord)
+                {
+                    return record.ObjectId;
+                }
+            }
+        }
+
+        throw new InvalidOperationException("no data blob carries a segment record");
+    }
+
+    [TestMethod]
+    public async Task ForensicRebuild_ADataBlobIsDeleted_SurfacesAMissingBlobFinding()
     {
         var (_, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -162,13 +208,13 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
         // Every segment the snapshot references is now missing — each is a
         // distinctly named MissingBlob finding, not a generic failure.
-        Assert.False(report.TargetSatisfied);
-        Assert.Contains(report.Findings, finding => finding.Kind == DamageKind.MissingBlob);
-        Assert.Contains(catalogue.Findings(), finding => finding.Kind == DamageKind.MissingBlob);
+        Assert.IsFalse(report.TargetSatisfied);
+        Assert.Contains(finding => finding.Kind == DamageKind.MissingBlob, report.Findings);
+        Assert.Contains(finding => finding.Kind == DamageKind.MissingBlob, catalogue.Findings());
     }
 
-    [Fact]
-    public async Task A_corrupted_footer_is_a_scoped_finding_and_the_scan_continues()
+    [TestMethod]
+    public async Task ForensicRebuild_AFooterIsCorrupted_ScopesTheFindingAndContinuesScanning()
     {
         var (_, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -187,14 +233,14 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
         var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
 
-        Assert.Contains(report.Findings, finding => finding.Kind == DamageKind.CorruptRecord);
+        Assert.Contains(finding => finding.Kind == DamageKind.CorruptRecord, report.Findings);
 
         // Corruption is local (04 §7): the other blobs' records still indexed.
-        Assert.True(report.RecordsIndexed > 0);
+        Assert.IsTrue(report.RecordsIndexed > 0);
     }
 
-    [Fact]
-    public async Task The_whole_file_hash_catches_assembly_corruption_every_tag_passes()
+    [TestMethod]
+    public async Task Restore_SegmentsAreAssembledWrongThoughEveryTagPasses_IsCaughtByTheWholeFileHash()
     {
         var (data, published, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -213,7 +259,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         var second = Array.FindIndex(
             references, first + 1,
             r => r.LogicalLength == references[first].LogicalLength && r.ObjectId != references[first].ObjectId);
-        Assert.True(second > first, "the scenario needs two same-length segments with different content");
+        Assert.IsTrue(second > first, "the scenario needs two same-length segments with different content");
 
         (references[first], references[second]) = (
             references[first] with { ObjectId = references[second].ObjectId },
@@ -233,19 +279,20 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         using var verify = new VerifyEngine(Repo, keys, store);
         var result = await verify.VerifyFileAsync(forged, reader, CancellationToken.None);
 
-        Assert.False(result.Ok);
+        Assert.IsFalse(result.Ok);
+        Assert.IsNotNull(result.Detail);
         Assert.Contains("whole_file_hash", result.Detail, StringComparison.Ordinal);
 
         // The restore engine refuses the same forgery before emitting a byte.
         using var destination = new MemoryStream();
         var restore = await new RestoreEngine(reader).RestoreFileAsync(forged, destination, CancellationToken.None);
 
-        Assert.False(restore.Success);
-        Assert.Equal(0, destination.Length);
+        Assert.IsFalse(restore.Success);
+        Assert.AreEqual(0, destination.Length);
     }
 
-    [Fact]
-    public async Task Verify_levels_pass_on_an_intact_blob_and_level_2_catches_silent_alteration()
+    [TestMethod]
+    public async Task Verify_AnIntactBlobAndASilentlyAlteredOne_PassesTheFirstAndCatchesTheSecondAtLevelTwo()
     {
         var (_, published, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -257,7 +304,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         foreach (var level in new[] { VerifyLevel.LocatorAndFooter, VerifyLevel.FooterAndDigest, VerifyLevel.EveryRecord })
         {
             var result = await verify.VerifyBlobAsync(blob.StoreKey, blob.Length, level, CancellationToken.None);
-            Assert.True(result.Ok, $"{level}: {result.Detail}");
+            Assert.IsTrue(result.Ok, $"{level}: {result.Detail}");
         }
 
         // Flip one ciphertext byte: level 1 still passes (the footer is
@@ -270,12 +317,12 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         var level1 = await verify.VerifyBlobAsync(blob.StoreKey, blob.Length, VerifyLevel.LocatorAndFooter, CancellationToken.None);
         var level2 = await verify.VerifyBlobAsync(blob.StoreKey, blob.Length, VerifyLevel.FooterAndDigest, CancellationToken.None);
 
-        Assert.True(level1.Ok, "structural checks cannot see a body flip — that is what level 2 is for");
-        Assert.False(level2.Ok);
+        Assert.IsTrue(level1.Ok, "structural checks cannot see a body flip — that is what level 2 is for");
+        Assert.IsFalse(level2.Ok);
     }
 
-    [Fact]
-    public async Task A_forensic_rebuild_of_a_tree_snapshot_repopulates_the_path_tables()
+    [TestMethod]
+    public async Task ForensicRebuild_ATreeSnapshot_RepopulatesThePathTables()
     {
         // A multi-directory tree snapshot, then a forensic rebuild into a
         // fresh catalogue: `ls` must work from footers alone (wave T2 —
@@ -314,26 +361,25 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "forensic-tree.db"), Repo);
         var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
 
-        Assert.True(report.TargetSatisfied);
+        Assert.IsTrue(report.TargetSatisfied);
 
         var snapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray();
-        var snapshot = Assert.Single(
-            catalogue.EnumerateSnapshots(), row => row.SnapshotId.Span.SequenceEqual(snapshotId));
-        Assert.Equal(1, snapshot.SignatureState);
-        Assert.Equal(1_722_600_000_000ul, snapshot.CapturedAt);
+        var snapshot = Assert.ContainsSingle(row => row.SnapshotId.Span.SequenceEqual(snapshotId), catalogue.EnumerateSnapshots());
+        Assert.AreEqual(1, snapshot.SignatureState);
+        Assert.AreEqual(1_722_600_000_000ul, snapshot.CapturedAt);
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             ["docs", "root.bin"],
             catalogue.ListDirectory(snapshotId, string.Empty).Select(entry => entry.Path));
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             ["docs/inner", "docs/top.bin"],
             catalogue.ListDirectory(snapshotId, "docs").Select(entry => entry.Path));
 
         var deep = catalogue.LookupPath(snapshotId, "docs/inner/deep.bin");
-        Assert.NotNull(deep);
-        Assert.Equal(4ul, deep!.LogicalLength);
-        Assert.NotNull(deep.ModifiedAt);
-        Assert.Null(deep.IdentityDevice); // identity is never durable (02 §2)
+        Assert.IsNotNull(deep);
+        Assert.AreEqual(4ul, deep!.LogicalLength);
+        Assert.IsNotNull(deep.ModifiedAt);
+        Assert.IsNull(deep.IdentityDevice); // identity is never durable (02 §2)
     }
 
     private static async Task<byte[]> ReadSnapshotStandaloneAsync(Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys)
@@ -346,7 +392,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
             var record = Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray());
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-            Assert.True(Repository.Packing.StandaloneRecordCipher.TryOpen(
+            Assert.IsTrue(Repository.Packing.StandaloneRecordCipher.TryOpen(
                 record, Repo, metadataKey, out var plaintext));
             return plaintext;
         }

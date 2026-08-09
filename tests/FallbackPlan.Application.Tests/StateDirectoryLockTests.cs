@@ -8,6 +8,7 @@ namespace FallbackPlan.Application.Tests;
 /// sharing a state directory share a writer identity, and the first symptom is
 /// T-18's identity-cloning alarm rather than an error message.
 /// </summary>
+[TestClass]
 public sealed class StateDirectoryLockTests : IDisposable
 {
     private readonly string _root = Path.Combine(
@@ -15,22 +16,22 @@ public sealed class StateDirectoryLockTests : IDisposable
 
     public StateDirectoryLockTests() => Directory.CreateDirectory(_root);
 
-    [Fact]
-    public void The_first_caller_takes_the_writer_role()
+    [TestMethod]
+    public void Acquire_WhenTheRoleIsFree_ShouldGrantItAndRecordTheOwner()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 
-        Assert.Equal(StateDirectoryLock.ServiceRole, held.Owner.Role);
-        Assert.Equal(Environment.ProcessId, held.Owner.ProcessId);
-        Assert.True(File.Exists(StateDirectoryLock.PathFor(_root)));
+        Assert.AreEqual(StateDirectoryLock.ServiceRole, held.Owner.Role);
+        Assert.AreEqual(Environment.ProcessId, held.Owner.ProcessId);
+        Assert.IsTrue(File.Exists(StateDirectoryLock.PathFor(_root)));
     }
 
-    [Fact]
-    public void A_second_caller_is_refused_and_the_holder_is_named()
+    [TestMethod]
+    public void Acquire_WhenAnotherRoleHoldsIt_ShouldThrowNamingTheHolder()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 
-        var refused = Assert.Throws<ClientStateException>(
+        var refused = Assert.ThrowsExactly<ClientStateException>(
             () => StateDirectoryLock.Acquire(_root, StateDirectoryLock.DirectRole));
 
         // "Busy" is not an answer an operator can act on. The message must
@@ -41,32 +42,32 @@ public sealed class StateDirectoryLockTests : IDisposable
         Assert.Contains(_root, refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Releasing_the_role_lets_the_next_caller_take_it()
+    [TestMethod]
+    public void TryAcquire_WhenTheHolderHasReleasedIt_ShouldGrantTheRole()
     {
         using (StateDirectoryLock.Acquire(_root, StateDirectoryLock.DirectRole))
         {
-            Assert.False(StateDirectoryLock.TryAcquire(_root, StateDirectoryLock.ServiceRole, out _));
+            Assert.IsFalse(StateDirectoryLock.TryAcquire(_root, StateDirectoryLock.ServiceRole, out _));
         }
 
-        Assert.True(StateDirectoryLock.TryAcquire(_root, StateDirectoryLock.ServiceRole, out var second));
+        Assert.IsTrue(StateDirectoryLock.TryAcquire(_root, StateDirectoryLock.ServiceRole, out var second));
         second!.Dispose();
     }
 
-    [Fact]
-    public void Describing_the_holder_reports_nothing_when_the_role_is_free()
+    [TestMethod]
+    public void DescribeHolderOrNull_WhenTheRoleIsFree_ShouldReturnNull()
     {
-        Assert.Null(StateDirectoryLock.DescribeHolderOrNull(_root));
+        Assert.IsNull(StateDirectoryLock.DescribeHolderOrNull(_root));
 
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
         var description = StateDirectoryLock.DescribeHolderOrNull(_root);
 
-        Assert.NotNull(description);
+        Assert.IsNotNull(description);
         Assert.Contains(StateDirectoryLock.ServiceRole, description, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void An_orphaned_owner_file_does_not_block_acquisition()
+    [TestMethod]
+    public void Acquire_WhenAnOrphanedOwnerFileRemains_ShouldStillGrantTheRole()
     {
         // The owner file is informational. If a crash leaves one behind, the
         // operating system has already released the handle — which is exactly
@@ -76,11 +77,11 @@ public sealed class StateDirectoryLockTests : IDisposable
             """{"role":"service","process":"ghost","pid":999999,"acquired_at":"2020-01-01T00:00:00.0000000+00:00"}""");
 
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.DirectRole);
-        Assert.Equal(StateDirectoryLock.DirectRole, held.Owner.Role);
+        Assert.AreEqual(StateDirectoryLock.DirectRole, held.Owner.Role);
     }
 
-    [Fact]
-    public void A_stale_holder_that_is_no_longer_running_is_reported_as_such()
+    [TestMethod]
+    public void Acquire_WhenTheNamedHolderIsNoLongerRunning_ShouldSaySoInTheRefusal()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 
@@ -91,7 +92,7 @@ public sealed class StateDirectoryLockTests : IDisposable
             Path.Combine(_root, "writer.owner"),
             """{"role":"service","process":"ghost","pid":2147483646,"acquired_at":"2020-01-01T00:00:00.0000000+00:00"}""");
 
-        var refused = Assert.Throws<ClientStateException>(
+        var refused = Assert.ThrowsExactly<ClientStateException>(
             () => StateDirectoryLock.Acquire(_root, StateDirectoryLock.DirectRole));
 
         Assert.Contains("no longer running", refused.Message, StringComparison.Ordinal);

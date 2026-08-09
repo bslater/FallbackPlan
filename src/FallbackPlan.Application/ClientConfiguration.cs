@@ -1,6 +1,8 @@
+using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
+using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
 
@@ -65,7 +67,7 @@ public sealed record ClientConfiguration
     /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
     public static ClientConfiguration Load(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         if (!File.Exists(path))
         {
@@ -76,11 +78,11 @@ public sealed record ClientConfiguration
         try
         {
             configuration = JsonSerializer.Deserialize<ClientConfiguration>(File.ReadAllText(path), SerializerOptions)
-                ?? throw new ClientStateException($"'{path}' holds no configuration object.");
+                ?? throw new ClientStateException(Strings.FormatClientConfiguration_HoldsNoConfigurationObject(path));
         }
         catch (JsonException exception)
         {
-            throw new ClientStateException($"'{path}' is not a valid configuration file: {exception.Message}", exception);
+            throw new ClientStateException(Strings.FormatClientConfiguration_NotValidConfigurationFile(path, exception.Message), exception);
         }
 
         configuration.Validate(path);
@@ -104,8 +106,7 @@ public sealed record ClientConfiguration
     {
         if (SchemaVersion != CurrentSchemaVersion)
         {
-            throw new ClientStateException(
-                $"'{path}' declares schema_version {SchemaVersion}; this build reads version {CurrentSchemaVersion} only.");
+            throw new ClientStateException(Strings.FormatClientConfiguration_DeclaresSchemaVersionBuildReads(path, SchemaVersion, CurrentSchemaVersion));
         }
 
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -113,17 +114,17 @@ public sealed record ClientConfiguration
         {
             if (set.Id.Length != 32 || !set.Id.All(Uri.IsHexDigit))
             {
-                throw new ClientStateException($"Backup set '{set.Name}': id must be 32 hex digits.");
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetIdMustHex(set.Name));
             }
 
             if (string.IsNullOrWhiteSpace(set.Name) || !names.Add(set.Name))
             {
-                throw new ClientStateException($"Backup set names must be non-empty and unique; '{set.Name}' is not.");
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetNamesMustNon(set.Name));
             }
 
             if (string.IsNullOrWhiteSpace(set.Root))
             {
-                throw new ClientStateException($"Backup set '{set.Name}': root must not be empty.");
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootMustNot(set.Name));
             }
 
             // Rule validity is dialect-level and case-independent — a writer
@@ -131,7 +132,7 @@ public sealed record ClientConfiguration
             // beats refusing mid-backup.
             if (!PathRuleSet.TryCreate(set.IncludeRules, set.ExcludeRules, caseSensitive: true, out _, out var defects))
             {
-                throw new ClientStateException($"Backup set '{set.Name}': {string.Join("; ", defects)}");
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSet(set.Name, string.Join("; ", defects)));
             }
         }
     }

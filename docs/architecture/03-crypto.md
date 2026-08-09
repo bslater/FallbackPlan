@@ -2,6 +2,8 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.3, §7.6 · **Resolves:** [C2](../review/2026-08-architecture-review.md#c2--nonce-uniqueness-is-asserted-but-never-constructed), [C3](../review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)
 
+**Built:** Yes — the key hierarchy, per-blob derivation and object identifiers all exist — see [implementation status](../implementation-status.md).
+
 ---
 
 ## 1. Rules

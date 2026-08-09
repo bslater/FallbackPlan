@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -25,6 +25,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 ///
 /// See specifications/repository-format/conformance/README.md.
 /// </summary>
+[TestClass]
 public sealed class CryptographicPrimitiveTests
 {
     private const int OrdinalSegment = 0x01;
@@ -77,13 +78,13 @@ public sealed class CryptographicPrimitiveTests
     /// invocation; running it here too means a divergence between .NET's HKDF and
     /// the generator's would be caught rather than silently accepted.
     /// </summary>
-    [Fact]
-    public void Hkdf_expand_matches_rfc_5869_test_case_1()
+    [TestMethod]
+    public void HkdfExpand_Rfc5869TestCaseOne_Matches()
     {
         var prk = Hex("077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5");
         var info = Hex("f0f1f2f3f4f5f6f7f8f9");
 
-        Assert.Equal(
+        Assert.AreEqual(
             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
             Hex(Expand(prk, info, 42)));
     }
@@ -92,33 +93,33 @@ public sealed class CryptographicPrimitiveTests
     // Key derivation (specification 03)
     // ---------------------------------------------------------------------
 
-    [Fact]
-    public void Derived_keys_match_the_committed_vectors()
+    [TestMethod]
+    public void DerivedKeys_TheCommittedVectors_Match()
     {
         using var document = Load("keys.json");
         var derived = document.RootElement.GetProperty("derived");
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             derived.GetProperty("content_id_key").GetString(),
             Hex(Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/content-id/v1"), 32)));
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             derived.GetProperty("key_id_key").GetString(),
             Hex(Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/key-id/v1"), 32)));
 
-        Assert.Equal(
+        Assert.AreEqual(
             derived.GetProperty("data_key_generation_0").GetString(),
             Hex(Expand(MasterKey, Info("fbp/data/v1", BigEndian(0u)), 32)));
 
-        Assert.Equal(
+        Assert.AreEqual(
             derived.GetProperty("data_key_generation_1").GetString(),
             Hex(Expand(MasterKey, Info("fbp/data/v1", BigEndian(1u)), 32)));
 
-        Assert.Equal(
+        Assert.AreEqual(
             derived.GetProperty("metadata_key_generation_0").GetString(),
             Hex(Expand(MasterKey, Info("fbp/metadata/v1", BigEndian(0u)), 32)));
 
-        Assert.Equal(
+        Assert.AreEqual(
             derived.GetProperty("signing_key_generation_0").GetString(),
             Hex(Expand(MasterKey, Info("fbp/signing/v1", BigEndian(0u)), 32)));
     }
@@ -127,8 +128,8 @@ public sealed class CryptographicPrimitiveTests
     /// The per-blob key derivation from specification 03 section 5 — the construction
     /// the format's confidentiality rests on.
     /// </summary>
-    [Fact]
-    public void Blob_key_derivation_matches_the_committed_vector()
+    [TestMethod]
+    public void BlobKeyDerivation_TheCommittedVector_Matches()
     {
         using var document = Load("keys.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -140,7 +141,7 @@ public sealed class CryptographicPrimitiveTests
         var dataKey = Expand(MasterKey, Info("fbp/data/v1", BigEndian(0u)), 32);
         var blobKey = Expand(dataKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter)), 32);
 
-        Assert.Equal(
+        Assert.AreEqual(
             document.RootElement.GetProperty("derived").GetProperty("blob_key").GetString(),
             Hex(blobKey));
     }
@@ -151,8 +152,8 @@ public sealed class CryptographicPrimitiveTests
     /// This is the property PT-13 added, and it is worth testing rather than
     /// assuming, because it is invisible until it fails catastrophically.
     /// </summary>
-    [Fact]
-    public void Identical_salt_with_a_different_writer_or_counter_yields_a_different_key()
+    [TestMethod]
+    public void BlobKeyDerivation_SameSaltDifferentWriterOrCounter_YieldsADifferentKey()
     {
         using var document = Load("keys.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -167,19 +168,19 @@ public sealed class CryptographicPrimitiveTests
         var otherWriter = Expand(dataKey, Info("fbp/blob/v1", salt, Enumerable.Repeat((byte)0xB0, 16).ToArray(), BigEndian(counter)), 32);
         var otherCounter = Expand(dataKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter + 1)), 32);
 
-        Assert.Equal(checks.GetProperty("blob_key_other_writer").GetString(), Hex(otherWriter));
-        Assert.Equal(checks.GetProperty("blob_key_other_counter").GetString(), Hex(otherCounter));
+        Assert.AreEqual(checks.GetProperty("blob_key_other_writer").GetString(), Hex(otherWriter));
+        Assert.AreEqual(checks.GetProperty("blob_key_other_counter").GetString(), Hex(otherCounter));
 
-        Assert.NotEqual(Hex(baseline), Hex(otherWriter));
-        Assert.NotEqual(Hex(baseline), Hex(otherCounter));
+        Assert.AreNotEqual(Hex(baseline), Hex(otherWriter));
+        Assert.AreNotEqual(Hex(baseline), Hex(otherCounter));
     }
 
     // ---------------------------------------------------------------------
     // Identifiers (specification 02)
     // ---------------------------------------------------------------------
 
-    [Fact]
-    public void Content_identifiers_match_the_committed_vectors()
+    [TestMethod]
+    public void ContentIdentifiers_TheCommittedVectors_Match()
     {
         using var document = Load("identifiers.json");
 
@@ -188,14 +189,14 @@ public sealed class CryptographicPrimitiveTests
             var name = testCase.GetProperty("name").GetString();
             var plaintext = PlaintextFor(name!, testCase.GetProperty("plaintext_length").GetInt32());
 
-            Assert.Equal(
+            SequenceAssert.AreEqual(
                 testCase.GetProperty("content_id").GetString(),
                 Hex(SHA256.HashData(plaintext)));
         }
     }
 
-    [Fact]
-    public void Object_identifiers_match_the_committed_vectors()
+    [TestMethod]
+    public void ObjectIdentifiers_TheCommittedVectors_Match()
     {
         using var document = Load("identifiers.json");
         var contentIdKey = Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/content-id/v1"), 32);
@@ -210,14 +211,14 @@ public sealed class CryptographicPrimitiveTests
             message[0] = OrdinalSegment;
             contentId.CopyTo(message, 1);
 
-            Assert.Equal(
+            SequenceAssert.AreEqual(
                 testCase.GetProperty("object_id_segment").GetString(),
                 Hex(HMACSHA256.HashData(contentIdKey, message)));
         }
     }
 
-    [Fact]
-    public void Store_blob_key_derivation_matches_the_committed_vector()
+    [TestMethod]
+    public void StoreBlobKeyDerivation_TheCommittedVector_Matches()
     {
         using var document = Load("identifiers.json");
         var blob = document.RootElement.GetProperty("blob_identifier");
@@ -228,7 +229,7 @@ public sealed class CryptographicPrimitiveTests
         message[0] = OrdinalBlobKey;
         blobId.CopyTo(message, 1);
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             blob.GetProperty("store_blob_key").GetString(),
             Hex(HMACSHA256.HashData(keyIdKey, message)[..16]));
     }
@@ -237,8 +238,8 @@ public sealed class CryptographicPrimitiveTests
     // Associated data (specification 04 section 4)
     // ---------------------------------------------------------------------
 
-    [Fact]
-    public void Associated_data_matches_the_committed_vectors()
+    [TestMethod]
+    public void AssociatedData_TheCommittedVectors_Match()
     {
         using var document = Load("records.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -259,8 +260,8 @@ public sealed class CryptographicPrimitiveTests
             aad.AddRange(objectId);
             aad.AddRange(BigEndian(ordinal));
 
-            Assert.Equal(55, aad.Count);
-            Assert.Equal(testCase.GetProperty("aad").GetString(), Hex([.. aad]));
+            Assert.AreEqual(55, aad.Count);
+            Assert.AreEqual(testCase.GetProperty("aad").GetString(), Hex([.. aad]));
         }
     }
 
@@ -270,8 +271,8 @@ public sealed class CryptographicPrimitiveTests
     /// two implementers can assemble differently — the record AAD gets exact
     /// bytes, and the footer's deserves the same.
     /// </summary>
-    [Fact]
-    public void Footer_associated_data_matches_the_committed_vector()
+    [TestMethod]
+    public void FooterAssociatedData_TheCommittedVector_Matches()
     {
         using var document = Load("records.json");
         var inputs = document.RootElement.GetProperty("inputs");
@@ -288,14 +289,14 @@ public sealed class CryptographicPrimitiveTests
         aad.AddRange(blobId);
         aad.AddRange(BigEndian(recordCount));
 
-        Assert.Equal(footer.GetProperty("aad_length").GetInt32(), aad.Count);
-        Assert.Equal(38, aad.Count);
-        Assert.Equal(footer.GetProperty("aad").GetString(), Hex([.. aad]));
+        Assert.AreEqual(footer.GetProperty("aad_length").GetInt32(), aad.Count);
+        Assert.AreEqual(38, aad.Count);
+        Assert.AreEqual(footer.GetProperty("aad").GetString(), Hex([.. aad]));
 
         // The reserved all-ones footer nonce is unreachable by any record:
         // ordinals stop at 65 535 and the nonce is the ordinal's big-endian
         // encoding, so no record nonce has a nonzero byte above position 8.
-        Assert.Equal("ffffffffffffffffffffffff", footer.GetProperty("nonce").GetString());
+        Assert.AreEqual("ffffffffffffffffffffffff", footer.GetProperty("nonce").GetString());
     }
 
     // ---------------------------------------------------------------------
@@ -314,8 +315,8 @@ public sealed class CryptographicPrimitiveTests
     /// empty-plaintext, empty-AAD, so alone it proves nothing about the
     /// property the record format leans on.
     /// </summary>
-    [Fact]
-    public void Aes_gcm_matches_known_answer_tests()
+    [TestMethod]
+    public void AesGcm_TheKnownAnswerTests_Match()
     {
         using var document = Load("aes-gcm.json");
 
@@ -334,13 +335,13 @@ public sealed class CryptographicPrimitiveTests
             using var aes = new AesGcm(key, tag.Length);
             aes.Encrypt(iv, plaintext, ciphertext, tag, aad);
 
-            Assert.Equal(expectedCipher, Hex(ciphertext));
-            Assert.Equal(expectedTag, Hex(tag));
+            Assert.AreEqual(expectedCipher, Hex(ciphertext));
+            Assert.AreEqual(expectedTag, Hex(tag));
 
             // And round-trips, which the vector file does not assert on its own.
             var recovered = new byte[plaintext.Length];
             aes.Decrypt(iv, ciphertext, tag, recovered, aad);
-            Assert.Equal(Hex(plaintext), Hex(recovered));
+            Assert.AreEqual(Hex(plaintext), Hex(recovered));
         }
     }
 
@@ -349,8 +350,8 @@ public sealed class CryptographicPrimitiveTests
     /// This is what makes relocating a record between ordinals, object types or
     /// repositories detectable (specification 04 section 4, threat T-3).
     /// </summary>
-    [Fact]
-    public void Altering_associated_data_causes_authentication_to_fail()
+    [TestMethod]
+    public void AesGcm_AssociatedDataAltered_FailsAuthentication()
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var nonce = new byte[12];
@@ -364,7 +365,7 @@ public sealed class CryptographicPrimitiveTests
         using var aes = new AesGcm(key, tag.Length);
         aes.Encrypt(nonce, plaintext, ciphertext, tag, aad);
 
-        Assert.Throws<AuthenticationTagMismatchException>(() =>
+        Assert.ThrowsExactly<AuthenticationTagMismatchException>(() =>
             aes.Decrypt(nonce, ciphertext, tag, new byte[plaintext.Length], tampered));
     }
 
@@ -386,7 +387,7 @@ public sealed class CryptographicPrimitiveTests
                 string.Create(CultureInfo.InvariantCulture, $"Unknown vector case '{name}'.")),
         };
 
-        Assert.Equal(expectedLength, plaintext.Length);
+        Assert.AreEqual(expectedLength, plaintext.Length);
         return plaintext;
     }
 }

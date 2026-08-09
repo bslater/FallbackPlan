@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Crypto;
 
@@ -7,6 +8,7 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// Exercises key-bundle wrapping (specification 03 §3): round-trip, and the
 /// single indistinguishable failure for every way an unwrap can go wrong.
 /// </summary>
+[TestClass]
 public sealed class KeyWrappingTests
 {
     private static int s_kekCounter;
@@ -28,8 +30,8 @@ public sealed class KeyWrappingTests
         return result.Kek;
     }
 
-    [Fact]
-    public void Wrap_then_unwrap_round_trips()
+    [TestMethod]
+    public void WrapThenUnwrap_TheSamePassphrase_RoundTripsTheKey()
     {
         using var kek = CreateKek();
         var nonce = new byte[KeyWrapping.NonceLength];
@@ -40,11 +42,11 @@ public sealed class KeyWrappingTests
 
         KeyWrapping.Wrap(kek, nonce, aad, bundle, ciphertext, tag);
 
-        Assert.Equal(bundle, KeyWrapping.Unwrap(kek, nonce, aad, ciphertext, tag));
+        SequenceAssert.AreEqual(bundle, KeyWrapping.Unwrap(kek, nonce, aad, ciphertext, tag));
     }
 
-    [Fact]
-    public void Every_unwrap_failure_is_indistinguishable()
+    [TestMethod]
+    public void Unwrap_AnyWrongInput_FailsIndistinguishably()
     {
         using var kek = CreateKek();
         using var wrongKek = CreateKek();
@@ -62,19 +64,19 @@ public sealed class KeyWrappingTests
         flippedTag[0] ^= 0x01;
         var differentAad = "framing-aae"u8.ToArray();
 
-        var wrongPassphrase = Assert.Throws<KeyUnwrapFailedException>(() =>
+        var wrongPassphrase = Assert.ThrowsExactly<KeyUnwrapFailedException>(() =>
             KeyWrapping.Unwrap(wrongKek, nonce, aad, ciphertext, tag));
-        var tamperedCiphertext = Assert.Throws<KeyUnwrapFailedException>(() =>
+        var tamperedCiphertext = Assert.ThrowsExactly<KeyUnwrapFailedException>(() =>
             KeyWrapping.Unwrap(kek, nonce, aad, flippedCiphertext, tag));
-        var tamperedTag = Assert.Throws<KeyUnwrapFailedException>(() =>
+        var tamperedTag = Assert.ThrowsExactly<KeyUnwrapFailedException>(() =>
             KeyWrapping.Unwrap(kek, nonce, aad, ciphertext, flippedTag));
-        var renamedObject = Assert.Throws<KeyUnwrapFailedException>(() =>
+        var renamedObject = Assert.ThrowsExactly<KeyUnwrapFailedException>(() =>
             KeyWrapping.Unwrap(kek, nonce, differentAad, ciphertext, tag));
 
         // Wrong passphrase and tampering are deliberately indistinguishable:
         // one message for all of them (specification 03 §3).
-        Assert.Equal(wrongPassphrase.Message, tamperedCiphertext.Message);
-        Assert.Equal(wrongPassphrase.Message, tamperedTag.Message);
-        Assert.Equal(wrongPassphrase.Message, renamedObject.Message);
+        Assert.AreEqual(wrongPassphrase.Message, tamperedCiphertext.Message);
+        Assert.AreEqual(wrongPassphrase.Message, tamperedTag.Message);
+        Assert.AreEqual(wrongPassphrase.Message, renamedObject.Message);
     }
 }

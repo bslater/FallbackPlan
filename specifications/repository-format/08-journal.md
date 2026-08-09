@@ -29,6 +29,8 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 
 > **Erratum (phase 0).** Two resolutions pending normative edits, per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) a standalone object has no blob envelope, so "metadata records" is under-specified — the `FBPKSREC` framing (Decision 1) supplies the encryption context, with object type `0x0A`; (2) the shared sequence space also feeds **blob counters** ([02 §4](02-identifiers.md#4-blob-identifier)), which publish no sequence-addressed object, so gap accounting needs a definition — Decision 7 gives it: a sequence number is accounted for by a delta, a journal record, a void delta, or a blob whose structured identifier embeds that counter named by an intent; nothing else.
 
+**Advisory hint objects are outside this space.** A placement hint ([06 §10](06-manifests.md#10-placement-hint)) or a source-identity hint ([06 §11](06-manifests.md#11-source-identity)) carries the sequence number of the write intent it was published under, and allocates none of its own. Drawing a number per hint would make a gapless space account for objects whose absence is never damage — and, where hints are per file version, would cost a durable allocation and a void-delta obligation for every changed file. Nothing is weakened by it: a hint sits under `/hints/`, no gap scan enumerates it, and record-key uniqueness rests on the per-object CSPRNG salt rather than on the counter ([03 §5](03-keys.md#5-per-blob-keys)).
+
 > **Erratum (phase 0).** "The repository's current generation" (§7 condition 1) is never defined in this specification. [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 5 defines it: the maximum of the key bundle's `current_data_generation`, `current_metadata_generation`, and the highest generation directory observed under `/index/…` — a lower bound that can only delay expiry, never hasten it.
 
 ## 3 Write intent
@@ -135,6 +137,8 @@ The last rule matters. An unparseable intent means the collector is older than t
 Leases are not load-bearing because four things independently break them: clock skew with no trusted time source; eventual consistency, which may simply not show a collector a lease written seconds ago; suspension, where a closed laptop lid loses a lease while its blobs remain legitimate; and the absence of any binding between a lease and the blobs it supposedly protects.
 
 An intent has none of those properties — it is durable, self-describing, names its blobs explicitly, and its retirement is an event. → [`04-concurrency-and-publication.md` §4.3](../../docs/architecture/04-concurrency-and-publication.md#43-why-leases-are-not-enough)
+
+The lease **object format** is [11 §2](11-lifecycle-objects.md#2-lease), alongside the two other namespaces the collector owns.
 
 ## 10 Publication order
 

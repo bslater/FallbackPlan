@@ -24,11 +24,13 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /leases/<scope>/<lease-id>
 /tombstones/<object-type>/<object-id>
 /audit/<period>/<record-id>
+/hints/placement/<snapshot-id>
+/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
 ```
 
 `<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).
 
-`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` follows the same rule.
+`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` and a source-identity hint's `<captured-at>` ([06 §11](06-manifests.md#11-source-identity)) follow the same rule; that hint's `<shard>` is the first four base32 characters of its `<source-key>`, sharded for the reason blobs are — one child per file in the repository is exactly the listing prefix this rule exists to bound.
 
 > **Erratum (phase 0).** This specification never defines how `<delta-id>`, `<checkpoint-id>`, or `<key-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6); the key identifier is likewise 16 opaque bytes, and readers discover it by listing `/keys/` (see the erratum at §6).
 
@@ -92,17 +94,19 @@ These are public. The salt is not a secret; publishing the parameters is what al
 
 ## 4 Object immutability
 
-Every object in the namespace except `/leases/…` is **immutable once written**. A writer MUST NOT overwrite an existing key with different content.
+Every object in the namespace except `/leases/…` ([11 §2](11-lifecycle-objects.md#2-lease)) is **immutable once written**. A writer MUST NOT overwrite an existing key with different content.
 
 Where a store offers conditional create, a writer SHOULD use it. Where it does not, uniqueness of the final identifier is what prevents collision — which is why the format is designed not to require conditional create for correctness.
 
 Re-writing an object with byte-identical content is permitted, and is the expected outcome of an idempotent retry.
 
+For blobs the rule is stated as a named invariant, [INV-BLOB-001](05-blob.md#51-blob-immutability--inv-blob-001), because the operations that would break it — compaction, key rotation, upload retry — are the ones written last and the ones whose violation nothing detects.
+
 ## 5 Deletion
 
 Only two processes delete objects: garbage collection ([`07-retention-and-gc.md`](../../docs/architecture/07-retention-and-gc.md)) and index-delta retirement ([07](07-index.md)).
 
-Both proceed by tombstone, grace period, and revalidation before the delete. A reader that encounters a missing object referenced by a live object MUST report it as a damage finding, and MUST NOT infer that the reference was invalid.
+Both proceed by tombstone, grace period, and revalidation before the delete — the tombstone object and the rules a collector must satisfy before deleting are [11 §3](11-lifecycle-objects.md#3-tombstone). A reader that encounters a missing object referenced by a live object MUST report it as a damage finding, and MUST NOT infer that the reference was invalid.
 
 ## 6 Discovery order
 

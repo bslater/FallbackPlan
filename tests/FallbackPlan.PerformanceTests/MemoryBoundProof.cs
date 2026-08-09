@@ -5,6 +5,8 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.PerformanceTests;
 
 /// <summary>
@@ -32,7 +34,7 @@ public static class MemoryBoundProof
         Directory.CreateDirectory(spool);
 
         using var keys = RepositoryKeySet.FromMasterKey([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
-        var store = new NullObjectStore();
+        var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy,
             RepositoryId.FromBytes(Convert.FromHexString("0102030405060708090a0b0c0d0e0f10")),
@@ -105,64 +107,5 @@ public static class MemoryBoundProof
                 Directory.Delete(spool, recursive: true);
             }
         }
-    }
-
-    /// <summary>
-    /// A deterministic pseudorandom stream of arbitrary length that holds
-    /// only one small block: the input the proof archives without ever
-    /// allocating it.
-    /// </summary>
-    private sealed class SyntheticStream(long length, int seed) : Stream
-    {
-        private readonly byte[] _block = CreateBlock(seed);
-        private long _position;
-
-        private static byte[] CreateBlock(int seed)
-        {
-            // One 1 MiB pseudorandom block, repeated with a rolling XOR so
-            // the content neither compresses to nothing nor repeats exactly
-            // (exact repetition would make every cdc segment identical).
-            var block = new byte[1024 * 1024];
-            new Random(seed).NextBytes(block);
-            return block;
-        }
-
-        public override bool CanRead => true;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => false;
-
-        public override long Length => length;
-
-        public override long Position
-        {
-            get => _position;
-            set => throw new NotSupportedException();
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            var take = (int)Math.Min(count, length - _position);
-            for (var index = 0; index < take; index++)
-            {
-                var absolute = _position + index;
-                var salt = (byte)((absolute >> 20) * 31);
-                buffer[offset + index] = (byte)(_block[absolute % _block.Length] ^ salt);
-            }
-
-            _position += take;
-            return take;
-        }
-
-        public override void Flush()
-        {
-        }
-
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

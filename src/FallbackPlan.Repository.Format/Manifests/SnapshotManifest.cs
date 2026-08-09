@@ -1,6 +1,8 @@
+using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
@@ -100,7 +102,7 @@ public static class SnapshotManifestCodec
     /// <summary>Encodes the map of keys 1–16 — the exact bytes the signature covers (06 §6.1).</summary>
     public static byte[] EncodeForSigning(SnapshotManifest manifest)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         var writer = new CanonicalCborWriter();
@@ -111,12 +113,12 @@ public static class SnapshotManifestCodec
     /// <summary>Encodes the stored form: keys 1–16 plus the 64-byte signature at key 17.</summary>
     public static byte[] Encode(SnapshotManifest manifest, ReadOnlySpan<byte> signature)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(manifest);
         Validate(manifest);
 
         if (signature.Length != 64)
         {
-            throw new ManifestValidationException("A snapshot signature is exactly 64 bytes (specification 06 §6).");
+            throw new ManifestValidationException(Strings.SnapshotManifestCodec_SnapshotSignatureExactlyBytes);
         }
 
         var writer = new CanonicalCborWriter();
@@ -137,7 +139,7 @@ public static class SnapshotManifestCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException($"The snapshot manifest is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatSnapshotManifestCodec_SnapshotManifestNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -225,8 +227,7 @@ public static class SnapshotManifestCodec
                     signature = reader.ReadFixedByteString(64);
                     break;
                 default:
-                    throw new ManifestValidationException(
-                        "The snapshot manifest carries an unknown key; specification 06 §6 assigns keys 1-17 only.");
+                    throw new ManifestValidationException(Strings.SnapshotManifestCodec_SnapshotManifestCarriesUnknownKey);
             }
         }
 
@@ -238,7 +239,7 @@ public static class SnapshotManifestCodec
             status is null || filesystem is null || generation is null || clientVersion is null ||
             signature is null)
         {
-            throw new ManifestValidationException("The snapshot manifest omits a mandatory key (specification 06 §6).");
+            throw new ManifestValidationException(Strings.SnapshotManifestCodec_SnapshotManifestOmitsMandatoryKey);
         }
 
         var manifest = new SnapshotManifest
@@ -401,8 +402,7 @@ public static class SnapshotManifestCodec
                     reservedNames = reader.ReadBoolean();
                     break;
                 default:
-                    throw new ManifestValidationException(
-                        "source_filesystem carries an unknown key (ADR-0022 §Decision 6; ADR-0026 §Decision 7).");
+                    throw new ManifestValidationException(Strings.SnapshotManifestCodec_SourceFilesystemCarriesUnknownKey);
             }
         }
 
@@ -410,7 +410,7 @@ public static class SnapshotManifestCodec
 
         if (caseSensitive is null || supportsSparse is null || name is null)
         {
-            throw new ManifestValidationException("source_filesystem omits a mandatory key (ADR-0022 §Decision 6).");
+            throw new ManifestValidationException(Strings.SnapshotManifestCodec_SourceFilesystemOmitsMandatoryKey);
         }
 
         return new SourceFilesystem(
@@ -421,17 +421,17 @@ public static class SnapshotManifestCodec
     {
         if (manifest.SnapshotId.Length != 16 || manifest.DeviceId.Length != 16 || manifest.BackupSetId.Length != 16)
         {
-            throw new ManifestValidationException("snapshot_id, device_id, and backup_set_id are 16 bytes each (specification 06 §6).");
+            throw new ManifestValidationException(Strings.SnapshotManifestCodec_SnapshotIdDeviceIdBackup);
         }
 
         if (manifest.ConsistencyMethod is < 1 or > 4)
         {
-            throw new ManifestValidationException($"consistency_method {manifest.ConsistencyMethod} is unassigned (specification 06 §6).");
+            throw new ManifestValidationException(Strings.FormatSnapshotManifestCodec_ConsistencyMethodUnassigned(manifest.ConsistencyMethod));
         }
 
         if (manifest.CaptureStatus is < 1 or > 3)
         {
-            throw new ManifestValidationException($"capture_status {manifest.CaptureStatus} is unassigned (specification 06 §6).");
+            throw new ManifestValidationException(Strings.FormatSnapshotManifestCodec_CaptureStatusUnassigned(manifest.CaptureStatus));
         }
     }
 }

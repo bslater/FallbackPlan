@@ -5,6 +5,7 @@ using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -14,6 +15,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// diff is a format change that must be deliberate — and the committed bytes
 /// open, restore, verify, and rebuild with the current reader.
 /// </summary>
+[TestClass]
 public sealed class FixtureRepositoryTests : IDisposable
 {
     private readonly string _scratch =
@@ -25,7 +27,7 @@ public sealed class FixtureRepositoryTests : IDisposable
         // maps [CallerFilePath] to /_/…, which does not exist on a CI
         // runner; the source path remains the fallback.
         var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
-        Assert.NotNull(root);
+        Assert.IsNotNull(root);
         return Path.Combine(
             root, "specifications", "repository-format", "conformance", "fixtures", "fixture-repository-v1");
     }
@@ -57,8 +59,8 @@ public sealed class FixtureRepositoryTests : IDisposable
         return map;
     }
 
-    [Fact]
-    public async Task Regeneration_is_byte_identical_to_the_committed_fixture()
+    [TestMethod]
+    public async Task FixtureRepository_Regenerated_IsByteIdenticalToTheCommittedOne()
     {
         var committed = CommittedFixturePath();
         var regenerated = Path.Combine(_scratch, "regenerated");
@@ -77,27 +79,27 @@ public sealed class FixtureRepositoryTests : IDisposable
         var committedFiles = FileMap(committed);
         var regeneratedFiles = FileMap(regenerated);
 
-        Assert.Equal(committedFiles.Keys, regeneratedFiles.Keys);
+        SequenceAssert.AreEqual(committedFiles.Keys, regeneratedFiles.Keys);
         foreach (var (relative, committedPath) in committedFiles)
         {
             var committedBytes = await File.ReadAllBytesAsync(committedPath);
             var regeneratedBytes = await File.ReadAllBytesAsync(regeneratedFiles[relative]);
-            Assert.True(
+            Assert.IsTrue(
                 committedBytes.AsSpan().SequenceEqual(regeneratedBytes),
                 $"'{relative}' differs from the committed fixture — a format change must be deliberate (NFR-COMP-004).");
         }
     }
 
-    [Fact]
-    public async Task The_committed_fixture_opens_restores_verifies_and_rebuilds()
+    [TestMethod]
+    public async Task FixtureRepository_TheCommittedFixture_OpensRestoresVerifiesAndRebuilds()
     {
         var store = new LocalFileSystemObjectStore(CommittedFixturePath());
         using var passphrase = FixtureRepository.CreatePassphrase();
 
         using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
-        Assert.Equal(FixtureRepository.Repo, repository.RepositoryId);
-        Assert.True(repository.UnstableFormatWarning);
-        Assert.True(repository.KdfBelowCreationMinimums, "the fixture's KDF parameters are deliberately small");
+        Assert.AreEqual(FixtureRepository.Repo, repository.RepositoryId);
+        Assert.IsTrue(repository.UnstableFormatWarning);
+        Assert.IsTrue(repository.KdfBelowCreationMinimums, "the fixture's KDF parameters are deliberately small");
 
         // Restore the fixture file byte-identically through the ordinary path.
         using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
@@ -105,13 +107,13 @@ public sealed class FixtureRepositoryTests : IDisposable
 
         var manifestEntry = reader.AllRecords.Single(record => record.ObjectType == Domain.ObjectType.FileVersionManifest);
         var manifestRead = await reader.ReadSegmentAsync(manifestEntry.ObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
 
         var manifest = Format.Manifests.FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
         using var restored = new MemoryStream();
         var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(FixtureRepository.FileContent(), restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(FixtureRepository.FileContent(), restored.ToArray());
 
         // Every blob verifies at the deepest level.
         using var verifier = new VerifyEngine(repository.RepositoryId, repository.Keys, store);
@@ -119,7 +121,7 @@ public sealed class FixtureRepositoryTests : IDisposable
             ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
         {
             var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, VerifyLevel.EveryRecord, CancellationToken.None);
-            Assert.True(result.Ok, $"{entry.Key.Value}: {result.Detail}");
+            Assert.IsTrue(result.Ok, $"{entry.Key.Value}: {result.Detail}");
         }
 
         // The index plane loads and rebuilds a catalogue with zero findings.
@@ -128,15 +130,15 @@ public sealed class FixtureRepositoryTests : IDisposable
         var report = await new CatalogueRebuilder(loader).RebuildAsync(
             catalogue, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
 
-        Assert.Equal(1, report.DeltasApplied);
-        Assert.Empty(report.Findings);
-        Assert.NotNull(catalogue.ResolveLocation(manifestEntry.ObjectId));
+        Assert.AreEqual(1, report.DeltasApplied);
+        Assert.IsEmpty(report.Findings);
+        Assert.IsNotNull(catalogue.ResolveLocation(manifestEntry.ObjectId));
 
         // The journal holds the intent and its retirement, both verifiable.
         using var journalReader = new JournalReader(store, repository.RepositoryId, repository.Hierarchy);
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
-        Assert.Equal(0, unparseable);
-        Assert.Equal(2, records.Count);
+        Assert.AreEqual(0, unparseable);
+        Assert.AreEqual(2, records.Count);
     }
 
     /// <inheritdoc />

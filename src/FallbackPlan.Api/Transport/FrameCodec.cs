@@ -1,5 +1,7 @@
+using Bodu;
 using System.Buffers.Binary;
 using System.Text.Json;
+using FallbackPlan.Api.Resources;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -31,14 +33,13 @@ public static class FrameCodec
     /// <returns>A task that completes when the frame is flushed.</returns>
     public static async ValueTask WriteAsync(Stream stream, WireFrame frame, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(frame);
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(frame);
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SerializerOptions);
         if (payload.Length > MaximumFrameBytes)
         {
-            throw new InvalidOperationException(
-                $"A {payload.Length}-byte frame exceeds the {MaximumFrameBytes}-byte limit.");
+            throw new InvalidOperationException(Strings.FormatFrameCodec_ByteFrameExceedsByteLimit(payload.Length, MaximumFrameBytes));
         }
 
         var prefix = new byte[4];
@@ -55,7 +56,7 @@ public static class FrameCodec
     /// <exception cref="InvalidDataException">The peer sent something that is not a frame.</exception>
     public static async ValueTask<WireFrame?> ReadAsync(Stream stream, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(stream);
 
         var prefix = new byte[4];
         if (!await ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false))
@@ -66,24 +67,23 @@ public static class FrameCodec
         var length = BinaryPrimitives.ReadInt32BigEndian(prefix);
         if (length is <= 0 or > MaximumFrameBytes)
         {
-            throw new InvalidDataException(
-                $"A frame declared {length} bytes, which is outside 1..{MaximumFrameBytes}.");
+            throw new InvalidDataException(Strings.FormatFrameCodec_FrameDeclaredBytesWhichOutside(length, MaximumFrameBytes));
         }
 
         var payload = new byte[length];
         if (!await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false))
         {
-            throw new InvalidDataException("A frame ended before its declared length.");
+            throw new InvalidDataException(Strings.FrameCodec_FrameEndedBeforeDeclaredLength);
         }
 
         try
         {
             return JsonSerializer.Deserialize<WireFrame>(payload, SerializerOptions)
-                ?? throw new InvalidDataException("A frame decoded to nothing.");
+                ?? throw new InvalidDataException(Strings.FrameCodec_FrameDecodedNothing);
         }
         catch (JsonException exception)
         {
-            throw new InvalidDataException($"A frame was not valid JSON: {exception.Message}", exception);
+            throw new InvalidDataException(Strings.FormatFrameCodec_FrameNotValidJSON(exception.Message), exception);
         }
     }
 
@@ -97,7 +97,7 @@ public static class FrameCodec
             if (got == 0)
             {
                 return read != 0
-                    ? throw new InvalidDataException("The peer closed mid-frame.")
+                    ? throw new InvalidDataException(Strings.FrameCodec_PeerClosedMidFrame)
                     : false;
             }
 

@@ -1,9 +1,11 @@
+using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -47,7 +49,7 @@ public static class StandaloneRecordCipher
     {
         if (payload.IsEmpty)
         {
-            throw new ArgumentException("A standalone record's payload is never empty (specification 04 §2.1).", nameof(payload));
+            throw new ArgumentException(Strings.StandaloneRecordCipher_StandaloneRecordSPayloadNever, nameof(payload));
         }
 
         Span<byte> salt = stackalloc byte[StandaloneRecordFraming.BlobSaltLength];
@@ -61,8 +63,7 @@ public static class StandaloneRecordCipher
         }
         else
         {
-            throw new ArgumentException(
-                $"A blob salt is exactly {StandaloneRecordFraming.BlobSaltLength} bytes.", nameof(blobSalt));
+            throw new ArgumentException(Strings.FormatBlobWriter_BlobSaltExactlyBytes(StandaloneRecordFraming.BlobSaltLength), nameof(blobSalt));
         }
 
         var header = new RecordHeader(
@@ -120,7 +121,7 @@ public static class StandaloneRecordCipher
         ReadOnlySpan<byte> metadataClassKey,
         out byte[] plaintext)
     {
-        ArgumentNullException.ThrowIfNull(record);
+        ThrowHelper.ThrowIfNull(record);
 
         plaintext = [];
 

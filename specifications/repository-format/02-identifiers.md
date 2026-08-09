@@ -69,6 +69,10 @@ Binding the type into the derivation means a record cannot be reinterpreted as a
 
 > **Erratum (phase 0).** Index deltas, checkpoints, and journal records are records too ([07 §2](07-index.md#2-index-delta), [08 §2](08-journal.md#2-record-framing)) and therefore need `object_type` values, which this table does not assign. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1 assigns: index delta `0x08`, index checkpoint `0x09`, journal record `0x0A`. `0x07` remains reserved.
 
+The two advisory hint objects are records as well, and their types are assigned here rather than by erratum because the sections defining them are normative text of this same revision: **placement hint** `0x0B` ([06 §10](06-manifests.md#10-placement-hint)), **source identity** `0x0C` ([06 §11](06-manifests.md#11-source-identity)). Both are advisory — an implementation that never writes one still conforms — but a reader that *does* find one must be able to tell what it is holding before decrypting it, which is what the type byte in the record header is for.
+
+The collector's three objects are assigned the same way: **lease** `0x0D`, **tombstone** `0x0E`, **audit-period record** `0x0F` ([11](11-lifecycle-objects.md)). Nothing writes them before phase 4; the values are fixed now so the collector is built against a format rather than establishing one.
+
 ### 3.2 What this does and does not protect
 
 Keying defends against the **store**. It does not defend against a **repository member**, because members hold the key.

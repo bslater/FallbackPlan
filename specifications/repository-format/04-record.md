@@ -53,7 +53,7 @@ A reader MUST validate `stored_length` against the limit **before allocating**, 
 nonce = 12-byte big-endian encoding of `ordinal`
 ```
 
-For `xchacha20-poly1305-v1`, whose nonce is 24 bytes, the ordinal is encoded in the **last 12 bytes** and the first 12 are zero. The extra space is not used to add randomness: uniqueness already holds by construction, and adding entropy would only make the derivation harder to reproduce.
+Format version 1 has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
 
 Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track.
 

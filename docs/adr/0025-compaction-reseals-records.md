@@ -77,6 +77,12 @@ envelopes, and any maintenance component already operates inside the key
 boundary. The CPU cost lands on a background maintenance pass, which is
 where the format prefers costs over reader complexity.
 
+## The invariant this protects
+
+Compaction is the operation most likely to break blob immutability, because reclaiming space *by rewriting a blob in place* is the obvious implementation and the wrong one. That rule is now stated as a named format invariant — [INV-BLOB-001](../../specifications/repository-format/05-blob.md#51-blob-immutability--inv-blob-001) — so a future collector is designed against it rather than discovering it.
+
+What it costs a collector to obey: a compaction pass writes new blobs and deletes old ones whole, so peak space during a pass exceeds steady-state space. That is the trade, and it is cheaper than the alternative, which reuses a `(blob key, nonce)` pair and is a plaintext-recovery bug nothing in the repository would report.
+
 ## Consequences
 
 **Positive**

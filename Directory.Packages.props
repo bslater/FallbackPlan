@@ -19,11 +19,14 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.10" />
   </ItemGroup>
   <ItemGroup Label="Testing">
-    <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="MSTest" Version="3.11.0" />
+    <!-- FsCheck's property runner ships xUnit and NUnit integrations and no
+         MSTest one, so the [Property] tests drive FsCheck's framework-agnostic
+         Check API from an ordinary [TestMethod] instead (ADR-0032). The
+         package is still the source of the generators and shrinkers. -->
+    <PackageVersion Include="FsCheck" Version="3.3.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
-    <PackageVersion Include="FsCheck.Xunit" Version="3.3.4" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- Test-only. Retained as an independent Argon2id implementation to

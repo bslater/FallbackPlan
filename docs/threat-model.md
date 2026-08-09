@@ -70,7 +70,11 @@ A destination claims to hold data it has discarded.
 
 ### T-10 Malicious repository member poisons deduplication
 A device holding repository keys publishes a segment record whose claimed content identifier does not match its plaintext. Other devices deduplicate against it and silently back up corrupt data, discovered only at restore — after the source is gone.
-**Mitigation:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). The default `repository` verifies on reuse — it fetches, decrypts, and confirms the content identifier before referencing another writer's segment — so a mismatched record is never referenced and the mismatch is reported. `device` avoids cross-writer reuse entirely. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
+**Mitigation, as designed:** dedup trust domains ([`03-crypto.md` §5](architecture/03-crypto.md#5-deduplication-trust-domains)). The default `repository` verifies on reuse — it fetches, decrypts, and confirms the content identifier before referencing another writer's segment — so a mismatched record is never referenced and the mismatch is reported. `device` avoids cross-writer reuse entirely. `repository-unverified` requires explicit acknowledgement of exactly this risk. FR-DED-001..004, NFR-SEC-007.
+
+> **Built (2026-08).** `DedupTrustGate` decides every reuse. Another writer's object is confirmed before it is referenced under the default domain, refused outright under `device`, and referenced unread only under `repository-unverified`. A record that reads and does not verify is written again from the bytes this device holds and reported as a damage finding — which is the point of moving detection to write time.
+>
+> Two residuals remain and are not the same size. **FR-DED-004's acknowledgement gate does not exist**, so `repository-unverified` — the one domain that leaves T-10 open — can be selected without anyone being told what it means; the gate belongs in the client that offers the choice. And **verification is remembered in the catalogue, not the repository**, so deleting the catalogue re-imposes the reads once; that is a cost, not an exposure, and [ADR-0006](adr/0006-object-identifiers-and-dedup-trust-domains.md#what-is-deliberately-not-solved) records why it was accepted. → [implementation status](implementation-status.md#0006--the-integrity-guard-is-built-and-one-thing-is-deliberately-not)
 
 ### T-11 Metadata side channels
 An honest-but-curious store learns from what it is legitimately given:
@@ -134,11 +138,30 @@ Stated plainly so no other document implies otherwise:
 - **Loss of all recovery material** makes the repository permanently unreadable. This is by design, and it is why the recovery-kit workflow is mandatory and drills are prompted.
 - **A malicious administrator** with access to every device and to retention controls can destroy data. Audit records make it attributable, not impossible.
 - **Hardware faults across every replica** are undetectable without verification, which is why verification coverage is a first-class status.
-- **Malware already present in a historical snapshot** will be faithfully restored. Restore defaults to quarantine for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)).
+- **Malware already present in a historical snapshot** will be faithfully restored. Restore defaults to a quarantine path for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)): content lands under a directory of its own and reaching the live tree is a deliberate choice. FR-RST-006.
 
 ## Controls summary
 
-OS-authenticated local command surface · paired device identity for remote clients, off by default · key material confined to the service account and never crossing the command surface · content withheld from remote clients unless separately enabled · Mutual device authentication · least-privilege repository grants · separate read/append/retention/administrative permissions · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state · dedup trust domains · keyed verification challenges · bounded parsers · type-based secret redaction · pinned dependencies and vulnerability scanning · signed reproducible releases · rollback-protected auto-update · repository-server rate limits and quotas · signed audit trail for destructive operations · quarantine-by-default restore.
+**This is the design's control set, and roughly half of it is built.** The distinction is drawn here rather than left to be inferred, because a threat model is read by people deciding whether to trust a system, and a designed control read as a deployed one is worse than no entry at all. Per-decision detail is in [implementation status](implementation-status.md).
+
+**In force** — implemented, with tests holding them:
+
+OS-authenticated local command surface · key material confined to the service account and never crossing the command surface (NFR-SEC-009) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
+
+**Designed, not built** — each waits on a phase, not on a decision:
+
+| Control | Waiting on |
+|---------|-----------|
+| Paired device identity for remote clients, off by default | The protocol is built; nothing carries it over a socket ([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)) |
+| Mutual device authentication | The same — the construction exists and has never spoken to another machine |
+| Content withheld from remote clients unless separately enabled | [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) |
+| Least-privilege repository grants; separate read/append/retention/administrative permissions | Phase 2–3 |
+| Keyed verification challenges | Replication (architecture 09 §5) |
+| Repository-server rate limits and quotas | Phase 3 |
+| Signed audit trail for destructive operations | Retention and GC, which are not built at all |
+| Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
+
+**Dedup trust domains are not in either list above, and that is the point.** An earlier version of this page put them under *in force* with a note that the `device` domain was "specified and unexercised". That was wrong in the direction that matters: **verify-on-reuse is not implemented at all**, including for `repository`, which is the default. Reuse is decided by index presence alone. See T-10 above, and treat the control as absent rather than partial.
 
 ## Review obligations
 

@@ -1,3 +1,5 @@
+using Bodu;
+
 namespace FallbackPlan.Storage.Abstractions;
 
 /// <summary>
@@ -10,8 +12,8 @@ public readonly record struct ObjectRange
     /// <exception cref="ArgumentOutOfRangeException">The offset is negative or the length not positive.</exception>
     public ObjectRange(long offset, long length)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        ThrowHelper.ThrowIfNegative(offset);
+        ThrowHelper.ThrowIfZeroOrNegative(length);
         Offset = offset;
         Length = length;
     }

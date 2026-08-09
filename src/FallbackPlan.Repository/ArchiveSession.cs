@@ -1,4 +1,6 @@
+using Bodu;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Threading.Channels;
 using FallbackPlan.Domain;
@@ -11,6 +13,7 @@ using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Segmentation;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -40,11 +43,24 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly SpoolPinnedConfiguration _pinned;
     private readonly IIntentScope? _intentScope;
     private readonly byte[] _classKey;
-    private readonly byte[] _segmentBuffer;
-    private readonly byte[] _compressed;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
-    private readonly ZstdSegmentCodec? _codec;
+
+    // Codecs are pooled rather than shared or made per-segment. One wraps a
+    // native compressor context and documents itself as not thread-safe, so the
+    // concurrent stage cannot share one; and construction allocates that
+    // context, so building one per segment would trade a lock for an
+    // allocation. The bag holds at most as many as can be in flight.
+    private readonly ConcurrentBag<ZstdSegmentCodec> _codecs = [];
+
+    // Segment buffers, pooled per session rather than through
+    // ArrayPool<byte>.Shared. Shared stops pooling above 1 MiB and a cdc-v1
+    // segment can be 8 MiB, so renting one per segment from it allocated a
+    // fresh large array every time — measured, and materially worse than the
+    // single session-long buffer it replaced. ArrayPool.Create was worse again:
+    // its implementation takes a lock per rent. A bag of same-sized buffers is
+    // what this actually needs, and it holds no more than can be in flight.
+    private readonly ConcurrentBag<byte[]> _buffers = [];
     private readonly List<ArchivedBlob> _blobs = [];
 
     // Upload leaves the archive loop (ADR-0029 §2). A sealed blob is handed to
@@ -55,9 +71,16 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly Channel<SealedBlob> _uploads;
     private readonly Task[] _uploadWorkers;
     private readonly Lock _blobGate = new();
-    private readonly Func<ObjectId, bool>? _segmentExists;
-    private readonly HashSet<ObjectId> _writtenThisSession = [];
+    private readonly ReusePredicate? _mayReuseSegment;
+
+    // A reservation set, not a record of what was written. The concurrent stage
+    // claims an object id before compressing it, so a duplicate segment loses
+    // the race and is treated as reused rather than compressed and appended a
+    // second time. ADR-0029 §1 frees which duplicate wins, but not how many
+    // records get written, and the reuse suites assert exact record counts.
+    private readonly ConcurrentDictionary<ObjectId, byte> _writtenThisSession = [];
     private BlobWriter? _writer;
+    private bool _resumeAttempted;
 
     internal ArchiveSession(
         CapturePolicy policy,
@@ -70,9 +93,9 @@ public sealed class ArchiveSession : IAsyncDisposable
         string spoolDirectory,
         SpoolPinnedConfiguration pinned,
         IIntentScope? intentScope,
-        Func<ObjectId, bool>? segmentExists)
+        ReusePredicate? mayReuseSegment)
     {
-        _segmentExists = segmentExists;
+        _mayReuseSegment = mayReuseSegment;
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -83,13 +106,8 @@ public sealed class ArchiveSession : IAsyncDisposable
         _pinned = pinned;
         _intentScope = intentScope;
         _classKey = keys.DeriveClassKey(BlobClass.Data, generation);
-        _segmentBuffer = ArrayPool<byte>.Shared.Rent(policy.MaximumSegmentBytes);
-        _compressed = ArrayPool<byte>.Shared.Rent(policy.MaximumSegmentBytes);
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
-        _codec = policy.Compression.Profile == CompressionProfile.ZstdV1
-            ? new ZstdSegmentCodec(policy.Compression.ZstdLevel, policy.MaximumSegmentBytes)
-            : null;
 
         // Bounded by the one concurrency setting (ADR-0029 §3), so the memory
         // bound stays statable: blobs in flight are part of what NFR-PERF-001
@@ -111,7 +129,61 @@ public sealed class ArchiveSession : IAsyncDisposable
     }
 
     /// <summary>Every blob sealed and uploaded by this session so far.</summary>
-    public IReadOnlyList<ArchivedBlob> Blobs => _blobs;
+    /// <remarks>
+    /// A snapshot, not a view. Upload workers append to the underlying list
+    /// while the archive loop runs (ADR-0029 §2), and handing out the live list
+    /// would let a caller enumerate it during a resize.
+    /// </remarks>
+    public IReadOnlyList<ArchivedBlob> Blobs
+    {
+        get
+        {
+            lock (_blobGate)
+            {
+                return [.. _blobs];
+            }
+        }
+    }
+
+    /// <summary>The blobs sealed since <paramref name="sealedBefore"/>, and the count now.</summary>
+    /// <remarks>
+    /// One lock acquisition for both, because taking the count and the tail
+    /// separately would let an upload land between them and attribute a blob to
+    /// the wrong call.
+    /// </remarks>
+    private List<ArchivedBlob> BlobsSealedSince(int sealedBefore)
+    {
+        lock (_blobGate)
+        {
+            return [.. _blobs.Skip(sealedBefore)];
+        }
+    }
+
+    private int SealedBlobCount()
+    {
+        lock (_blobGate)
+        {
+            return _blobs.Count;
+        }
+    }
+
+    /// <summary>
+    /// Whether an existing segment record may be referenced instead of written
+    /// again (09 §5–§6; NFR-PERF-010; FR-DED-002).
+    /// </summary>
+    /// <remarks>
+    /// The predicate answers with the index <em>and</em> the configured trust
+    /// domain, so under the default it may perform a read before saying yes
+    /// (<see cref="DedupTrustGate"/>). It is called from the concurrent stage
+    /// on several threads at once and owns whatever serialisation its state
+    /// needs — the session no longer holds a lock across it, because a lock
+    /// held across a verification fetch would serialise the pipeline behind
+    /// the network.
+    /// </remarks>
+    private ValueTask<bool> MayReuseSegmentAsync(ObjectId objectId, CancellationToken cancellationToken) =>
+        _mayReuseSegment is null
+            ? ValueTask.FromResult(false)
+            : _mayReuseSegment(objectId, cancellationToken);
 
     /// <summary>
     /// Archives one file as a new version, comparing against
@@ -125,7 +197,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<ArchiveResult> ArchiveFileAsync(
         Stream source, ArchiveResult? priorVersion, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
         var usesCdc = _policy.SegmentationProfile == SegmentationProfile.CdcV1;
 
@@ -153,7 +225,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
-        var sealedBefore = _blobs.Count;
+        var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         ISegmentReader segmentReader = usesCdc
@@ -162,48 +234,77 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         var logicalLength = 0L;
 
-        while (await segmentReader.ReadNextAsync(_segmentBuffer, cancellationToken).ConfigureAwait(false) is { } segment)
+        // The staged pipeline (ADR-0029 §1). Each entry is a segment already in
+        // flight; the channel's FIFO order is the reorder buffer, so the barrier
+        // below sees segments in the order the reader produced them without
+        // having to reconstruct that order. Capacity bounds how many are in
+        // flight, and with it the memory NFR-PERF-001 bounds — the +1 is the
+        // slack the upload channel's comment explains.
+        var prepared = Channel.CreateBounded<Task<PreparedSegment>>(
+            new BoundedChannelOptions(_policy.Concurrency + 1)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+            });
+
+        // The barrier runs on its own task and is the only thread that touches
+        // the blob writer, the counter allocator and the ordinal sequence.
+        var barrier = Task.Run(
+            () => DrainPreparedAsync(prepared.Reader, references, contentIds, cancellationToken),
+            CancellationToken.None);
+
+        try
         {
-            var plaintext = _segmentBuffer.AsMemory(0, segment.Length);
-            logicalLength = segment.Offset + segment.Length;
-            EngineDiagnostics.ArchiveBytesLogical.Add(segment.Length);
+            var reuse = new ReuseContext(priorByContent, comparable && !usesCdc ? priorVersion : null);
 
-            // 04 §5 order: content id, object id, compress, ordinal, encrypt.
-            var contentId = ContentHasher.Hash(plaintext.Span);
-            wholeFile.AppendData(plaintext.Span);
-
-            // Content-based reuse (09 §6, cdc-v1): the same bytes anywhere
-            // in the prior version need no new record.
-            if (priorByContent is not null &&
-                priorByContent.TryGetValue(contentId, out var prior) &&
-                prior.Length == segment.Length)
+            while (true)
             {
-                EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
-                references.Add(new SegmentReference(segment.Offset, segment.Length, prior.ObjectId));
-                contentIds.Add(contentId);
-                continue;
+                // Rented per segment, not per session: the reader fills the head
+                // of whatever buffer it is given, so one shared buffer would be
+                // overwritten by the next read while the previous segment was
+                // still being compressed and appended.
+                var plaintext = RentBuffer();
+                SegmentDescriptor? read;
+                try
+                {
+                    read = await segmentReader.ReadNextAsync(plaintext, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    ReturnBuffer(plaintext);
+                    throw;
+                }
+
+                if (read is not { } segment)
+                {
+                    ReturnBuffer(plaintext);
+                    break;
+                }
+
+                logicalLength = segment.Offset + segment.Length;
+                EngineDiagnostics.ArchiveBytesLogical.Add(segment.Length);
+
+                // The whole-file hash covers the file in order, so it is fed
+                // here and nowhere else. It is also the one SHA-256 pass that
+                // stays serial; the per-segment content id moves below, which
+                // is the "second hash" ADR-0029 §6 step 2 names.
+                wholeFile.AppendData(plaintext.AsSpan(0, segment.Length));
+
+                await prepared.Writer.WriteAsync(
+                    PrepareSegmentAsync(segment, plaintext, reuse, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
             }
 
-            // Positional reuse (09 §6, fixed-v1): identical content at the
-            // same position of the prior version needs no new record.
-            if (comparable && !usesCdc &&
-                segment.Index < priorVersion!.SegmentReferences.Count &&
-                priorVersion.SegmentReferences[(int)segment.Index].LogicalLength == segment.Length &&
-                priorVersion.SegmentContentIds[(int)segment.Index] == contentId)
-            {
-                EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
-                references.Add(new SegmentReference(
-                    segment.Offset,
-                    segment.Length,
-                    priorVersion.SegmentReferences[(int)segment.Index].ObjectId));
-                contentIds.Add(contentId);
-                continue;
-            }
-
-            var objectId = await AppendSegmentRecordAsync(contentId, plaintext, cancellationToken).ConfigureAwait(false);
-            references.Add(new SegmentReference(segment.Offset, segment.Length, objectId));
-            contentIds.Add(contentId);
+            prepared.Writer.TryComplete();
         }
+        catch (Exception exception)
+        {
+            prepared.Writer.TryComplete(exception);
+        }
+
+        // Always awaited, including when the producer failed: the barrier owns
+        // returning every rented buffer, so abandoning it would leak them.
+        await barrier.ConfigureAwait(false);
 
         var hash = new byte[32];
         wholeFile.GetHashAndReset(hash);
@@ -211,12 +312,294 @@ public sealed class ArchiveSession : IAsyncDisposable
         return new ArchiveResult(
             references,
             contentIds,
-            _blobs.Skip(sealedBefore).ToList(),
+            BlobsSealedSince(sealedBefore),
             logicalLength,
             hash,
             _policy.SegmentationProfile,
             _policy.SegmentSize,
             _policy.CdcParameters);
+    }
+
+    /// <summary>What a segment can be compared against for reuse (09 §6).</summary>
+    /// <remarks>
+    /// Both members are read-only for the file's duration, which is what lets
+    /// the reuse tests run in the concurrent stage: they need the content id,
+    /// and the content id is what moved off the serial path.
+    /// </remarks>
+    private readonly record struct ReuseContext(
+        Dictionary<ContentId, (ObjectId ObjectId, long Length)>? ByContent,
+        ArchiveResult? Positional);
+
+    /// <summary>
+    /// A segment carried from the concurrent stage to the ordered barrier.
+    /// </summary>
+    /// <remarks>
+    /// It owns its rented buffers. The barrier returns them once it has either
+    /// appended the record or decided there is none to append — no other path
+    /// may return them, or one segment's buffer would be handed out while
+    /// another still held a span into it.
+    /// </remarks>
+    private sealed record PreparedSegment(
+        long Offset,
+        int Length,
+        ContentId ContentId,
+        ObjectId ObjectId,
+        byte[] Plaintext,
+        byte[]? Compressed,
+        int PayloadLength,
+        CompressionProfile Profile,
+        bool NeedsRecord);
+
+    /// <summary>
+    /// The concurrent stage: content id, reuse, object id, dedup reservation and
+    /// compression. Everything here may run on any thread and in any order.
+    /// </summary>
+    private async Task<PreparedSegment> PrepareSegmentAsync(
+        SegmentDescriptor segment, byte[] plaintext, ReuseContext reuse, CancellationToken cancellationToken)
+    {
+        // Yield first so the producer is not the thread that does this work —
+        // otherwise the pipeline is a channel with a serial loop behind it.
+        await Task.Yield();
+
+        try
+        {
+            var contentId = ContentHasher.Hash(plaintext.AsSpan(0, segment.Length));
+
+            // Content-based reuse (09 §6, cdc-v1): the same bytes anywhere in
+            // the prior version need no new record.
+            if (reuse.ByContent is not null &&
+                reuse.ByContent.TryGetValue(contentId, out var prior) &&
+                prior.Length == segment.Length)
+            {
+                return Reused(segment, plaintext, contentId, prior.ObjectId);
+            }
+
+            // Positional reuse (09 §6, fixed-v1): identical content at the same
+            // position of the prior version needs no new record.
+            if (reuse.Positional is { } positional &&
+                segment.Index < positional.SegmentReferences.Count &&
+                positional.SegmentReferences[(int)segment.Index].LogicalLength == segment.Length &&
+                positional.SegmentContentIds[(int)segment.Index] == contentId)
+            {
+                return Reused(
+                    segment, plaintext, contentId, positional.SegmentReferences[(int)segment.Index].ObjectId);
+            }
+
+            var objectId = _objectIdDeriver.Derive(ObjectType.SegmentRecord, contentId);
+
+            // Segment reuse by object identifier (09 §6; NFR-PERF-010). The
+            // in-session half is a reservation: whoever claims the id writes the
+            // record, and anyone else with the same content is reused. Claiming
+            // before compressing is what keeps the record count deterministic
+            // when two identical segments are in flight at once.
+            if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
+                !_writtenThisSession.TryAdd(objectId, 0))
+            {
+                return Reused(segment, plaintext, contentId, objectId);
+            }
+
+            var codec = RentCodec();
+            byte[]? compressed = null;
+            var payloadLength = segment.Length;
+            var profile = CompressionProfile.None;
+
+            try
+            {
+                if (codec is not null)
+                {
+                    var destination = RentBuffer();
+                    if (codec.TryCompressForStorage(
+                            plaintext.AsSpan(0, segment.Length),
+                            _policy.Compression.ThresholdPermille,
+                            destination,
+                            out var written))
+                    {
+                        compressed = destination;
+                        payloadLength = written;
+                        profile = CompressionProfile.ZstdV1;
+                    }
+                    else
+                    {
+                        ReturnBuffer(destination);
+                    }
+                }
+            }
+            finally
+            {
+                ReturnCodec(codec);
+            }
+
+            return new PreparedSegment(
+                segment.Offset,
+                segment.Length,
+                contentId,
+                objectId,
+                plaintext,
+                compressed,
+                payloadLength,
+                profile,
+                NeedsRecord: true);
+        }
+        catch
+        {
+            // The buffer belongs to this method once it is handed over, so a
+            // failure here returns it rather than leaving it to a barrier that
+            // will never see this item.
+            ReturnBuffer(plaintext);
+            throw;
+        }
+    }
+
+    private static PreparedSegment Reused(
+        SegmentDescriptor segment, byte[] plaintext, ContentId contentId, ObjectId objectId)
+    {
+        EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
+
+        return new PreparedSegment(
+            segment.Offset,
+            segment.Length,
+            contentId,
+            objectId,
+            plaintext,
+            Compressed: null,
+            PayloadLength: 0,
+            CompressionProfile.None,
+            NeedsRecord: false);
+    }
+
+    /// <summary>
+    /// The ordered barrier (ADR-0029 §1): assign ordinal, encrypt, append,
+    /// digest — strictly in the order the reader produced the segments.
+    /// </summary>
+    /// <remarks>
+    /// Single-threaded by construction, which is what every invariant below it
+    /// rests on. <see cref="BlobWriter.AppendRecordAsync"/> takes its ordinal
+    /// from the record count and is not re-entrant; the ordinal is the AEAD
+    /// nonce, so two callers racing to one ordinal is the failure specification
+    /// 05 §6.1 calls catastrophic. The blob counter allocator and the upload
+    /// channel's <c>SingleWriter</c> both depend on this too.
+    /// </remarks>
+    private async Task DrainPreparedAsync(
+        ChannelReader<Task<PreparedSegment>> reader,
+        List<SegmentReference> references,
+        List<ContentId> contentIds,
+        CancellationToken cancellationToken)
+    {
+        Exception? failure = null;
+
+        await foreach (var pending in reader.ReadAllAsync(CancellationToken.None).ConfigureAwait(false))
+        {
+            PreparedSegment segment;
+            try
+            {
+                segment = await pending.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                // Keep draining. The producer blocks on a full channel, so
+                // abandoning the loop here would deadlock it, and every item
+                // still queued is holding rented buffers.
+                failure ??= exception;
+                continue;
+            }
+
+            try
+            {
+                if (failure is null)
+                {
+                    await AppendPreparedAsync(segment, references, contentIds, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+            finally
+            {
+                ReturnBuffer(segment.Plaintext);
+                if (segment.Compressed is not null)
+                {
+                    ReturnBuffer(segment.Compressed);
+                }
+            }
+        }
+
+        if (failure is not null)
+        {
+            throw failure;
+        }
+    }
+
+    private async ValueTask AppendPreparedAsync(
+        PreparedSegment segment,
+        List<SegmentReference> references,
+        List<ContentId> contentIds,
+        CancellationToken cancellationToken)
+    {
+        if (segment.NeedsRecord)
+        {
+            var payload = segment.Compressed is null
+                ? segment.Plaintext.AsMemory(0, segment.Length)
+                : segment.Compressed.AsMemory(0, segment.PayloadLength);
+
+            if (_writer is not null && !_writer.CanAppend(payload.Length))
+            {
+                await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            _writer ??= OpenWriter();
+
+            await _writer.AppendRecordAsync(
+                ObjectType.SegmentRecord,
+                segment.ObjectId,
+                segment.Profile,
+                (ulong)segment.Length,
+                payload,
+                cancellationToken).ConfigureAwait(false);
+
+            EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
+            EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
+
+            if (_writer.ShouldSeal)
+            {
+                await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        references.Add(new SegmentReference(segment.Offset, segment.Length, segment.ObjectId));
+        contentIds.Add(segment.ContentId);
+    }
+
+    /// <summary>A buffer big enough for any segment this policy can produce.</summary>
+    private byte[] RentBuffer() =>
+        _buffers.TryTake(out var buffer) ? buffer : new byte[_policy.MaximumSegmentBytes];
+
+    /// <summary>
+    /// Returns a segment buffer for reuse within this session.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not cleared here. These buffers hold plaintext, and the
+    /// session-long ones they replaced were zeroed on return because they went
+    /// back to a pool other components draw from. This bag is private to one
+    /// session and hands buffers back only to the same pipeline, so zeroing on
+    /// every return would be an 8 MiB memset per segment that protects nothing.
+    /// They are zeroed once, at disposal, before they become garbage.
+    /// </remarks>
+    private void ReturnBuffer(byte[] buffer) => _buffers.Add(buffer);
+
+    private ZstdSegmentCodec? RentCodec() =>
+        _policy.Compression.Profile != CompressionProfile.ZstdV1
+            ? null
+            : _codecs.TryTake(out var codec)
+                ? codec
+                : new ZstdSegmentCodec(_policy.Compression.ZstdLevel, _policy.MaximumSegmentBytes);
+
+    private void ReturnCodec(ZstdSegmentCodec? codec)
+    {
+        if (codec is not null)
+        {
+            _codecs.Add(codec);
+        }
     }
 
     /// <summary>
@@ -232,8 +615,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<ArchiveResult> ArchiveSparseFileAsync(
         Stream source, IReadOnlyList<SparseExtent> holes, long logicalLength, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(holes);
+        ThrowHelper.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(holes);
 
         if (!HolesAreWellFormed(holes, logicalLength))
         {
@@ -243,12 +626,18 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         var references = new List<SegmentReference>();
         var contentIds = new List<ContentId>();
-        var sealedBefore = _blobs.Count;
+        var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         long position = 0;
         var holeIndex = 0;
 
+        // One rental for the call. This path is serial by nature — a run's
+        // segments are read and appended one at a time — so nothing else can be
+        // holding a span into the buffer when the next read fills it.
+        var segmentBuffer = RentBuffer();
+        try
+        {
         while (position < logicalLength)
         {
             if (holeIndex < holes.Count && (long)holes[holeIndex].Offset == position)
@@ -275,9 +664,9 @@ public sealed class ArchiveSession : IAsyncDisposable
                 ? new CdcSegmentReader(run, _policy.CdcParameters!.Value)
                 : new FixedSegmentReader(run, _policy.SegmentSize);
 
-            while (await segmentReader.ReadNextAsync(_segmentBuffer, cancellationToken).ConfigureAwait(false) is { } segment)
+            while (await segmentReader.ReadNextAsync(segmentBuffer, cancellationToken).ConfigureAwait(false) is { } segment)
             {
-                var plaintext = _segmentBuffer.AsMemory(0, segment.Length);
+                var plaintext = segmentBuffer.AsMemory(0, segment.Length);
                 var contentId = ContentHasher.Hash(plaintext.Span);
                 wholeFile.AppendData(plaintext.Span);
 
@@ -288,6 +677,11 @@ public sealed class ArchiveSession : IAsyncDisposable
 
             position = runEnd;
         }
+        }
+        finally
+        {
+            ReturnBuffer(segmentBuffer);
+        }
 
         var hash = new byte[32];
         wholeFile.GetHashAndReset(hash);
@@ -295,7 +689,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         return new ArchiveResult(
             references,
             contentIds,
-            _blobs.Skip(sealedBefore).ToList(),
+            BlobsSealedSince(sealedBefore),
             logicalLength,
             hash,
             _policy.SegmentationProfile,
@@ -312,29 +706,37 @@ public sealed class ArchiveSession : IAsyncDisposable
     public async ValueTask<SingleSegmentRecord?> TryArchiveSingleSegmentAsync(
         Stream source, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(source);
 
-        var length = 0;
-        int read;
-        while (length < _policy.MaximumSegmentBytes &&
-               (read = await source.ReadAsync(
-                   _segmentBuffer.AsMemory(length, _policy.MaximumSegmentBytes - length), cancellationToken)
-                   .ConfigureAwait(false)) > 0)
+        var segmentBuffer = RentBuffer();
+        try
         {
-            length += read;
-        }
+            var length = 0;
+            int read;
+            while (length < _policy.MaximumSegmentBytes &&
+                   (read = await source.ReadAsync(
+                       segmentBuffer.AsMemory(length, _policy.MaximumSegmentBytes - length), cancellationToken)
+                       .ConfigureAwait(false)) > 0)
+            {
+                length += read;
+            }
 
-        // Anything left beyond the segment bound means "does not fit".
-        var probe = new byte[1];
-        if (await source.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0)
+            // Anything left beyond the segment bound means "does not fit".
+            var probe = new byte[1];
+            if (await source.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0)
+            {
+                return null;
+            }
+
+            var plaintext = segmentBuffer.AsMemory(0, length);
+            var contentId = ContentHasher.Hash(plaintext.Span);
+            var objectId = await AppendSegmentRecordAsync(contentId, plaintext, cancellationToken).ConfigureAwait(false);
+            return new SingleSegmentRecord(objectId, contentId, (ulong)length);
+        }
+        finally
         {
-            return null;
+            ReturnBuffer(segmentBuffer);
         }
-
-        var plaintext = _segmentBuffer.AsMemory(0, length);
-        var contentId = ContentHasher.Hash(plaintext.Span);
-        var objectId = await AppendSegmentRecordAsync(contentId, plaintext, cancellationToken).ConfigureAwait(false);
-        return new SingleSegmentRecord(objectId, contentId, (ulong)length);
     }
 
     /// <summary>
@@ -376,9 +778,28 @@ public sealed class ArchiveSession : IAsyncDisposable
 
     private async Task UploadWorkerAsync()
     {
-        await foreach (var sealedBlob in _uploads.Reader.ReadAllAsync().ConfigureAwait(false))
+        try
         {
-            await UploadAsync(sealedBlob).ConfigureAwait(false);
+            await foreach (var sealedBlob in _uploads.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                await UploadAsync(sealedBlob).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // A dead worker must not leave the producer parked. Without this the
+            // failing worker simply stops reading: once every worker has gone the
+            // same way and the bounded channel is full, SealAndQueueAsync blocks
+            // in WriteAsync for ever, because nothing left alive will ever
+            // complete the channel it is waiting on.
+            //
+            // Completing without an error is deliberate. Completing *with* one
+            // makes every healthy sibling throw ChannelClosedException wrapping
+            // it, and then the drain reports whichever wrapper it reaches first
+            // instead of the upload that actually broke. The cause stays on this
+            // task, which is where DrainUploadsAsync looks for it.
+            _uploads.Writer.TryComplete();
+            throw;
         }
     }
 
@@ -404,7 +825,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
-                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
+                throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
             }
 
             EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
@@ -429,6 +850,12 @@ public sealed class ArchiveSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Appends one segment serially — the sparse and single-segment paths,
+    /// which produce at most one segment at a time and so have nothing to
+    /// overlap. It runs the same stages as the pipeline, in the same order,
+    /// without the staging.
+    /// </summary>
     private async ValueTask<ObjectId> AppendSegmentRecordAsync(
         ContentId contentId, ReadOnlyMemory<byte> plaintext, CancellationToken cancellationToken)
     {
@@ -437,29 +864,96 @@ public sealed class ArchiveSession : IAsyncDisposable
         // Segment reuse by object identifier (specification 09 §6;
         // NFR-PERF-010): equal content derives an equal identifier, and an
         // identifier the index already locates — or this session already
-        // wrote — needs no new record. Keyed on the object id so the test
+        // claimed — needs no new record. Keyed on the object id so the test
         // survives a catalogue rebuild.
-        if (_writtenThisSession.Contains(objectId) || _segmentExists?.Invoke(objectId) == true)
+        if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
+            !_writtenThisSession.TryAdd(objectId, 0))
         {
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
             return objectId;
         }
 
+        var codec = RentCodec();
+        byte[]? compressed = null;
         var payload = plaintext;
         var profile = CompressionProfile.None;
-        if (_codec is not null &&
-            _codec.TryCompressForStorage(plaintext.Span, _policy.Compression.ThresholdPermille, _compressed, out var written))
+
+        try
         {
-            payload = _compressed.AsMemory(0, written);
-            profile = CompressionProfile.ZstdV1;
+            if (codec is not null)
+            {
+                var destination = RentBuffer();
+                if (codec.TryCompressForStorage(
+                        plaintext.Span, _policy.Compression.ThresholdPermille, destination, out var written))
+                {
+                    compressed = destination;
+                    payload = destination.AsMemory(0, written);
+                    profile = CompressionProfile.ZstdV1;
+                }
+                else
+                {
+                    ReturnBuffer(destination);
+                }
+            }
+
+            ReturnCodec(codec);
+            codec = null;
+
+            if (_writer is not null && !_writer.CanAppend(payload.Length))
+            {
+                await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            _writer ??= OpenWriter();
+
+            await _writer.AppendRecordAsync(
+                ObjectType.SegmentRecord,
+                objectId,
+                profile,
+                (ulong)plaintext.Length,
+                payload,
+                cancellationToken).ConfigureAwait(false);
+
+            EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
+            EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
+
+            if (_writer.ShouldSeal)
+            {
+                await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return objectId;
+        }
+        finally
+        {
+            ReturnCodec(codec);
+            if (compressed is not null)
+            {
+                ReturnBuffer(compressed);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens the blob to append to: the spool an interrupted run left behind
+    /// if it can be resumed, otherwise a new blob.
+    /// </summary>
+    private BlobWriter OpenWriter()
+    {
+        // Once per session, and only when a blob is actually wanted — a
+        // session that archives nothing leaves the spool for the next one
+        // rather than discarding work it never looked at.
+        if (!_resumeAttempted)
+        {
+            _resumeAttempted = true;
+            var resumed = TryResumeSpool();
+            if (resumed is not null)
+            {
+                return resumed;
+            }
         }
 
-        if (_writer is not null && !_writer.CanAppend(payload.Length))
-        {
-            await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        _writer ??= BlobWriter.Create(
+        return BlobWriter.Create(
             _repositoryId,
             _writerId,
             _generation,
@@ -470,25 +964,51 @@ public sealed class ArchiveSession : IAsyncDisposable
             _policy.BlobWriteProfile,
             _spoolDirectory,
             pinned: _pinned);
+    }
 
-        await _writer.AppendRecordAsync(
-            ObjectType.SegmentRecord,
-            objectId,
-            profile,
-            (ulong)plaintext.Length,
-            payload,
-            cancellationToken).ConfigureAwait(false);
+    /// <summary>
+    /// Resumes the spool an interrupted run left, or <see langword="null"/>
+    /// when there is nothing safely resumable (specification 05 §6.3;
+    /// FR-ARCH-011, NFR-SEC-003).
+    /// </summary>
+    private BlobWriter? TryResumeSpool()
+    {
+        var result = BlobWriter.TryResume(
+            _spoolDirectory,
+            _repositoryId,
+            _writerId,
+            _generation,
+            BlobClass.Data,
+            _classKey,
+            _policy.EncryptionProfile,
+            _policy.BlobWriteProfile,
+            _pinned);
 
-        _writtenThisSession.Add(objectId);
-        EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
-        EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
-
-        if (_writer.ShouldSeal)
+        if (result is not ResumeResult.Resumed resumed)
         {
-            await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
+            // NoSpool, or MustRestart having already deleted the spool and its
+            // sidecar. Either way the caller creates a new blob, which draws a
+            // fresh salt and so reuses no ordinal (05 §6.2).
+            return null;
         }
 
-        return objectId;
+        var writer = resumed.Writer;
+
+        // The blob arrives holding records this session did not write. Its
+        // segments have to enter the dedup set, or the session appends a
+        // second copy of a segment the blob already carries — the same
+        // content at a second ordinal, which would inflate the blob and
+        // publish two records where the manifest references one.
+        foreach (var entry in writer.Entries)
+        {
+            _writtenThisSession.TryAdd(entry.ObjectId, 0);
+        }
+
+        // Nothing else needs rebuilding: the index entries for these records
+        // are derived from the sealed blob's own record table at seal time,
+        // which the resumed writer holds in full, and the blob's counter and
+        // salt come from its envelope rather than the allocator.
+        return writer;
     }
 
     private async ValueTask SealAndQueueAsync(CancellationToken cancellationToken)
@@ -501,9 +1021,22 @@ public sealed class ArchiveSession : IAsyncDisposable
         // Hand it over and carry on. If a worker has already failed the channel
         // is complete, and the write fails here rather than losing the blob
         // silently.
-        if (!_uploads.Writer.TryWrite(sealedBlob))
+        try
         {
-            await _uploads.Writer.WriteAsync(sealedBlob, cancellationToken).ConfigureAwait(false);
+            if (!_uploads.Writer.TryWrite(sealedBlob))
+            {
+                await _uploads.Writer.WriteAsync(sealedBlob, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (ChannelClosedException)
+        {
+            await sealedBlob.DisposeAsync().ConfigureAwait(false);
+
+            // The queue is closed because a worker died. Draining reports what
+            // actually went wrong; a bare ChannelClosedException would name the
+            // plumbing that noticed rather than the upload that failed.
+            await DrainUploadsAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
@@ -528,16 +1061,36 @@ public sealed class ArchiveSession : IAsyncDisposable
     {
         if (_writer is not null)
         {
-            await _writer.DisposeAsync().ConfigureAwait(false);
+            // A blob still open here means the session did not finish:
+            // FlushAsync seals the open blob, so reaching disposal with one
+            // is the interrupted case (04 §5.1 row 3, "partial spool, nothing
+            // uploaded"). Abandon rather than dispose — the spool and its
+            // sidecar stay on disk for the next session to resume (05 §6.3)
+            // instead of being deleted along with the work they hold. A
+            // partial spool is still never uploaded.
+            await _writer.AbandonAsync().ConfigureAwait(false);
             _writer = null;
         }
 
         CryptographicOperations.ZeroMemory(_classKey);
-        ArrayPool<byte>.Shared.Return(_segmentBuffer, clearArray: true);
-        ArrayPool<byte>.Shared.Return(_compressed, clearArray: true);
+
+        // The segment buffers held file plaintext. They are zeroed here, once,
+        // rather than on every return — see ReturnBuffer.
+        while (_buffers.TryTake(out var buffer))
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+        }
+
         _objectIdDeriver.Dispose();
         _storeKeyDeriver.Dispose();
-        _codec?.Dispose();
+
+        // Each holds a native compressor context, so they are disposed rather
+        // than dropped. The bag is only reachable here once every prepared
+        // segment has been drained, which is what returns them to it.
+        while (_codecs.TryTake(out var codec))
+        {
+            codec.Dispose();
+        }
     }
 
     /// <summary>
