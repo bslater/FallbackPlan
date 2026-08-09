@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
@@ -54,16 +55,23 @@ internal enum ReuseVerification
 /// so a successful read <em>is</em> the confirmation ADR-0006 asks for. There
 /// is no separate verification step to get wrong.
 /// </para>
+/// <para>
+/// Both callers share one instance and they do not share a thread: the
+/// rename path runs on the sequential tree walk, verify-on-reuse runs on the
+/// archive pipeline at the configured concurrency. Everything here is
+/// therefore safe to call concurrently — the blob cache explicitly so, and
+/// the catalogue through <see cref="CatalogueGate"/>.
+/// </para>
 /// </remarks>
 internal sealed class TargetedRecordReader(
     IObjectStore store,
     RepositoryId repositoryId,
     RepositoryKeySet keys,
-    Catalogue.Catalogue catalogue) : IDisposable
+    CatalogueGate catalogue) : IDisposable
 {
     private readonly ObjectIdDeriver _objectIdDeriver = new(keys.ContentIdKey);
     private readonly StoreBlobKeyDeriver _storeKeyDeriver = new(keys.KeyIdKey);
-    private readonly Dictionary<ObjectKey, BlobReader?> _blobs = [];
+    private readonly ConcurrentDictionary<ObjectKey, BlobReader?> _blobs = new();
 
     /// <summary>
     /// The file-version manifest <paramref name="objectId"/> names, or
@@ -142,7 +150,7 @@ internal sealed class TargetedRecordReader(
     private async ValueTask<(RecordReadOutcome? Outcome, byte[]? Plaintext)> ReadAsync(
         ObjectId objectId, ObjectType expectedType, CancellationToken cancellationToken)
     {
-        if (catalogue.ResolveLocation(objectId) is not { } location)
+        if (catalogue.Read(c => c.ResolveLocation(objectId)) is not { } location)
         {
             return (null, null);
         }
@@ -220,17 +228,11 @@ internal sealed class TargetedRecordReader(
             // may not be there.
             var metadata = await store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
 
-            if (!metadata.Found || metadata.Metadata!.Length <= 0)
-            {
-                _blobs[storeKey] = null;
-                return null;
-            }
-
-            var blobLength = metadata.Metadata.Length;
-
-            reader = await BlobReader.OpenAsync(
-                store, storeKey, blobLength, repositoryId, keys.DeriveClassKey, _objectIdDeriver, cancellationToken)
-                .ConfigureAwait(false);
+            reader = !metadata.Found || metadata.Metadata!.Length <= 0
+                ? null
+                : await BlobReader.OpenAsync(
+                    store, storeKey, metadata.Metadata.Length, repositoryId, keys.DeriveClassKey,
+                    _objectIdDeriver, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is BlobFormatException or IOException)
         {
@@ -239,7 +241,17 @@ internal sealed class TargetedRecordReader(
             reader = null;
         }
 
-        _blobs[storeKey] = reader;
-        return reader;
+        // The open happens outside the cache rather than under a lock, so two
+        // threads wanting the same blob can both open it. The loser disposes
+        // its own reader and takes the winner's: every caller past this point
+        // holds the one reader the cache owns and Dispose will close.
+        var shared = _blobs.GetOrAdd(storeKey, reader);
+
+        if (!ReferenceEquals(shared, reader))
+        {
+            reader?.Dispose();
+        }
+
+        return shared;
     }
 }

@@ -177,15 +177,20 @@ public sealed partial class PublicationOrchestrator
         // a renamed file's prior manifest (architecture 06 §4.2) and the
         // verify-on-reuse confirmation (ADR-0006). Both want the same blob
         // cache, and neither exists without a catalogue to resolve a location.
-        using var reader = _catalogue is { } readerCatalogue
-            ? new TargetedRecordReader(_store, _repositoryId, _keys, readerCatalogue)
+        // Every catalogue call made while the pipeline is running goes
+        // through one gate, because the pipeline is concurrent and a SQLite
+        // connection is not (CatalogueGate).
+        var gated = _catalogue is { } concurrentCatalogue ? new CatalogueGate(concurrentCatalogue) : null;
+
+        using var reader = gated is not null
+            ? new TargetedRecordReader(_store, _repositoryId, _keys, gated)
             : null;
 
         // The reuse decision, trust domain included (09 §5; FR-DED-002).
         // Without a catalogue there is no index to reuse from at all, so the
         // question never arises and the gate is absent rather than permissive.
-        using var trust = _catalogue is { } trustCatalogue
-            ? new DedupTrustGate(_policy.DedupTrustDomain, _writerId, trustCatalogue, reader!)
+        var trust = gated is not null
+            ? new DedupTrustGate(_policy.DedupTrustDomain, _writerId, gated, reader!)
             : null;
         var dedup = trust is null ? null : (ReusePredicate)trust.MayReuseAsync;
 
@@ -210,7 +215,7 @@ public sealed partial class PublicationOrchestrator
                 : null;
 
             var walker = new TreeWalkPublisher(
-                job, options, session, builder, grouper, _catalogue, sourceKeys,
+                job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
                 reader);
 
@@ -492,7 +497,7 @@ public sealed partial class PublicationOrchestrator
         ArchiveSession session,
         ManifestBuilder builder,
         HardlinkGrouper grouper,
-        Catalogue.Catalogue? catalogue,
+        CatalogueGate? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
         HintSource? hints,
         TargetedRecordReader? manifests)
@@ -758,13 +763,13 @@ public sealed partial class PublicationOrchestrator
                 return null;
             }
 
-            if (catalogue.LookupPath(priorSnapshot.Span, entry.RelativePath) is { } byPath)
+            if (catalogue.Read(c => c.LookupPath(priorSnapshot.Span, entry.RelativePath)) is { } byPath)
             {
                 return byPath;
             }
 
             return entry.Identity is { } identity
-                ? catalogue.LookupIdentity(priorSnapshot.Span, identity.Device, identity.FileId)
+                ? catalogue.Read(c => c.LookupIdentity(priorSnapshot.Span, identity.Device, identity.FileId))
                 : null;
         }
 

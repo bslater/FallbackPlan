@@ -433,8 +433,15 @@ public sealed partial class LocalScanTests : IDisposable
         // the scanner descended through it — out of the approved root, which
         // architecture 06 §2 forbids. Junctions need no privilege to create,
         // so this is the shape an unprivileged attacker actually has.
+        //
+        // It has to be a real junction, which means mklink: the managed
+        // Directory.CreateSymbolicLink makes a directory *symlink*, and that
+        // does need SeCreateSymbolicLinkPrivilege — a privilege an ordinary
+        // Windows account and an ordinary test runner both lack. Building the
+        // link that way tested a shape the attacker cannot make and threw
+        // "A required privilege is not held by the client" everywhere else.
         var junction = Path.Combine(_root, "junction");
-        Directory.CreateSymbolicLink(junction, Path.Combine(_root, "target"));
+        Assert.IsTrue(CreateJunction(junction, Path.Combine(_root, "target")), "could not create a directory junction");
 
         var events = await ScanAsync();
         var link = events.OfType<ScanEvent.Leaf>()
@@ -445,6 +452,31 @@ public sealed partial class LocalScanTests : IDisposable
 
         // Followed content would appear twice; it must appear exactly once.
         Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), events.OfType<ScanEvent.Leaf>());
+    }
+
+    /// <summary>
+    /// Creates a directory junction at <paramref name="path"/>. <c>mklink</c>
+    /// is a <c>cmd</c> built-in, so it has to be run through the shell; there
+    /// is no managed API that makes a mount point rather than a symlink.
+    /// </summary>
+    private static bool CreateJunction(string path, string target)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            ArgumentList = { "/c", "mklink", "/J", path, target },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        });
+
+        if (process is null)
+        {
+            return false;
+        }
+
+        process.WaitForExit(TimeSpan.FromSeconds(30));
+        return process.ExitCode == 0 && Directory.Exists(path);
     }
 
     [TestMethod]

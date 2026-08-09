@@ -125,10 +125,19 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             .Count();
         Assert.IsTrue(totalDataBlobs > 2, "the scenario needs several data blobs to make targeting observable");
 
-        // Target only the FIRST segment's object — its records live in one
-        // blob, so the scan must stop early (NFR-PERF-015's direction: one
-        // named object without a whole-repository scan).
-        var target = published.Archive.SegmentReferences[0].ObjectId;
+        // The target is taken from the first blob the scan will reach, not
+        // from the first segment of the file. Which blob holds segment 0
+        // depends on which concurrent worker sealed first, and the scan order
+        // is by store key — keyed, so effectively unrelated to write order.
+        // Asserting "fewer than all" against an arbitrary target therefore
+        // fails whenever it lands in the last blob enumerated, about one run
+        // in `totalDataBlobs`, and it did: the suite went red under whole-
+        // solution load and green on its own.
+        //
+        // Pinning the target to the first blob makes the claim exact instead
+        // of probabilistic — one blob scanned, not merely "not all of them" —
+        // which is the stronger statement NFR-PERF-015 actually wants.
+        var target = await FirstSegmentInScanOrderAsync(store, keys);
 
         using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "targeted.db"), Repo);
@@ -139,9 +148,44 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             CancellationToken.None);
 
         Assert.IsTrue(report.TargetSatisfied);
-        Assert.IsTrue(report.DataBlobsScanned < totalDataBlobs,
-            $"targeting must stop early: scanned {report.DataBlobsScanned} of {totalDataBlobs} data blobs");
+        Assert.AreEqual(1, report.DataBlobsScanned,
+            $"targeting must stop at the blob that satisfies it, of {totalDataBlobs} data blobs");
         Assert.IsNotNull(catalogue.ResolveLocation(target));
+    }
+
+    /// <summary>
+    /// A segment object living in the first data blob the forensic scan
+    /// reaches — the store enumerates <c>blobs/data/</c> in key order and the
+    /// rebuilder walks it in that order.
+    /// </summary>
+    private static async Task<Domain.Identifiers.ObjectId> FirstSegmentInScanOrderAsync(
+        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys)
+    {
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/data/"), ListOptions.Default, CancellationToken.None))
+        {
+            var metadata = await store.GetMetadataAsync(entry.Key, CancellationToken.None);
+
+            if (!metadata.Found)
+            {
+                continue;
+            }
+
+            using var deriver = new ObjectIdDeriver(keys.ContentIdKey);
+            using var reader = await FallbackPlan.Repository.Packing.BlobReader.OpenAsync(
+                store, entry.Key, metadata.Metadata!.Length, Repo, keys.DeriveClassKey, deriver,
+                CancellationToken.None);
+
+            foreach (var record in reader.RecordTable)
+            {
+                if (record.ObjectType == ObjectType.SegmentRecord)
+                {
+                    return record.ObjectId;
+                }
+            }
+        }
+
+        throw new InvalidOperationException("no data blob carries a segment record");
     }
 
     [TestMethod]

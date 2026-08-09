@@ -24,6 +24,13 @@ namespace FallbackPlan.Repository.Packing;
 /// reader that skips that step restores corrupt data and reports success.
 /// Corruption is local: each record resolves to its own
 /// <see cref="RecordReadResult"/>.
+/// <para>
+/// One reader may be read from several threads at once, which is the whole
+/// point of caching it: the objects a publication wants cluster into a few
+/// blobs. Everything a record read touches is either immutable or local to
+/// the call, with one exception — the zstd context, which is a stateful
+/// native decoder and is guarded below.
+/// </para>
 /// </remarks>
 public sealed class BlobReader : IDisposable
 {
@@ -34,6 +41,7 @@ public sealed class BlobReader : IDisposable
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly byte[] _blobKey;
     private readonly ZstdSegmentDecompressor _decompressor = new();
+    private readonly Lock _decompressorGate = new();
 
     private BlobReader(
         IObjectStore store,
@@ -221,7 +229,16 @@ public sealed class BlobReader : IDisposable
             plaintext = new byte[header.LogicalLength];
             try
             {
-                _decompressor.Decompress(storedPayload, plaintext);
+                // The one piece of shared mutable state in a record read.
+                // Concurrent calls on one native decoder do not fail loudly —
+                // they produce plausible garbage, which then fails step 7
+                // below and reads as corruption in the repository rather than
+                // as a bug here. Held only across the decompress: the range
+                // read above and the hash below stay outside it.
+                lock (_decompressorGate)
+                {
+                    _decompressor.Decompress(storedPayload, plaintext);
+                }
             }
             catch (CompressionFormatException exception)
             {

@@ -158,6 +158,51 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             + $"{second.Store.Reads - readsToVerify}");
     }
 
+    [TestMethod]
+    public async Task RepositoryDomain_ManySegmentsVerifiedConcurrently_ReusesThemAllWithoutRacing()
+    {
+        var store = new CountingObjectStore(CreateStore());
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var source = ManyFileSource();
+
+        using (var first = OpenCatalogue("first"))
+        {
+            await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Repository)
+                .PublishAsync(Job(source, 0xC1), CancellationToken.None);
+        }
+
+        using var second = OpenCatalogue("second");
+        using (var loader = new IndexLoader(store, Repo, hierarchy))
+        {
+            await new CatalogueRebuilder(loader).RebuildAsync(
+                second, currentGeneration: 0, gapPatienceGenerations: 2,
+                isSequenceAccountedAsync: null, CancellationToken.None);
+        }
+
+        // The reuse decision is asked from the archive pipeline, which is
+        // concurrent, and answering it reads the catalogue and caches an open
+        // blob. Both of those were built for the sequential tree walk, and one
+        // file's two segments never made the overlap wide enough to notice:
+        // the first Windows run of the suite died on a corrupted Dictionary
+        // inside the blob cache. Twenty-four files across many blobs at eight
+        // workers is wide enough.
+        var published = await Publish(
+                store, keys, hierarchy, second, SecondWriter, "second", DedupTrustDomain.Repository, concurrency: 8)
+            .PublishAsync(
+                Job(source, 0xC2, now: 1_722_600_000_002) with
+                {
+                    DeviceId = Enumerable.Repeat((byte)0x44, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        // Every segment verified and was referenced: nothing re-written, and
+        // nothing reported wrong. A race that lost a cache entry would show up
+        // here as content records the second writer should never have needed.
+        Assert.AreEqual(0, published.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(second.Findings());
+    }
+
     /// <summary>
     /// Writer one fills the repository; writer two arrives with a catalogue
     /// rebuilt from the index alone — which is how a second device really
@@ -169,40 +214,56 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         var store = new CountingObjectStore(CreateStore());
         var keys = CreateKeys();
         var hierarchy = new KeyHierarchy(MasterKey);
+        CatalogueDb? secondCatalogue = null;
 
-        var source = OneFileSource();
-
-        using (var first = OpenCatalogue("first"))
+        // Nothing here is owned by the caller until the record is returned, so
+        // a publication that throws has to close its own files. Otherwise the
+        // real exception is lost behind a cleanup failure — "the process
+        // cannot access 'catalogue-second.db'" — which says nothing about
+        // what actually went wrong.
+        try
         {
-            await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Repository)
-                .PublishAsync(Job(source, 0xB1), CancellationToken.None);
-        }
+            var source = OneFileSource();
 
-        if (corruptFirstWritersData)
+            using (var first = OpenCatalogue("first"))
+            {
+                await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Repository)
+                    .PublishAsync(Job(source, 0xB1), CancellationToken.None);
+            }
+
+            if (corruptFirstWritersData)
+            {
+                CorruptOneDataBlob();
+            }
+
+            // The second device knows nothing locally. It learns the first
+            // writer's locations the only way a second device can: from the
+            // repository's own index objects.
+            secondCatalogue = OpenCatalogue("second");
+            using (var loader = new IndexLoader(store, Repo, hierarchy))
+            {
+                await new CatalogueRebuilder(loader).RebuildAsync(
+                    secondCatalogue, currentGeneration: 0, gapPatienceGenerations: 2,
+                    isSequenceAccountedAsync: null, CancellationToken.None);
+            }
+
+            var published = await Publish(store, keys, hierarchy, secondCatalogue, SecondWriter, "second", domain)
+                .PublishAsync(
+                    Job(source, 0xB2, now: 1_722_600_000_002) with
+                    {
+                        DeviceId = Enumerable.Repeat((byte)0x44, 16).ToArray(),
+                    },
+                    CancellationToken.None);
+
+            return new SecondWriterRun(store, keys, hierarchy, secondCatalogue, published);
+        }
+        catch
         {
-            CorruptOneDataBlob();
+            secondCatalogue?.Dispose();
+            hierarchy.Dispose();
+            keys.Dispose();
+            throw;
         }
-
-        // The second device knows nothing locally. It learns the first
-        // writer's locations the only way a second device can: from the
-        // repository's own index objects.
-        var secondCatalogue = OpenCatalogue("second");
-        using (var loader = new IndexLoader(store, Repo, hierarchy))
-        {
-            await new CatalogueRebuilder(loader).RebuildAsync(
-                secondCatalogue, currentGeneration: 0, gapPatienceGenerations: 2,
-                isSequenceAccountedAsync: null, CancellationToken.None);
-        }
-
-        var published = await Publish(store, keys, hierarchy, secondCatalogue, SecondWriter, "second", domain)
-            .PublishAsync(
-                Job(source, 0xB2, now: 1_722_600_000_002) with
-                {
-                    DeviceId = Enumerable.Repeat((byte)0x44, 16).ToArray(),
-                },
-                CancellationToken.None);
-
-        return new SecondWriterRun(store, keys, hierarchy, secondCatalogue, published);
     }
 
     /// <summary>One two-writer fixture and what the second writer published.</summary>
@@ -248,13 +309,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         CatalogueDb catalogue,
         WriterId writer,
         string spoolName,
-        DedupTrustDomain domain)
+        DedupTrustDomain domain,
+        int concurrency = CapturePolicy.DefaultConcurrency)
     {
         var spool = Path.Combine(SpoolDirectory, spoolName);
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy with { DedupTrustDomain = domain },
+            SmallBlobPolicy with { DedupTrustDomain = domain, Concurrency = concurrency },
             Repo,
             writer,
             KeyGeneration.Zero,
@@ -271,6 +333,24 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     {
         var source = new FakeFileSystemSource();
         source.AddFile("shared/payload.bin", Deterministic(120_000, 17), fileId: 9_001);
+        return source;
+    }
+
+    /// <summary>
+    /// Enough distinct content to fill many blobs, so a second writer's reuse
+    /// decisions land on many different blobs at once rather than queueing on
+    /// one.
+    /// </summary>
+    private static FakeFileSystemSource ManyFileSource()
+    {
+        var source = new FakeFileSystemSource();
+
+        for (var i = 0; i < 24; i++)
+        {
+            source.AddFile(
+                $"shared/payload-{i:D2}.bin", Deterministic(192_000, (byte)(20 + i)), fileId: (ulong)(9_100 + i));
+        }
+
         return source;
     }
 

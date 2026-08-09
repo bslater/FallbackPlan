@@ -45,23 +45,21 @@ public delegate ValueTask<bool> ReusePredicate(ObjectId objectId, CancellationTo
 internal sealed class DedupTrustGate(
     DedupTrustDomain domain,
     WriterId writerId,
-    Catalogue.Catalogue catalogue,
-    TargetedRecordReader reader) : IDisposable
+    CatalogueGate catalogue,
+    TargetedRecordReader reader)
 {
-    // The catalogue holds one SQLite connection and the archive pipeline asks
-    // this question from several threads at once. Only the catalogue calls are
-    // serialised — the verification read is not, or one slow fetch would stall
-    // every other segment's lookup behind it.
-    private readonly SemaphoreSlim _catalogueGate = new(1, 1);
+    // The archive pipeline asks this question from several threads at once, so
+    // both counters and the catalogue are shared state. The catalogue is
+    // serialised by the gate; this is the only other thing to get right.
+    private int _verificationReads;
 
     /// <summary>The number of verification reads this publication performed.</summary>
-    public int VerificationReads { get; private set; }
+    public int VerificationReads => Volatile.Read(ref _verificationReads);
 
     /// <summary>Whether <paramref name="objectId"/> may be referenced rather than written again.</summary>
     public async ValueTask<bool> MayReuseAsync(ObjectId objectId, CancellationToken cancellationToken)
     {
-        var candidate = await WithCatalogueAsync(
-            c => c.FindReuseCandidate(objectId), cancellationToken).ConfigureAwait(false);
+        var candidate = catalogue.Read(c => c.FindReuseCandidate(objectId));
 
         if (candidate is null)
         {
@@ -103,13 +101,16 @@ internal sealed class DedupTrustGate(
             return true;
         }
 
-        VerificationReads++;
+        Interlocked.Increment(ref _verificationReads);
+
+        // Outside the catalogue gate on purpose: this is the one slow thing
+        // here, and holding the connection across it would serialise every
+        // other segment's lookup behind one fetch.
         var verification = await reader.VerifyAsync(objectId, cancellationToken).ConfigureAwait(false);
 
         if (verification == ReuseVerification.Verified)
         {
-            await WithCatalogueAsync(
-                c => { c.RecordVerified(objectId); return true; }, cancellationToken).ConfigureAwait(false);
+            catalogue.Write(c => c.RecordVerified(objectId));
             return true;
         }
 
@@ -120,38 +121,14 @@ internal sealed class DedupTrustGate(
         // not evidence of anything and is recorded as nothing.
         if (verification == ReuseVerification.Failed)
         {
-            await WithCatalogueAsync(
-                c =>
-                {
-                    c.RecordFinding(
-                        new DamageFinding(
-                            DamageKind.CorruptRecord,
-                            $"Object {objectId}, stored by another writer, did not verify when offered for reuse; "
-                            + "it was written again rather than referenced (ADR-0006)."),
-                        objectId);
-                    return true;
-                },
-                cancellationToken).ConfigureAwait(false);
+            catalogue.Write(c => c.RecordFinding(
+                new DamageFinding(
+                    DamageKind.CorruptRecord,
+                    $"Object {objectId}, stored by another writer, did not verify when offered for reuse; "
+                    + "it was written again rather than referenced (ADR-0006)."),
+                objectId));
         }
 
         return false;
-    }
-
-    /// <inheritdoc />
-    public void Dispose() => _catalogueGate.Dispose();
-
-    private async ValueTask<T> WithCatalogueAsync<T>(
-        Func<Catalogue.Catalogue, T> operation, CancellationToken cancellationToken)
-    {
-        await _catalogueGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        try
-        {
-            return operation(catalogue);
-        }
-        finally
-        {
-            _catalogueGate.Release();
-        }
     }
 }
