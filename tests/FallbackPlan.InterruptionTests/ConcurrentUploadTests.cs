@@ -1,6 +1,7 @@
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -16,11 +17,12 @@ namespace FallbackPlan.InterruptionTests;
 /// collector could delete a blob a job is still using — which is [C4], the
 /// finding the whole intent journal exists to answer.
 /// </remarks>
+[TestClass]
 public sealed class ConcurrentUploadTests : InterruptionHarness
 {
-    [Theory]
-    [InlineData(1)]
-    [InlineData(4)]
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(4)]
     public async Task Every_blob_is_intent_covered_before_its_own_put(int concurrency)
     {
         using var keys = CreateKeys();
@@ -39,7 +41,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
 
         // Several data blobs, or the test proves nothing about several blobs.
         var blobs = published.Archive.Blobs;
-        Assert.True(
+        Assert.IsTrue(
             blobs.Count > 1,
             $"expected more than one blob to exercise concurrent upload; got {blobs.Count}");
 
@@ -47,7 +49,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         {
             var blobKey = blob.StoreKey.ToString();
             var blobIndex = observed.Keys.IndexOf(blobKey);
-            Assert.True(blobIndex >= 0, $"blob '{blobKey}' was never put");
+            Assert.IsTrue(blobIndex >= 0, $"blob '{blobKey}' was never put");
 
             // Some journal record naming this blob has to precede it. The
             // intent extension is the only thing that writes one.
@@ -55,17 +57,17 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
                 .Take(blobIndex)
                 .Count(key => key.StartsWith("journal/", StringComparison.Ordinal));
 
-            Assert.True(
+            Assert.IsTrue(
                 journalBefore > 0,
                 $"blob '{blobKey}' was uploaded with no journal record before it — its covering intent was not durable "
                 + "first (08 §3.1, C4).");
         }
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(4)]
     public async Task A_restore_is_byte_identical_whatever_the_concurrency(int concurrency)
     {
         using var keys = CreateKeys();
@@ -84,13 +86,13 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         // claim rather than the part of it that was real. 2 is included because
         // it is the shipped default and was the one value never tested.
         var restored = await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x52);
-        Assert.Equal(content, restored);
+        SequenceAssert.AreEqual(content, restored);
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(4)]
     public async Task Every_blob_carries_dense_ascending_ordinals_at_any_concurrency(int concurrency)
     {
         using var keys = CreateKeys();
@@ -103,7 +105,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         using var source = new MemoryStream(content);
         var published = await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x53), TestCancellation);
 
-        Assert.NotEmpty(published.Archive.Blobs);
+        Assert.IsNotEmpty(published.Archive.Blobs);
 
         // The property the ordering barrier exists for, asserted on blobs a
         // concurrent pipeline actually produced. Nothing else checks it:
@@ -119,8 +121,8 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
             {
                 var entry = blob.RecordTable[i];
 
-                Assert.Equal((uint)i, entry.Ordinal);
-                Assert.True(
+                Assert.AreEqual((uint)i, entry.Ordinal);
+                Assert.IsTrue(
                     entry.PhysicalOffset >= previousEnd,
                     $"record {i} of blob '{blob.BlobId}' starts at {entry.PhysicalOffset}, inside the record before it "
                     + "— offsets must strictly increase (specification 05 §3.1).");

@@ -4,6 +4,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -15,6 +16,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A wrong passphrase opens nothing, and a transcription error in the
 /// text kit is caught at the offending line, never guessed around.
 /// </summary>
+[TestClass]
 public sealed class KitDrillTests : IDisposable
 {
     private readonly string _root =
@@ -89,7 +91,7 @@ public sealed class KitDrillTests : IDisposable
         return (store, kit, files);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_kit_and_passphrase_restore_everything_with_no_local_state()
     {
         var (store, kit, files) = await CreateBackedUpRepositoryAsync();
@@ -104,34 +106,34 @@ public sealed class KitDrillTests : IDisposable
         using var session = RecoverySession.Open(reparsed, passphrase, store);
 
         var (blobs, notes) = await session.LoadBlobsAsync(CancellationToken.None);
-        Assert.True(blobs > 0);
-        Assert.Empty(notes);
+        Assert.IsTrue(blobs > 0);
+        Assert.IsEmpty(notes);
 
-        var snapshot = Assert.Single(await session.ListSnapshotsAsync(CancellationToken.None));
-        Assert.True(snapshot.SignatureVerified, "the recovered snapshot's signature must verify (06 §6.1)");
+        var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
+        Assert.IsTrue(snapshot.SignatureVerified, "the recovered snapshot's signature must verify (06 §6.1)");
 
         var output = Path.Combine(_root, "restored");
         var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
 
-        Assert.Equal(0, report.Failed);
-        Assert.Equal(files.Count, report.Restored);
+        Assert.AreEqual(0, report.Failed);
+        Assert.AreEqual(files.Count, report.Restored);
         foreach (var (path, content) in files)
         {
-            Assert.Equal(content, File.ReadAllBytes(
+            SequenceAssert.AreEqual(content, File.ReadAllBytes(
                 Path.Combine(output, path.Replace('/', Path.DirectorySeparatorChar))));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_wrong_passphrase_opens_nothing()
     {
         var (store, kit, _) = await CreateBackedUpRepositoryAsync();
 
         using var wrong = Passphrase.Create("wrong-passphrase-entirely-here!");
-        Assert.Throws<KeyUnwrapFailedException>(() => RecoverySession.Open(kit, wrong, store));
+        Assert.ThrowsExactly<KeyUnwrapFailedException>(() => RecoverySession.Open(kit, wrong, store));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_transcription_error_is_caught_at_the_offending_line()
     {
         var (_, kit, _) = await CreateBackedUpRepositoryAsync();
@@ -141,13 +143,13 @@ public sealed class KitDrillTests : IDisposable
         // transcription mistake the per-line check exists for (FR-KIT-003).
         var lines = text.Split('\n');
         var lineIndex = Array.FindIndex(lines, line => line.StartsWith("03:", StringComparison.Ordinal));
-        Assert.True(lineIndex >= 0, "the text kit has a line 03");
+        Assert.IsTrue(lineIndex >= 0, "the text kit has a line 03");
         var line = lines[lineIndex].ToCharArray();
         var payloadStart = 4;
         line[payloadStart] = line[payloadStart] == 'a' ? 'b' : 'a';
         lines[lineIndex] = new string(line);
 
-        var exception = Assert.ThrowsAny<FormatException>(
+        var exception = Assert.Throws<FormatException>(
             () => RecoveryKitText.ParseToFramed(string.Join('\n', lines)));
         Assert.Contains("3", exception.Message, StringComparison.Ordinal);
     }

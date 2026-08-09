@@ -7,6 +7,7 @@ namespace FallbackPlan.Protocol.Tests;
 /// Grants and terms (specification peer-protocol 01 §3–§4): what a pinned
 /// pairing is, what survives a restart, and whose terms win.
 /// </summary>
+[TestClass]
 public sealed class PeerGrantStoreTests : IDisposable
 {
     private readonly string _stateDirectory =
@@ -21,7 +22,7 @@ public sealed class PeerGrantStoreTests : IDisposable
         PeerTerms? terms = null) =>
         new(identity, label, role, terms ?? new PeerTerms(500_000_000_000, "every 1h", 4), 1_722_600_000_000);
 
-    [Fact]
+    [TestMethod]
     public void A_pinned_grant_survives_a_restart()
     {
         using var keypair = PeerKeypair.Generate();
@@ -33,15 +34,15 @@ public sealed class PeerGrantStoreTests : IDisposable
         // survive a process restart they do not survive at all.
         var reopened = Open().Find(keypair.Identity);
 
-        Assert.NotNull(reopened);
-        Assert.Equal(keypair.Identity, reopened!.Identity);
-        Assert.Equal("a friend's laptop", reopened.Label);
-        Assert.Equal(PeerRole.StoresForUs, reopened.Role);
-        Assert.Equal(500_000_000_000ul, reopened.Terms.QuotaBytes);
-        Assert.Equal(4u, reopened.Terms.RetentionFloorGenerations);
+        Assert.IsNotNull(reopened);
+        Assert.AreEqual(keypair.Identity, reopened!.Identity);
+        Assert.AreEqual("a friend's laptop", reopened.Label);
+        Assert.AreEqual(PeerRole.StoresForUs, reopened.Role);
+        Assert.AreEqual(500_000_000_000ul, reopened.Terms.QuotaBytes);
+        Assert.AreEqual(4u, reopened.Terms.RetentionFloorGenerations);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_peer_whose_key_differs_is_simply_not_found()
     {
         using var paired = PeerKeypair.Generate();
@@ -54,11 +55,11 @@ public sealed class PeerGrantStoreTests : IDisposable
         // comparison someone had to remember to write. An impostor presenting
         // the same label is still a different peer, because the label is not
         // what anything is keyed by.
-        Assert.NotNull(store.Find(paired.Identity));
-        Assert.Null(store.Find(impostor.Identity));
+        Assert.IsNotNull(store.Find(paired.Identity));
+        Assert.IsNull(store.Find(impostor.Identity));
     }
 
-    [Fact]
+    [TestMethod]
     public void Revoking_removes_the_pairing_and_says_whether_there_was_one()
     {
         using var keypair = PeerKeypair.Generate();
@@ -66,15 +67,15 @@ public sealed class PeerGrantStoreTests : IDisposable
         var store = Open();
         store.Pin(Grant(keypair.Identity));
 
-        Assert.True(store.Revoke(keypair.Identity));
-        Assert.Null(store.Find(keypair.Identity));
-        Assert.Null(Open().Find(keypair.Identity));
+        Assert.IsTrue(store.Revoke(keypair.Identity));
+        Assert.IsNull(store.Find(keypair.Identity));
+        Assert.IsNull(Open().Find(keypair.Identity));
 
         // Revoking twice is not an error, but it is not a lie either.
-        Assert.False(store.Revoke(keypair.Identity));
+        Assert.IsFalse(store.Revoke(keypair.Identity));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_label_can_be_changed_and_changes_nothing_else()
     {
         using var keypair = PeerKeypair.Generate();
@@ -82,18 +83,18 @@ public sealed class PeerGrantStoreTests : IDisposable
         var store = Open();
         store.Pin(Grant(keypair.Identity, label: "laptop"));
 
-        Assert.True(store.Relabel(keypair.Identity, "Ana's laptop"));
+        Assert.IsTrue(store.Relabel(keypair.Identity, "Ana's laptop"));
 
         var grant = store.Find(keypair.Identity);
-        Assert.Equal("Ana's laptop", grant!.Label);
+        Assert.AreEqual("Ana's laptop", grant!.Label);
 
         // The label carries no authority, so editing it must not disturb the
         // thing that does.
-        Assert.Equal(keypair.Identity, grant.Identity);
-        Assert.Equal(PeerRole.StoresForUs, grant.Role);
+        Assert.AreEqual(keypair.Identity, grant.Identity);
+        Assert.AreEqual(PeerRole.StoresForUs, grant.Role);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_grant_file_that_cannot_be_read_is_refused_not_emptied()
     {
         using var keypair = PeerKeypair.Generate();
@@ -104,11 +105,11 @@ public sealed class PeerGrantStoreTests : IDisposable
         // The job journal is sacrificial by design; this is not. Starting empty
         // would silently unpair every peer this device has, which is a fleet-wide
         // outage presented as a clean start.
-        var refused = Assert.Throws<ClientStateException>(Open);
+        var refused = Assert.ThrowsExactly<ClientStateException>(Open);
         Assert.Contains("not rebuildable", refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void The_store_holds_no_more_grants_than_the_limit()
     {
         var store = Open();
@@ -124,12 +125,12 @@ public sealed class PeerGrantStoreTests : IDisposable
             }
 
             using var overflow = PeerKeypair.Generate();
-            Assert.Throws<ClientStateException>(() => store.Pin(Grant(overflow.Identity)));
+            Assert.ThrowsExactly<ClientStateException>(() => store.Pin(Grant(overflow.Identity)));
 
             // Re-pinning one already held is a replacement, not a new grant, so
             // a full store can still accept a re-pairing.
             store.Pin(Grant(keypairs[0].Identity, label: "renamed"));
-            Assert.Equal("renamed", store.Find(keypairs[0].Identity)!.Label);
+            Assert.AreEqual("renamed", store.Find(keypairs[0].Identity)!.Label);
         }
         finally
         {
@@ -140,7 +141,7 @@ public sealed class PeerGrantStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Applying_narrower_terms_says_so()
     {
         using var keypair = PeerKeypair.Generate();
@@ -151,18 +152,18 @@ public sealed class PeerGrantStoreTests : IDisposable
         // A destination may change its terms whenever it likes and the source
         // continues under them. Narrowing is the case the source must surface,
         // because the alternative is replication that quietly stops.
-        Assert.True(store.ApplyTerms(keypair.Identity, new PeerTerms(500, string.Empty, 4)));
-        Assert.Equal(500ul, store.Find(keypair.Identity)!.Terms.QuotaBytes);
+        Assert.IsTrue(store.ApplyTerms(keypair.Identity, new PeerTerms(500, string.Empty, 4)));
+        Assert.AreEqual(500ul, store.Find(keypair.Identity)!.Terms.QuotaBytes);
 
-        Assert.False(store.ApplyTerms(keypair.Identity, new PeerTerms(2_000, string.Empty, 4)));
+        Assert.IsFalse(store.ApplyTerms(keypair.Identity, new PeerTerms(2_000, string.Empty, 4)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Applying_terms_to_a_peer_that_is_not_paired_is_refused()
     {
         using var stranger = PeerKeypair.Generate();
 
-        Assert.Throws<ClientStateException>(
+        Assert.ThrowsExactly<ClientStateException>(
             () => Open().ApplyTerms(stranger.Identity, PeerTerms.None));
     }
 
@@ -179,42 +180,43 @@ public sealed class PeerGrantStoreTests : IDisposable
 /// The destination's terms (specification peer-protocol 01 §4): its disk, its
 /// rules.
 /// </summary>
+[TestClass]
 public sealed class PeerTermsTests
 {
-    [Fact]
+    [TestMethod]
     public void A_source_may_ask_for_less_but_never_for_more()
     {
         var offered = new PeerTerms(1_000, "every 1h", 4);
 
-        Assert.True(new PeerTerms(1_000, "every 1h", 4).IsWithin(offered));
-        Assert.True(new PeerTerms(500, "every 1h", 2).IsWithin(offered));
+        Assert.IsTrue(new PeerTerms(1_000, "every 1h", 4).IsWithin(offered));
+        Assert.IsTrue(new PeerTerms(500, "every 1h", 2).IsWithin(offered));
 
         // More quota, or a deeper retention floor, is asking the destination to
         // do something it did not agree to.
-        Assert.False(new PeerTerms(1_001, "every 1h", 4).IsWithin(offered));
-        Assert.False(new PeerTerms(1_000, "every 1h", 5).IsWithin(offered));
+        Assert.IsFalse(new PeerTerms(1_001, "every 1h", 4).IsWithin(offered));
+        Assert.IsFalse(new PeerTerms(1_000, "every 1h", 5).IsWithin(offered));
     }
 
-    [Fact]
+    [TestMethod]
     public void Nothing_is_within_terms_that_permit_nothing()
     {
-        Assert.True(PeerTerms.None.IsWithin(PeerTerms.None));
-        Assert.False(new PeerTerms(1, string.Empty, 0).IsWithin(PeerTerms.None));
+        Assert.IsTrue(PeerTerms.None.IsWithin(PeerTerms.None));
+        Assert.IsFalse(new PeerTerms(1, string.Empty, 0).IsWithin(PeerTerms.None));
     }
 
-    [Fact]
+    [TestMethod]
     public void Narrowing_is_recognised_on_every_axis_a_source_relies_on()
     {
         var before = new PeerTerms(1_000, string.Empty, 4);
 
-        Assert.True(new PeerTerms(999, string.Empty, 4).Narrows(before));
-        Assert.True(new PeerTerms(1_000, string.Empty, 3).Narrows(before));
+        Assert.IsTrue(new PeerTerms(999, string.Empty, 4).Narrows(before));
+        Assert.IsTrue(new PeerTerms(1_000, string.Empty, 3).Narrows(before));
 
         // Gaining a window where there was none is a narrowing too: transfers
         // that could run at any time now cannot.
-        Assert.True(new PeerTerms(1_000, "every 1h", 4).Narrows(before));
+        Assert.IsTrue(new PeerTerms(1_000, "every 1h", 4).Narrows(before));
 
-        Assert.False(new PeerTerms(1_000, string.Empty, 4).Narrows(before));
-        Assert.False(new PeerTerms(2_000, string.Empty, 8).Narrows(before));
+        Assert.IsFalse(new PeerTerms(1_000, string.Empty, 4).Narrows(before));
+        Assert.IsFalse(new PeerTerms(2_000, string.Empty, 8).Narrows(before));
     }
 }

@@ -18,6 +18,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// path, filename, or identifier can ride telemetry, by test rather than
 /// by review. The same run proves the headline instruments actually fire.
 /// </summary>
+[TestClass]
 public sealed class TelemetryPrivacyTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -31,7 +32,7 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
             ["operation"] = ["put", "get", "list", "delete"],
         };
 
-    [Fact]
+    [TestMethod]
     public async Task Every_emitted_attribute_is_on_the_allowlist_and_the_instruments_fire()
     {
         var captured = new ConcurrentBag<(string Instrument, KeyValuePair<string, object?>[] Tags)>();
@@ -93,7 +94,7 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
 
         listener.Dispose();
 
-        Assert.NotEmpty(captured);
+        Assert.IsNotEmpty(captured);
 
         // THE assertion: every attribute name AND value comes from the
         // closed sets in ADR-0027 §3. A path, a hex identifier, or a new
@@ -102,10 +103,10 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
         {
             foreach (var tag in tags)
             {
-                Assert.True(
+                Assert.IsTrue(
                     EngineDiagnostics.AllowedAttributes.Contains(tag.Key),
                     $"{instrument} emitted attribute '{tag.Key}' — not on the NFR-PRIV-002 allowlist.");
-                Assert.True(
+                Assert.IsTrue(
                     AllowedValues[tag.Key].Contains(tag.Value as string),
                     $"{instrument} emitted {tag.Key}='{tag.Value}' — outside the closed value set.");
             }

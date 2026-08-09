@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -15,6 +14,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// As the engine is built, assertions comparing computed values against these
 /// vectors join this project. See specifications/repository-format/conformance/.
 /// </summary>
+[TestClass]
 public sealed class VectorFileTests
 {
     /// <summary>
@@ -49,18 +49,18 @@ public sealed class VectorFileTests
     private static JsonDocument Load(string name)
     {
         var path = Path.Combine(VectorDirectory, name);
-        Assert.True(File.Exists(path), $"Vector file not found: {path}");
+        Assert.IsTrue(File.Exists(path), $"Vector file not found: {path}");
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_expected_vector_file_is_present_and_parses()
     {
         foreach (var name in ExpectedFiles.Keys)
         {
             using var document = Load(name);
-            Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
-            Assert.True(
+            Assert.AreEqual(JsonValueKind.Object, document.RootElement.ValueKind);
+            Assert.IsTrue(
                 document.RootElement.TryGetProperty("description", out _),
                 $"{name} has no description");
         }
@@ -77,23 +77,23 @@ public sealed class VectorFileTests
     /// requires flipping the expectation here too — deliberately, in the same
     /// change, with the reason in view.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Every_vector_group_declares_its_provenance_truthfully()
     {
         foreach (var (name, expected) in ExpectedFiles)
         {
             using var document = Load(name);
-            Assert.True(
+            Assert.IsTrue(
                 document.RootElement.TryGetProperty("independently_derived", out var derived),
                 $"{name} does not declare independently_derived");
-            Assert.True(
+            Assert.IsTrue(
                 derived.ValueKind is JsonValueKind.True or JsonValueKind.False,
                 $"{name}: independently_derived must be a boolean");
-            Assert.Equal(expected, derived.GetBoolean());
+            Assert.AreEqual(expected, derived.GetBoolean());
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Key_derivation_vectors_prove_writer_separation()
     {
         using var document = Load("keys.json");
@@ -104,29 +104,29 @@ public sealed class VectorFileTests
         var otherWriter = checks.GetProperty("blob_key_other_writer").GetString();
         var otherCounter = checks.GetProperty("blob_key_other_counter").GetString();
 
-        Assert.Equal(64, blobKey!.Length);
+        Assert.AreEqual(64, blobKey!.Length);
 
         // The same blob_salt with a different writer or counter must produce a
         // different key. This is what makes key separation survive a cloned VM
         // replaying CSPRNG state, and a vector file that failed to demonstrate
         // it would be silently useless.
-        Assert.NotEqual(blobKey, otherWriter);
-        Assert.NotEqual(blobKey, otherCounter);
-        Assert.NotEqual(otherWriter, otherCounter);
+        Assert.AreNotEqual(blobKey, otherWriter);
+        Assert.AreNotEqual(blobKey, otherCounter);
+        Assert.AreNotEqual(otherWriter, otherCounter);
     }
 
-    [Fact]
+    [TestMethod]
     public void Associated_data_is_fifty_five_bytes_in_every_case()
     {
         using var document = Load("records.json");
         foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
         {
-            Assert.Equal(55, testCase.GetProperty("aad_length").GetInt32());
-            Assert.Equal(110, testCase.GetProperty("aad").GetString()!.Length);
+            Assert.AreEqual(55, testCase.GetProperty("aad_length").GetInt32());
+            Assert.AreEqual(110, testCase.GetProperty("aad").GetString()!.Length);
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Object_identifiers_differ_by_object_type()
     {
         using var document = Load("identifiers.json");
@@ -135,10 +135,10 @@ public sealed class VectorFileTests
             .GetProperty("object_ids");
 
         var values = ids.EnumerateObject().Select(p => p.Value.GetString()).ToList();
-        Assert.Equal(values.Count, values.Distinct().Count());
+        Assert.AreEqual(values.Count, values.Distinct().Count());
     }
 
-    [Fact]
+    [TestMethod]
     public void Fixed_segmentation_cases_are_contiguous_and_complete()
     {
         using var document = Load("segmentation.json");
@@ -151,7 +151,7 @@ public sealed class VectorFileTests
             // segment_count is what an implementation will read; the segments
             // array is what it will verify against. A generator bug that
             // desynchronised them would otherwise pass every check here.
-            Assert.Equal(testCase.GetProperty("segment_count").GetInt32(), segments.Count);
+            Assert.AreEqual(testCase.GetProperty("segment_count").GetInt32(), segments.Count);
 
             long covered = 0;
             long expectedOffset = 0;
@@ -160,21 +160,21 @@ public sealed class VectorFileTests
                 var offset = segments[i].GetProperty("offset").GetInt64();
                 var length = segments[i].GetProperty("length").GetInt64();
 
-                Assert.Equal(expectedOffset, offset);
+                Assert.AreEqual(expectedOffset, offset);
                 if (i < segments.Count - 1)
                 {
-                    Assert.Equal(segmentSize, length);   // only the last may be short
+                    Assert.AreEqual(segmentSize, length);   // only the last may be short
                 }
 
                 covered += length;
                 expectedOffset += length;
             }
 
-            Assert.Equal(fileLength, covered);
+            Assert.AreEqual(fileLength, covered);
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Compression_threshold_decisions_are_self_consistent()
     {
         using var document = Load("compression.json");
@@ -187,7 +187,7 @@ public sealed class VectorFileTests
             var expected = testCase.GetProperty("expected_profile").GetString();
 
             var shouldCompress = compressed * 1000 <= logical * (1000 - threshold);
-            Assert.Equal(shouldCompress ? "zstd-v1" : "none", expected);
+            Assert.AreEqual(shouldCompress ? "zstd-v1" : "none", expected);
         }
     }
 }

@@ -7,57 +7,58 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 /// including A5's acceptance criterion: a profile exceeding a provider limit
 /// is rejected at configuration time with a named reason (FR-ARCH-007).
 /// </summary>
+[TestClass]
 public sealed class BlobWriteProfileTests
 {
-    [Fact]
+    [TestMethod]
     public void The_specification_defaults_validate_clean()
     {
-        Assert.True(BlobWriteProfile.LocalDefault.Validate().IsValid);
-        Assert.True(BlobWriteProfile.ObjectStoreDefault.Validate().IsValid);
+        Assert.IsTrue(BlobWriteProfile.LocalDefault.Validate().IsValid);
+        Assert.IsTrue(BlobWriteProfile.ObjectStoreDefault.Validate().IsValid);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_profile_exceeding_a_provider_limit_is_rejected_at_configuration_time_with_a_named_reason()
     {
         // The acceptance scenario: the object-store default seals up to
         // 512 MiB, but this provider only accepts 256 MiB objects.
         var result = BlobWriteProfile.ObjectStoreDefault.ValidateAgainstStore(256L * 1024 * 1024);
 
-        Assert.False(result.IsValid);
-        Assert.True(result.Has("blob_maximum_exceeds_provider_object_size"));
+        Assert.IsFalse(result.IsValid);
+        Assert.IsTrue(result.Has("blob_maximum_exceeds_provider_object_size"));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_profile_within_the_provider_limit_passes_the_store_check()
     {
-        Assert.True(BlobWriteProfile.LocalDefault.ValidateAgainstStore(long.MaxValue).IsValid);
+        Assert.IsTrue(BlobWriteProfile.LocalDefault.ValidateAgainstStore(long.MaxValue).IsValid);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_maximum_above_the_format_blob_limit_is_named()
     {
         var profile = BlobWriteProfile.ObjectStoreDefault with { MaximumSizeBytes = 513L * 1024 * 1024 };
 
-        Assert.True(profile.Validate().Has("blob_maximum_exceeds_format_limit"));
+        Assert.IsTrue(profile.Validate().Has("blob_maximum_exceeds_format_limit"));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_target_above_the_maximum_is_named()
     {
         var profile = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 512L * 1024 * 1024 };
 
-        Assert.True(profile.Validate().Has("blob_target_exceeds_maximum"));
+        Assert.IsTrue(profile.Validate().Has("blob_target_exceeds_maximum"));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_record_count_above_the_format_limit_is_named()
     {
         var profile = BlobWriteProfile.LocalDefault with { MaximumRecordCount = 65_537 };
 
-        Assert.True(profile.Validate().Has("blob_record_count_exceeds_format_limit"));
+        Assert.IsTrue(profile.Validate().Has("blob_record_count_exceeds_format_limit"));
     }
 
-    [Fact]
+    [TestMethod]
     public void The_policy_level_store_check_aggregates_both_sources()
     {
         var policy = CapturePolicy.Default with
@@ -68,8 +69,8 @@ public sealed class BlobWriteProfileTests
 
         var result = policy.ValidateAgainstStore(256L * 1024 * 1024);
 
-        Assert.False(result.IsValid);
-        Assert.True(result.Has("compression_level_out_of_range"));
-        Assert.True(result.Has("blob_maximum_exceeds_provider_object_size"));
+        Assert.IsFalse(result.IsValid);
+        Assert.IsTrue(result.Has("compression_level_out_of_range"));
+        Assert.IsTrue(result.Has("blob_maximum_exceeds_provider_object_size"));
     }
 }

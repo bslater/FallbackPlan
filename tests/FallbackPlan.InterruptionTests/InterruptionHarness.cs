@@ -104,7 +104,7 @@ public abstract class InterruptionHarness : IDisposable
 
             var record = StandaloneRecordFraming.Parse(memory.ToArray());
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-            Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
 
             var decoded = SnapshotManifestCodec.Decode(plaintext);
             if (!decoded.Manifest.SnapshotId.Span.SequenceEqual(wantedId))
@@ -116,16 +116,16 @@ public abstract class InterruptionHarness : IDisposable
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, treeRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, treeRead.Outcome);
             var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
 
             var manifestRead = await reader.ReadSegmentAsync(tree.Entries[0].ObjectId, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
             var manifest = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
 
             using var restored = new MemoryStream();
             var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
-            Assert.True(restore.Success, restore.FailureDetail);
+            Assert.IsTrue(restore.Success, restore.FailureDetail);
 
             return restored.ToArray();
         }

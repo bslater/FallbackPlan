@@ -6,6 +6,7 @@ using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Packing;
 
@@ -24,6 +25,7 @@ namespace FallbackPlan.Repository.Tests.Packing;
 /// safe failure (05 §6.2) and is what keeps an ordinal from being re-used
 /// under a salt that already covered it.
 /// </remarks>
+[TestClass]
 public sealed class SpoolCheckpointTests : IDisposable
 {
     private static readonly RepositoryId Repo =
@@ -91,7 +93,7 @@ public sealed class SpoolCheckpointTests : IDisposable
             ObjectType.SegmentRecord, id, CompressionProfile.None, (ulong)payload.Length, payload, CancellationToken.None);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Resume_produces_a_sealed_blob_byte_identical_to_an_uninterrupted_run()
     {
         // Uninterrupted reference run: five records, sealed.
@@ -131,9 +133,9 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         // Resume, append the remaining two records, seal.
         var resume = Resume(interruptedDirectory, Pinned);
-        var resumed = Assert.IsType<ResumeResult.Resumed>(resume);
+        Assert.IsInstanceOfType<ResumeResult.Resumed>(resume, out var resumed);
 
-        Assert.Equal(3, resumed.Writer.RecordCount);
+        Assert.AreEqual(3, resumed.Writer.RecordCount);
 
         await AppendAsync(resumed.Writer, 3);
         await AppendAsync(resumed.Writer, 4);
@@ -157,10 +159,10 @@ public sealed class SpoolCheckpointTests : IDisposable
         // 05 §6.3: byte-identical to the uninterrupted blob — same salt, same
         // records, same ordinals, and the checkpointed bytes re-emitted
         // verbatim rather than recomputed.
-        Assert.Equal(await File.ReadAllBytesAsync(referenceBytesPath), resumedBytes);
+        SequenceAssert.AreEqual(await File.ReadAllBytesAsync(referenceBytesPath), resumedBytes);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_changed_codec_version_forces_restart_and_discards_the_spool()
     {
         var directory = SpoolDirectory("codec");
@@ -170,15 +172,15 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         var result = Resume(directory, Pinned with { CodecVersion = "ZstdSharp.Port 9.9.9" });
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("codec_version_changed", restart.Reason);
-        Assert.Empty(Directory.GetFiles(directory));
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("codec_version_changed", restart.Reason);
+        Assert.IsEmpty(Directory.GetFiles(directory));
     }
 
-    [Theory]
-    [InlineData("segmentation_profile_changed")]
-    [InlineData("segmentation_parameters_changed")]
-    [InlineData("compression_profile_changed")]
+    [TestMethod]
+    [DataRow("segmentation_profile_changed")]
+    [DataRow("segmentation_parameters_changed")]
+    [DataRow("compression_profile_changed")]
     public async Task Any_changed_pinned_field_forces_restart(string expectedReason)
     {
         var directory = SpoolDirectory(expectedReason);
@@ -196,11 +198,11 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         var result = Resume(directory, mutated);
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal(expectedReason, restart.Reason);
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual(expectedReason, restart.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_changed_key_generation_forces_restart()
     {
         var directory = SpoolDirectory("generation");
@@ -212,11 +214,11 @@ public sealed class SpoolCheckpointTests : IDisposable
             directory, Repo, Writer, new KeyGeneration(1), BlobClass.Data, ClassKey,
             EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, Pinned);
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("key_generation_changed", restart.Reason);
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("key_generation_changed", restart.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_torn_checkpoint_forces_restart()
     {
         var directory = SpoolDirectory("torn");
@@ -231,11 +233,11 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         var result = Resume(directory, Pinned);
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("checkpoint_unreadable", restart.Reason);
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("checkpoint_unreadable", restart.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_torn_spool_tail_forces_restart_and_discards_the_spool()
     {
         var directory = SpoolDirectory("tail");
@@ -257,12 +259,12 @@ public sealed class SpoolCheckpointTests : IDisposable
         // torn bytes already used to the pool, and re-using it under the same
         // salt is the one mistake 05 §6.1 calls catastrophic. Restart draws a
         // fresh salt instead, so nothing is reused.
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
-        Assert.Empty(Directory.GetFiles(directory));
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("spool_tail_unauthenticated", restart.Reason);
+        Assert.IsEmpty(Directory.GetFiles(directory));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_flipped_ciphertext_byte_forces_restart()
     {
         var directory = SpoolDirectory("flipped");
@@ -281,12 +283,12 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         var result = Resume(directory, Pinned);
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
-        Assert.Empty(Directory.GetFiles(directory));
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("spool_tail_unauthenticated", restart.Reason);
+        Assert.IsEmpty(Directory.GetFiles(directory));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_spool_from_another_repository_forces_restart()
     {
         var directory = SpoolDirectory("foreign");
@@ -307,20 +309,20 @@ public sealed class SpoolCheckpointTests : IDisposable
             BlobWriteProfile.LocalDefault,
             Pinned);
 
-        var restart = Assert.IsType<ResumeResult.MustRestart>(result);
-        Assert.Equal("spool_tail_unauthenticated", restart.Reason);
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
+        Assert.AreEqual("spool_tail_unauthenticated", restart.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void An_empty_spool_directory_reports_no_spool()
     {
         var directory = SpoolDirectory("empty");
         Directory.CreateDirectory(directory);
 
-        Assert.IsType<ResumeResult.NoSpool>(Resume(directory, Pinned));
+        Assert.IsInstanceOfType<ResumeResult.NoSpool>(Resume(directory, Pinned));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_restarted_blob_draws_a_fresh_salt_and_therefore_a_different_key()
     {
         // Restart is the safe failure precisely because a fresh CSPRNG salt
@@ -330,7 +332,7 @@ public sealed class SpoolCheckpointTests : IDisposable
         var firstSalt = await AbandonAndReadSaltAsync("salt-a");
         var secondSalt = await AbandonAndReadSaltAsync("salt-b");
 
-        Assert.NotEqual(firstSalt, secondSalt);
+        Assert.AreNotEqual(firstSalt, secondSalt);
     }
 
     private async Task<byte[]> AbandonAndReadSaltAsync(string name)

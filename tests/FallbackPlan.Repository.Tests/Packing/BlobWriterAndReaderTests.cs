@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Packing;
 
@@ -17,6 +18,7 @@ namespace FallbackPlan.Repository.Tests.Packing;
 /// alone, the footer reached in exactly two range reads, sealing triggers,
 /// never-split records, and locality of corruption.
 /// </summary>
+[TestClass]
 public sealed class BlobWriterAndReaderTests : IDisposable
 {
     private static readonly RepositoryId Repo = RepositoryId.FromBytes(Convert.FromHexString("0102030405060708090a0b0c0d0e0f10"));
@@ -69,12 +71,12 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         var key = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, keyDeriver.Derive(sealedBlob.BlobId));
 
         var put = await store.PutAsync(key, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, CancellationToken.None);
-        Assert.Equal(PutOutcome.Created, put.Outcome);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
 
         return (key, sealedBlob.Length, payloads);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Every_record_is_locatable_and_verifiable_from_the_blob_and_keys_alone()
     {
         // The C2 acceptance criterion, verbatim: no index, no catalogue, no
@@ -86,18 +88,18 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         using var reader = await BlobReader.OpenAsync(
             store, key, length, Repo, (_, _) => ClassKey, deriver, CancellationToken.None);
 
-        Assert.Equal(5, reader.RecordTable.Count);
+        Assert.AreEqual(5, reader.RecordTable.Count);
 
         foreach (var (entry, expected) in reader.RecordTable.Zip(payloads))
         {
             var result = await reader.ReadRecordAsync(entry, CancellationToken.None);
 
-            Assert.Equal(RecordReadOutcome.Ok, result.Outcome);
-            Assert.Equal(expected, result.Plaintext);
+            Assert.AreEqual(RecordReadOutcome.Ok, result.Outcome);
+            SequenceAssert.AreEqual(expected, result.Plaintext);
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_footer_is_reached_in_exactly_two_range_reads()
     {
         var store = CreateStore();
@@ -110,13 +112,13 @@ public sealed class BlobWriterAndReaderTests : IDisposable
 
         // Read one: the locator. Read two: the footer. The envelope's small
         // read for key-derivation selectors is deliberately third.
-        Assert.Equal(3, counting.Ranges.Count);
-        Assert.Equal((length - FooterLocator.Length, (long)FooterLocator.Length), counting.Ranges[0]);
-        Assert.True(counting.Ranges[1].Offset >= BlobEnvelope.Length && counting.Ranges[1].Offset < length - FooterLocator.Length);
-        Assert.Equal((0L, (long)BlobEnvelope.Length), counting.Ranges[2]);
+        Assert.AreEqual(3, counting.Ranges.Count);
+        Assert.AreEqual((length - FooterLocator.Length, (long)FooterLocator.Length), counting.Ranges[0]);
+        Assert.IsTrue(counting.Ranges[1].Offset >= BlobEnvelope.Length && counting.Ranges[1].Offset < length - FooterLocator.Length);
+        Assert.AreEqual((0L, (long)BlobEnvelope.Length), counting.Ranges[2]);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_failed_record_leaves_every_other_record_readable()
     {
         // Corruption is local (04 §7): flip one ciphertext byte of record 1.
@@ -143,20 +145,20 @@ public sealed class BlobWriterAndReaderTests : IDisposable
             results.Add(await reader.ReadRecordAsync(entry, CancellationToken.None));
         }
 
-        Assert.Equal(RecordReadOutcome.Ok, results[0].Outcome);
-        Assert.Equal(RecordReadOutcome.AuthenticationFailed, results[1].Outcome);
-        Assert.Equal(RecordReadOutcome.Ok, results[2].Outcome);
-        Assert.Equal(payloads[0], results[0].Plaintext);
-        Assert.Equal(payloads[2], results[2].Plaintext);
+        Assert.AreEqual(RecordReadOutcome.Ok, results[0].Outcome);
+        Assert.AreEqual(RecordReadOutcome.AuthenticationFailed, results[1].Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, results[2].Outcome);
+        SequenceAssert.AreEqual(payloads[0], results[0].Plaintext);
+        SequenceAssert.AreEqual(payloads[2], results[2].Plaintext);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Target_size_and_record_count_both_trigger_should_seal()
     {
         var smallTarget = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 1_000, MaximumSizeBytes = 100_000 };
         await using (var writer = CreateWriter(smallTarget, counter: 1))
         {
-            Assert.False(writer.ShouldSeal);
+            Assert.IsFalse(writer.ShouldSeal);
             using var deriver = new ObjectIdDeriver(ContentIdKey);
             var payload = new byte[2_000];
             payload[0] = 1;
@@ -164,7 +166,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
                 ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
                 (ulong)payload.Length, payload, CancellationToken.None);
 
-            Assert.True(writer.ShouldSeal);
+            Assert.IsTrue(writer.ShouldSeal);
         }
 
         var twoRecords = BlobWriteProfile.LocalDefault with { MaximumRecordCount = 2 };
@@ -180,12 +182,12 @@ public sealed class BlobWriterAndReaderTests : IDisposable
                     (ulong)payload.Length, payload, CancellationToken.None);
             }
 
-            Assert.True(writer.ShouldSeal);
-            Assert.False(writer.CanAppend(10));
+            Assert.IsTrue(writer.ShouldSeal);
+            Assert.IsFalse(writer.CanAppend(10));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_record_that_would_exceed_the_maximum_is_refused_never_split()
     {
         var tiny = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 1_000, MaximumSizeBytes = 2_000 };
@@ -195,14 +197,14 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         var tooBig = new byte[5_000];
         tooBig[0] = 1;
 
-        Assert.False(writer.CanAppend(tooBig.Length));
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.IsFalse(writer.CanAppend(tooBig.Length));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
             await writer.AppendRecordAsync(
                 ObjectType.SegmentRecord, IdFor(tooBig, deriver), CompressionProfile.None,
                 (ulong)tooBig.Length, tooBig, CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Truncating_the_locator_is_refused()
     {
         var store = CreateStore();
@@ -212,11 +214,11 @@ public sealed class BlobWriterAndReaderTests : IDisposable
 
         // Opening with a length 16 bytes short models a truncated object: the
         // "locator" read lands on footer bytes and must refuse.
-        await Assert.ThrowsAsync<BlobFormatException>(async () =>
+        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
             await BlobReader.OpenAsync(store, key, length - 16, Repo, (_, _) => ClassKey, deriver, CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Distinct_salts_separate_writers_sharing_a_counter()
     {
         await using var first = CreateWriter(counter: 7);
@@ -235,7 +237,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         await using var sealedSecond = await second.SealAsync(CancellationToken.None);
 
         // Same key inputs except the CSPRNG salt: the sealed bytes must differ.
-        Assert.NotEqual(sealedFirst.Digest, sealedSecond.Digest);
+        Assert.AreNotEqual(sealedFirst.Digest, sealedSecond.Digest);
     }
 
     /// <inheritdoc />

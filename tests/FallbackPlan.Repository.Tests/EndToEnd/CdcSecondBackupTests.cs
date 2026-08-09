@@ -1,3 +1,4 @@
+using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
@@ -6,6 +7,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// neighbourhood — the second backup rewrites the affected segments and
 /// reuses everything else by content, position notwithstanding.
 /// </summary>
+[TestClass]
 public sealed class CdcSecondBackupTests : ArchiveTestHarness
 {
     private static byte[] BuildRandomFile(int length, int seed)
@@ -15,7 +17,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
         return data;
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_front_insertion_rewrites_only_the_first_segment()
     {
         var original = BuildRandomFile(2_000_000, seed: 20260803);
@@ -26,7 +28,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
         using var firstSource = new MemoryStream(original);
         var first = await archiver.ArchiveAsync(firstSource, CancellationToken.None);
 
-        Assert.True(first.SegmentReferences.Count > 5, "the file must span several cdc segments");
+        Assert.IsTrue(first.SegmentReferences.Count > 5, "the file must span several cdc segments");
 
         // Prepend one byte: every boundary shifts by one, but every window —
         // and therefore every segment's content — beyond the first cut is
@@ -40,9 +42,9 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
 
         // Only the first segment's content changed; everything downstream is
         // reused by content identifier despite the one-byte position shift.
-        Assert.Equal(1, second.RecordsWritten);
-        Assert.Equal(first.SegmentReferences.Count, second.SegmentReferences.Count);
-        Assert.Equal(
+        Assert.AreEqual(1, second.RecordsWritten);
+        Assert.AreEqual(first.SegmentReferences.Count, second.SegmentReferences.Count);
+        SequenceAssert.AreEqual(
             first.SegmentReferences.Select(reference => reference.ObjectId).Skip(1),
             second.SegmentReferences.Select(reference => reference.ObjectId).Skip(1));
 
@@ -53,11 +55,11 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(second.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(inserted, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(inserted, restored.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Changed_cdc_parameters_forbid_reuse_and_re_archive_in_full()
     {
         var original = BuildRandomFile(1_200_000, seed: 99);
@@ -77,10 +79,10 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
         var second = await CreateArchiver(store, keys, rescaled, firstCounter: 2_000)
             .ArchiveAsync(new MemoryStream(original), first, CancellationToken.None);
 
-        Assert.Equal(second.SegmentReferences.Count, second.RecordsWritten);
+        Assert.AreEqual(second.SegmentReferences.Count, second.RecordsWritten);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unchanged_file_writes_no_records_under_cdc()
     {
         var original = BuildRandomFile(1_000_000, seed: 5);
@@ -92,8 +94,8 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
         var second = await CreateArchiver(store, keys, CdcPolicy, firstCounter: 3_000)
             .ArchiveAsync(new MemoryStream(original), first, CancellationToken.None);
 
-        Assert.Equal(0, second.RecordsWritten);
-        Assert.Empty(second.Blobs);
-        Assert.Equal(first.WholeFileHash, second.WholeFileHash);
+        Assert.AreEqual(0, second.RecordsWritten);
+        Assert.IsEmpty(second.Blobs);
+        SequenceAssert.AreEqual(first.WholeFileHash, second.WholeFileHash);
     }
 }

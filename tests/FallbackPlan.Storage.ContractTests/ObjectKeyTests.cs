@@ -1,6 +1,5 @@
+using FallbackPlan.TestSupport;
 using FallbackPlan.Storage.Abstractions;
-using FsCheck.Xunit;
-using Xunit;
 
 namespace FallbackPlan.Storage.ContractTests;
 
@@ -8,67 +7,71 @@ namespace FallbackPlan.Storage.ContractTests;
 /// Exercises the store-key grammar (specification 01 §2): traversal and
 /// hidden-path shapes are unconstructible, and parse–render is a bijection.
 /// </summary>
+[TestClass]
 public sealed class ObjectKeyTests
 {
-    [Theory]
-    [InlineData("repository-format")]
-    [InlineData("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura")]
-    [InlineData("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura.footer")]
-    [InlineData("index/delta/0000000000000001/delta-1")]
-    [InlineData("keys/key_1")]
+    [TestMethod]
+    [DataRow("repository-format")]
+    [DataRow("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura")]
+    [DataRow("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura.footer")]
+    [DataRow("index/delta/0000000000000001/delta-1")]
+    [DataRow("keys/key_1")]
     public void Valid_keys_parse_and_render_unchanged(string value)
     {
-        Assert.True(ObjectKey.TryParse(value, out var key));
-        Assert.Equal(value, key.Value);
+        Assert.IsTrue(ObjectKey.TryParse(value, out var key));
+        Assert.AreEqual(value, key.Value);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("/leading")]
-    [InlineData("trailing/")]
-    [InlineData("double//component")]
-    [InlineData("..")]
-    [InlineData("blobs/../keys")]
-    [InlineData(".hidden")]
-    [InlineData("blobs/.fbp-tmp/x")]
-    [InlineData("Uppercase")]
-    [InlineData("with space")]
-    [InlineData("back\\slash")]
-    [InlineData("percent%20")]
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("/leading")]
+    [DataRow("trailing/")]
+    [DataRow("double//component")]
+    [DataRow("..")]
+    [DataRow("blobs/../keys")]
+    [DataRow(".hidden")]
+    [DataRow("blobs/.fbp-tmp/x")]
+    [DataRow("Uppercase")]
+    [DataRow("with space")]
+    [DataRow("back\\slash")]
+    [DataRow("percent%20")]
     public void Invalid_keys_are_unconstructible(string value)
     {
-        Assert.False(ObjectKey.TryParse(value, out _));
-        Assert.Throws<ArgumentException>(() => ObjectKey.Parse(value));
+        Assert.IsFalse(ObjectKey.TryParse(value, out _));
+        Assert.ThrowsExactly<ArgumentException>(() => ObjectKey.Parse(value));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_key_longer_than_the_maximum_is_refused()
     {
         var component = new string('a', ObjectKey.MaximumComponentLength);
         var value = string.Join('/', Enumerable.Repeat(component, 5)); // 1279 chars
 
-        Assert.False(ObjectKey.TryParse(value, out _));
+        Assert.IsFalse(ObjectKey.TryParse(value, out _));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_component_longer_than_the_maximum_is_refused()
     {
-        Assert.False(ObjectKey.TryParse(new string('a', ObjectKey.MaximumComponentLength + 1), out _));
+        Assert.IsFalse(ObjectKey.TryParse(new string('a', ObjectKey.MaximumComponentLength + 1), out _));
     }
 
-    [Fact]
+    [TestMethod]
     public void Prefixes_match_by_ordinal_string_prefix()
     {
         var key = ObjectKey.Parse("blobs/data/abcd/object");
 
-        Assert.True(ObjectPrefix.Parse("blobs/").Matches(key));
-        Assert.True(ObjectPrefix.Parse("blobs/data/ab").Matches(key));
-        Assert.True(ObjectPrefix.All.Matches(key));
-        Assert.False(ObjectPrefix.Parse("blobs/meta/").Matches(key));
+        Assert.IsTrue(ObjectPrefix.Parse("blobs/").Matches(key));
+        Assert.IsTrue(ObjectPrefix.Parse("blobs/data/ab").Matches(key));
+        Assert.IsTrue(ObjectPrefix.All.Matches(key));
+        Assert.IsFalse(ObjectPrefix.Parse("blobs/meta/").Matches(key));
     }
 
-    [Property]
-    public bool Parse_of_a_rendered_key_returns_an_equal_key(byte[]? componentSeeds, byte componentCount)
+    [TestMethod]
+    public void Parse_of_a_rendered_key_returns_an_equal_key() =>
+        PropertyCheck.Holds(this);
+
+    public static bool Parse_of_a_rendered_key_returns_an_equal_keyProperty(byte[]? componentSeeds, byte componentCount)
     {
         // Deterministically map arbitrary bytes onto the valid alphabet so the
         // property explores the grammar's full space without rejection bias.

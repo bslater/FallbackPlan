@@ -1,6 +1,6 @@
 using System.Text;
 using FallbackPlan.Storage.Abstractions;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Storage.ContractTests;
 
@@ -21,7 +21,7 @@ public abstract class ObjectStoreContractTests
 
     private static async Task<byte[]> ReadAllAsync(OpenReadResult result)
     {
-        Assert.Equal(OpenReadOutcome.Found, result.Outcome);
+        Assert.AreEqual(OpenReadOutcome.Found, result.Outcome);
 
         using (result)
         {
@@ -31,7 +31,7 @@ public abstract class ObjectStoreContractTests
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Put_then_open_read_round_trips_bytes()
     {
         var store = CreateStore();
@@ -39,13 +39,13 @@ public abstract class ObjectStoreContractTests
         var payload = Encoding.ASCII.GetBytes("segment record bytes");
 
         var put = await store.PutAsync(key, ContentFactory(payload), PutConditions.None, CancellationToken.None);
-        Assert.Equal(PutOutcome.Created, put.Outcome);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
 
         var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
-        Assert.Equal(payload, await ReadAllAsync(read));
+        SequenceAssert.AreEqual(payload, await ReadAllAsync(read));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Ranged_read_returns_exactly_the_requested_slice()
     {
         var store = CreateStore();
@@ -61,10 +61,10 @@ public abstract class ObjectStoreContractTests
 
         var read = await store.OpenReadAsync(key, new ObjectRange(100, 250), CancellationToken.None);
 
-        Assert.Equal(payload[100..350], await ReadAllAsync(read));
+        SequenceAssert.AreEqual(payload[100..350], await ReadAllAsync(read));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_range_past_the_end_reports_range_not_satisfiable_as_a_result()
     {
         var store = CreateStore();
@@ -79,10 +79,10 @@ public abstract class ObjectStoreContractTests
 
         using var read = await store.OpenReadAsync(key, new ObjectRange(5, 10), CancellationToken.None);
 
-        Assert.Equal(OpenReadOutcome.RangeNotSatisfiable, read.Outcome);
+        Assert.AreEqual(OpenReadOutcome.RangeNotSatisfiable, read.Outcome);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Metadata_reports_length_for_an_existing_object()
     {
         var store = CreateStore();
@@ -91,31 +91,31 @@ public abstract class ObjectStoreContractTests
 
         var metadata = await store.GetMetadataAsync(key, CancellationToken.None);
 
-        Assert.True(metadata.Found);
-        Assert.Equal(123, metadata.Metadata!.Length);
+        Assert.IsTrue(metadata.Found);
+        Assert.AreEqual(123, metadata.Metadata!.Length);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Metadata_reports_not_found_as_a_result_not_an_exception()
     {
         var store = CreateStore();
 
         var metadata = await store.GetMetadataAsync(ObjectKey.Parse("absent"), CancellationToken.None);
 
-        Assert.False(metadata.Found);
+        Assert.IsFalse(metadata.Found);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Open_read_of_a_missing_object_reports_not_found_as_a_result()
     {
         var store = CreateStore();
 
         using var read = await store.OpenReadAsync(ObjectKey.Parse("absent"), range: null, CancellationToken.None);
 
-        Assert.Equal(OpenReadOutcome.NotFound, read.Outcome);
+        Assert.AreEqual(OpenReadOutcome.NotFound, read.Outcome);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_second_put_of_the_same_key_reports_already_exists_not_an_exception()
     {
         // The doc's own scenario (§2.2): an idempotent retry of a write that
@@ -127,14 +127,14 @@ public abstract class ObjectStoreContractTests
         var first = await store.PutAsync(key, ContentFactory(payload), PutConditions.IfNotExists, CancellationToken.None);
         var second = await store.PutAsync(key, ContentFactory(payload), PutConditions.IfNotExists, CancellationToken.None);
 
-        Assert.Equal(PutOutcome.Created, first.Outcome);
-        Assert.Equal(PutOutcome.AlreadyExists, second.Outcome);
+        Assert.AreEqual(PutOutcome.Created, first.Outcome);
+        Assert.AreEqual(PutOutcome.AlreadyExists, second.Outcome);
 
         var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
-        Assert.Equal(payload, await ReadAllAsync(read));
+        SequenceAssert.AreEqual(payload, await ReadAllAsync(read));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_put_of_different_content_under_a_live_key_never_takes_effect()
     {
         // INV-BLOB-001 (specification 05 §5.1) and the general rule it
@@ -147,7 +147,7 @@ public abstract class ObjectStoreContractTests
         var key = ObjectKey.Parse("blobs/data/aaaa/sealed-blob");
         var sealedBytes = "the bytes that were sealed"u8.ToArray();
 
-        Assert.Equal(
+        Assert.AreEqual(
             PutOutcome.Created,
             (await store.PutAsync(key, ContentFactory(sealedBytes), PutConditions.IfNotExists, CancellationToken.None)).Outcome);
 
@@ -157,14 +157,14 @@ public abstract class ObjectStoreContractTests
                 key, ContentFactory("different bytes entirely"u8.ToArray()), conditions, CancellationToken.None);
 
             // Reported as a result, not thrown — and, either way, not applied.
-            Assert.Equal(PutOutcome.AlreadyExists, rewrite.Outcome);
+            Assert.AreEqual(PutOutcome.AlreadyExists, rewrite.Outcome);
         }
 
         var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
-        Assert.Equal(sealedBytes, await ReadAllAsync(read));
+        SequenceAssert.AreEqual(sealedBytes, await ReadAllAsync(read));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_content_factory_is_invoked_and_its_stream_disposed()
     {
         var store = CreateStore();
@@ -183,12 +183,12 @@ public abstract class ObjectStoreContractTests
             PutConditions.None,
             CancellationToken.None);
 
-        Assert.Equal(PutOutcome.Created, put.Outcome);
-        Assert.True(invocations >= 1, "The factory must be invoked at least once.");
-        Assert.True(lastStream!.Disposed, "The provider owns and disposes each stream the factory produces.");
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+        Assert.IsTrue(invocations >= 1, "The factory must be invoked at least once.");
+        Assert.IsTrue(lastStream!.Disposed, "The provider owns and disposes each stream the factory produces.");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_content_factory_may_be_invoked_more_than_once_without_error()
     {
         // The contract half of §2.1: the caller guarantees the factory can
@@ -208,11 +208,11 @@ public abstract class ObjectStoreContractTests
         _ = await factory(CancellationToken.None);
         var put = await store.PutAsync(key, factory, PutConditions.None, CancellationToken.None);
 
-        Assert.Equal(PutOutcome.Created, put.Outcome);
-        Assert.Equal(2, invocations);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+        Assert.AreEqual(2, invocations);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Listing_returns_ordinal_key_order_and_honours_the_prefix()
     {
         var store = CreateStore();
@@ -229,10 +229,10 @@ public abstract class ObjectStoreContractTests
             listed.Add(entry.Key.Value);
         }
 
-        Assert.Equal(["blobs/data/aa/1", "blobs/data/zz/2", "blobs/meta/aa/3"], listed);
+        SequenceAssert.AreEqual(["blobs/data/aa/1", "blobs/data/zz/2", "blobs/meta/aa/3"], listed);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_prefix_ending_mid_component_still_matches_by_string()
     {
         var store = CreateStore();
@@ -260,7 +260,7 @@ public abstract class ObjectStoreContractTests
             listed.Add(entry.Key.Value);
         }
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             [
                 "hints/identity/aaaa/aaaabbbb/0000000000000001/s",
                 "hints/identity/aaaa/aaaadddd/0000000000000003/s",
@@ -276,7 +276,7 @@ public abstract class ObjectStoreContractTests
             narrowed.Add(entry.Key.Value);
         }
 
-        Assert.Equal(["hints/identity/aaaa/aaaabbbb/0000000000000001/s"], narrowed);
+        SequenceAssert.AreEqual(["hints/identity/aaaa/aaaabbbb/0000000000000001/s"], narrowed);
 
         // A prefix naming nothing lists nothing, rather than everything.
         await foreach (var entry in store.ListAsync(
@@ -286,7 +286,7 @@ public abstract class ObjectStoreContractTests
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_resume_token_persisted_across_enumerators_resumes_strictly_after_its_entry()
     {
         var store = CreateStore();
@@ -323,12 +323,12 @@ public abstract class ObjectStoreContractTests
             secondPass.Add(entry.Key.Value);
         }
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             ["index/delta/0000000000000001/entry-2", "index/delta/0000000000000001/entry-3", "index/delta/0000000000000001/entry-4"],
             secondPass);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Delete_reports_deleted_then_not_found_as_results()
     {
         var store = CreateStore();
@@ -338,11 +338,11 @@ public abstract class ObjectStoreContractTests
         var first = await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
         var second = await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
 
-        Assert.Equal(DeleteOutcome.Deleted, first.Outcome);
-        Assert.Equal(DeleteOutcome.NotFound, second.Outcome);
+        Assert.AreEqual(DeleteOutcome.Deleted, first.Outcome);
+        Assert.AreEqual(DeleteOutcome.NotFound, second.Outcome);
 
         var metadata = await store.GetMetadataAsync(key, CancellationToken.None);
-        Assert.False(metadata.Found);
+        Assert.IsFalse(metadata.Found);
     }
 
     /// <summary>A stream that records whether the provider disposed it.</summary>

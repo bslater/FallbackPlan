@@ -1,6 +1,7 @@
 using System.Formats.Cbor;
 using System.Text;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Protocol.Tests;
 
@@ -8,9 +9,10 @@ namespace FallbackPlan.Protocol.Tests;
 /// Framing (specification peer-protocol 02 §5): what a reader will accept off a
 /// wire it does not trust.
 /// </summary>
+[TestClass]
 public sealed class PeerFrameTests
 {
-    [Fact]
+    [TestMethod]
     public async Task A_frame_written_is_a_frame_read()
     {
         var hello = new SessionHello(1, 3, ["a", "b"], ["a"], "1.0.0-test", new PeerTerms(1_024, "every 1h", 4));
@@ -21,21 +23,21 @@ public sealed class PeerFrameTests
 
         var frame = await PeerFrame.ReadAsync(stream, CancellationToken.None);
 
-        Assert.NotNull(frame);
-        Assert.Equal(PeerMessageType.SessionHello, frame!.Value.Type);
-        Assert.Equal(hello, SessionHello.Read(frame.Value.Body));
+        Assert.IsNotNull(frame);
+        Assert.AreEqual(PeerMessageType.SessionHello, frame!.Value.Type);
+        Assert.AreEqual(hello, SessionHello.Read(frame.Value.Body));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_clean_close_is_not_an_error()
     {
         using var stream = new MemoryStream();
 
         // Nothing at all, and nothing wrong: the peer finished and went away.
-        Assert.Null(await PeerFrame.ReadAsync(stream, CancellationToken.None));
+        Assert.IsNull(await PeerFrame.ReadAsync(stream, CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_close_part_way_through_a_frame_is_an_error()
     {
         using var stream = new MemoryStream();
@@ -45,13 +47,13 @@ public sealed class PeerFrameTests
         var truncated = stream.ToArray()[..^1];
         using var partial = new MemoryStream(truncated);
 
-        var refused = await Assert.ThrowsAsync<PeerProtocolException>(
+        var refused = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
             async () => await PeerFrame.ReadAsync(partial, CancellationToken.None));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_oversized_frame_is_refused_before_it_is_allocated()
     {
         // Four bytes claiming 4 GiB. A reader that allocates first and checks
@@ -61,14 +63,14 @@ public sealed class PeerFrameTests
         var prefix = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
         using var stream = new MemoryStream(prefix);
 
-        var refused = await Assert.ThrowsAsync<PeerProtocolException>(
+        var refused = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
             async () => await PeerFrame.ReadAsync(stream, CancellationToken.None));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
         Assert.Contains("over the", refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void Non_canonical_cbor_is_refused_rather_than_read_leniently()
     {
         // Keys out of order. Two encodings of one message is the ambiguity
@@ -82,11 +84,11 @@ public sealed class PeerFrameTests
         writer.WriteUInt32((uint)PeerMessageType.SessionAccept);
         writer.WriteEndMap();
 
-        var refused = Assert.Throws<PeerProtocolException>(() => PeerFrame.Decode(writer.Encode()));
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Decode(writer.Encode()));
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_body_whose_first_key_is_not_the_message_type_is_refused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -95,11 +97,11 @@ public sealed class PeerFrameTests
         writer.WriteInt32(7);
         writer.WriteEndMap();
 
-        var refused = Assert.Throws<PeerProtocolException>(() => PeerFrame.Decode(writer.Encode()));
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Decode(writer.Encode()));
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unknown_message_type_reaches_the_caller_to_be_refused()
     {
         using var stream = new MemoryStream();
@@ -111,9 +113,9 @@ public sealed class PeerFrameTests
         // frame layer surfaces the type and the session layer refuses it.
         var frame = await PeerFrame.ReadAsync(stream, CancellationToken.None);
 
-        Assert.NotNull(frame);
-        Assert.Equal((PeerMessageType)9_001, frame!.Value.Type);
-        Assert.False(Enum.IsDefined(frame.Value.Type));
+        Assert.IsNotNull(frame);
+        Assert.AreEqual((PeerMessageType)9_001, frame!.Value.Type);
+        Assert.IsFalse(Enum.IsDefined(frame.Value.Type));
     }
 
     private sealed record UnknownMessage : IPeerMessage
@@ -132,33 +134,34 @@ public sealed class PeerFrameTests
 /// Session messages (specification peer-protocol 02 §2, §6): what survives a
 /// round trip and what a reader will not take.
 /// </summary>
+[TestClass]
 public sealed class PeerSessionMessageTests
 {
-    [Fact]
+    [TestMethod]
     public void A_hello_without_terms_round_trips()
     {
         var hello = new SessionHello(1, 1, [], [], "1.0.0", Terms: null);
 
         var (type, body) = PeerFrame.Decode(PeerFrame.Encode(hello));
 
-        Assert.Equal(PeerMessageType.SessionHello, type);
+        Assert.AreEqual(PeerMessageType.SessionHello, type);
         var read = SessionHello.Read(body);
-        Assert.Null(read.Terms);
-        Assert.Equal(hello, read);
+        Assert.IsNull(read.Terms);
+        Assert.AreEqual(hello, read);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_hello_whose_range_runs_backwards_is_refused()
     {
         var hello = new SessionHello(5, 2, [], [], "1.0.0", Terms: null);
 
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionHello.Read(PeerFrame.Decode(PeerFrame.Encode(hello)).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_hello_that_omits_its_range_is_refused()
     {
         // Absent, not merely zero. A reader that defaults a missing range to
@@ -171,13 +174,13 @@ public sealed class PeerSessionMessageTests
         writer.WriteTextString("1.0.0");
         writer.WriteEndMap();
 
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionHello.Read(PeerFrame.Decode(writer.Encode()).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_feature_identifier_that_is_not_lower_case_ascii_is_refused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -197,13 +200,13 @@ public sealed class PeerSessionMessageTests
         // Refused rather than folded to lower case: a name two implementations
         // spell differently and one silently normalises is a negotiation that
         // disagrees with itself while both sides believe they agree.
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionHello.Read(PeerFrame.Decode(writer.Encode()).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void An_empty_feature_identifier_is_refused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -222,25 +225,25 @@ public sealed class PeerSessionMessageTests
 
         // Nothing supports "", so a peer offering it is either broken or
         // probing. Neither is a reason to carry it into the intersection.
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionHello.Read(PeerFrame.Decode(writer.Encode()).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_hello_with_more_features_than_the_limit_is_refused()
     {
         var tooMany = Enumerable.Range(0, SessionHello.MaximumFeatures + 1)
             .Select(i => $"f{i}").ToList();
 
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerFrame.Encode(new SessionHello(1, 1, tooMany, [], "1.0.0", null)));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_key_this_version_does_not_know_is_skipped_within_a_known_message()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -260,22 +263,22 @@ public sealed class PeerSessionMessageTests
         // for a corrupted stream.
         var hello = SessionHello.Read(PeerFrame.Decode(writer.Encode()).Body);
 
-        Assert.Equal(1, hello.MinimumVersion);
-        Assert.Equal(2, hello.MaximumVersion);
+        Assert.AreEqual(1, hello.MinimumVersion);
+        Assert.AreEqual(2, hello.MaximumVersion);
     }
 
-    [Fact]
+    [TestMethod]
     public void An_acceptance_round_trips()
     {
         var accept = new SessionAccept(3, ["one", "two"]);
 
         var (type, body) = PeerFrame.Decode(PeerFrame.Encode(accept));
 
-        Assert.Equal(PeerMessageType.SessionAccept, type);
-        Assert.Equal(accept, SessionAccept.Read(body));
+        Assert.AreEqual(PeerMessageType.SessionAccept, type);
+        Assert.AreEqual(accept, SessionAccept.Read(body));
     }
 
-    [Fact]
+    [TestMethod]
     public void An_authentication_claim_round_trips()
     {
         using var keypair = PeerKeypair.Generate();
@@ -283,24 +286,24 @@ public sealed class PeerSessionMessageTests
 
         var (type, body) = PeerFrame.Decode(PeerFrame.Encode(auth));
 
-        Assert.Equal(PeerMessageType.SessionAuth, type);
-        Assert.Equal(auth, SessionAuth.Read(body));
+        Assert.AreEqual(PeerMessageType.SessionAuth, type);
+        Assert.AreEqual(auth, SessionAuth.Read(body));
     }
 
-    [Fact]
+    [TestMethod]
     public void An_authentication_proof_round_trips()
     {
         var proof = new SessionAuthProof(Enumerable.Range(0, 64).Select(i => (byte)i).ToArray());
 
         var (type, body) = PeerFrame.Decode(PeerFrame.Encode(proof));
 
-        Assert.Equal(PeerMessageType.SessionAuthProof, type);
-        Assert.Equal(proof, SessionAuthProof.Read(body));
+        Assert.AreEqual(PeerMessageType.SessionAuthProof, type);
+        Assert.AreEqual(proof, SessionAuthProof.Read(body));
     }
 
-    [Theory]
-    [InlineData(31)]
-    [InlineData(33)]
+    [TestMethod]
+    [DataRow(31)]
+    [DataRow(33)]
     public void An_identity_that_is_not_thirty_two_bytes_is_refused(int length)
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -316,13 +319,13 @@ public sealed class PeerSessionMessageTests
         // Length-checked before it reaches the identity type, so a short key
         // cannot become an ArgumentException surfacing as a crash rather than
         // a refusal.
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionAuth.Read(PeerFrame.Decode(writer.Encode()).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_proof_that_is_not_a_signature_length_is_refused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
@@ -333,13 +336,13 @@ public sealed class PeerSessionMessageTests
         writer.WriteByteString(new byte[16]);
         writer.WriteEndMap();
 
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => SessionAuthProof.Read(PeerFrame.Decode(writer.Encode()).Body));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_refusal_carries_the_code_a_client_branches_on()
     {
         var refusal = SessionRefuse.From(
@@ -347,11 +350,11 @@ public sealed class PeerSessionMessageTests
 
         var read = SessionRefuse.Read(PeerFrame.Decode(PeerFrame.Encode(refusal)).Body);
 
-        Assert.Equal(PeerRefusalReason.Revoked, read.Reason);
-        Assert.Equal("This pairing was revoked.", read.Text);
+        Assert.AreEqual(PeerRefusalReason.Revoked, read.Reason);
+        Assert.AreEqual("This pairing was revoked.", read.Text);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_refusal_text_is_truncated_on_a_character_boundary()
     {
         // The text is written for this side's operator and served to a stranger,
@@ -362,7 +365,7 @@ public sealed class PeerSessionMessageTests
 
         var read = SessionRefuse.Read(PeerFrame.Decode(PeerFrame.Encode(refusal)).Body);
 
-        Assert.True(Encoding.UTF8.GetByteCount(read.Text) <= SessionRefuse.MaximumTextBytes);
+        Assert.IsTrue(Encoding.UTF8.GetByteCount(read.Text) <= SessionRefuse.MaximumTextBytes);
         Assert.StartsWith("éé", read.Text, StringComparison.Ordinal);
         Assert.DoesNotContain('�', read.Text);
     }
@@ -372,21 +375,22 @@ public sealed class PeerSessionMessageTests
 /// Version selection and feature negotiation (specification peer-protocol
 /// 02 §3–§4): what two independent implementations must agree on.
 /// </summary>
+[TestClass]
 public sealed class PeerSessionNegotiationTests
 {
     private static SessionHello Hello(
         ushort minimum, ushort maximum, string[]? offered = null, string[]? required = null) =>
         new(minimum, maximum, offered ?? [], required ?? [], "1.0.0", null);
 
-    [Fact]
+    [TestMethod]
     public void The_highest_version_both_sides_speak_wins()
     {
-        Assert.Equal(3, PeerSessionNegotiation.SelectVersion(Hello(1, 5), Hello(2, 3)));
-        Assert.Equal(3, PeerSessionNegotiation.SelectVersion(Hello(2, 3), Hello(1, 5)));
-        Assert.Equal(1, PeerSessionNegotiation.SelectVersion(Hello(1, 1), Hello(1, 1)));
+        Assert.AreEqual(3, PeerSessionNegotiation.SelectVersion(Hello(1, 5), Hello(2, 3)));
+        Assert.AreEqual(3, PeerSessionNegotiation.SelectVersion(Hello(2, 3), Hello(1, 5)));
+        Assert.AreEqual(1, PeerSessionNegotiation.SelectVersion(Hello(1, 1), Hello(1, 1)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Selection_does_not_depend_on_which_side_is_asking()
     {
         // Both sides compute this alone, from the same two hellos, and never
@@ -401,19 +405,19 @@ public sealed class PeerSessionNegotiationTests
 
         foreach (var (a, b) in pairs)
         {
-            Assert.Equal(
+            Assert.AreEqual(
                 PeerSessionNegotiation.SelectVersion(a, b),
                 PeerSessionNegotiation.SelectVersion(b, a));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Ranges_that_do_not_overlap_are_refused_naming_both()
     {
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerSessionNegotiation.SelectVersion(Hello(1, 2), Hello(7, 9)));
 
-        Assert.Equal(PeerRefusalReason.VersionUnsupported, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.VersionUnsupported, refused.Reason);
 
         // Both ranges, per 02 §3. Without them the operator cannot tell which
         // side needs upgrading, which is the only question this refusal answers.
@@ -421,17 +425,17 @@ public sealed class PeerSessionNegotiationTests
         Assert.Contains("7–9", refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void Features_in_effect_are_the_intersection()
     {
         var effect = PeerSessionNegotiation.SelectFeatures(
             Hello(1, 1, offered: ["a", "b", "c"]),
             Hello(1, 1, offered: ["b", "c", "d"]));
 
-        Assert.Equal(["b", "c"], effect);
+        SequenceAssert.AreEqual(["b", "c"], effect);
     }
 
-    [Fact]
+    [TestMethod]
     public void The_intersection_is_ordered_so_both_sides_write_the_same_list()
     {
         var ours = Hello(1, 1, offered: ["zeta", "alpha", "mu"]);
@@ -439,48 +443,48 @@ public sealed class PeerSessionNegotiationTests
 
         // A set has no order, and an unordered accept is one two sides can
         // disagree about while both being right.
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             PeerSessionNegotiation.SelectFeatures(ours, theirs),
             PeerSessionNegotiation.SelectFeatures(theirs, ours));
-        Assert.Equal(["alpha", "mu", "zeta"], PeerSessionNegotiation.SelectFeatures(ours, theirs));
+        SequenceAssert.AreEqual(["alpha", "mu", "zeta"], PeerSessionNegotiation.SelectFeatures(ours, theirs));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_required_feature_the_peer_does_not_offer_refuses_the_session()
     {
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerSessionNegotiation.SelectFeatures(
                 Hello(1, 1, offered: ["a"], required: ["b"]),
                 Hello(1, 1, offered: ["a"])));
 
-        Assert.Equal(PeerRefusalReason.FeatureUnsupported, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.FeatureUnsupported, refused.Reason);
         Assert.Contains("'b'", refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_feature_the_peer_requires_of_us_is_checked_too()
     {
         // They would refuse anyway. Refusing first costs a message and avoids
         // the half-open state 02 §6 says must not exist.
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerSessionNegotiation.SelectFeatures(
                 Hello(1, 1, offered: ["a"]),
                 Hello(1, 1, offered: ["a"], required: ["z"])));
 
-        Assert.Equal(PeerRefusalReason.FeatureUnsupported, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.FeatureUnsupported, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void Requiring_something_both_sides_offer_is_fine()
     {
         var effect = PeerSessionNegotiation.SelectFeatures(
             Hello(1, 1, offered: ["a", "b"], required: ["a"]),
             Hello(1, 1, offered: ["a", "c"], required: ["a"]));
 
-        Assert.Equal(["a"], effect);
+        SequenceAssert.AreEqual(["a"], effect);
     }
 
-    [Fact]
+    [TestMethod]
     public void Version_one_offers_no_features_and_two_such_peers_still_agree()
     {
         var hello = PeerSessionNegotiation.Hello("1.0.0");
@@ -489,11 +493,11 @@ public sealed class PeerSessionNegotiationTests
 
         // The mechanism exists before any feature does, because retrofitting
         // negotiation onto a deployed protocol means a flag day (02 §4).
-        Assert.Equal(PeerSessionNegotiation.CurrentVersion, accept.Version);
-        Assert.Empty(accept.Features);
+        Assert.AreEqual(PeerSessionNegotiation.CurrentVersion, accept.Version);
+        Assert.IsEmpty(accept.Features);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_destination_hello_carries_its_terms_and_a_sources_does_not()
     {
         var terms = new PeerTerms(500_000_000_000, "every 1h", 4);
@@ -501,7 +505,7 @@ public sealed class PeerSessionNegotiationTests
         var destination = PeerSessionNegotiation.Hello("1.0.0", terms);
         var source = PeerSessionNegotiation.Hello("1.0.0");
 
-        Assert.Equal(terms, SessionHello.Read(PeerFrame.Decode(PeerFrame.Encode(destination)).Body).Terms);
-        Assert.Null(SessionHello.Read(PeerFrame.Decode(PeerFrame.Encode(source)).Body).Terms);
+        Assert.AreEqual(terms, SessionHello.Read(PeerFrame.Decode(PeerFrame.Encode(destination)).Body).Terms);
+        Assert.IsNull(SessionHello.Read(PeerFrame.Decode(PeerFrame.Encode(source)).Body).Terms);
     }
 }

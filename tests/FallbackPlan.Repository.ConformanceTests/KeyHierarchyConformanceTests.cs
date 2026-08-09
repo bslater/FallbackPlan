@@ -2,7 +2,6 @@ using System.Text.Json;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -13,6 +12,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// closes the chain the identifier conformance suite opens — the content-ID
 /// and key-ID keys it consumes are proven here to derive from the master key.
 /// </summary>
+[TestClass]
 public sealed class KeyHierarchyConformanceTests
 {
     private static JsonDocument Vectors { get; } =
@@ -24,27 +24,27 @@ public sealed class KeyHierarchyConformanceTests
     private static string Derived(string name) =>
         Vectors.RootElement.GetProperty("derived").GetProperty(name).GetString()!;
 
-    [Fact]
+    [TestMethod]
     public void Repository_scoped_keys_match_the_committed_vectors()
     {
         using var hierarchy = CreateHierarchy();
 
-        Assert.Equal(Derived("content_id_key"), Convert.ToHexStringLower(hierarchy.DeriveContentIdKey()));
-        Assert.Equal(Derived("key_id_key"), Convert.ToHexStringLower(hierarchy.DeriveKeyIdKey()));
+        Assert.AreEqual(Derived("content_id_key"), Convert.ToHexStringLower(hierarchy.DeriveContentIdKey()));
+        Assert.AreEqual(Derived("key_id_key"), Convert.ToHexStringLower(hierarchy.DeriveKeyIdKey()));
     }
 
-    [Fact]
+    [TestMethod]
     public void Generational_keys_match_the_committed_vectors()
     {
         using var hierarchy = CreateHierarchy();
 
-        Assert.Equal(Derived("data_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveDataKey(KeyGeneration.Zero)));
-        Assert.Equal(Derived("data_key_generation_1"), Convert.ToHexStringLower(hierarchy.DeriveDataKey(new KeyGeneration(1))));
-        Assert.Equal(Derived("metadata_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveMetadataKey(KeyGeneration.Zero)));
-        Assert.Equal(Derived("signing_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveSigningKeySeed(KeyGeneration.Zero)));
+        Assert.AreEqual(Derived("data_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveDataKey(KeyGeneration.Zero)));
+        Assert.AreEqual(Derived("data_key_generation_1"), Convert.ToHexStringLower(hierarchy.DeriveDataKey(new KeyGeneration(1))));
+        Assert.AreEqual(Derived("metadata_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveMetadataKey(KeyGeneration.Zero)));
+        Assert.AreEqual(Derived("signing_key_generation_0"), Convert.ToHexStringLower(hierarchy.DeriveSigningKeySeed(KeyGeneration.Zero)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Blob_key_and_separation_checks_match_the_committed_vectors()
     {
         var inputs = Vectors.RootElement.GetProperty("inputs");
@@ -57,24 +57,24 @@ public sealed class KeyHierarchyConformanceTests
 
         var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(dataKey, blobSalt, writer, counter, blobKey);
-        Assert.Equal(Derived("blob_key"), Convert.ToHexStringLower(blobKey));
+        Assert.AreEqual(Derived("blob_key"), Convert.ToHexStringLower(blobKey));
 
         var separation = Vectors.RootElement.GetProperty("separation_checks");
 
         var otherWriter = WriterId.FromBytes(Convert.FromHexString("b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"));
         var otherWriterKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(dataKey, blobSalt, otherWriter, counter, otherWriterKey);
-        Assert.Equal(
+        Assert.AreEqual(
             separation.GetProperty("blob_key_other_writer").GetString(),
             Convert.ToHexStringLower(otherWriterKey));
 
         var otherCounterKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(dataKey, blobSalt, writer, counter + 1, otherCounterKey);
-        Assert.Equal(
+        Assert.AreEqual(
             separation.GetProperty("blob_key_other_counter").GetString(),
             Convert.ToHexStringLower(otherCounterKey));
 
-        Assert.NotEqual(Convert.ToHexStringLower(blobKey), Convert.ToHexStringLower(otherWriterKey));
-        Assert.NotEqual(Convert.ToHexStringLower(blobKey), Convert.ToHexStringLower(otherCounterKey));
+        Assert.AreNotEqual(Convert.ToHexStringLower(blobKey), Convert.ToHexStringLower(otherWriterKey));
+        Assert.AreNotEqual(Convert.ToHexStringLower(blobKey), Convert.ToHexStringLower(otherCounterKey));
     }
 }

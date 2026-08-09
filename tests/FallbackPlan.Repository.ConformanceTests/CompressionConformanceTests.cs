@@ -1,6 +1,5 @@
 using System.Text.Json;
 using FallbackPlan.Repository.Format.Compression;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -10,9 +9,10 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// the decision, not compressed bytes — zstd output is not reproducible
 /// across library versions.
 /// </summary>
+[TestClass]
 public sealed class CompressionConformanceTests
 {
-    [Fact]
+    [TestMethod]
     public void The_storage_decision_matches_every_committed_case()
     {
         using var vectors = JsonDocument.Parse(
@@ -29,7 +29,7 @@ public sealed class CompressionConformanceTests
 
             var expectedProfile = vectorCase.GetProperty("expected_profile").GetString();
 
-            Assert.Equal(
+            Assert.AreEqual(
                 expectedProfile,
                 storeCompressed ? "zstd-v1" : "none");
         }

@@ -34,6 +34,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// already sitting where it lands. Both are tested; they are not the same
 /// test and must not share a citation again.
 /// </remarks>
+[TestClass]
 public sealed class RestorePlanTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -72,7 +73,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         return data;
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_plan_surfaces_case_collisions_and_degradations_before_any_byte_moves()
     {
         var source = new FakeFileSystemSource();
@@ -102,18 +103,18 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             MaxPathBytes = 4096,
         });
 
-        Assert.Equal(2, plan.Conflicts.Count(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal)));
-        Assert.Contains(plan.Degradations, degradation => degradation.Capability == "posix-metadata");
-        Assert.Contains(plan.Degradations, degradation => degradation.Capability == "symlinks");
-        Assert.Equal(200ul, plan.SpaceEstimateBytes);
+        Assert.AreEqual(2, plan.Conflicts.Count(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal)));
+        Assert.Contains(degradation => degradation.Capability == "posix-metadata", plan.Degradations);
+        Assert.Contains(degradation => degradation.Capability == "symlinks", plan.Degradations);
+        Assert.AreEqual(200ul, plan.SpaceEstimateBytes);
 
         // The same tree on a case-sensitive target has no collisions.
         var sensitivePlan = RestorePlanner.Plan(
             catalogue, snapshotId, string.Empty, RestoreTargetProfile.ForLocalPlatform() with { CaseSensitive = true });
-        Assert.DoesNotContain(sensitivePlan.Conflicts, conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal));
+        Assert.DoesNotContain(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal), sensitivePlan.Conflicts);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Execution_displaces_applies_metadata_after_content_and_accounts_for_everything()
     {
         var content = Deterministic(50_000, 5);
@@ -130,7 +131,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var snapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray();
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);
-        Assert.Empty(plan.Conflicts);
+        Assert.IsEmpty(plan.Conflicts);
 
         var output = Path.Combine(SpoolDirectory, "restore-out");
 
@@ -154,28 +155,29 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.Equal(plan.Items.Count, receipt.Items.Count);
-        Assert.Equal(content, File.ReadAllBytes(destination));
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual(plan.Items.Count, receipt.Items.Count);
+        SequenceAssert.AreEqual(content, File.ReadAllBytes(destination));
 
         // What was there is moved aside, not gone — and into THIS run's own
         // store, so a second restore of the same path cannot destroy it.
-        Assert.Equal("data/file.bin", Assert.Single(receipt.Displaced));
-        Assert.Equal(
+        Assert.AreEqual("data/file.bin", Assert.ContainsSingle(receipt.Displaced));
+        Assert.AreEqual(
             "precious local edits",
             File.ReadAllText(Path.Combine(output, ".fbp-displaced", "test", "data", "file.bin")));
 
         // Metadata landed after content: mtime is the captured one.
-        Assert.Equal(
+        Assert.AreEqual(
             DateTimeOffset.FromUnixTimeMilliseconds(1_600_000_000_000).UtcDateTime,
             File.GetLastWriteTimeUtc(destination));
         // The receipt is a valid versioned JSON document.
         using var parsed = JsonDocument.Parse(receipt.ToJson());
-        Assert.Equal(RestoreReceipt.CurrentSchemaVersion, parsed.RootElement.GetProperty("schema_version").GetInt32());
-        Assert.Equal("Complete", parsed.RootElement.GetProperty("outcome").GetString());
+        Assert.AreEqual(RestoreReceipt.CurrentSchemaVersion, parsed.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.AreEqual("Complete", parsed.RootElement.GetProperty("outcome").GetString());
     }
 
-    [PlatformFact(TestPlatforms.Posix, "restoring mode bits is a POSIX concern; Windows carries an ACL the executor applies differently")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "restoring mode bits is a POSIX concern; Windows carries an ACL the executor applies differently")]
     [PlatformTrait(TestPlatforms.Posix)]
     [UnsupportedOSPlatform("windows")]
     public async Task Restored_files_carry_their_captured_posix_mode()
@@ -202,14 +204,14 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, output, new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
 
-        Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.Equal(
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual(
             UnixFileMode.UserRead | UnixFileMode.UserWrite,
             File.GetUnixFileMode(Path.Combine(receipt.WrittenTo, "data", "file.bin"))
                 & (UnixFileMode.UserRead | UnixFileMode.UserWrite));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_targeted_forensic_rebuild_is_enough_to_restore_that_snapshot()
     {
         // Two snapshots; the drill targets only the first. The rebuilt
@@ -237,12 +239,12 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         {
             var report = await rebuilder.RebuildAsync(
                 rebuilt, new ForensicTarget.Snapshot(snapshotId), CancellationToken.None);
-            Assert.True(report.TargetSatisfied);
+            Assert.IsTrue(report.TargetSatisfied);
         }
 
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(rebuilt, snapshotId, string.Empty, target);
-        Assert.Contains(plan.Items, item => item.Path == "wanted/data.bin");
+        Assert.Contains(item => item.Path == "wanted/data.bin", plan.Items);
 
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -251,22 +253,22 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, output, new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
 
-        Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.Equal(firstContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "wanted", "data.bin")));
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        SequenceAssert.AreEqual(firstContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "wanted", "data.bin")));
 
         // Quarantine by default (FR-RST-006): under the chosen output, not in it.
         Assert.StartsWith(output, receipt.WrittenTo, StringComparison.Ordinal);
-        Assert.NotEqual(output, receipt.WrittenTo);
+        Assert.AreNotEqual(output, receipt.WrittenTo);
     }
 
-    [Theory]
-    [InlineData("../escaped.bin")]
-    [InlineData("data/../../escaped.bin")]
-    [InlineData("./data/file.bin")]
-    [InlineData("data//file.bin")]
-    [InlineData("/etc/passwd")]
-    [InlineData("data/sub\\file.bin")]
-    [InlineData("C:/windows/system32/x.dll")]
+    [TestMethod]
+    [DataRow("../escaped.bin")]
+    [DataRow("data/../../escaped.bin")]
+    [DataRow("./data/file.bin")]
+    [DataRow("data//file.bin")]
+    [DataRow("/etc/passwd")]
+    [DataRow("data/sub\\file.bin")]
+    [DataRow("C:/windows/system32/x.dll")]
     public async Task A_path_that_is_not_plain_components_is_refused(string hostilePath)
     {
         // The store is written by other participants and holds historical
@@ -290,21 +292,21 @@ public sealed class RestorePlanTests : ArchiveTestHarness
                 new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 },
                 CancellationToken.None);
 
-            Assert.Equal(RestoreOutcome.Failed, receipt.Outcome);
+            Assert.AreEqual(RestoreOutcome.Failed, receipt.Outcome);
 
-            var item = Assert.Single(receipt.Items);
-            Assert.Equal("failed", item.Outcome);
+            var item = Assert.ContainsSingle(receipt.Items);
+            Assert.AreEqual("failed", item.Outcome);
             Assert.StartsWith("refused:", item.Detail, StringComparison.Ordinal);
 
             // A refusal is not a partial write: nothing escaped, and nothing
             // landed inside the root for this item either.
-            Assert.False(File.Exists(Path.Combine(SpoolDirectory, "escaped.bin")));
-            Assert.False(Directory.Exists(output) && Directory.EnumerateFiles(
+            Assert.IsFalse(File.Exists(Path.Combine(SpoolDirectory, "escaped.bin")));
+            Assert.IsFalse(Directory.Exists(output) && Directory.EnumerateFiles(
                 output, "*", SearchOption.AllDirectories).Any());
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_skipped_required_item_makes_the_restore_partial()
     {
         // Architecture 08 §3: a restore that recovered 9 999 of 10 000 files
@@ -342,13 +344,13 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 },
             CancellationToken.None);
 
-        Assert.Contains(receipt.Items, item => item.Outcome == "skipped");
-        Assert.DoesNotContain(receipt.Items, item => item.Outcome == "failed");
-        Assert.Equal(RestoreOutcome.Partial, receipt.Outcome);
-        Assert.Equal(RestoreReceipt.CurrentSchemaVersion, receipt.SchemaVersion);
+        Assert.Contains(item => item.Outcome == "skipped", receipt.Items);
+        Assert.DoesNotContain(item => item.Outcome == "failed", receipt.Items);
+        Assert.AreEqual(RestoreOutcome.Partial, receipt.Outcome);
+        Assert.AreEqual(RestoreReceipt.CurrentSchemaVersion, receipt.SchemaVersion);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Two_restores_of_one_path_do_not_destroy_the_first_displaced_copy()
     {
         var (plan, target, reader, keys) = await OneRealItemAsync(0xD3);
@@ -369,10 +371,10 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             // A single shared refuge with overwrite:true was worse than no
             // refuge at all — the second run silently destroyed exactly the
             // file the policy exists to keep.
-            Assert.Equal(
+            Assert.AreEqual(
                 "the first local edits",
                 File.ReadAllText(Path.Combine(output, ".fbp-displaced", "run-one", "data", "file.bin")));
-            Assert.Equal(
+            Assert.AreEqual(
                 "the second local edits",
                 File.ReadAllText(Path.Combine(output, ".fbp-displaced", "run-two", "data", "file.bin")));
 
@@ -389,7 +391,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Historical_content_lands_in_quarantine_unless_in_place_is_asked_for()
     {
         var (plan, target, reader, keys) = await OneRealItemAsync(0xD4);
@@ -407,12 +409,12 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             // FR-RST-006. A snapshot may hold malware that was present when it
             // was captured; restoring it is what the user asked for, and
             // restoring it into the live tree *by default* is not.
-            Assert.Equal(RestoreOutcome.Complete, quarantined.Outcome);
-            Assert.NotEqual(output, quarantined.WrittenTo);
+            Assert.AreEqual(RestoreOutcome.Complete, quarantined.Outcome);
+            Assert.AreNotEqual(output, quarantined.WrittenTo);
             Assert.StartsWith(
                 Path.Combine(output, ".fbp-quarantine"), quarantined.WrittenTo, StringComparison.Ordinal);
-            Assert.True(File.Exists(Path.Combine(quarantined.WrittenTo, "data", "file.bin")));
-            Assert.False(File.Exists(Path.Combine(output, "data", "file.bin")));
+            Assert.IsTrue(File.Exists(Path.Combine(quarantined.WrittenTo, "data", "file.bin")));
+            Assert.IsFalse(File.Exists(Path.Combine(output, "data", "file.bin")));
 
             // In place is available and is a deliberate choice, not the thing
             // that happens when the operator presses Enter.
@@ -426,12 +428,12 @@ public sealed class RestorePlanTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-            Assert.Equal(Path.Combine(SpoolDirectory, "fr-rst-006-live"), inPlace.WrittenTo);
-            Assert.True(File.Exists(Path.Combine(inPlace.WrittenTo, "data", "file.bin")));
+            Assert.AreEqual(Path.Combine(SpoolDirectory, "fr-rst-006-live"), inPlace.WrittenTo);
+            Assert.IsTrue(File.Exists(Path.Combine(inPlace.WrittenTo, "data", "file.bin")));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Restore_selects_by_snapshot_by_path_and_by_destination()
     {
         var source = new FakeFileSystemSource();
@@ -461,9 +463,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(
             catalogue, Enumerable.Repeat((byte)0xE7, 16).ToArray(), "keep", target);
 
-        Assert.Contains(plan.Items, item => item.Path == "keep/wanted.bin");
-        Assert.Contains(plan.Items, item => item.Path == "keep/nested/also.bin");
-        Assert.DoesNotContain(plan.Items, item => item.Path.StartsWith("skip", StringComparison.Ordinal));
+        Assert.Contains(item => item.Path == "keep/wanted.bin", plan.Items);
+        Assert.Contains(item => item.Path == "keep/nested/also.bin", plan.Items);
+        Assert.DoesNotContain(item => item.Path.StartsWith("skip", StringComparison.Ordinal), plan.Items);
 
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -480,17 +482,17 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        Assert.Equal(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.Equal(destination, receipt.WrittenTo);
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual(destination, receipt.WrittenTo);
 
         // The bytes are the selected snapshot's, not the later one's — which
         // is the only thing that distinguishes a working snapshot selector
         // from one that quietly restores the newest version.
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             Deterministic(3_000, 11),
             await File.ReadAllBytesAsync(Path.Combine(destination, "keep", "wanted.bin")));
-        Assert.True(File.Exists(Path.Combine(destination, "keep", "nested", "also.bin")));
-        Assert.False(Directory.Exists(Path.Combine(destination, "skip")));
+        Assert.IsTrue(File.Exists(Path.Combine(destination, "keep", "nested", "also.bin")));
+        Assert.IsFalse(Directory.Exists(Path.Combine(destination, "skip")));
     }
 
     /// <summary>Publishes one file and returns a plan that restores it.</summary>

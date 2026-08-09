@@ -1,6 +1,7 @@
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -14,6 +15,7 @@ namespace FallbackPlan.InterruptionTests;
 /// resume at the unit level and BlobSpoolResumeTests proves it through the
 /// orchestrator — and its store-side claim is asserted here.
 /// </summary>
+[TestClass]
 public sealed class PublicationInterruptionTests : InterruptionHarness
 {
     private async Task<byte[]> PublishBaselineAsync(
@@ -35,7 +37,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         PublicationStep killAfter)
     {
         using var source = new MemoryStream(data);
-        return await Assert.ThrowsAsync<PublicationKilledException>(async () =>
+        return await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
             await CreateOrchestrator(store, keys, hierarchy, new KillAfter(killAfter))
                 .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
     }
@@ -43,17 +45,17 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     // An explicit initializer rather than a collection expression: Visual
     // Studio's analyzer lowers the expression through a path that trips
     // CA1825 (observed on Windows), and warnings are errors everywhere.
-    public static TheoryData<PublicationStep> KillPoints() => new()
-    {
-        PublicationStep.PublishIntent,
-        PublicationStep.UploadBlobs,
-        PublicationStep.PublishIndexDeltas,
-        PublicationStep.PublishSnapshot,
-        PublicationStep.RetireIntent,
-    };
+    public static IEnumerable<object[]> KillPoints() =>
+    [
+        [PublicationStep.PublishIntent],
+        [PublicationStep.UploadBlobs],
+        [PublicationStep.PublishIndexDeltas],
+        [PublicationStep.PublishSnapshot],
+        [PublicationStep.RetireIntent],
+    ];
 
-    [Theory]
-    [MemberData(nameof(KillPoints))]
+    [TestMethod]
+    [DynamicData(nameof(KillPoints))]
     public async Task No_kill_point_makes_the_committed_snapshot_unreadable_and_a_fresh_process_completes(
         PublicationStep killAfter)
     {
@@ -68,7 +70,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         // The load-bearing claim of the whole matrix (04 §5.1): no
         // interruption at any step makes the committed snapshot unreadable.
-        Assert.Equal(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
 
         // A fresh process completes the job — the durable world it inherits
         // is exactly what the kill left. New snapshot id: retry of an
@@ -78,11 +80,11 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
             await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
-        Assert.Equal(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
-        Assert.Equal(second, await RestoreSnapshotAsync(store, keys, 0xC3));
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
+        SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xC3));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_1_intent_published_no_blobs()
     {
         var store = CreateStore();
@@ -93,11 +95,11 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         await KillSecondPublicationAsync(store, keys, hierarchy, BuildFile(seed: 2), PublicationStep.PublishIntent);
 
         // "Intent published, no blobs": nothing collectable was written.
-        Assert.Equal(blobsBefore, CountUnder("blobs"));
-        Assert.Equal(1, CountUnder("journal"));
+        Assert.AreEqual(blobsBefore, CountUnder("blobs"));
+        Assert.AreEqual(1, CountUnder("journal"));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_4_blobs_durable_unreferenced_and_intent_covered()
     {
         var store = CreateStore();
@@ -107,9 +109,9 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         await KillSecondPublicationAsync(store, keys, hierarchy, BuildFile(seed: 2), PublicationStep.UploadBlobs);
 
         // "Blobs durable, unreferenced": blobs exist, no delta, no snapshot.
-        Assert.True(CountUnder("blobs") > 0);
-        Assert.Equal(0, CountUnder("index/delta"));
-        Assert.Equal(0, CountUnder("snapshots"));
+        Assert.IsTrue(CountUnder("blobs") > 0);
+        Assert.AreEqual(0, CountUnder("index/delta"));
+        Assert.AreEqual(0, CountUnder("snapshots"));
 
         // "Intent keeps them reachable": every uploaded blob is covered by a
         // live intent — the survey a collector must run (08 §8).
@@ -117,23 +119,23 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, currentGeneration: 0, nowMs: 1_722_600_000_000, skewMarginMs: 0);
 
-        Assert.NotEmpty(survey.LiveIntents);
+        Assert.IsNotEmpty(survey.LiveIntents);
 
         // Every blob, not merely some blob: the row's claim is that a collector
         // running now would delete none of them, and one covered blob out of
         // several would still lose data.
         var stored = await ReadStoredBlobsAsync(store);
-        Assert.NotEmpty(stored);
+        Assert.IsNotEmpty(stored);
 
         foreach (var (key, blobId) in stored)
         {
-            Assert.True(
+            Assert.IsTrue(
                 survey.IsCovered(blobId),
                 $"blob '{key}' is durable but no live intent covers it — a collector would delete it (08 §8, C4).");
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_6_deltas_published_no_snapshot()
     {
         var store = CreateStore();
@@ -144,16 +146,16 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         // "Deltas published, no snapshot": harmless index entries; blobs
         // stay intent-covered until retirement or expiry.
-        Assert.True(CountUnder("index/delta") > 0);
-        Assert.Equal(0, CountUnder("snapshots"));
+        Assert.IsTrue(CountUnder("index/delta") > 0);
+        Assert.AreEqual(0, CountUnder("snapshots"));
 
         using var journalReader = new JournalReader(store, Repo, hierarchy);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
-        Assert.NotEmpty(survey.LiveIntents);
+        Assert.IsNotEmpty(survey.LiveIntents);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_7_snapshot_published_intent_live_snapshot_restorable()
     {
         var store = CreateStore();
@@ -165,15 +167,15 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         // "Snapshot is valid and restorable; intent retires on next run or
         // expires" — the snapshot works even though the intent never retired.
-        Assert.Equal(second, await RestoreSnapshotAsync(store, keys, 0xB2));
+        SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xB2));
 
         using var journalReader = new JournalReader(store, Repo, hierarchy);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
-        Assert.NotEmpty(survey.LiveIntents);
+        Assert.IsNotEmpty(survey.LiveIntents);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_8_complete_the_intent_is_retired()
     {
         var store = CreateStore();
@@ -183,15 +185,15 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         await KillSecondPublicationAsync(store, keys, hierarchy, second, PublicationStep.RetireIntent);
 
-        Assert.Equal(second, await RestoreSnapshotAsync(store, keys, 0xB2));
+        SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xB2));
 
         using var journalReader = new JournalReader(store, Repo, hierarchy);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
-        Assert.Empty(survey.LiveIntents);
+        Assert.IsEmpty(survey.LiveIntents);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_3_a_partial_spool_uploads_nothing()
     {
         // The step-3 row's store-side claim: a job that dies before any seal
@@ -205,13 +207,13 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         var faulting = new FaultInjectingObjectStore(store, putBudget: 1); // the intent put succeeds; the first blob put dies
 
         using var source = new MemoryStream(BuildFile(seed: 3));
-        await Assert.ThrowsAsync<IOException>(async () =>
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await CreateOrchestrator(faulting, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xD4), CancellationToken.None));
 
-        Assert.Equal(0, CountUnder("blobs"));
+        Assert.AreEqual(0, CountUnder("blobs"));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_failed_upload_fails_the_job_rather_than_parking_the_producer()
     {
         // Row 3 kills the upload too early to reach this: the failure has to
@@ -231,16 +233,16 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
             .PublishAsync(Job(source, snapshotSeed: 0xD5), CancellationToken.None).AsTask();
 
         var finished = await Task.WhenAny(publication, Task.Delay(TimeSpan.FromSeconds(30)));
-        Assert.True(
+        Assert.IsTrue(
             ReferenceEquals(finished, publication),
             "the publication never finished — the producer is parked on a queue no live worker will ever drain.");
 
         // And it fails with the upload's own error, not with the queue
         // plumbing that noticed the upload was gone.
-        await Assert.ThrowsAsync<IOException>(async () => await publication);
+        await Assert.ThrowsExactlyAsync<IOException>(async () => await publication);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Row_4_holds_with_several_uploads_outstanding()
     {
         const int Outstanding = 4;
@@ -262,7 +264,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         using var source = new MemoryStream(content);
         var publication = orchestrator.PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None).AsTask();
 
-        Assert.True(
+        Assert.IsTrue(
             await gate.WaitUntilParkedAsync(TimeSpan.FromSeconds(30)),
             $"only {gate.ParkedCount} of {Outstanding} blob uploads were ever outstanding at once — the gate never held "
             + "the state this test exists to inspect.");
@@ -281,34 +283,34 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
             // No put has been allowed to return, so the durable blobs are
             // exactly the parked ones — the count is a fact about the gate, not
             // a race to be tolerated.
-            Assert.Equal(Outstanding, inFlight.Count);
+            Assert.AreEqual(Outstanding, inFlight.Count);
 
             foreach (var (key, blobId) in inFlight)
             {
-                Assert.True(
+                Assert.IsTrue(
                     survey.IsCovered(blobId),
                     $"blob '{key}' was durable with its upload still outstanding and no live intent covered it (C4).");
             }
 
-            Assert.Equal(0, CountUnder("index/delta"));
-            Assert.Equal(0, CountUnder("snapshots"));
+            Assert.AreEqual(0, CountUnder("index/delta"));
+            Assert.AreEqual(0, CountUnder("snapshots"));
         }
 
         gate.Release();
-        await Assert.ThrowsAsync<PublicationKilledException>(async () => await publication);
+        await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () => await publication);
 
         // Row 4 still reads the same once the kill lands, and a fresh process
         // completes the job over what it left.
-        Assert.True(CountUnder("blobs") > Outstanding);
-        Assert.Equal(0, CountUnder("index/delta"));
-        Assert.Equal(0, CountUnder("snapshots"));
+        Assert.IsTrue(CountUnder("blobs") > Outstanding);
+        Assert.AreEqual(0, CountUnder("index/delta"));
+        Assert.AreEqual(0, CountUnder("snapshots"));
 
         using (var retry = new MemoryStream(content))
         {
             await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
-        Assert.Equal(content, await RestoreSnapshotAsync(store, keys, 0xC3));
+        SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, 0xC3));
     }
 
     /// <summary>

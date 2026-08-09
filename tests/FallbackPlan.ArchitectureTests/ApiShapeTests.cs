@@ -16,9 +16,10 @@ namespace FallbackPlan.ArchitectureTests;
 /// exception loses its type and a missing cancellation token means a client
 /// cannot let go.
 /// </remarks>
+[TestClass]
 public sealed class ApiShapeTests
 {
-    [Fact]
+    [TestMethod]
     public void Every_contract_operation_is_asynchronous_and_cancellable()
     {
         var offenders = new List<string>();
@@ -47,23 +48,23 @@ public sealed class ApiShapeTests
             }
         }
 
-        Assert.True(offenders.Count == 0, string.Join("; ", offenders));
+        Assert.IsTrue(offenders.Count == 0, string.Join("; ", offenders));
     }
 
-    [Fact]
+    [TestMethod]
     public void Progress_is_streamed_rather_than_returned_as_a_collection()
     {
         // A ten-hour backup's progress cannot be a list you get at the end.
         var watch = typeof(IFallbackPlanService).GetMethod(nameof(IFallbackPlanService.WatchAsync));
 
-        Assert.NotNull(watch);
-        Assert.True(
+        Assert.IsNotNull(watch);
+        Assert.IsTrue(
             watch.ReturnType.IsGenericType
             && watch.ReturnType.GetGenericTypeDefinition() == typeof(IAsyncEnumerable<>),
             "Job progress must stream (NFR-PORT-004: asynchronous streaming).");
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_outcome_is_a_result_type_rather_than_an_exception()
     {
         // Expected failures are values. An exception crossing a process
@@ -73,16 +74,16 @@ public sealed class ApiShapeTests
             .Where(type => type.IsPublic && typeof(ServiceResult).IsAssignableFrom(type) && !type.IsAbstract)
             .ToList();
 
-        Assert.NotEmpty(results);
-        Assert.Contains(results, type => type == typeof(ServiceError));
+        Assert.IsNotEmpty(results);
+        Assert.Contains(type => type == typeof(ServiceError), results);
 
         // And the reason set is closed, so a client can branch on it rather
         // than matching on message text.
-        Assert.True(typeof(ServiceErrorReason).IsEnum);
-        Assert.NotEmpty(Enum.GetValues<ServiceErrorReason>());
+        Assert.IsTrue(typeof(ServiceErrorReason).IsEnum);
+        Assert.IsNotEmpty(Enum.GetValues<ServiceErrorReason>());
     }
 
-    [Fact]
+    [TestMethod]
     public void The_contract_carries_no_exception_types()
     {
         var offenders = typeof(ServiceResult).Assembly
@@ -94,6 +95,6 @@ public sealed class ApiShapeTests
             .Select(property => $"{property.DeclaringType?.Name}.{property.Name}")
             .ToList();
 
-        Assert.True(offenders.Count == 0, string.Join("; ", offenders));
+        Assert.IsTrue(offenders.Count == 0, string.Join("; ", offenders));
     }
 }

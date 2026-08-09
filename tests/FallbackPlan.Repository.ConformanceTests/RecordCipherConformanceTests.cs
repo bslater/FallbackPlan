@@ -3,7 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -14,12 +14,13 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// <see cref="RecordCipher"/> — a regression vector for the exact
 /// construction records use (specification 04; FR-ARCH-009).
 /// </summary>
+[TestClass]
 public sealed class RecordCipherConformanceTests
 {
     private static JsonDocument Load(string name) =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", name)));
 
-    [Fact]
+    [TestMethod]
     public void The_real_record_construction_reproduces_the_pinned_case()
     {
         using var aesGcm = Load("aes-gcm.json");
@@ -41,13 +42,13 @@ public sealed class RecordCipherConformanceTests
             keyInputs.GetProperty("blob_counter").GetUInt64(),
             blobKey);
 
-        Assert.Equal(vectorCase.GetProperty("key").GetString(), Convert.ToHexStringLower(blobKey));
+        Assert.AreEqual(vectorCase.GetProperty("key").GetString(), Convert.ToHexStringLower(blobKey));
 
         // Build nonce and AAD with the real builders from records.json inputs.
         var recordInputs = records.RootElement.GetProperty("inputs");
         var nonce = new byte[12];
         RecordNonce.Write(47, nonce);
-        Assert.Equal(vectorCase.GetProperty("iv").GetString(), Convert.ToHexStringLower(nonce));
+        Assert.AreEqual(vectorCase.GetProperty("iv").GetString(), Convert.ToHexStringLower(nonce));
 
         var aad = new byte[RecordAad.Length];
         RecordAad.Write(
@@ -57,7 +58,7 @@ public sealed class RecordCipherConformanceTests
             ObjectId.FromBytes(Convert.FromHexString(recordInputs.GetProperty("object_id").GetString()!)),
             47,
             aad);
-        Assert.Equal(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
+        Assert.AreEqual(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
 
         // Seal through the real cipher and compare the pinned bytes.
         var plaintext = Convert.FromHexString(vectorCase.GetProperty("plaintext").GetString()!);
@@ -65,12 +66,12 @@ public sealed class RecordCipherConformanceTests
         var tag = new byte[RecordCipher.TagLength];
         RecordCipher.Seal(blobKey, nonce, aad, plaintext, ciphertext, tag);
 
-        Assert.Equal(vectorCase.GetProperty("ciphertext").GetString(), Convert.ToHexStringLower(ciphertext));
-        Assert.Equal(vectorCase.GetProperty("tag").GetString(), Convert.ToHexStringLower(tag));
+        Assert.AreEqual(vectorCase.GetProperty("ciphertext").GetString(), Convert.ToHexStringLower(ciphertext));
+        Assert.AreEqual(vectorCase.GetProperty("tag").GetString(), Convert.ToHexStringLower(tag));
 
         // And open it back.
         var restored = new byte[plaintext.Length];
-        Assert.True(RecordCipher.TryOpen(blobKey, nonce, aad, ciphertext, tag, restored));
-        Assert.Equal(plaintext, restored);
+        Assert.IsTrue(RecordCipher.TryOpen(blobKey, nonce, aad, ciphertext, tag, restored));
+        SequenceAssert.AreEqual(plaintext, restored);
     }
 }

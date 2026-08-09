@@ -15,6 +15,7 @@ namespace FallbackPlan.Protocol.Tests;
 /// which is the attack the whole ceremony exists to stop, and the one a test
 /// that only checks "both sides agree" would happily pass.
 /// </remarks>
+[TestClass]
 public sealed class PairingCeremonyTests
 {
     /// <summary>One side of a ceremony, with everything it contributes.</summary>
@@ -48,7 +49,7 @@ public sealed class PairingCeremonyTests
                 responderSecret, offerer.Exchange.Nonce, responder.Exchange.Nonce, transcript));
     }
 
-    [Fact]
+    [TestMethod]
     public void Two_sides_of_one_ceremony_see_the_same_string()
     {
         using var offerer = Side.Create();
@@ -56,12 +57,15 @@ public sealed class PairingCeremonyTests
 
         var (a, b) = Ceremony(offerer, responder);
 
-        Assert.Equal(a, b);
-        Assert.Equal(PairingTranscript.ShortAuthenticationStringCharacters, a.Length);
-        Assert.All(a, character => Assert.Contains(character, "abcdefghijklmnopqrstuvwxyz234567"));
+        Assert.AreEqual(a, b);
+        Assert.AreEqual(PairingTranscript.ShortAuthenticationStringCharacters, a.Length);
+        foreach (var character in a)
+        {
+            Assert.Contains(character, "abcdefghijklmnopqrstuvwxyz234567");
+        }
     }
 
-    [Fact]
+    [TestMethod]
     public void A_relay_between_two_ceremonies_cannot_make_the_strings_agree()
     {
         // The attack: Mallory runs one ceremony with Alice and another with Bob,
@@ -75,10 +79,10 @@ public sealed class PairingCeremonyTests
         var (aliceSees, _) = Ceremony(alice, malloryToAlice);
         var (_, bobSees) = Ceremony(malloryToBob, bob);
 
-        Assert.NotEqual(aliceSees, bobSees);
+        Assert.AreNotEqual(aliceSees, bobSees);
     }
 
-    [Fact]
+    [TestMethod]
     public void Substituting_either_identity_changes_the_string()
     {
         using var offerer = Side.Create();
@@ -102,14 +106,14 @@ public sealed class PairingCeremonyTests
                 offerer.Contribution, responder.Contribution with { Identity = impostor.Identity }, 1),
         })
         {
-            Assert.NotEqual(
+            Assert.AreNotEqual(
                 expected,
                 PairingTranscript.ShortAuthenticationString(
                     secret, offerer.Exchange.Nonce, responder.Exchange.Nonce, forged));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Changing_the_protocol_version_changes_the_string()
     {
         using var offerer = Side.Create();
@@ -119,7 +123,7 @@ public sealed class PairingCeremonyTests
 
         // A downgrade that left the string untouched would be a downgrade the
         // humans could not see.
-        Assert.NotEqual(
+        Assert.AreNotEqual(
             PairingTranscript.ShortAuthenticationString(
                 secret, offerer.Exchange.Nonce, responder.Exchange.Nonce,
                 PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1)),
@@ -128,7 +132,7 @@ public sealed class PairingCeremonyTests
                 PairingTranscript.Build(offerer.Contribution, responder.Contribution, 2)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Swapping_the_roles_changes_the_string()
     {
         using var one = Side.Create();
@@ -139,7 +143,7 @@ public sealed class PairingCeremonyTests
         // Role order is fixed by the specification, so a transcript built with
         // the roles reversed is a different transcript. Both sides agreeing on
         // who offered is part of what they are confirming.
-        Assert.NotEqual(
+        Assert.AreNotEqual(
             PairingTranscript.ShortAuthenticationString(
                 secret, one.Exchange.Nonce, two.Exchange.Nonce,
                 PairingTranscript.Build(one.Contribution, two.Contribution, 1)),
@@ -148,7 +152,7 @@ public sealed class PairingCeremonyTests
                 PairingTranscript.Build(two.Contribution, one.Contribution, 1)));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_confirmation_verifies_against_its_signer_and_no_one_else()
     {
         using var offerer = Side.Create();
@@ -158,11 +162,11 @@ public sealed class PairingCeremonyTests
         var bytes = PairingTranscript.ConfirmationBytes(transcript);
         var signature = offerer.Keypair.Sign(bytes);
 
-        Assert.True(offerer.Keypair.Identity.Verify(bytes, signature));
-        Assert.False(responder.Keypair.Identity.Verify(bytes, signature));
+        Assert.IsTrue(offerer.Keypair.Identity.Verify(bytes, signature));
+        Assert.IsFalse(responder.Keypair.Identity.Verify(bytes, signature));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_confirmation_over_a_different_transcript_does_not_verify()
     {
         using var offerer = Side.Create();
@@ -177,10 +181,10 @@ public sealed class PairingCeremonyTests
 
         // Replaying a genuine confirmation into a ceremony it was not made for
         // is the cheapest way to fake approval, so it has to fail on the bytes.
-        Assert.False(offerer.Keypair.Identity.Verify(PairingTranscript.ConfirmationBytes(forged), signature));
+        Assert.IsFalse(offerer.Keypair.Identity.Verify(PairingTranscript.ConfirmationBytes(forged), signature));
     }
 
-    [Fact]
+    [TestMethod]
     public void The_confirmation_label_separates_it_from_the_derivation()
     {
         using var offerer = Side.Create();
@@ -191,11 +195,11 @@ public sealed class PairingCeremonyTests
         // Domain separation (00 §4): the bytes signed must not be the bare
         // transcript, or a signature could be replayed wherever the transcript
         // is used unsigned.
-        Assert.NotEqual(transcript, PairingTranscript.ConfirmationBytes(transcript));
-        Assert.True(PairingTranscript.ConfirmationBytes(transcript).Length > transcript.Length);
+        Assert.AreNotEqual(transcript, PairingTranscript.ConfirmationBytes(transcript));
+        Assert.IsTrue(PairingTranscript.ConfirmationBytes(transcript).Length > transcript.Length);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_low_order_point_is_refused_rather_than_agreed_with()
     {
         using var side = Side.Create();
@@ -203,25 +207,25 @@ public sealed class PairingCeremonyTests
         // All-zero is the canonical low-order point: agreeing with it fixes the
         // shared secret to a value the sender knows, which fixes the string the
         // humans compare.
-        var refused = Assert.Throws<ArgumentException>(
+        var refused = Assert.ThrowsExactly<ArgumentException>(
             () => side.Exchange.DeriveSharedSecret(new byte[PairingTranscript.ExchangeKeyLength]));
 
         Assert.Contains("low-order", refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_wrong_length_contribution_is_refused()
     {
         using var keypair = PeerKeypair.Generate();
         var good = new byte[PairingTranscript.ExchangeKeyLength];
         good[0] = 9;
 
-        Assert.Throws<ArgumentException>(() => PairingTranscript.Build(
+        Assert.ThrowsExactly<ArgumentException>(() => PairingTranscript.Build(
             new PairingContribution(keypair.Identity, new byte[31], new byte[PairingTranscript.NonceLength]),
             new PairingContribution(keypair.Identity, good, new byte[PairingTranscript.NonceLength]),
             1));
 
-        Assert.Throws<ArgumentException>(() => PairingTranscript.Build(
+        Assert.ThrowsExactly<ArgumentException>(() => PairingTranscript.Build(
             new PairingContribution(keypair.Identity, good, new byte[8]),
             new PairingContribution(keypair.Identity, good, new byte[PairingTranscript.NonceLength]),
             1));
@@ -232,9 +236,10 @@ public sealed class PairingCeremonyTests
 /// Peer identity and its keypair (specification peer-protocol 01 §1;
 /// ADR-0030 §1).
 /// </summary>
+[TestClass]
 public sealed class PeerIdentityTests
 {
-    [Fact]
+    [TestMethod]
     public void A_keypair_round_trips_through_its_private_seed()
     {
         using var original = PeerKeypair.Generate();
@@ -242,38 +247,41 @@ public sealed class PeerIdentityTests
 
         using var reloaded = PeerKeypair.FromPrivateKey(seed);
 
-        Assert.Equal(original.Identity, reloaded.Identity);
-        Assert.Equal(original.Identity.Fingerprint, reloaded.Identity.Fingerprint);
+        Assert.AreEqual(original.Identity, reloaded.Identity);
+        Assert.AreEqual(original.Identity.Fingerprint, reloaded.Identity.Fingerprint);
 
         // And it still signs as the same peer, which is what "the same identity"
         // has to mean for a grant pinned before a restart.
         var data = "durable across a restart"u8.ToArray();
-        Assert.True(original.Identity.Verify(data, reloaded.Sign(data)));
+        Assert.IsTrue(original.Identity.Verify(data, reloaded.Sign(data)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Two_generated_keypairs_are_different_peers()
     {
         using var one = PeerKeypair.Generate();
         using var two = PeerKeypair.Generate();
 
-        Assert.NotEqual(one.Identity, two.Identity);
-        Assert.NotEqual(one.Identity.Fingerprint, two.Identity.Fingerprint);
+        Assert.AreNotEqual(one.Identity, two.Identity);
+        Assert.AreNotEqual(one.Identity.Fingerprint, two.Identity.Fingerprint);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_fingerprint_is_stable_and_base32()
     {
         using var keypair = PeerKeypair.Generate();
 
         var fingerprint = keypair.Identity.Fingerprint;
 
-        Assert.Equal(fingerprint, keypair.Identity.Fingerprint);
-        Assert.Equal(26, fingerprint.Length);
-        Assert.All(fingerprint, character => Assert.Contains(character, "abcdefghijklmnopqrstuvwxyz234567"));
+        Assert.AreEqual(fingerprint, keypair.Identity.Fingerprint);
+        Assert.AreEqual(26, fingerprint.Length);
+        foreach (var character in fingerprint)
+        {
+            Assert.Contains(character, "abcdefghijklmnopqrstuvwxyz234567");
+        }
     }
 
-    [Fact]
+    [TestMethod]
     public void An_identity_is_its_key_and_nothing_else()
     {
         using var keypair = PeerKeypair.Generate();
@@ -282,24 +290,24 @@ public sealed class PeerIdentityTests
 
         // Equality is over the key, because the key is the identity. Anything
         // else here would be a second thing a peer could be identified by.
-        Assert.Equal(keypair.Identity, copied);
-        Assert.Equal(keypair.Identity.GetHashCode(), copied.GetHashCode());
+        Assert.AreEqual(keypair.Identity, copied);
+        Assert.AreEqual(keypair.Identity.GetHashCode(), copied.GetHashCode());
     }
 
-    [Fact]
+    [TestMethod]
     public void A_key_of_the_wrong_length_is_not_an_identity()
     {
-        Assert.Throws<ArgumentException>(() => PeerIdentity.FromPublicKey(new byte[31]));
-        Assert.Throws<ArgumentException>(() => PeerIdentity.FromPublicKey(RandomNumberGenerator.GetBytes(64)));
+        Assert.ThrowsExactly<ArgumentException>(() => PeerIdentity.FromPublicKey(new byte[31]));
+        Assert.ThrowsExactly<ArgumentException>(() => PeerIdentity.FromPublicKey(RandomNumberGenerator.GetBytes(64)));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_signature_of_the_wrong_length_does_not_verify()
     {
         using var keypair = PeerKeypair.Generate();
         var data = "x"u8.ToArray();
 
-        Assert.False(keypair.Identity.Verify(data, new byte[63]));
-        Assert.False(keypair.Identity.Verify(data, []));
+        Assert.IsFalse(keypair.Identity.Verify(data, new byte[63]));
+        Assert.IsFalse(keypair.Identity.Verify(data, []));
     }
 }

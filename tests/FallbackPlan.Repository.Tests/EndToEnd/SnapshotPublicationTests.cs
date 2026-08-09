@@ -9,6 +9,7 @@ using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -19,6 +20,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the probed source filesystem — and everything restores from a cold
 /// reader.
 /// </summary>
+[TestClass]
 public sealed class SnapshotPublicationTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -71,7 +73,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         while (next is { } id)
         {
             var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
             var manifest = TreeManifestCodec.Decode(read.Plaintext!);
             chain.Add(manifest);
             next = manifest.Continuation;
@@ -83,11 +85,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     private static async Task<FileVersionManifest> ReadFileVersionAsync(RepositoryReader reader, ObjectId id)
     {
         var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
         return FileVersionManifestCodec.Decode(read.Plaintext!);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_multi_file_tree_publishes_and_restores_from_a_cold_reader()
     {
         var source = new FakeFileSystemSource();
@@ -104,28 +106,28 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.Equal(3, published.Files.Count);
-        Assert.Empty(published.Failures);
-        Assert.Null(published.ErrorManifestObjectId);
+        Assert.AreEqual(3, published.Files.Count);
+        Assert.IsEmpty(published.Failures);
+        Assert.IsNull(published.ErrorManifestObjectId);
 
         // Cold reader: footers only, no index, no catalogue.
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (rootHead, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
-        Assert.Equal("/"u8.ToArray(), rootHead.Name!.Value.ToArray());
+        SequenceAssert.AreEqual("/"u8.ToArray(), rootHead.Name!.Value.ToArray());
 
         // Root entries in byte order: beta.bin, docs.
-        Assert.Equal(["beta.bin", "docs"], rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)));
-        Assert.Equal(EntryKind.File, rootEntries[0].EntryKind);
-        Assert.Equal(EntryKind.DirectoryPlaceholder, rootEntries[1].EntryKind);
+        SequenceAssert.AreEqual(["beta.bin", "docs"], rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)));
+        Assert.AreEqual(EntryKind.File, rootEntries[0].EntryKind);
+        Assert.AreEqual(EntryKind.DirectoryPlaceholder, rootEntries[1].EntryKind);
 
         var (docsHead, docsEntries) = await ReadTreeAsync(reader, rootEntries[1].ObjectId);
-        Assert.Equal("docs"u8.ToArray(), docsHead.Name!.Value.ToArray());
-        Assert.Equal(["alpha.bin", "deep"], docsEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)));
+        SequenceAssert.AreEqual("docs"u8.ToArray(), docsHead.Name!.Value.ToArray());
+        SequenceAssert.AreEqual(["alpha.bin", "deep"], docsEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)));
 
         var (_, deepEntries) = await ReadTreeAsync(reader, docsEntries[1].ObjectId);
-        var nestedEntry = Assert.Single(deepEntries);
+        var nestedEntry = Assert.ContainsSingle(deepEntries);
 
         // Every file restores byte-identical.
         foreach (var (entryId, expected) in new[]
@@ -138,12 +140,12 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             var manifest = await ReadFileVersionAsync(reader, entryId);
             using var restored = new MemoryStream();
             var restore = await reader.RestoreAsync(manifest.SegmentReferences, restored, CancellationToken.None);
-            Assert.True(restore.Success, restore.FailureDetail);
-            Assert.Equal(expected, restored.ToArray());
+            Assert.IsTrue(restore.Success, restore.FailureDetail);
+            SequenceAssert.AreEqual(expected, restored.ToArray());
         }
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_snapshot_records_probe_parents_policy_and_complete_status()
     {
         var source = new FakeFileSystemSource();
@@ -164,7 +166,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         }
 
         byte[] snapshotBytes;
-        using (var read = await store.OpenReadAsync(Assert.Single(snapshotKeys), range: null, CancellationToken.None))
+        using (var read = await store.OpenReadAsync(Assert.ContainsSingle(snapshotKeys), range: null, CancellationToken.None))
         {
             using var memory = new MemoryStream();
             await read.Content!.CopyToAsync(memory);
@@ -173,41 +175,41 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var record = StandaloneRecordFraming.Parse(snapshotBytes);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
-        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plain));
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plain));
         var decoded = SnapshotManifestCodec.Decode(plain);
 
         using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
         {
-            Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+            Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
         }
 
         var manifest = decoded.Manifest;
-        Assert.Equal(1, manifest.CaptureStatus);
-        Assert.Null(manifest.ErrorManifest);
-        Assert.Equal(1, manifest.ConsistencyMethod);
+        Assert.AreEqual(1, manifest.CaptureStatus);
+        Assert.IsNull(manifest.ErrorManifest);
+        Assert.AreEqual(1, manifest.ConsistencyMethod);
 
         // The probed filesystem, ADR-0026 §Decision 7 keys included.
-        Assert.Equal("fakefs", manifest.SourceFilesystem.Name);
-        Assert.True(manifest.SourceFilesystem.CaseSensitive);
-        Assert.Equal(4096u, manifest.SourceFilesystem.MaxPathBytes);
-        Assert.Equal(255u, manifest.SourceFilesystem.MaxComponentBytes);
-        Assert.False(manifest.SourceFilesystem.ReservedNames);
+        Assert.AreEqual("fakefs", manifest.SourceFilesystem.Name);
+        Assert.IsTrue(manifest.SourceFilesystem.CaseSensitive);
+        Assert.AreEqual(4096u, manifest.SourceFilesystem.MaxPathBytes);
+        Assert.AreEqual(255u, manifest.SourceFilesystem.MaxComponentBytes);
+        Assert.IsFalse(manifest.SourceFilesystem.ReservedNames);
 
         // Lineage.
-        var parent = Assert.Single(manifest.ParentSnapshots);
-        Assert.Equal(Enumerable.Repeat((byte)0x44, 16).ToArray(), parent.ToArray());
+        var parent = Assert.ContainsSingle(manifest.ParentSnapshots);
+        SequenceAssert.AreEqual(Enumerable.Repeat((byte)0x44, 16).ToArray(), parent.ToArray());
 
         // The policy manifest carries the rule strings verbatim (06 §7.1).
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, policyRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
         var policy = PolicyManifestCodec.Decode(policyRead.Plaintext!);
-        Assert.Equal(["**/*.bin"], policy.IncludeRules);
-        Assert.Equal(["skip"], policy.ExcludeRules);
+        SequenceAssert.AreEqual(["**/*.bin"], policy.IncludeRules);
+        SequenceAssert.AreEqual(["skip"], policy.ExcludeRules);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Failures_produce_an_error_manifest_and_partial_status_and_the_rest_still_captures()
     {
         var source = new FakeFileSystemSource();
@@ -221,35 +223,35 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.Equal(2, published.Failures.Count);
-        Assert.NotNull(published.ErrorManifestObjectId);
-        Assert.Single(published.Files); // good.bin captured
+        Assert.AreEqual(2, published.Failures.Count);
+        Assert.IsNotNull(published.ErrorManifestObjectId);
+        Assert.ContainsSingle(published.Files); // good.bin captured
 
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var errorRead = await reader.ReadSegmentAsync(published.ErrorManifestObjectId!.Value, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, errorRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, errorRead.Outcome);
         var errors = ErrorManifestCodec.Decode(errorRead.Plaintext!);
 
-        Assert.Contains(errors.Failures, failure =>
+        Assert.Contains(failure =>
             failure.Reason == CaptureFailureReason.Permission &&
-            Encoding.UTF8.GetString(failure.PathComponents[0].Span) == "bad.bin");
-        Assert.Contains(errors.Failures, failure => failure.Reason == CaptureFailureReason.NotFound);
+            Encoding.UTF8.GetString(failure.PathComponents[0].Span) == "bad.bin", errors.Failures);
+        Assert.Contains(failure => failure.Reason == CaptureFailureReason.NotFound, errors.Failures);
 
         // capture_status = 2 iff a non-empty error manifest is referenced
         // (ADR-0026 §Decision 3).
         var snapshotRead = await reader.ReadSegmentAsync(published.SnapshotObjectId, CancellationToken.None);
         var snapshot = SnapshotManifestCodec.Decode(snapshotRead.Plaintext!);
-        Assert.Equal(2, snapshot.Manifest.CaptureStatus);
-        Assert.Equal(published.ErrorManifestObjectId, snapshot.Manifest.ErrorManifest);
+        Assert.AreEqual(2, snapshot.Manifest.CaptureStatus);
+        Assert.AreEqual(published.ErrorManifestObjectId, snapshot.Manifest.ErrorManifest);
 
         // The failed file appears in no tree.
         var (_, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
-        Assert.DoesNotContain(rootEntries, entry => Encoding.UTF8.GetString(entry.Name.Span) == "bad.bin");
+        Assert.DoesNotContain(entry => Encoding.UTF8.GetString(entry.Name.Span) == "bad.bin", rootEntries);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Excluded_paths_are_pruned_and_are_not_failures()
     {
         var source = new FakeFileSystemSource();
@@ -263,13 +265,13 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var job = Job(source) with { ExcludeRules = ["skip"] };
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
 
-        Assert.Single(published.Files);
-        Assert.Empty(published.Failures);
-        Assert.Null(published.ErrorManifestObjectId);
-        Assert.DoesNotContain(published.Files, file => file.RelativePath.StartsWith("skip", StringComparison.Ordinal));
+        Assert.ContainsSingle(published.Files);
+        Assert.IsEmpty(published.Failures);
+        Assert.IsNull(published.ErrorManifestObjectId);
+        Assert.DoesNotContain(file => file.RelativePath.StartsWith("skip", StringComparison.Ordinal), published.Files);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Invalid_rules_are_refused_before_any_byte_is_written()
     {
         var source = new FakeFileSystemSource();
@@ -280,7 +282,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var job = Job(source) with { ExcludeRules = ["a**b"] };
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
             await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None));
 
         var blobs = 0;
@@ -289,10 +291,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             blobs++;
         }
 
-        Assert.Equal(0, blobs);
+        Assert.AreEqual(0, blobs);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Hardlinked_files_share_a_group_and_singletons_carry_none()
     {
         var source = new FakeFileSystemSource();
@@ -314,9 +316,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var two = await ReadFileVersionAsync(reader, byPath["two.bin"].ObjectId);
         var solo = await ReadFileVersionAsync(reader, byPath["solo.bin"].ObjectId);
 
-        Assert.NotNull(one.HardlinkGroup);
-        Assert.Equal(one.HardlinkGroup!.Value.ToArray(), two.HardlinkGroup!.Value.ToArray());
-        Assert.Null(solo.HardlinkGroup);
+        Assert.IsNotNull(one.HardlinkGroup);
+        SequenceAssert.AreEqual(one.HardlinkGroup!.Value.ToArray(), two.HardlinkGroup!.Value.ToArray());
+        Assert.IsNull(solo.HardlinkGroup);
 
         // The expected derivation, computed independently (ADR-0026 §Decision 1).
         var message = "fbp/hardlink/v1"u8.ToArray()
@@ -324,10 +326,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             .Concat(new byte[] { 0, 0, 0, 0, 0, 0, 0, 42 })
             .ToArray();
         var expected = HMACSHA256.HashData(keys.ContentIdKey.ToArray(), message)[..16];
-        Assert.Equal(expected, one.HardlinkGroup.Value.ToArray());
+        SequenceAssert.AreEqual(expected, one.HardlinkGroup.Value.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Symlinks_and_specials_are_zero_content_versions_with_their_shapes()
     {
         var source = new FakeFileSystemSource();
@@ -352,7 +354,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.Empty(published.Failures);
+        Assert.IsEmpty(published.Failures);
 
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -361,18 +363,18 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var link = await ReadFileVersionAsync(reader, byPath["link"].ObjectId);
         var pipe = await ReadFileVersionAsync(reader, byPath["pipe"].ObjectId);
 
-        Assert.Equal(EntryKind.Symlink, link.EntryKind);
-        Assert.Equal("target/elsewhere"u8.ToArray(), link.LinkTarget!.Value.ToArray());
-        Assert.Equal(0ul, link.LogicalLength);
-        Assert.Empty(link.SegmentReferences);
+        Assert.AreEqual(EntryKind.Symlink, link.EntryKind);
+        SequenceAssert.AreEqual("target/elsewhere"u8.ToArray(), link.LinkTarget!.Value.ToArray());
+        Assert.AreEqual(0ul, link.LogicalLength);
+        Assert.IsEmpty(link.SegmentReferences);
 
-        Assert.Equal(EntryKind.Special, pipe.EntryKind);
+        Assert.AreEqual(EntryKind.Special, pipe.EntryKind);
         Assert.Contains("special-kind: fifo", pipe.CaptureDiagnostics);
-        Assert.Equal(0ul, pipe.LogicalLength);
-        Assert.Equal(SHA256.HashData([]), pipe.WholeFileHash.ToArray());
+        Assert.AreEqual(0ul, pipe.LogicalLength);
+        SequenceAssert.AreEqual(SHA256.HashData([]), pipe.WholeFileHash.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Sparse_files_store_only_data_and_restore_with_zeroes()
     {
         // 64 KiB data ‖ 128 KiB hole ‖ 64 KiB data. The backing content
@@ -395,25 +397,25 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var manifest = await ReadFileVersionAsync(
-            reader, Assert.Single(published.Files).ObjectId);
+            reader, Assert.ContainsSingle(published.Files).ObjectId);
 
         // The hole is an extent, not stored bytes: references cover exactly
         // the data runs (06 §3.2 tiling).
-        var extent = Assert.Single(manifest.SparseExtents);
-        Assert.Equal(64ul * 1024, extent.Offset);
-        Assert.Equal(128ul * 1024, extent.Length);
-        Assert.Equal(content.Length, (long)manifest.LogicalLength);
-        Assert.Equal(128L * 1024, manifest.SegmentReferences.Sum(reference => reference.LogicalLength));
+        var extent = Assert.ContainsSingle(manifest.SparseExtents);
+        Assert.AreEqual(64ul * 1024, extent.Offset);
+        Assert.AreEqual(128ul * 1024, extent.Length);
+        Assert.AreEqual(content.Length, (long)manifest.LogicalLength);
+        Assert.AreEqual(128L * 1024, manifest.SegmentReferences.Sum(reference => reference.LogicalLength));
 
         // Restore materialises the zeroes and the whole-file hash verifies.
         var engine = new RestoreEngine(reader);
         using var restored = new MemoryStream();
         var restore = await engine.RestoreFileAsync(manifest, restored, CancellationToken.None);
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(content, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(content, restored.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Alternate_streams_become_single_segment_records_and_oversize_is_error_reason_6()
     {
         var source = new FakeFileSystemSource();
@@ -436,24 +438,24 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
         var carrier = await ReadFileVersionAsync(reader, byPath["carrier.bin"].ObjectId);
 
-        var stream = Assert.Single(carrier.Metadata.AlternateStreams);
-        Assert.Equal("Zone.Identifier"u8.ToArray(), stream.Name.ToArray());
+        var stream = Assert.ContainsSingle(carrier.Metadata.AlternateStreams);
+        SequenceAssert.AreEqual("Zone.Identifier"u8.ToArray(), stream.Name.ToArray());
 
         // The stream's object id names a segment record holding the bytes.
         var streamRead = await reader.ReadSegmentAsync(stream.ObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, streamRead.Outcome);
-        Assert.Equal("[ZoneTransfer]\nZoneId=3"u8.ToArray(), streamRead.Plaintext);
+        Assert.AreEqual(RecordReadOutcome.Ok, streamRead.Outcome);
+        SequenceAssert.AreEqual("[ZoneTransfer]\nZoneId=3"u8.ToArray(), streamRead.Plaintext);
 
         // The oversize stream is error reason 6; its file still captured.
-        Assert.Contains(published.Failures, failure => failure.Reason == CaptureFailureReason.TooLarge);
+        Assert.Contains(failure => failure.Reason == CaptureFailureReason.TooLarge, published.Failures);
         var big = await ReadFileVersionAsync(reader, byPath["big-stream.bin"].ObjectId);
-        Assert.Empty(big.Metadata.AlternateStreams);
-        Assert.Equal(2, snapshotStatusOf(published));
+        Assert.IsEmpty(big.Metadata.AlternateStreams);
+        Assert.AreEqual(2, snapshotStatusOf(published));
 
         int snapshotStatusOf(PublishedTreeSnapshot snapshot) => snapshot.ErrorManifestObjectId is null ? 1 : 2;
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_file_changing_mid_read_is_reread_and_diagnosed_when_it_never_settles()
     {
         var source = new FakeFileSystemSource();
@@ -479,11 +481,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         // ADR-0026 §Decision 2: content is the last complete read; the
         // diagnostic records the attempt count.
         Assert.Contains("captured-inconsistent: 2", diagnosed.CaptureDiagnostics);
-        Assert.DoesNotContain(settled.CaptureDiagnostics, diagnostic =>
-            diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostic =>
+            diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal), settled.CaptureDiagnostics);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_name_that_comes_to_mean_a_different_object_is_recorded_as_a_substitution()
     {
         var source = new FakeFileSystemSource();
@@ -510,15 +512,15 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var ordinary = await ReadFileVersionAsync(reader, byPath[settled.RelativePath].ObjectId);
 
         Assert.Contains("captured-identity-changed", diagnosed.CaptureDiagnostics);
-        Assert.DoesNotContain(diagnosed.CaptureDiagnostics, diagnostic =>
-            diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostic =>
+            diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal), diagnosed.CaptureDiagnostics);
 
         // An unchanged file's identity matches its own, so nothing is claimed
         // about it — the check must not fire on the ordinary case.
         Assert.DoesNotContain("captured-identity-changed", ordinary.CaptureDiagnostics);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Blob_continuity_spans_files_instead_of_sealing_per_file()
     {
         // 40 files of 1 KiB under a 256 KiB blob target: continuity means a
@@ -535,12 +537,12 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.Equal(40, published.Files.Count);
-        Assert.True(published.ContentBlobs.Count <= 2,
+        Assert.AreEqual(40, published.Files.Count);
+        Assert.IsTrue(published.ContentBlobs.Count <= 2,
             $"40 small files must share blobs (specification 05 §5); got {published.ContentBlobs.Count}.");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_directory_too_wide_for_one_manifest_shards_into_a_valid_chain()
     {
         var source = new FakeFileSystemSource();
@@ -579,23 +581,23 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         while (next is { } id)
         {
             var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
-            Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
             var manifest = TreeManifestCodec.Decode(read.Plaintext!);
             chain.Add(manifest);
             next = manifest.Continuation;
         }
 
-        Assert.True(chain.Count > 1, "a 256-byte budget over 100 entries must shard");
+        Assert.IsTrue(chain.Count > 1, "a 256-byte budget over 100 entries must shard");
 
         // The chain satisfies every 06 §9 rule and flattens to the input.
         var flattened = TreeChain.ValidateAndFlatten(chain);
-        Assert.Equal(entries.Count, flattened.Count);
-        Assert.Equal(
+        Assert.AreEqual(entries.Count, flattened.Count);
+        SequenceAssert.AreEqual(
             entries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)),
             flattened.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Source_filesystem_limits_round_trip_through_the_snapshot_codec()
     {
         var manifest = new SnapshotManifest
@@ -618,16 +620,16 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var decoded = SnapshotManifestCodec.Decode(SnapshotManifestCodec.Encode(manifest, new byte[64])).Manifest;
 
-        Assert.Equal(65534u, decoded.SourceFilesystem.MaxPathBytes);
-        Assert.Equal(510u, decoded.SourceFilesystem.MaxComponentBytes);
-        Assert.True(decoded.SourceFilesystem.ReservedNames);
+        Assert.AreEqual(65534u, decoded.SourceFilesystem.MaxPathBytes);
+        Assert.AreEqual(510u, decoded.SourceFilesystem.MaxComponentBytes);
+        Assert.IsTrue(decoded.SourceFilesystem.ReservedNames);
 
         // And a three-key map still round-trips to nulls — the phase-0
         // form is untouched (ADR-0026 §Decision 7 keeps the fixture frozen).
         var legacy = manifest with { SourceFilesystem = new SourceFilesystem(true, false, "stream") };
         var legacyDecoded = SnapshotManifestCodec.Decode(SnapshotManifestCodec.Encode(legacy, new byte[64])).Manifest;
-        Assert.Null(legacyDecoded.SourceFilesystem.MaxPathBytes);
-        Assert.Null(legacyDecoded.SourceFilesystem.MaxComponentBytes);
-        Assert.Null(legacyDecoded.SourceFilesystem.ReservedNames);
+        Assert.IsNull(legacyDecoded.SourceFilesystem.MaxPathBytes);
+        Assert.IsNull(legacyDecoded.SourceFilesystem.MaxComponentBytes);
+        Assert.IsNull(legacyDecoded.SourceFilesystem.ReservedNames);
     }
 }

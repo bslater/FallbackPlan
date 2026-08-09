@@ -8,6 +8,7 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 /// and the specification's encoded-byte lexicographic ordering coincide, so a
 /// single enforcement layer satisfies rule 3 of 00 §4.1.
 /// </summary>
+[TestClass]
 public sealed class MapKeyOrderingTests
 {
     // Keys 0, 1, 23, 24, 255, 256, 65536: their canonical encodings straddle
@@ -15,21 +16,21 @@ public sealed class MapKeyOrderingTests
     // encoded-byte lexicographic order are all the same sequence.
     private const string SortedMap = "a700000100170018180018ff00190100001a0001000000";
 
-    [Fact]
+    [TestMethod]
     public void Keys_in_encoded_byte_order_are_accepted()
     {
         CanonicalCbor.Validate(Convert.FromHexString(SortedMap));
     }
 
-    [Theory]
-    [InlineData("a700000100181800170018ff00190100001a0001000000")] // 24 before 23
-    [InlineData("a70000010017001818001901000018ff001a0001000000")] // 256 before 255
+    [TestMethod]
+    [DataRow("a700000100181800170018ff00190100001a0001000000")] // 24 before 23
+    [DataRow("a70000010017001818001901000018ff001a0001000000")] // 256 before 255
     public void Transposed_keys_are_rejected(string hex)
     {
-        Assert.Throws<CborFormatException>(() => CanonicalCbor.Validate(Convert.FromHexString(hex)));
+        Assert.ThrowsExactly<CborFormatException>(() => CanonicalCbor.Validate(Convert.FromHexString(hex)));
     }
 
-    [Fact]
+    [TestMethod]
     public void The_writer_produces_exactly_the_documented_order()
     {
         var writer = new CanonicalCborWriter();
@@ -42,6 +43,6 @@ public sealed class MapKeyOrderingTests
 
         writer.WriteEndMap();
 
-        Assert.Equal(SortedMap, Convert.ToHexStringLower(writer.Encode()));
+        Assert.AreEqual(SortedMap, Convert.ToHexStringLower(writer.Encode()));
     }
 }

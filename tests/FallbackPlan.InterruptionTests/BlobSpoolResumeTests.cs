@@ -2,6 +2,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -24,9 +25,10 @@ namespace FallbackPlan.InterruptionTests;
 /// being re-used under a salt that already covered it (05 §6.1).
 /// </para>
 /// </remarks>
+[TestClass]
 public sealed class BlobSpoolResumeTests : InterruptionHarness
 {
-    [Fact]
+    [TestMethod]
     public async Task A_job_killed_with_a_blob_open_leaves_a_resumable_spool()
     {
         var store = CreateStore();
@@ -37,7 +39,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
 
         // The spool is still there. The session's own disposal used to delete
         // it, which left resume reachable only after a true process kill.
-        Assert.NotEmpty(SpoolFiles());
+        Assert.IsNotEmpty(SpoolFiles());
 
         // 05 §6.3: a partial spool is never uploaded, under any circumstances.
         // Blobs the run sealed before it died are durable and legitimate —
@@ -46,7 +48,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         await AssertNoBlobCarriesSaltAsync(store, SaltOf(await ReadSpoolAsync()));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_resumed_spool_re_emits_its_sealed_bytes_verbatim()
     {
         var store = CreateStore();
@@ -61,7 +63,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         await CreateOrchestrator(store, keys, hierarchy)
             .PublishAsync(Job(source, snapshotSeed: 0x71), CancellationToken.None);
 
-        Assert.Equal(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x71));
+        SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x71));
 
         // Resumed, not restarted: a sealed blob opens with exactly the bytes
         // the interrupted run spooled. That is NFR-SEC-003's "byte-identical"
@@ -69,10 +71,10 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         // the failure the rule exists to prevent (05 §6.1: recompression is
         // not reproducible across codec versions, and the same ordinal over
         // different bytes is nonce reuse).
-        Assert.Contains(await SealedBlobsAsync(store), blob => StartsWith(blob, spooled));
+        Assert.Contains(blob => StartsWith(blob, spooled), await SealedBlobsAsync(store));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_torn_spool_tail_restarts_rather_than_truncating()
     {
         var store = CreateStore();
@@ -96,11 +98,11 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
 
         // A restart costs spooled work, never correctness: the job completes
         // and the file restores.
-        Assert.Equal(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x72));
+        SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x72));
         await AssertNoBlobCarriesSaltAsync(store, abandonedSalt);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Damage_inside_a_spooled_record_restarts()
     {
         var store = CreateStore();
@@ -121,7 +123,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         await CreateOrchestrator(store, keys, hierarchy)
             .PublishAsync(Job(source, snapshotSeed: 0x73), CancellationToken.None);
 
-        Assert.Equal(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x73));
+        SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x73));
         await AssertNoBlobCarriesSaltAsync(store, abandonedSalt);
     }
 
@@ -140,7 +142,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         // at the drain barrier, by which time every blob has been sealed and
         // there is nothing open left to resume.
         using var source = new FaultingStream(content, failAfterBytes: 600 * 1024);
-        await Assert.ThrowsAsync<IOException>(async () =>
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await CreateOrchestrator(store, keys, hierarchy)
                 .PublishAsync(Job(source, snapshotSeed: 0x70), CancellationToken.None));
 
@@ -209,7 +211,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     {
         foreach (var blob in await SealedBlobsAsync(store))
         {
-            Assert.NotEqual(abandonedSalt, SaltOf(blob));
+            Assert.AreNotEqual(abandonedSalt, SaltOf(blob));
         }
     }
 

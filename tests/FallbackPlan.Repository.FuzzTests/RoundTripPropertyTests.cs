@@ -1,10 +1,10 @@
+using FallbackPlan.TestSupport;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
-using FsCheck.Xunit;
 
 namespace FallbackPlan.Repository.FuzzTests;
 
@@ -13,6 +13,7 @@ namespace FallbackPlan.Repository.FuzzTests;
 /// value a writer can legitimately produce, encode → decode → re-encode is
 /// byte-identical, so no information rides outside the canonical encoding.
 /// </summary>
+[TestClass]
 public sealed class RoundTripPropertyTests
 {
     private static readonly WriterId Writer =
@@ -24,8 +25,11 @@ public sealed class RoundTripPropertyTests
     private static BlobId BlobFrom(int seed) =>
         BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(~seed)).AsSpan(0, 16));
 
-    [Property(MaxTest = 100)]
-    public void File_version_manifests_round_trip_byte_identically(byte[]? segmentSeeds, bool sparse)
+    [TestMethod]
+    public void File_version_manifests_round_trip_byte_identically() =>
+        PropertyCheck.Holds(this, maxTest: 100);
+
+    public static void File_version_manifests_round_trip_byte_identicallyProperty(byte[]? segmentSeeds, bool sparse)
     {
         // Build a legitimate manifest: contiguous references whose lengths
         // are derived from the generated seeds, coverage exact by
@@ -62,11 +66,14 @@ public sealed class RoundTripPropertyTests
         var encoded = FileVersionManifestCodec.Encode(manifest);
         var decoded = FileVersionManifestCodec.Decode(encoded);
 
-        Assert.Equal(encoded, FileVersionManifestCodec.Encode(decoded));
+        SequenceAssert.AreEqual(encoded, FileVersionManifestCodec.Encode(decoded));
     }
 
-    [Property(MaxTest = 100)]
-    public void Index_deltas_round_trip_byte_identically(byte entryCount, ulong sequence, bool isVoid)
+    [TestMethod]
+    public void Index_deltas_round_trip_byte_identically() =>
+        PropertyCheck.Holds(this, maxTest: 100);
+
+    public static void Index_deltas_round_trip_byte_identicallyProperty(byte entryCount, ulong sequence, bool isVoid)
     {
         var entries = Enumerable.Range(0, isVoid ? 0 : 1 + entryCount % 32)
             .Select(index => new IndexEntry(
@@ -92,15 +99,18 @@ public sealed class RoundTripPropertyTests
         var encoded = IndexDeltaCodec.Encode(delta, new byte[64]);
         var decoded = IndexDeltaCodec.Decode(encoded);
 
-        Assert.Equal(encoded, IndexDeltaCodec.Encode(decoded.Delta, decoded.Signature.Span));
+        SequenceAssert.AreEqual(encoded, IndexDeltaCodec.Encode(decoded.Delta, decoded.Signature.Span));
 
         // The signed prefix is the same bytes EncodeForSigning produces —
         // the two-pass construction (06 §6.1) loses nothing.
-        Assert.Equal(IndexDeltaCodec.EncodeForSigning(decoded.Delta), decoded.SignedBytes.ToArray());
+        SequenceAssert.AreEqual(IndexDeltaCodec.EncodeForSigning(decoded.Delta), decoded.SignedBytes.ToArray());
     }
 
-    [Property(MaxTest = 100)]
-    public void Checkpoints_round_trip_byte_identically(byte entryCount, ulong generation)
+    [TestMethod]
+    public void Checkpoints_round_trip_byte_identically() =>
+        PropertyCheck.Holds(this, maxTest: 100);
+
+    public static void Checkpoints_round_trip_byte_identicallyProperty(byte entryCount, ulong generation)
     {
         var entries = Enumerable.Range(0, 1 + entryCount % 24)
             .Select(index => new IndexEntry(
@@ -127,11 +137,14 @@ public sealed class RoundTripPropertyTests
         var encoded = CheckpointCodec.Encode(checkpoint, new byte[64]);
         var decoded = CheckpointCodec.Decode(encoded);
 
-        Assert.Equal(encoded, CheckpointCodec.Encode(decoded.Checkpoint, decoded.Signature.Span));
+        SequenceAssert.AreEqual(encoded, CheckpointCodec.Encode(decoded.Checkpoint, decoded.Signature.Span));
     }
 
-    [Property(MaxTest = 100)]
-    public void Journal_records_of_every_kind_round_trip_byte_identically(
+    [TestMethod]
+    public void Journal_records_of_every_kind_round_trip_byte_identically() =>
+        PropertyCheck.Holds(this, maxTest: 100);
+
+    public static void Journal_records_of_every_kind_round_trip_byte_identicallyProperty(
         byte kindSeed, ulong sequence, ulong timestamp, byte blobCount)
     {
         var blobs = Enumerable.Range(0, 1 + blobCount % 16).Select(BlobFrom).ToList();
@@ -156,17 +169,20 @@ public sealed class RoundTripPropertyTests
         var encoded = JournalRecordCodec.Encode(record, new byte[64]);
         var decoded = JournalRecordCodec.Decode(encoded);
 
-        Assert.Equal(encoded, JournalRecordCodec.Encode(decoded.Record, decoded.Signature.Span));
+        SequenceAssert.AreEqual(encoded, JournalRecordCodec.Encode(decoded.Record, decoded.Signature.Span));
     }
 
-    [Property(MaxTest = 200)]
-    public void Base32_encodes_then_decodes_to_the_original_bytes(byte[]? bytes)
+    [TestMethod]
+    public void Base32_encodes_then_decodes_to_the_original_bytes() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void Base32_encodes_then_decodes_to_the_original_bytesProperty(byte[]? bytes)
     {
         bytes ??= [];
         var text = Base32.Encode(bytes);
         var decoded = new byte[bytes.Length + 8];
 
-        Assert.True(Base32.TryDecode(text, decoded, out var written));
-        Assert.Equal(bytes, decoded.AsSpan(0, written).ToArray());
+        Assert.IsTrue(Base32.TryDecode(text, decoded, out var written));
+        SequenceAssert.AreEqual(bytes, decoded.AsSpan(0, written).ToArray());
     }
 }

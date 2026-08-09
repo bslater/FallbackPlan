@@ -1,4 +1,5 @@
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Protocol.Tests;
 
@@ -6,6 +7,7 @@ namespace FallbackPlan.Protocol.Tests;
 /// Channel-bound authentication (specification peer-protocol 02 §3): the
 /// property RFC 7250 was chosen for, obtained without it.
 /// </summary>
+[TestClass]
 public sealed class SessionBindingTests
 {
     private static SessionBindingContribution Contribution(PeerIdentity identity, byte fill) =>
@@ -18,7 +20,7 @@ public sealed class SessionBindingTests
         return bytes;
     }
 
-    [Fact]
+    [TestMethod]
     public void A_proof_verifies_against_the_transcript_both_sides_build()
     {
         using var initiator = PeerKeypair.Generate();
@@ -29,10 +31,10 @@ public sealed class SessionBindingTests
 
         var proof = SessionBinding.Prove(initiator, i, r, PeerSessionRole.Initiator);
 
-        Assert.True(SessionBinding.Verify(proof, i, r, PeerSessionRole.Initiator));
+        Assert.IsTrue(SessionBinding.Verify(proof, i, r, PeerSessionRole.Initiator));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_proof_does_not_verify_under_the_other_role()
     {
         using var keypair = PeerKeypair.Generate();
@@ -45,10 +47,10 @@ public sealed class SessionBindingTests
         // Role separation. Without it an attacker could open a connection back
         // to a peer and reflect that peer's own proof at it — the peer would
         // verify its own signature and be satisfied.
-        Assert.False(SessionBinding.Verify(proof, i, r, PeerSessionRole.Responder));
+        Assert.IsFalse(SessionBinding.Verify(proof, i, r, PeerSessionRole.Responder));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_proof_from_another_connection_does_not_verify_on_this_one()
     {
         using var initiator = PeerKeypair.Generate();
@@ -62,10 +64,10 @@ public sealed class SessionBindingTests
         // mechanism is that this fails.
         var laterConnection = r with { TlsPublicKeyHash = Bytes(0x99, SessionBinding.TlsPublicKeyHashLength) };
 
-        Assert.False(SessionBinding.Verify(proof, i, laterConnection, PeerSessionRole.Initiator));
+        Assert.IsFalse(SessionBinding.Verify(proof, i, laterConnection, PeerSessionRole.Initiator));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_changed_nonce_invalidates_the_proof()
     {
         using var initiator = PeerKeypair.Generate();
@@ -80,16 +82,16 @@ public sealed class SessionBindingTests
         // other side, so freshness that does not depend on it is carried too.
         var replayed = r with { Nonce = Bytes(0x77, SessionBinding.NonceLength) };
 
-        Assert.False(SessionBinding.Verify(proof, i, replayed, PeerSessionRole.Initiator));
+        Assert.IsFalse(SessionBinding.Verify(proof, i, replayed, PeerSessionRole.Initiator));
     }
 
-    [Fact]
+    [TestMethod]
     public void Nonces_are_fresh_each_time()
     {
-        Assert.NotEqual(SessionBinding.Nonce(), SessionBinding.Nonce());
+        Assert.AreNotEqual(SessionBinding.Nonce(), SessionBinding.Nonce());
     }
 
-    [Fact]
+    [TestMethod]
     public void A_binding_of_the_wrong_length_is_rejected_at_the_boundary()
     {
         using var keypair = PeerKeypair.Generate();
@@ -98,7 +100,7 @@ public sealed class SessionBindingTests
             keypair.Identity, new byte[4], Bytes(0, SessionBinding.NonceLength));
         var good = Contribution(keypair.Identity, 0x22);
 
-        Assert.Throws<ArgumentException>(
+        Assert.ThrowsExactly<ArgumentException>(
             () => SessionBinding.Transcript(short_, good, PeerSessionRole.Initiator));
     }
 }
@@ -107,6 +109,7 @@ public sealed class SessionBindingTests
 /// The session state machine and its one route to authenticated
 /// (specification peer-protocol 02 §2–§3).
 /// </summary>
+[TestClass]
 public sealed class PeerAuthenticatorTests : IDisposable
 {
     private readonly string _stateDirectory =
@@ -158,7 +161,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     private PeerAuthenticator Responder(PeerGrantStore store) =>
         new(_answerer, store, PeerSessionRole.Responder, _answererBinding, _diallerBinding);
 
-    [Fact]
+    [TestMethod]
     public void Two_paired_peers_authenticate_each_other()
     {
         var diallerStore = Store("dialler");
@@ -169,24 +172,24 @@ public sealed class PeerAuthenticatorTests : IDisposable
         var (initiator, responder) = Handshake(
             Initiator(diallerStore, _answerer.Identity), Responder(answererStore));
 
-        Assert.Equal(PeerSessionState.Authenticated, initiator.State);
-        Assert.Equal(PeerSessionState.Authenticated, responder.State);
-        Assert.Equal(_answerer.Identity, initiator.Peer!.Identity);
-        Assert.Equal(_dialler.Identity, responder.Peer!.Identity);
+        Assert.AreEqual(PeerSessionState.Authenticated, initiator.State);
+        Assert.AreEqual(PeerSessionState.Authenticated, responder.State);
+        Assert.AreEqual(_answerer.Identity, initiator.Peer!.Identity);
+        Assert.AreEqual(_dialler.Identity, responder.Peer!.Identity);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_session_starts_encrypted_and_unauthenticated()
     {
         // The state 02 §2 exists to name: TLS is done, and it has established
         // nobody's identity.
         var authenticator = Initiator(Store("dialler"));
 
-        Assert.Equal(PeerSessionState.Encrypted, authenticator.State);
-        Assert.Null(authenticator.Peer);
+        Assert.AreEqual(PeerSessionState.Encrypted, authenticator.State);
+        Assert.IsNull(authenticator.Peer);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_hello_is_not_permitted_before_authentication()
     {
         var diallerStore = Store("dialler");
@@ -198,36 +201,36 @@ public sealed class PeerAuthenticatorTests : IDisposable
 
         // A stranger has no business learning what features this device
         // supports or what terms it offers.
-        Assert.False(authenticator.Permits(PeerMessageType.SessionHello));
-        Assert.True(authenticator.Permits(PeerMessageType.SessionAuth));
+        Assert.IsFalse(authenticator.Permits(PeerMessageType.SessionHello));
+        Assert.IsTrue(authenticator.Permits(PeerMessageType.SessionAuth));
 
         Handshake(authenticator, Responder(answererStore));
 
-        Assert.True(authenticator.Permits(PeerMessageType.SessionHello));
-        Assert.False(authenticator.Permits(PeerMessageType.SessionAuth));
+        Assert.IsTrue(authenticator.Permits(PeerMessageType.SessionHello));
+        Assert.IsFalse(authenticator.Permits(PeerMessageType.SessionAuth));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_refusal_is_permitted_in_every_state()
     {
         // The alternative to being allowed to say "no" in a state that forbids
         // saying anything is hanging up silently.
         foreach (var state in Enum.GetValues<PeerSessionState>())
         {
-            Assert.True(PeerAuthenticator.Permits(state, PeerMessageType.SessionRefuse));
+            Assert.IsTrue(PeerAuthenticator.Permits(state, PeerMessageType.SessionRefuse));
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void An_unpaired_peer_is_refused_before_any_signature_is_checked()
     {
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => Responder(Store("answerer")).Accept(SessionAuth.Create(_dialler.Identity)));
 
-        Assert.Equal(PeerRefusalReason.NotPaired, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.NotPaired, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_dialler_that_reaches_the_wrong_device_says_so()
     {
         using var stranger = PeerKeypair.Generate();
@@ -238,14 +241,14 @@ public sealed class PeerAuthenticatorTests : IDisposable
 
         // Both are paired, so this is not a pairing failure — the operator
         // asked to reach one device and a different one answered (01 §2.5).
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => Initiator(store, _answerer.Identity).Accept(SessionAuth.Create(stranger.Identity)));
 
-        Assert.Equal(PeerRefusalReason.IdentityChanged, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.IdentityChanged, refused.Reason);
         Assert.Contains(_answerer.Identity.Fingerprint, refused.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_responder_expecting_nobody_reports_not_paired_rather_than_guessing()
     {
         using var stranger = PeerKeypair.Generate();
@@ -256,13 +259,13 @@ public sealed class PeerAuthenticatorTests : IDisposable
         // It cannot honestly say "changed": the only thing this stranger
         // offered is the key that is wrong, and which pairing it *meant* to be
         // is not something an inbound connection reveals.
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => Responder(store).Accept(SessionAuth.Create(stranger.Identity)));
 
-        Assert.Equal(PeerRefusalReason.NotPaired, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.NotPaired, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_man_in_the_middle_relaying_valid_proofs_is_caught_by_both_sides()
     {
         var diallerStore = Store("dialler");
@@ -289,28 +292,28 @@ public sealed class PeerAuthenticatorTests : IDisposable
 
         // Relaying them is all the attacker can do: it holds neither private
         // key, so it cannot make the proof the other leg's transcript needs.
-        var caughtByDialler = Assert.Throws<PeerProtocolException>(() => dialler.Verify(answererProof));
-        var caughtByAnswerer = Assert.Throws<PeerProtocolException>(() => answerer.Verify(diallerProof));
+        var caughtByDialler = Assert.ThrowsExactly<PeerProtocolException>(() => dialler.Verify(answererProof));
+        var caughtByAnswerer = Assert.ThrowsExactly<PeerProtocolException>(() => answerer.Verify(diallerProof));
 
-        Assert.Equal(PeerRefusalReason.AuthenticationFailed, caughtByDialler.Reason);
-        Assert.Equal(PeerRefusalReason.AuthenticationFailed, caughtByAnswerer.Reason);
-        Assert.Equal(PeerSessionState.Encrypted, dialler.State);
-        Assert.Equal(PeerSessionState.Encrypted, answerer.State);
+        Assert.AreEqual(PeerRefusalReason.AuthenticationFailed, caughtByDialler.Reason);
+        Assert.AreEqual(PeerRefusalReason.AuthenticationFailed, caughtByAnswerer.Reason);
+        Assert.AreEqual(PeerSessionState.Encrypted, dialler.State);
+        Assert.AreEqual(PeerSessionState.Encrypted, answerer.State);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_proof_arriving_before_the_claim_it_proves_is_refused()
     {
         var store = Store("dialler");
         Pin(store, _answerer.Identity);
 
-        var refused = Assert.Throws<PeerProtocolException>(
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => Initiator(store, _answerer.Identity).Verify(new SessionAuthProof(new byte[64])));
 
-        Assert.Equal(PeerRefusalReason.Malformed, refused.Reason);
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
     }
 
-    [Fact]
+    [TestMethod]
     public void An_authenticated_session_opens_and_will_not_authenticate_twice()
     {
         var diallerStore = Store("dialler");
@@ -321,9 +324,9 @@ public sealed class PeerAuthenticatorTests : IDisposable
         var (initiator, _) = Handshake(Initiator(diallerStore, _answerer.Identity), Responder(answererStore));
 
         initiator.Open();
-        Assert.Equal(PeerSessionState.Open, initiator.State);
+        Assert.AreEqual(PeerSessionState.Open, initiator.State);
 
-        Assert.Throws<PeerProtocolException>(() => initiator.Accept(SessionAuth.Create(_answerer.Identity)));
+        Assert.ThrowsExactly<PeerProtocolException>(() => initiator.Accept(SessionAuth.Create(_answerer.Identity)));
     }
 
     public void Dispose()
@@ -342,6 +345,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
 /// The certificate the platform's TLS insists on and this design trusts for
 /// nothing (specification peer-protocol 02 §1).
 /// </summary>
+[TestClass]
 public sealed class EphemeralTlsCertificateTests
 {
     private static EphemeralTlsCertificate Create()
@@ -350,7 +354,7 @@ public sealed class EphemeralTlsCertificateTests
         return EphemeralTlsCertificate.Create(now, now.AddDays(1));
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_connection_gets_a_different_key()
     {
         using var first = Create();
@@ -358,21 +362,21 @@ public sealed class EphemeralTlsCertificateTests
 
         // 02 §1 requires this, and the requirement is load-bearing: reuse would
         // let one connection's binding describe another.
-        Assert.NotEqual(first.PublicKeyHash, second.PublicKeyHash);
+        Assert.AreNotEqual(first.PublicKeyHash, second.PublicKeyHash);
     }
 
-    [Fact]
+    [TestMethod]
     public void The_binding_is_the_hash_of_the_public_key_as_the_peer_would_compute_it()
     {
         using var certificate = Create();
 
         // The peer has the certificate, not the object that made it, so it must
         // reach the same 32 bytes from the certificate alone.
-        Assert.Equal(certificate.PublicKeyHash, EphemeralTlsCertificate.BindingOf(certificate.Certificate));
-        Assert.Equal(SessionBinding.TlsPublicKeyHashLength, certificate.PublicKeyHash.Length);
+        SequenceAssert.AreEqual(certificate.PublicKeyHash, EphemeralTlsCertificate.BindingOf(certificate.Certificate));
+        Assert.AreEqual(SessionBinding.TlsPublicKeyHashLength, certificate.PublicKeyHash.Length);
     }
 
-    [Fact]
+    [TestMethod]
     public void It_carries_no_identity_a_reader_could_mistake_for_one()
     {
         using var certificate = Create();
@@ -381,10 +385,10 @@ public sealed class EphemeralTlsCertificateTests
         // connection this build makes. Nothing checks it, and a hostname or a
         // fingerprint here would invite someone to — the identity is checked
         // in 02 §3.
-        Assert.Equal(certificate.Certificate.Subject, certificate.Certificate.Issuer);
-        Assert.Equal("CN=fallbackplan-peer-session", certificate.Certificate.Subject);
+        Assert.AreEqual(certificate.Certificate.Subject, certificate.Certificate.Issuer);
+        Assert.AreEqual("CN=fallbackplan-peer-session", certificate.Certificate.Subject);
 
         using var other = Create();
-        Assert.Equal(other.Certificate.Subject, certificate.Certificate.Subject);
+        Assert.AreEqual(other.Certificate.Subject, certificate.Certificate.Subject);
     }
 }

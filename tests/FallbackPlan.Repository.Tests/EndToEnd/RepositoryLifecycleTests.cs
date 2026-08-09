@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -12,6 +13,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// passphrase indistinguishably from tampering, and surfaces the mandated
 /// unstable-format warning.
 /// </summary>
+[TestClass]
 public sealed class RepositoryLifecycleTests : IDisposable
 {
     private readonly string _root =
@@ -24,7 +26,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         CreatedBy = "fallbackplan-tests/1.0",
     };
 
-    [Fact]
+    [TestMethod]
     public async Task A_created_repository_opens_with_the_right_passphrase()
     {
         var store = CreateStore();
@@ -35,19 +37,19 @@ public sealed class RepositoryLifecycleTests : IDisposable
             store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None))
         {
             created = repository.RepositoryId;
-            Assert.True(repository.UnstableFormatWarning, "phase-0 repositories are unstable and must say so (01 §3.2)");
+            Assert.IsTrue(repository.UnstableFormatWarning, "phase-0 repositories are unstable and must say so (01 §3.2)");
         }
 
         using var reopened = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
 
-        Assert.Equal(created, reopened.RepositoryId);
-        Assert.Equal(Domain.KeyGeneration.Zero, reopened.CurrentDataGeneration);
-        Assert.Equal(Domain.KeyGeneration.Zero, reopened.CurrentMetadataGeneration);
-        Assert.False(reopened.KdfBelowCreationMinimums);
-        Assert.Equal("fallbackplan-tests/1.0", reopened.Descriptor.CreatedBy);
+        Assert.AreEqual(created, reopened.RepositoryId);
+        Assert.AreEqual(Domain.KeyGeneration.Zero, reopened.CurrentDataGeneration);
+        Assert.AreEqual(Domain.KeyGeneration.Zero, reopened.CurrentMetadataGeneration);
+        Assert.IsFalse(reopened.KdfBelowCreationMinimums);
+        Assert.AreEqual("fallbackplan-tests/1.0", reopened.Descriptor.CreatedBy);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_wrong_passphrase_fails_indistinguishably_from_tampering()
     {
         var store = CreateStore();
@@ -61,23 +63,23 @@ public sealed class RepositoryLifecycleTests : IDisposable
 
         // 03 §3: wrong passphrase and tampered object are deliberately the
         // same failure — nothing may leak which one it was.
-        await Assert.ThrowsAsync<KeyUnwrapFailedException>(async () =>
+        await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
             (await RepositoryLifecycle.OpenAsync(store, wrong, CancellationToken.None)).Dispose());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_empty_store_is_not_a_repository()
     {
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        var exception = await Assert.ThrowsAsync<RepositoryOpenException>(async () =>
+        var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
             (await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None)).Dispose());
 
         Assert.Contains("does not hold a FallbackPlan repository", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Creating_over_an_existing_repository_is_refused()
     {
         var store = CreateStore();
@@ -86,12 +88,12 @@ public sealed class RepositoryLifecycleTests : IDisposable
         (await RepositoryLifecycle.CreateAsync(
             store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None)).Dispose();
 
-        await Assert.ThrowsAsync<IOException>(async () =>
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
             (await RepositoryLifecycle.CreateAsync(
                 store, passphrase, Settings, createdAtUnixMilliseconds: 2, CancellationToken.None)).Dispose());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_corrupted_descriptor_is_reported_as_corruption()
     {
         var store = CreateStore();
@@ -105,13 +107,13 @@ public sealed class RepositoryLifecycleTests : IDisposable
         bytes[20] ^= 0x01;
         await File.WriteAllBytesAsync(descriptorPath, bytes);
 
-        var exception = await Assert.ThrowsAsync<RepositoryOpenException>(async () =>
+        var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
             (await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None)).Dispose());
 
         Assert.Contains("digest", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_opened_repository_archives_and_restores()
     {
         // The bootstrap composes with the record path: create, open, archive
@@ -144,8 +146,8 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(archived.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(data, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
     }
 
     /// <inheritdoc />

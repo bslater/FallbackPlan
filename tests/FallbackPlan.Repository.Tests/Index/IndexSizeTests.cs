@@ -5,6 +5,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Index;
 
@@ -39,6 +40,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// and it is flat.
 /// </para>
 /// </remarks>
+[TestClass]
 public sealed class IndexSizeTests : IDisposable
 {
     private const int BytesPerObjectBound = 80;
@@ -77,7 +79,7 @@ public sealed class IndexSizeTests : IDisposable
             IndexEntryType.Insertion);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_checkpoint_costs_no_more_than_eighty_stored_bytes_per_distinct_object()
     {
         const int smaller = 131_072;
@@ -95,8 +97,8 @@ public sealed class IndexSizeTests : IDisposable
             CultureInfo.InvariantCulture,
             $"marginal {marginal:f1} B/object; total at {larger} objects {total:f1} B/object.");
 
-        Assert.True(marginal <= BytesPerObjectBound, $"An additional object costs too much index. {detail}");
-        Assert.True(total <= BytesPerObjectBound, $"The whole index is over the bound at scale. {detail}");
+        Assert.IsTrue(marginal <= BytesPerObjectBound, $"An additional object costs too much index. {detail}");
+        Assert.IsTrue(total <= BytesPerObjectBound, $"The whole index is over the bound at scale. {detail}");
     }
 
     private async Task<long> MeasureCheckpointAsync(int objects, ulong generation)
@@ -115,7 +117,7 @@ public sealed class IndexSizeTests : IDisposable
 
         // Distinctness is the denominator, so it is checked rather than
         // assumed — a generator that collided would flatter the result.
-        Assert.Equal(objects, entries.Select(entry => entry.ObjectId).Distinct().Count());
+        Assert.AreEqual(objects, entries.Select(entry => entry.ObjectId).Distinct().Count());
 
         CheckpointId checkpointId;
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
@@ -133,7 +135,7 @@ public sealed class IndexSizeTests : IDisposable
         var metadata = await store.GetMetadataAsync(
             MetadataStoreKeys.IndexCheckpoint(generation, checkpointId), CancellationToken.None);
 
-        Assert.True(metadata.Found);
+        Assert.IsTrue(metadata.Found);
         return metadata.Metadata!.Length;
     }
 

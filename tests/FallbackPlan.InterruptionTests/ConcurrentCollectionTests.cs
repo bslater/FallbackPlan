@@ -10,6 +10,7 @@ namespace FallbackPlan.InterruptionTests;
 /// unexpired intent is reachable, no exceptions, no heuristics — and an
 /// unparseable intent forces the conservative reading.
 /// </summary>
+[TestClass]
 public sealed class ConcurrentCollectionTests : InterruptionHarness
 {
     /// <summary>
@@ -53,7 +54,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
         return candidates;
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_collector_running_mid_backup_deletes_nothing()
     {
         var store = CreateStore();
@@ -65,19 +66,19 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
         // and only the intent stands between them and deletion (08 §1).
         using (var source = new MemoryStream(BuildFile(seed: 7)))
         {
-            await Assert.ThrowsAsync<PublicationKilledException>(async () =>
+            await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
                 await CreateOrchestrator(store, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs))
                     .PublishAsync(Job(source, snapshotSeed: 0xE5), CancellationToken.None));
         }
 
-        Assert.True(CountUnder("blobs") > 0);
+        Assert.IsTrue(CountUnder("blobs") > 0);
 
         var wouldDelete = await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000);
 
-        Assert.Empty(wouldDelete);
+        Assert.IsEmpty(wouldDelete);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unparseable_intent_protects_everything()
     {
         var store = CreateStore();
@@ -86,7 +87,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
 
         using (var source = new MemoryStream(BuildFile(seed: 7)))
         {
-            await Assert.ThrowsAsync<PublicationKilledException>(async () =>
+            await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
                 await CreateOrchestrator(store, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs))
                     .PublishAsync(Job(source, snapshotSeed: 0xE5), CancellationToken.None));
         }
@@ -104,10 +105,10 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
 
         var wouldDelete = await SimulateCollectorMarkAsync(store, hierarchy, 0, 1_722_600_000_000);
 
-        Assert.Empty(wouldDelete);
+        Assert.IsEmpty(wouldDelete);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_retired_intent_releases_coverage_only_after_the_snapshot_exists()
     {
         var store = CreateStore();
@@ -127,7 +128,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
 
         var candidates = await SimulateCollectorMarkAsync(store, hierarchy, 0, 1_722_600_000_000);
 
-        Assert.NotEmpty(candidates);
-        Assert.Equal(1, CountUnder("snapshots"));
+        Assert.IsNotEmpty(candidates);
+        Assert.AreEqual(1, CountUnder("snapshots"));
     }
 }

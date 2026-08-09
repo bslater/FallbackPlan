@@ -7,6 +7,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
+using FallbackPlan.TestSupport;
 
 /// <summary>
 /// E1 — the exit-criterion-7 shape (FR-MAN-001, NFR-REL-002): the catalogue is
@@ -19,11 +20,12 @@ using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 /// local database is required to interpret a committed snapshot) and
 /// NFR-REL-002 (losing it costs no repository data) each make from one side.
 /// </summary>
+[TestClass]
 public sealed class CatalogueRebuildTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
 
-    [Fact]
+    [TestMethod]
     public async Task A_deleted_catalogue_rebuilds_from_the_index_and_restores()
     {
         var data = BuildTestFile(regions: 6);
@@ -46,7 +48,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
 
             foreach (var reference in archived.SegmentReferences.DistinctBy(reference => reference.ObjectId))
             {
-                Assert.True(probe.TryLocateRecord(reference.ObjectId, out var locatedKey, out var entry));
+                Assert.IsTrue(probe.TryLocateRecord(reference.ObjectId, out var locatedKey, out var entry));
                 var blob = archived.Blobs.Single(archivedBlob => archivedBlob.StoreKey.Equals(locatedKey));
 
                 entries.Add(new IndexEntry(
@@ -66,7 +68,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         var cataloguePath = Path.Combine(SpoolDirectory, "catalogue.db");
         using (var live = Catalogue.Open(cataloguePath, Repo))
         {
-            Assert.Equal(0, live.AppliedDeltaCount());
+            Assert.AreEqual(0, live.AppliedDeltaCount());
         }
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
@@ -79,15 +81,15 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         var report = await new CatalogueRebuilder(loader).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
 
-        Assert.Equal(1, report.DeltasApplied);
-        Assert.Empty(report.Findings);
+        Assert.AreEqual(1, report.DeltasApplied);
+        Assert.IsEmpty(report.Findings);
 
         // The rebuilt catalogue locates a record's blob directly — derive
         // the store key from the blob id, open THAT one blob, read the
         // record. No listing of blobs, no whole-repository scan.
         var target = archived.SegmentReferences[7];
         var located = rebuilt.ResolveLocation(target.ObjectId);
-        Assert.NotNull(located);
+        Assert.IsNotNull(located);
 
         using var storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         var blobStoreKey = BlobStoreKeys.ForBlob(BlobClass.Data, storeKeyDeriver.Derive(located!.BlobId));
@@ -98,11 +100,11 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
             store, blobStoreKey, blobLength, Repo, keys.DeriveClassKey, objectIdDeriver, CancellationToken.None);
 
         var tableEntry = blobReader.RecordTable.Single(entry => entry.ObjectId == target.ObjectId);
-        Assert.Equal(located.PhysicalOffset, tableEntry.PhysicalOffset);
+        Assert.AreEqual(located.PhysicalOffset, tableEntry.PhysicalOffset);
 
         var read = await blobReader.ReadRecordAsync(tableEntry, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
-        Assert.Equal(
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
+        SequenceAssert.AreEqual(
             data.AsSpan((int)target.LogicalOffset, (int)target.LogicalLength).ToArray(),
             read.Plaintext);
 
@@ -112,7 +114,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(archived.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(data, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
     }
 }

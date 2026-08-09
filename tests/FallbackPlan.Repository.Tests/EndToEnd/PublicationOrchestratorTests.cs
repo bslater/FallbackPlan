@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -17,6 +18,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// discoverable snapshot, retirement follows it — and the published
 /// snapshot reopens and restores from a cold reader.
 /// </summary>
+[TestClass]
 public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -76,7 +78,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         ExpiryGeneration: 5,
         ClientVersion: "fallbackplan-tests/1.0");
 
-    [Fact]
+    [TestMethod]
     public async Task The_nine_step_order_holds_on_the_wire()
     {
         var data = BuildTestFile(regions: 6);
@@ -94,7 +96,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 
         // Step 1 before steps 3-4: the intent (the writer's first journal
         // put) precedes the first blob put (08 §3.1).
-        Assert.True(FirstIndex("journal/") < FirstIndex("blobs/"), "the intent must be durable before any blob byte");
+        Assert.IsTrue(FirstIndex("journal/") < FirstIndex("blobs/"), "the intent must be durable before any blob byte");
 
         // Every blob put is preceded by a journal put covering it — an
         // extension published immediately before the upload (08 §4).
@@ -102,22 +104,22 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         {
             if (puts[i].StartsWith("blobs/", StringComparison.Ordinal))
             {
-                Assert.Contains(puts.Take(i), key => key.StartsWith("journal/", StringComparison.Ordinal));
+                Assert.Contains(key => key.StartsWith("journal/", StringComparison.Ordinal), puts.Take(i));
             }
         }
 
         // Steps 4 → 6 → 7: every blob durable before the delta; the delta
         // before the discoverable snapshot (FR-SNP-001's invariant).
-        Assert.True(LastIndex("blobs/") < FirstIndex("index/delta/"), "deltas reference only durable blobs");
-        Assert.True(FirstIndex("index/delta/") < FirstIndex("snapshots/"), "the snapshot follows its index deltas");
+        Assert.IsTrue(LastIndex("blobs/") < FirstIndex("index/delta/"), "deltas reference only durable blobs");
+        Assert.IsTrue(FirstIndex("index/delta/") < FirstIndex("snapshots/"), "the snapshot follows its index deltas");
 
         // Step 8: retirement is the LAST journal put, after the snapshot.
-        Assert.True(FirstIndex("snapshots/") < LastIndex("journal/"), "retirement follows the snapshot");
+        Assert.IsTrue(FirstIndex("snapshots/") < LastIndex("journal/"), "retirement follows the snapshot");
 
-        Assert.NotEqual(default, published.DeltaId);
+        Assert.AreNotEqual(default, published.DeltaId);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_published_snapshot_reopens_from_a_cold_reader_and_restores()
     {
         var data = BuildTestFile(regions: 6);
@@ -136,7 +138,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
             snapshotKeys.Add(entry.Key);
         }
 
-        var snapshotKey = Assert.Single(snapshotKeys);
+        var snapshotKey = Assert.ContainsSingle(snapshotKeys);
 
         byte[] snapshotBytes;
         using (var read = await store.OpenReadAsync(snapshotKey, range: null, CancellationToken.None))
@@ -148,39 +150,39 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 
         var record = StandaloneRecordFraming.Parse(snapshotBytes);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
-        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var snapshotPlain));
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var snapshotPlain));
 
         var decoded = SnapshotManifestCodec.Decode(snapshotPlain);
         using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
         {
-            Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span),
+            Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span),
                 "a published snapshot's signature must verify against the derived key (06 §6.1)");
         }
 
-        Assert.Equal(published.RootTreeObjectId, decoded.Manifest.RootTree);
+        Assert.AreEqual(published.RootTreeObjectId, decoded.Manifest.RootTree);
 
         // Follow root tree → file version → segments, all through footers.
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, treeRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, treeRead.Outcome);
         var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
-        var fileEntry = Assert.Single(tree.Entries);
+        var fileEntry = Assert.ContainsSingle(tree.Entries);
 
         var manifestRead = await reader.ReadSegmentAsync(fileEntry.ObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, manifestRead.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
         var manifest = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
 
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(manifest.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(data, restored.ToArray());
-        Assert.Equal(manifest.WholeFileHash.ToArray(), restore.WholeFileHash!.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
+        SequenceAssert.AreEqual(manifest.WholeFileHash.ToArray(), restore.WholeFileHash!.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_intent_is_retired_and_the_survey_shows_nothing_live()
     {
         var data = BuildTestFile(regions: 4);
@@ -194,17 +196,17 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         using var journalReader = new JournalReader(store, Repo, hierarchy);
         var (records, unparseable, findings) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
 
-        Assert.Equal(0, unparseable);
-        Assert.Empty(findings);
+        Assert.AreEqual(0, unparseable);
+        Assert.IsEmpty(findings);
 
         var survey = IntentSurveyor.Survey(records, 0, currentGeneration: 0, nowMs: 1_722_600_000_000, skewMarginMs: 0);
 
         // A completed publication leaves no live intent — retirement is the
         // event that says the covered work is reachable (08 §5).
-        Assert.Empty(survey.LiveIntents);
+        Assert.IsEmpty(survey.LiveIntents);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Observer_steps_arrive_in_order_and_a_throwing_observer_kills_between_steps()
     {
         var data = BuildTestFile(regions: 4);
@@ -219,7 +221,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
             await CreateOrchestrator(CreateStore(), keys, hierarchy, recorder).PublishAsync(Job(source), CancellationToken.None);
         }
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             [
                 PublicationStep.PublishIntent, PublicationStep.ScanSource, PublicationStep.SegmentAndSeal,
                 PublicationStep.UploadBlobs, PublicationStep.VerifyAcknowledgements, PublicationStep.PublishIndexDeltas,
@@ -228,7 +230,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
             steps);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_throwing_observer_kills_between_steps_leaving_the_interrupted_state()
     {
         var data = BuildTestFile(regions: 4);
@@ -242,7 +244,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 
         using (var source = new MemoryStream(data))
         {
-            await Assert.ThrowsAsync<PublicationKilledException>(async () =>
+            await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
                 await CreateOrchestrator(store, keys, hierarchy, killer).PublishAsync(Job(source), CancellationToken.None));
         }
 
@@ -259,8 +261,8 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
             deltas++;
         }
 
-        Assert.Equal(0, snapshots);
-        Assert.True(deltas > 0);
+        Assert.AreEqual(0, snapshots);
+        Assert.IsTrue(deltas > 0);
     }
 
     private sealed class PublicationKilledException : Exception;

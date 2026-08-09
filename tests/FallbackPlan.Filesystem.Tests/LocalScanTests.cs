@@ -14,6 +14,7 @@ namespace FallbackPlan.Filesystem.Tests;
 /// followed, hardlink identity, and the revalidation stat. Platform-specific
 /// behaviour is skipped where the platform lacks it, never faked.
 /// </summary>
+[TestClass]
 public sealed partial class LocalScanTests : IDisposable
 {
     private readonly string _root =
@@ -51,7 +52,7 @@ public sealed partial class LocalScanTests : IDisposable
         _ => "?",
     });
 
-    [Fact]
+    [TestMethod]
     public async Task Traversal_is_depth_first_and_byte_sorted()
     {
         Write("b/inner.txt");
@@ -63,38 +64,38 @@ public sealed partial class LocalScanTests : IDisposable
 
         // 'B' (0x42) sorts before 'a' (0x61) and 'b' (0x62) in raw bytes —
         // exactly what tree entry ordering requires (06 §5).
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             ["> ", "> B-upper", "< B-upper", "F a-file.txt", "> b", "F b/inner.txt", "< b", "F c.txt", "< "],
             Paths(events));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Scanning_twice_yields_identical_event_sequences()
     {
         Write("x/deep/file1.bin", "one");
         Write("x/file2.bin", "two");
         Write("y.bin", "three");
 
-        Assert.Equal(Paths(await ScanAsync()), Paths(await ScanAsync()));
+        SequenceAssert.AreEqual(Paths(await ScanAsync()), Paths(await ScanAsync()));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Excluded_paths_are_pruned_not_failed()
     {
         Write("keep/data.txt");
         Write("skip/cache.tmp");
         Write("skip/deep/more.tmp");
 
-        Assert.True(PathRuleSet.TryCreate([], ["skip"], caseSensitive: true, out var rules, out _));
+        Assert.IsTrue(PathRuleSet.TryCreate([], ["skip"], caseSensitive: true, out var rules, out _));
         var events = await ScanAsync(new ScanOptions { Rules = rules });
 
         var paths = Paths(events).ToList();
-        Assert.DoesNotContain(paths, path => path.Contains("skip", StringComparison.Ordinal));
-        Assert.Empty(events.OfType<ScanEvent.Failure>());
+        Assert.DoesNotContain(path => path.Contains("skip", StringComparison.Ordinal), paths);
+        Assert.IsEmpty(events.OfType<ScanEvent.Failure>());
         Assert.Contains("F keep/data.txt", paths);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task File_metadata_captures_times_mode_and_ownership()
     {
         var full = Write("meta.txt", "metadata");
@@ -102,18 +103,19 @@ public sealed partial class LocalScanTests : IDisposable
         var events = await ScanAsync();
         var entry = events.OfType<ScanEvent.Leaf>().Single().Entry;
 
-        Assert.Equal(ScanEntryKind.File, entry.Kind);
-        Assert.Equal(8, entry.Length);
-        Assert.NotNull(entry.Metadata.ModifiedAt);
-        Assert.True(entry.Identity.HasValue && entry.Identity.Value.FileId != 0);
+        Assert.AreEqual(ScanEntryKind.File, entry.Kind);
+        Assert.AreEqual(8, entry.Length);
+        Assert.IsNotNull(entry.Metadata.ModifiedAt);
+        Assert.IsTrue(entry.Identity.HasValue && entry.Identity.Value.FileId != 0);
 
         // The captured mtime agrees with the filesystem's own report to the
         // millisecond — the value NFR-PERF-003's short-circuit will compare.
         var expected = (ulong)new DateTimeOffset(File.GetLastWriteTimeUtc(full)).ToUnixTimeMilliseconds();
-        Assert.Equal(expected, entry.Metadata.ModifiedAt!.Value);
+        Assert.AreEqual(expected, entry.Metadata.ModifiedAt!.Value);
     }
 
-    [PlatformFact(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Symlinks_are_captured_as_links_and_never_followed()
     {
@@ -123,20 +125,21 @@ public sealed partial class LocalScanTests : IDisposable
         var events = await ScanAsync();
         var link = events.OfType<ScanEvent.Leaf>().Single(leaf => leaf.Entry.RelativePath == "link").Entry;
 
-        Assert.Equal(ScanEntryKind.Symlink, link.Kind);
-        Assert.NotNull(link.LinkTarget);
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        Assert.IsNotNull(link.LinkTarget);
         Assert.Contains("target", Encoding.UTF8.GetString(link.LinkTarget!.Value.Span), StringComparison.Ordinal);
 
         // Followed content would appear twice; it must appear exactly once.
-        Assert.Single(events.OfType<ScanEvent.Leaf>(), leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
+        Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), events.OfType<ScanEvent.Leaf>());
     }
 
-    [PlatformFact(TestPlatforms.Posix, "the link(2) syscall this drives is POSIX; Windows hardlinks are covered separately")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "the link(2) syscall this drives is POSIX; Windows hardlinks are covered separately")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Hardlinks_share_identity_and_report_their_link_count()
     {
         var original = Write("one.bin", "linked");
-        Assert.Equal(0, Link(original, Path.Combine(_root, "two.bin")));
+        Assert.AreEqual(0, Link(original, Path.Combine(_root, "two.bin")));
 
         var events = await ScanAsync();
         var leaves = events.OfType<ScanEvent.Leaf>().ToList();
@@ -144,12 +147,13 @@ public sealed partial class LocalScanTests : IDisposable
         var one = leaves.Single(leaf => leaf.Entry.RelativePath == "one.bin").Entry;
         var two = leaves.Single(leaf => leaf.Entry.RelativePath == "two.bin").Entry;
 
-        Assert.Equal(one.Identity!.Value.FileId, two.Identity!.Value.FileId);
-        Assert.Equal(one.Identity.Value.Device, two.Identity.Value.Device);
-        Assert.Equal(2u, one.Identity.Value.LinkCount);
+        Assert.AreEqual(one.Identity!.Value.FileId, two.Identity!.Value.FileId);
+        Assert.AreEqual(one.Identity.Value.Device, two.Identity.Value.Device);
+        Assert.AreEqual(2u, one.Identity.Value.LinkCount);
     }
 
-    [PlatformFact(TestPlatforms.Posix, "FIFOs, sockets and device nodes are POSIX entry kinds with no Windows analogue")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "FIFOs, sockets and device nodes are POSIX entry kinds with no Windows analogue")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Special_files_carry_their_kind_as_diagnostics_and_are_never_errors()
     {
@@ -162,10 +166,10 @@ public sealed partial class LocalScanTests : IDisposable
         var events = await ScanAsync();
         var entry = events.OfType<ScanEvent.Leaf>().Single().Entry;
 
-        Assert.Equal(ScanEntryKind.Special, entry.Kind);
+        Assert.AreEqual(ScanEntryKind.Special, entry.Kind);
         Assert.Contains("special-kind: fifo", entry.Diagnostics);
-        Assert.Equal(0, entry.Length);
-        Assert.Empty(events.OfType<ScanEvent.Failure>());
+        Assert.AreEqual(0, entry.Length);
+        Assert.IsEmpty(events.OfType<ScanEvent.Failure>());
     }
 
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "mkfifo", SetLastError = true,
@@ -176,7 +180,8 @@ public sealed partial class LocalScanTests : IDisposable
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
     private static partial int Link(string existingPath, string newPath);
 
-    [PlatformFact(TestPlatforms.Posix, "setxattr(2) is POSIX; the Windows analogue is alternate data streams, tested separately")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "setxattr(2) is POSIX; the Windows analogue is alternate data streams, tested separately")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Extended_attributes_round_trip_where_the_platform_supports_them()
     {
@@ -189,16 +194,17 @@ public sealed partial class LocalScanTests : IDisposable
         var events = await ScanAsync();
         var entry = events.OfType<ScanEvent.Leaf>().Single().Entry;
 
-        var attribute = Assert.Single(entry.Metadata.ExtendedAttributes);
-        Assert.Equal("user.fbp-test", Encoding.UTF8.GetString(attribute.Name.Span));
-        Assert.Equal("hello"u8.ToArray(), attribute.Value.ToArray());
+        var attribute = Assert.ContainsSingle(entry.Metadata.ExtendedAttributes);
+        Assert.AreEqual("user.fbp-test", Encoding.UTF8.GetString(attribute.Name.Span));
+        SequenceAssert.AreEqual("hello"u8.ToArray(), attribute.Value.ToArray());
     }
 
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "setxattr", SetLastError = true,
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
     private static partial int SetXattr(string path, string name, byte[] value, nuint size, int flags);
 
-    [PlatformFact(TestPlatforms.Posix, "hole discovery here uses SEEK_HOLE; Windows sparse files use a different query")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "hole discovery here uses SEEK_HOLE; Windows sparse files use a different query")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Sparse_holes_are_reported_as_extents_where_supported()
     {
@@ -220,11 +226,12 @@ public sealed partial class LocalScanTests : IDisposable
         }
 
         var hole = entry.SparseExtents[0];
-        Assert.True(hole.Offset >= 4 && hole.Offset + hole.Length <= 1024 * 1024 + 4,
+        Assert.IsTrue(hole.Offset >= 4 && hole.Offset + hole.Length <= 1024 * 1024 + 4,
             $"hole [{hole.Offset}, +{hole.Length}) must sit inside the written gap");
     }
 
-    [UnprivilegedPlatformFact(TestPlatforms.Posix, "denial is expressed here with chmod, a POSIX permission shape")]
+    [TestMethod]
+    [UnprivilegedPlatformCondition(TestPlatforms.Posix, "denial is expressed here with chmod, a POSIX permission shape")]
     [PlatformTrait(TestPlatforms.Posix)]
     [UnsupportedOSPlatform("windows")]
     public async Task An_unreadable_directory_is_a_failure_event_not_an_aborted_scan()
@@ -239,12 +246,12 @@ public sealed partial class LocalScanTests : IDisposable
         {
             var events = await ScanAsync();
 
-            var failure = Assert.Single(events.OfType<ScanEvent.Failure>());
-            Assert.Equal(CaptureFailureReason.Permission, failure.Detail.Reason);
+            var failure = Assert.ContainsSingle(events.OfType<ScanEvent.Failure>());
+            Assert.AreEqual(CaptureFailureReason.Permission, failure.Detail.Reason);
             Assert.StartsWith("denied", failure.Detail.RelativePath, StringComparison.Ordinal);
 
             // The rest of the tree still captured (architecture 06 §1).
-            Assert.Contains(events.OfType<ScanEvent.Leaf>(), leaf => leaf.Entry.RelativePath == "open/readable.txt");
+            Assert.Contains(leaf => leaf.Entry.RelativePath == "open/readable.txt", events.OfType<ScanEvent.Leaf>());
         }
         finally
         {
@@ -252,29 +259,30 @@ public sealed partial class LocalScanTests : IDisposable
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void The_revalidation_stat_sees_a_change()
     {
         var full = Write("reval.txt", "before");
-        Assert.True(LocalFileSystemSource.TryStat(full, out var before));
+        Assert.IsTrue(LocalFileSystemSource.TryStat(full, out var before));
 
         File.WriteAllText(full, "after-longer");
-        Assert.True(LocalFileSystemSource.TryStat(full, out var after));
+        Assert.IsTrue(LocalFileSystemSource.TryStat(full, out var after));
 
-        Assert.NotEqual(before.Size, after.Size);
-        Assert.Equal(before.FileId, after.FileId);
+        Assert.AreNotEqual(before.Size, after.Size);
+        Assert.AreEqual(before.FileId, after.FileId);
     }
 
-    [Fact]
+    [TestMethod]
     public void Probe_reports_a_filesystem_name_and_limits()
     {
         var info = _source.Probe(_root);
 
-        Assert.False(string.IsNullOrEmpty(info.Name));
-        Assert.True(info.MaxComponentBytes is null or > 0);
+        Assert.IsFalse(string.IsNullOrEmpty(info.Name));
+        Assert.IsTrue(info.MaxComponentBytes is null or > 0);
     }
 
-    [PlatformFact(TestPlatforms.Posix, "POSIX mode bits and owner names have no NTFS equivalent — Windows carries a security descriptor instead")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "POSIX mode bits and owner names have no NTFS equivalent — Windows carries a security descriptor instead")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Posix_metadata_is_captured_for_a_regular_file()
     {
@@ -282,11 +290,12 @@ public sealed partial class LocalScanTests : IDisposable
 
         var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
 
-        Assert.NotNull(entry.Metadata.PosixMode);
-        Assert.False(string.IsNullOrEmpty(entry.Metadata.OwnerName));
+        Assert.IsNotNull(entry.Metadata.PosixMode);
+        Assert.IsFalse(string.IsNullOrEmpty(entry.Metadata.OwnerName));
     }
 
-    [PlatformFact(TestPlatforms.Posix, "the readdir ABI and non-UTF-8 filenames are POSIX shapes")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "the readdir ABI and non-UTF-8 filenames are POSIX shapes")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Names_come_from_the_filesystem_not_from_a_decoded_string()
     {
@@ -310,10 +319,11 @@ public sealed partial class LocalScanTests : IDisposable
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, scanned);
+        SequenceAssert.AreEqual(expected, scanned);
     }
 
-    [PlatformFact(TestPlatforms.Posix, "a filename that is not valid UTF-8 is only expressible on POSIX")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a filename that is not valid UTF-8 is only expressible on POSIX")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task A_name_that_is_not_valid_utf8_is_reported_rather_than_mangled()
     {
@@ -323,7 +333,7 @@ public sealed partial class LocalScanTests : IDisposable
         byte[] raw = [.. "bad"u8, (byte)0xFF, (byte)0xFE, .. "name.txt"u8];
 
         var path = RawPath(_root, raw);
-        Assert.True(CreateFileWithRawName(path), "could not create a file with a non-UTF-8 name");
+        Assert.IsTrue(CreateFileWithRawName(path), "could not create a file with a non-UTF-8 name");
 
         try
         {
@@ -333,15 +343,11 @@ public sealed partial class LocalScanTests : IDisposable
         // bytes, and the path built from it did not open the file — so the
         // entry was captured under a name it did not have, with content that
         // had never been read.
-        var failure = Assert.Single(
-            events.OfType<ScanEvent.Failure>(),
-            f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable);
+        var failure = Assert.ContainsSingle(f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable, events.OfType<ScanEvent.Failure>());
         Assert.Contains("a name the file does not have", failure.Detail.Detail, StringComparison.Ordinal);
 
             // And it is not also captured under a substituted name.
-            Assert.DoesNotContain(
-                events.OfType<ScanEvent.Leaf>(),
-                leaf => leaf.Entry.NameBytes.Span.StartsWith("bad"u8));
+            Assert.DoesNotContain(leaf => leaf.Entry.NameBytes.Span.StartsWith("bad"u8), events.OfType<ScanEvent.Leaf>());
         }
         finally
         {
@@ -384,7 +390,8 @@ public sealed partial class LocalScanTests : IDisposable
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
     private static partial int NativeClose(int fd);
 
-    [PlatformFact(TestPlatforms.Windows, "an unpaired surrogate is a UTF-16 filename shape; POSIX names are bytes")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "an unpaired surrogate is a UTF-16 filename shape; POSIX names are bytes")]
     [PlatformTrait(TestPlatforms.Windows)]
     public async Task A_name_with_an_unpaired_surrogate_is_reported_rather_than_substituted()
     {
@@ -405,20 +412,17 @@ public sealed partial class LocalScanTests : IDisposable
 
         var events = await ScanAsync();
 
-        var failure = Assert.Single(
-            events.OfType<ScanEvent.Failure>(),
-            f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable);
+        var failure = Assert.ContainsSingle(f => f.Detail.Reason == CaptureFailureReason.NameNotRepresentable, events.OfType<ScanEvent.Failure>());
         Assert.Contains("a name the file does not have", failure.Detail.Detail, StringComparison.Ordinal);
 
         // 06 §4.3 forbids the substitute specifically: an entry stored as
         // "bad�name.txt" looks captured, lists, and restores as a file
         // the user never had.
-        Assert.DoesNotContain(
-            events.OfType<ScanEvent.Leaf>(),
-            leaf => Encoding.UTF8.GetString(leaf.Entry.NameBytes.Span).Contains('�'));
+        Assert.DoesNotContain(leaf => Encoding.UTF8.GetString(leaf.Entry.NameBytes.Span).Contains('�'), events.OfType<ScanEvent.Leaf>());
     }
 
-    [PlatformFact(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
     [PlatformTrait(TestPlatforms.Windows)]
     public async Task A_directory_junction_is_a_link_and_is_not_descended()
     {
@@ -436,23 +440,22 @@ public sealed partial class LocalScanTests : IDisposable
         var link = events.OfType<ScanEvent.Leaf>()
             .Single(leaf => leaf.Entry.RelativePath == "junction").Entry;
 
-        Assert.Equal(ScanEntryKind.Symlink, link.Kind);
-        Assert.NotNull(link.LinkTarget);
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        Assert.IsNotNull(link.LinkTarget);
 
         // Followed content would appear twice; it must appear exactly once.
-        Assert.Single(
-            events.OfType<ScanEvent.Leaf>(),
-            leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
+        Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), events.OfType<ScanEvent.Leaf>());
     }
 
-    [PlatformFact(TestPlatforms.Windows, "reserved device names (CON, NUL) and case-insensitive-by-default volumes are Windows filesystem shapes")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "reserved device names (CON, NUL) and case-insensitive-by-default volumes are Windows filesystem shapes")]
     [PlatformTrait(TestPlatforms.Windows)]
     public void Probe_reports_the_windows_filesystem_shape()
     {
         var info = _source.Probe(_root);
 
-        Assert.True(info.ReservedNames);
-        Assert.False(info.CaseSensitive);
+        Assert.IsTrue(info.ReservedNames);
+        Assert.IsFalse(info.CaseSensitive);
     }
 
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "symlink", SetLastError = true)]
@@ -480,7 +483,8 @@ public sealed partial class LocalScanTests : IDisposable
         throw new InvalidOperationException($"The scan never reached '{relativePath}'.");
     }
 
-    [PlatformFact(TestPlatforms.Posix, "openat and fstatat are the POSIX handle-relative calls")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "openat and fstatat are the POSIX handle-relative calls")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Content_is_read_from_the_handle_even_after_the_name_is_repointed()
     {
@@ -492,8 +496,8 @@ public sealed partial class LocalScanTests : IDisposable
         {
             // The premise: this platform took a handle. Without one the rest
             // of this test would prove nothing about the handle-relative walk.
-            Assert.NotNull(entry.ContentHandle);
-            Assert.False(entry.ContentHandle!.IsInvalid);
+            Assert.IsNotNull(entry.ContentHandle);
+            Assert.IsFalse(entry.ContentHandle!.IsInvalid);
 
             // The attack: between classification and read, the name is made to
             // refer to a different object. A path-based scanner re-opens the
@@ -504,23 +508,24 @@ public sealed partial class LocalScanTests : IDisposable
             File.WriteAllText(path, "bytes the attacker substituted");
 
             // The substitution took: the name now yields the attacker's bytes.
-            Assert.Equal("bytes the attacker substituted", await File.ReadAllTextAsync(path));
+            Assert.AreEqual("bytes the attacker substituted", await File.ReadAllTextAsync(path));
 
             using (var reader = new StreamReader(_source.OpenRead(entry)))
             {
-                Assert.Equal("the bytes that were classified", await reader.ReadToEndAsync());
+                Assert.AreEqual("the bytes that were classified", await reader.ReadToEndAsync());
             }
 
             // And revalidation describes the object that was read, not the one
             // now at the name — which is what makes it a revalidation.
             var probe = _source.Revalidate(entry);
-            Assert.NotNull(probe);
-            Assert.Equal(entry.Identity!.Value.FileId, probe!.Identity!.Value.FileId);
-            Assert.Equal(entry.Length, probe.Length);
+            Assert.IsNotNull(probe);
+            Assert.AreEqual(entry.Identity!.Value.FileId, probe!.Identity!.Value.FileId);
+            Assert.AreEqual(entry.Length, probe.Length);
         }
     }
 
-    [PlatformFact(TestPlatforms.Posix, "a link target is a byte string only on POSIX; Windows targets are UTF-16")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link target is a byte string only on POSIX; Windows targets are UTF-16")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task A_link_target_that_is_not_valid_utf8_is_recorded_as_the_bytes_it_holds()
     {
@@ -539,11 +544,12 @@ public sealed partial class LocalScanTests : IDisposable
         var events = await ScanAsync();
         var link = events.OfType<ScanEvent.Leaf>().Single(leaf => leaf.Entry.RelativePath == "dangling").Entry;
 
-        Assert.Equal(ScanEntryKind.Symlink, link.Kind);
-        Assert.Equal(target[..^1], link.LinkTarget!.Value.ToArray());
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        SequenceAssert.AreEqual(target[..^1], link.LinkTarget!.Value.ToArray());
     }
 
-    [PlatformFact(TestPlatforms.Posix, "O_NOFOLLOW on the descent is what refuses this, and it is POSIX")]
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "O_NOFOLLOW on the descent is what refuses this, and it is POSIX")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task A_symlink_standing_where_a_directory_was_is_not_descended()
     {
@@ -565,10 +571,8 @@ public sealed partial class LocalScanTests : IDisposable
         var escape = events.OfType<ScanEvent.Leaf>()
             .Single(leaf => leaf.Entry.RelativePath == "inside/escape").Entry;
 
-        Assert.Equal(ScanEntryKind.Symlink, escape.Kind);
-        Assert.DoesNotContain(
-            events.OfType<ScanEvent.Leaf>(),
-            leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal));
+        Assert.AreEqual(ScanEntryKind.Symlink, escape.Kind);
+        Assert.DoesNotContain(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), events.OfType<ScanEvent.Leaf>());
     }
 
     /// <inheritdoc />

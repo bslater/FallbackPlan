@@ -4,6 +4,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Packing;
 
@@ -13,6 +14,7 @@ namespace FallbackPlan.Repository.Tests.Packing;
 /// the repository and object identity into the AAD, and refuses truncation
 /// and oversize before allocation.
 /// </summary>
+[TestClass]
 public sealed class StandaloneRecordTests
 {
     private static readonly RepositoryId Repo =
@@ -36,25 +38,25 @@ public sealed class StandaloneRecordTests
         return (sealedBytes, objectId, payload);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_standalone_record_round_trips()
     {
         var (sealedBytes, objectId, payload) = SealSample();
 
         var record = StandaloneRecordFraming.Parse(sealedBytes);
 
-        Assert.Equal(0u, record.Header.Ordinal);
-        Assert.Equal(objectId, record.Header.ObjectId);
-        Assert.Equal(ObjectType.IndexDelta, record.Header.ObjectType);
-        Assert.Equal(Writer, record.WriterId);
-        Assert.Equal(42UL, record.Counter);
-        Assert.Equal(KeyGeneration.Zero, record.KeyGeneration);
+        Assert.AreEqual(0u, record.Header.Ordinal);
+        Assert.AreEqual(objectId, record.Header.ObjectId);
+        Assert.AreEqual(ObjectType.IndexDelta, record.Header.ObjectType);
+        Assert.AreEqual(Writer, record.WriterId);
+        Assert.AreEqual(42UL, record.Counter);
+        Assert.AreEqual(KeyGeneration.Zero, record.KeyGeneration);
 
-        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, MetadataKey, out var plaintext));
-        Assert.Equal(payload, plaintext);
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, MetadataKey, out var plaintext));
+        SequenceAssert.AreEqual(payload, plaintext);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_record_moved_between_repositories_fails_authentication()
     {
         var (sealedBytes, _, _) = SealSample();
@@ -64,11 +66,11 @@ public sealed class StandaloneRecordTests
 
         // The 55-byte AAD binds the repository identity (04 §4) — replaying
         // a delta into a sibling repository must fail, not decrypt.
-        Assert.False(StandaloneRecordCipher.TryOpen(record, otherRepository, MetadataKey, out var plaintext));
-        Assert.Empty(plaintext);
+        Assert.IsFalse(StandaloneRecordCipher.TryOpen(record, otherRepository, MetadataKey, out var plaintext));
+        Assert.IsEmpty(plaintext);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_tampered_ciphertext_byte_fails_authentication_and_emits_nothing()
     {
         var (sealedBytes, _, _) = SealSample();
@@ -76,11 +78,11 @@ public sealed class StandaloneRecordTests
 
         var record = StandaloneRecordFraming.Parse(sealedBytes);
 
-        Assert.False(StandaloneRecordCipher.TryOpen(record, Repo, MetadataKey, out var plaintext));
-        Assert.Empty(plaintext);
+        Assert.IsFalse(StandaloneRecordCipher.TryOpen(record, Repo, MetadataKey, out var plaintext));
+        Assert.IsEmpty(plaintext);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_wrong_generation_key_fails_authentication()
     {
         var (sealedBytes, _, _) = SealSample();
@@ -88,10 +90,10 @@ public sealed class StandaloneRecordTests
 
         var otherGenerationKey = Enumerable.Range(90, 32).Select(value => (byte)value).ToArray();
 
-        Assert.False(StandaloneRecordCipher.TryOpen(record, Repo, otherGenerationKey, out _));
+        Assert.IsFalse(StandaloneRecordCipher.TryOpen(record, Repo, otherGenerationKey, out _));
     }
 
-    [Fact]
+    [TestMethod]
     public void Distinct_counters_produce_distinct_keys_for_one_salt()
     {
         // The shared sequence space is what makes (salt, writer, counter)
@@ -106,33 +108,33 @@ public sealed class StandaloneRecordTests
         var second = StandaloneRecordCipher.Seal(
             Repo, MetadataKey, KeyGeneration.Zero, Writer, 2, ObjectType.IndexDelta, objectId, payload, salt);
 
-        Assert.NotEqual(
+        Assert.AreNotEqual(
             first[StandaloneRecordFraming.PrefixLength..],
             second[StandaloneRecordFraming.PrefixLength..]);
     }
 
-    [Fact]
+    [TestMethod]
     public void An_object_without_the_magic_is_named_as_not_a_standalone_record()
     {
         var (sealedBytes, _, _) = SealSample();
         sealedBytes[0] ^= 0x01;
 
-        var exception = Assert.Throws<RecordFormatException>(() => StandaloneRecordFraming.Parse(sealedBytes));
+        var exception = Assert.ThrowsExactly<RecordFormatException>(() => StandaloneRecordFraming.Parse(sealedBytes));
         Assert.Contains("FBPKSREC", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void Truncation_and_trailing_bytes_are_refused()
     {
         var (sealedBytes, _, _) = SealSample();
 
-        Assert.Throws<RecordFormatException>(() =>
+        Assert.ThrowsExactly<RecordFormatException>(() =>
             StandaloneRecordFraming.Parse(sealedBytes.AsMemory(0, sealedBytes.Length - 1)));
-        Assert.Throws<RecordFormatException>(() =>
+        Assert.ThrowsExactly<RecordFormatException>(() =>
             StandaloneRecordFraming.Parse((byte[])[.. sealedBytes, 0xDE]));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_declared_length_over_the_metadata_bound_is_refused_before_allocation()
     {
         var (sealedBytes, _, _) = SealSample();
@@ -146,16 +148,16 @@ public sealed class StandaloneRecordTests
             header.Ordinal, 20 * 1024 * 1024, 20 * 1024 * 1024, header.ObjectId);
         hostile.WriteTo(headerSpan);
 
-        var exception = Assert.Throws<RecordFormatException>(() => StandaloneRecordFraming.Parse(sealedBytes));
+        var exception = Assert.ThrowsExactly<RecordFormatException>(() => StandaloneRecordFraming.Parse(sealedBytes));
         Assert.Contains("16 MiB", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public void The_reserved_object_type_still_cannot_be_sealed()
     {
         var payload = "x"u8.ToArray();
 
-        Assert.Throws<ArgumentException>(() =>
+        Assert.ThrowsExactly<ArgumentException>(() =>
             StandaloneRecordCipher.Seal(
                 Repo, MetadataKey, KeyGeneration.Zero, Writer, 1, (ObjectType)0x07,
                 ObjectId.FromBytes(SHA256.HashData(payload)), payload));

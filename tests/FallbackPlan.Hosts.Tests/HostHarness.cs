@@ -68,7 +68,7 @@ public sealed class HostHarness : IDisposable
     {
         var exitCode = await Cli.CliApplication.RunAsync(
             ["init", "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable]);
-        Assert.Equal(0, exitCode);
+        Assert.AreEqual(0, exitCode);
     }
 
     /// <summary>Backs the source tree up through the CLI, so the store holds a real snapshot.</summary>
@@ -79,7 +79,7 @@ public sealed class HostHarness : IDisposable
             "backup", SourceRoot,
             "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable, "--state", StateDirectory,
         ]);
-        Assert.Equal(0, exitCode);
+        Assert.AreEqual(0, exitCode);
     }
 
     /// <summary>Exports a recovery kit through the CLI and returns its path.</summary>
@@ -93,7 +93,7 @@ public sealed class HostHarness : IDisposable
             "key-export", "--output", kit,
             "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable, "--state", StateDirectory,
         ]);
-        Assert.Equal(0, exitCode);
+        Assert.AreEqual(0, exitCode);
         return kit;
     }
 

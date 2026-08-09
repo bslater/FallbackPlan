@@ -11,6 +11,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// superseded and reported, and any application order converges (07 §6 —
 /// exit criterion 9's index half).
 /// </summary>
+[TestClass]
 public sealed class IndexPrecedenceTests
 {
     private static ObjectId Object(byte seed)
@@ -43,7 +44,7 @@ public sealed class IndexPrecedenceTests
             Writer(writerSeed),
             sequence);
 
-    [Fact]
+    [TestMethod]
     public void Rule_1_the_highest_generation_wins()
     {
         var older = Entry(blobSeed: 1, generation: 1, writerSeed: 9, sequence: 500);
@@ -54,27 +55,27 @@ public sealed class IndexPrecedenceTests
 
         // Compaction republished the object at generation 2: that entry wins
         // even against a higher (writer, sequence) at generation 1.
-        Assert.Equal(Blob(2), winner!.Entry.BlobId);
-        Assert.Empty(findings);
+        Assert.AreEqual(Blob(2), winner!.Entry.BlobId);
+        Assert.IsEmpty(findings);
     }
 
-    [Fact]
+    [TestMethod]
     public void Rule_2_at_equal_generation_the_higher_writer_then_sequence_wins()
     {
         var lowWriter = Entry(blobSeed: 1, generation: 3, writerSeed: 0x10, sequence: 99);
         var highWriter = Entry(blobSeed: 2, generation: 3, writerSeed: 0x20, sequence: 1);
 
         var winner = IndexPrecedence.Resolve([lowWriter, highWriter], _ => BlobState.Live, []);
-        Assert.Equal(Blob(2), winner!.Entry.BlobId);
+        Assert.AreEqual(Blob(2), winner!.Entry.BlobId);
 
         var lowSequence = Entry(blobSeed: 3, generation: 3, writerSeed: 0x20, sequence: 5);
         var highSequence = Entry(blobSeed: 4, generation: 3, writerSeed: 0x20, sequence: 6);
 
         winner = IndexPrecedence.Resolve([highSequence, lowSequence], _ => BlobState.Live, []);
-        Assert.Equal(Blob(4), winner!.Entry.BlobId);
+        Assert.AreEqual(Blob(4), winner!.Entry.BlobId);
     }
 
-    [Fact]
+    [TestMethod]
     public void Rule_3_a_deleted_blob_winner_is_superseded_and_reported()
     {
         var deletedWinner = Entry(blobSeed: 1, generation: 5, writerSeed: 1, sequence: 10, IndexEntryType.Supersession);
@@ -88,12 +89,12 @@ public sealed class IndexPrecedenceTests
 
         // Even though it wins on generation, the deleted-blob entry is
         // treated as superseded — and the anomaly is a damage finding.
-        Assert.Equal(Blob(2), winner!.Entry.BlobId);
-        var finding = Assert.Single(findings);
-        Assert.Equal(DamageKind.MissingBlob, finding.Kind);
+        Assert.AreEqual(Blob(2), winner!.Entry.BlobId);
+        var finding = Assert.ContainsSingle(findings);
+        Assert.AreEqual(DamageKind.MissingBlob, finding.Kind);
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_candidate_deleted_resolves_to_nothing_with_findings()
     {
         var findings = new List<DamageFinding>();
@@ -102,11 +103,11 @@ public sealed class IndexPrecedenceTests
             _ => BlobState.Deleted,
             findings);
 
-        Assert.Null(winner);
-        Assert.NotEmpty(findings);
+        Assert.IsNull(winner);
+        Assert.IsNotEmpty(findings);
     }
 
-    [Fact]
+    [TestMethod]
     public void Any_application_order_converges_on_the_same_state()
     {
         // 07 §6's claim, checked: the winner is a property of the entries,
@@ -133,14 +134,14 @@ public sealed class IndexPrecedenceTests
             var shuffled = entries.OrderBy(_ => random.Next()).ToList();
             var winner = IndexPrecedence.Resolve(shuffled, _ => BlobState.Live, [])!;
 
-            Assert.Equal(reference.Entry, winner.Entry);
-            Assert.Equal(reference.Generation, winner.Generation);
-            Assert.Equal(reference.WriterId, winner.WriterId);
-            Assert.Equal(reference.Sequence, winner.Sequence);
+            Assert.AreEqual(reference.Entry, winner.Entry);
+            Assert.AreEqual(reference.Generation, winner.Generation);
+            Assert.AreEqual(reference.WriterId, winner.WriterId);
+            Assert.AreEqual(reference.Sequence, winner.Sequence);
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Two_insertions_for_one_object_are_benign_and_either_location_serves()
     {
         // 07 §3: two writers independently stored the same content in
@@ -152,7 +153,7 @@ public sealed class IndexPrecedenceTests
         var findings = new List<DamageFinding>();
         var winner = IndexPrecedence.Resolve([first, second], _ => BlobState.Live, findings);
 
-        Assert.NotNull(winner);
-        Assert.Empty(findings);
+        Assert.IsNotNull(winner);
+        Assert.IsEmpty(findings);
     }
 }

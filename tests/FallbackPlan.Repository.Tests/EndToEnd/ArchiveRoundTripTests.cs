@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -19,12 +20,13 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// published. Write intents and publication ordering (specification 08)
 /// arrive with Wave D, before any real publication engine exists.
 /// </remarks>
+[TestClass]
 public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
 {
     [GeneratedRegex("^blobs/data/[a-z2-7]{4}/[a-z2-7]{26}$")]
     private static partial Regex BlobKeyShape();
 
-    [Fact]
+    [TestMethod]
     public async Task A_test_file_is_split_backed_up_and_restored_byte_identical()
     {
         var original = BuildTestFile();
@@ -36,20 +38,20 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         using var source = new MemoryStream(original);
         var result = await archiver.ArchiveAsync(source, CancellationToken.None);
 
-        Assert.Equal(original.LongLength, result.LogicalLength);
-        Assert.Equal(original.Length / (64 * 1024), result.SegmentReferences.Count);
-        Assert.True(result.Blobs.Count > 1, "The small blob targets must force multiple blobs.");
+        Assert.AreEqual(original.LongLength, result.LogicalLength);
+        Assert.AreEqual(original.Length / (64 * 1024), result.SegmentReferences.Count);
+        Assert.IsTrue(result.Blobs.Count > 1, "The small blob targets must force multiple blobs.");
 
         // One record per DISTINCT segment: identical content derives an
         // identical object identifier and is stored once (09 §6) — the test
         // file's repeating regions make several segments byte-identical.
-        Assert.Equal(result.SegmentContentIds.Distinct().Count(), result.RecordsWritten);
+        Assert.AreEqual(result.SegmentContentIds.Distinct().Count(), result.RecordsWritten);
 
         // Every stored object sits at blobs/data/<shard>/<store-blob-key>,
         // and the shard is the rendering's first four characters.
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
         {
-            Assert.Matches(BlobKeyShape(), entry.Key.Value);
+            Assert.MatchesRegex(BlobKeyShape(), entry.Key.Value);
             Assert.StartsWith(entry.Key.Components[2], entry.Key.Components[3], StringComparison.Ordinal);
         }
 
@@ -57,22 +59,22 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         // the archive run beyond the logical references a manifest will
         // eventually carry.
         using var reader = new RepositoryReader(Repo, keys, store);
-        Assert.Equal(result.Blobs.Count, await reader.LoadBlobsAsync(CancellationToken.None));
+        Assert.AreEqual(result.Blobs.Count, await reader.LoadBlobsAsync(CancellationToken.None));
 
         // The threshold decision went both ways across the mixed regions.
-        Assert.Contains(reader.AllRecords, record => record.CompressionProfileValue == CompressionProfile.ZstdV1.Value);
-        Assert.Contains(reader.AllRecords, record => record.CompressionProfileValue == CompressionProfile.None.Value);
+        Assert.Contains(record => record.CompressionProfileValue == CompressionProfile.ZstdV1.Value, reader.AllRecords);
+        Assert.Contains(record => record.CompressionProfileValue == CompressionProfile.None.Value, reader.AllRecords);
 
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(result.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(original.LongLength, restore.Length);
-        Assert.Equal(original, restored.ToArray());
-        Assert.Equal(result.WholeFileHash, restore.WholeFileHash);
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        Assert.AreEqual(original.LongLength, restore.Length);
+        SequenceAssert.AreEqual(original, restored.ToArray());
+        SequenceAssert.AreEqual(result.WholeFileHash, restore.WholeFileHash);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_empty_file_produces_no_segments_no_records_and_no_blobs()
     {
         var store = CreateStore();
@@ -84,22 +86,22 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
 
         // A zero-length file has an empty segment list and no records at all
         // (specification 09 §2.1) — its manifest will say so; nothing is stored.
-        Assert.Empty(result.SegmentReferences);
-        Assert.Empty(result.Blobs);
-        Assert.Equal(0, result.LogicalLength);
+        Assert.IsEmpty(result.SegmentReferences);
+        Assert.IsEmpty(result.Blobs);
+        Assert.AreEqual(0, result.LogicalLength);
 
         using var reader = new RepositoryReader(Repo, keys, store);
-        Assert.Equal(0, await reader.LoadBlobsAsync(CancellationToken.None));
+        Assert.AreEqual(0, await reader.LoadBlobsAsync(CancellationToken.None));
 
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(result.SegmentReferences, restored, CancellationToken.None);
 
-        Assert.True(restore.Success);
-        Assert.Equal(0, restore.Length);
-        Assert.Empty(restored.ToArray());
+        Assert.IsTrue(restore.Success);
+        Assert.AreEqual(0, restore.Length);
+        Assert.IsEmpty(restored.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Each_segment_is_individually_readable_by_object_identifier()
     {
         var original = BuildTestFile(regions: 6);
@@ -117,8 +119,8 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         var reference = result.SegmentReferences[3];
         var segment = await reader.ReadSegmentAsync(reference.ObjectId, CancellationToken.None);
 
-        Assert.Equal(RecordReadOutcome.Ok, segment.Outcome);
-        Assert.Equal(
+        Assert.AreEqual(RecordReadOutcome.Ok, segment.Outcome);
+        SequenceAssert.AreEqual(
             original.AsSpan((int)reference.LogicalOffset, (int)reference.LogicalLength).ToArray(),
             segment.Plaintext);
     }

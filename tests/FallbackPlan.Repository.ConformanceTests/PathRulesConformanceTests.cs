@@ -1,6 +1,5 @@
 using System.Text.Json;
 using FallbackPlan.Domain;
-using Xunit;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -11,12 +10,13 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// green here means two implementations in two languages agree on every
 /// committed case — the property the dialect exists to guarantee.
 /// </summary>
+[TestClass]
 public sealed class PathRulesConformanceTests
 {
     private static JsonDocument Vectors { get; } =
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "path-rules.json")));
 
-    [Fact]
+    [TestMethod]
     public void Every_single_rule_match_case_agrees()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("match_cases").EnumerateArray())
@@ -25,31 +25,31 @@ public sealed class PathRulesConformanceTests
             var path = vectorCase.GetProperty("path").GetString()!;
             var caseSensitive = vectorCase.GetProperty("case_sensitive").GetBoolean();
 
-            Assert.True(
+            Assert.IsTrue(
                 PathRule.TryCreate(rule, caseSensitive, out var compiled, out var defect),
                 $"rule '{rule}' failed to compile: {defect}");
 
-            Assert.True(
+            Assert.IsTrue(
                 vectorCase.GetProperty("matches").GetBoolean() == compiled!.Matches(path),
                 $"rule '{rule}' vs '{path}': expected {vectorCase.GetProperty("matches").GetBoolean()}");
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_invalid_rule_is_refused_with_a_named_defect()
     {
         foreach (var vectorCase in Vectors.RootElement.GetProperty("invalid_cases").EnumerateArray())
         {
             var rule = vectorCase.GetProperty("rule").GetString()!;
 
-            Assert.False(
+            Assert.IsFalse(
                 PathRule.TryCreate(rule, caseSensitive: true, out _, out var defect),
                 $"invalid rule '{rule}' ({vectorCase.GetProperty("reason").GetString()}) unexpectedly compiled");
-            Assert.False(string.IsNullOrEmpty(defect), $"invalid rule '{rule}' produced no named defect");
+            Assert.IsFalse(string.IsNullOrEmpty(defect), $"invalid rule '{rule}' produced no named defect");
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void Every_evaluation_scenario_agrees_on_excluded_and_captured()
     {
         foreach (var scenario in Vectors.RootElement.GetProperty("evaluation_scenarios").EnumerateArray())
@@ -59,7 +59,7 @@ public sealed class PathRulesConformanceTests
             var excludes = scenario.GetProperty("excludes").EnumerateArray().Select(rule => rule.GetString()!).ToList();
             var caseSensitive = scenario.GetProperty("case_sensitive").GetBoolean();
 
-            Assert.True(
+            Assert.IsTrue(
                 PathRuleSet.TryCreate(includes, excludes, caseSensitive, out var rules, out var defects),
                 $"scenario '{name}' rules failed: {string.Join("; ", defects)}");
 
@@ -67,10 +67,10 @@ public sealed class PathRulesConformanceTests
             {
                 var path = expectation.GetProperty("path").GetString()!;
 
-                Assert.True(
+                Assert.IsTrue(
                     expectation.GetProperty("excluded").GetBoolean() == rules!.IsExcluded(path),
                     $"scenario '{name}', path '{path}': excluded disagrees");
-                Assert.True(
+                Assert.IsTrue(
                     expectation.GetProperty("captured").GetBoolean() == rules.IsCaptured(path),
                     $"scenario '{name}', path '{path}': captured disagrees");
             }

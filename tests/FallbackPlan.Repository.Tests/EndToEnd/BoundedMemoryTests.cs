@@ -38,11 +38,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// rather than about the code.
 /// </para>
 /// </remarks>
-[CollectionDefinition(nameof(BoundedMemoryTests), DisableParallelization = true)]
+[TestClass]
 public sealed class SerialMemoryMeasurement;
 
 /// <inheritdoc cref="SerialMemoryMeasurement"/>
-[Collection(nameof(BoundedMemoryTests))]
+[DoNotParallelize]
+[TestClass]
 public sealed class BoundedMemoryTests : ArchiveTestHarness
 {
     private const long Mebibyte = 1024 * 1024;
@@ -50,7 +51,7 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     /// <summary>The NFR-PERF-001 live-set bound this reproduces at reduced scale.</summary>
     private const long LiveSetBound = 256 * Mebibyte;
 
-    [Fact]
+    [TestMethod]
     public async Task Eight_times_the_input_does_not_cost_eight_times_the_memory()
     {
         var small = await MeasurePeakLiveSetAsync(32 * Mebibyte, firstCounter: 1);
@@ -65,8 +66,8 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         // threshold sits well below proportionality rather than close to the
         // observation, because the instrument is a sampled live set and its
         // spread is tens of mebibytes either way.
-        Assert.True(large < small * 2.5, $"Memory grew with input length. {detail}");
-        Assert.True(large <= LiveSetBound, $"The retained set exceeded the NFR-PERF-001 bound. {detail}");
+        Assert.IsTrue(large < small * 2.5, $"Memory grew with input length. {detail}");
+        Assert.IsTrue(large <= LiveSetBound, $"The retained set exceeded the NFR-PERF-001 bound. {detail}");
     }
 
     private async Task<long> MeasurePeakLiveSetAsync(long inputBytes, ulong firstCounter)
@@ -93,8 +94,8 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
 
             // The archive really happened — a pipeline that read nothing would
             // also hold no memory.
-            Assert.Equal(inputBytes, result.LogicalLength);
-            Assert.True(store.BytesConsumed > 0);
+            Assert.AreEqual(inputBytes, result.LogicalLength);
+            Assert.IsTrue(store.BytesConsumed > 0);
         }
 
         return Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)) - baseline;

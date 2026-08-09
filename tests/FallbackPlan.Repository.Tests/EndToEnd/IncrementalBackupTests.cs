@@ -10,6 +10,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -24,6 +25,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// snapshot whole, because a deletion is new snapshot state rather than a
 /// removal (FR-SNP-002).
 /// </summary>
+[TestClass]
 public sealed class IncrementalBackupTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -79,7 +81,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         return source;
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_live_catalogue_answers_snapshots_paths_and_listings_after_publication()
     {
         var source = BuildSource();
@@ -91,36 +93,36 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        var snapshot = Assert.Single(catalogue.EnumerateSnapshots());
-        Assert.Equal(Enumerable.Repeat((byte)0xA1, 16).ToArray(), snapshot.SnapshotId.ToArray());
-        Assert.Equal(1_722_600_000_000ul, snapshot.CapturedAt);
-        Assert.Equal(published.RootTreeObjectId, snapshot.RootTree);
-        Assert.Equal(1, snapshot.CaptureStatus);
-        Assert.Equal(1, snapshot.SignatureState);
+        var snapshot = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
+        SequenceAssert.AreEqual(Enumerable.Repeat((byte)0xA1, 16).ToArray(), snapshot.SnapshotId.ToArray());
+        Assert.AreEqual(1_722_600_000_000ul, snapshot.CapturedAt);
+        Assert.AreEqual(published.RootTreeObjectId, snapshot.RootTree);
+        Assert.AreEqual(1, snapshot.CaptureStatus);
+        Assert.AreEqual(1, snapshot.SignatureState);
 
         // ls / — byte order: docs, readme.md.
         var root = catalogue.ListDirectory(snapshot.SnapshotId.Span, string.Empty);
-        Assert.Equal(["docs", "readme.md"], root.Select(entry => entry.Path));
-        Assert.Equal(EntryKind.DirectoryPlaceholder, root[0].EntryKind);
+        SequenceAssert.AreEqual(["docs", "readme.md"], root.Select(entry => entry.Path));
+        Assert.AreEqual(EntryKind.DirectoryPlaceholder, root[0].EntryKind);
 
         var docs = catalogue.ListDirectory(snapshot.SnapshotId.Span, "docs");
-        Assert.Equal(["docs/big.bin", "docs/small.txt"], docs.Select(entry => entry.Path));
+        SequenceAssert.AreEqual(["docs/big.bin", "docs/small.txt"], docs.Select(entry => entry.Path));
 
         // Path lookup joins the file-version columns the next incremental
         // needs, including the scan-time identity.
         var big = catalogue.LookupPath(snapshot.SnapshotId.Span, "docs/big.bin");
-        Assert.NotNull(big);
-        Assert.Equal(300_000ul, big!.LogicalLength);
-        Assert.NotNull(big.ModifiedAt);
-        Assert.NotNull(big.IdentityDevice);
-        Assert.NotNull(big.IdentityFileId);
+        Assert.IsNotNull(big);
+        Assert.AreEqual(300_000ul, big!.LogicalLength);
+        Assert.IsNotNull(big.ModifiedAt);
+        Assert.IsNotNull(big.IdentityDevice);
+        Assert.IsNotNull(big.IdentityFileId);
 
         // Case-insensitive resolution folds through the ADR-0026 §8 key.
-        Assert.NotNull(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN", caseInsensitive: true));
-        Assert.Null(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN"));
+        Assert.IsNotNull(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN", caseInsensitive: true));
+        Assert.IsNull(catalogue.LookupPath(snapshot.SnapshotId.Span, "DOCS/Big.BIN"));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_deleted_file_leaves_the_earlier_snapshot_whole_and_still_restorable()
     {
         var source = BuildSource();
@@ -135,7 +137,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var blobsBefore = Directory.EnumerateFiles(
             Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories).Count();
 
-        Assert.True(source.Remove("docs/small.txt"));
+        Assert.IsTrue(source.Remove("docs/small.txt"));
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xD2, now: 1_722_600_060_000), CancellationToken.None);
@@ -145,13 +147,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         // The deletion is recorded as new snapshot state — the later snapshot
         // simply does not name the path.
-        Assert.Null(catalogue.LookupPath(after, "docs/small.txt"));
-        Assert.Equal(["docs/big.bin"], catalogue.ListDirectory(after, "docs").Select(entry => entry.Path));
+        Assert.IsNull(catalogue.LookupPath(after, "docs/small.txt"));
+        SequenceAssert.AreEqual(["docs/big.bin"], catalogue.ListDirectory(after, "docs").Select(entry => entry.Path));
 
         // And the earlier snapshot is untouched by it.
         var deleted = catalogue.LookupPath(before, "docs/small.txt");
-        Assert.NotNull(deleted);
-        Assert.Equal(
+        Assert.IsNotNull(deleted);
+        SequenceAssert.AreEqual(
             ["docs/big.bin", "docs/small.txt"],
             catalogue.ListDirectory(before, "docs").Select(entry => entry.Path));
 
@@ -162,23 +164,23 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(deleted!.ObjectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
 
         using var restored = new MemoryStream();
         var result = await new RestoreEngine(reader).RestoreFileAsync(
             FileVersionManifestCodec.Decode(read.Plaintext!), restored, CancellationToken.None);
 
-        Assert.True(result.Success, result.FailureDetail);
-        Assert.Equal(Deterministic(500, 5), restored.ToArray());
+        Assert.IsTrue(result.Success, result.FailureDetail);
+        SequenceAssert.AreEqual(Deterministic(500, 5), restored.ToArray());
 
         // Belt and braces: the store only ever grew.
-        Assert.True(
+        Assert.IsTrue(
             Directory.EnumerateFiles(Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories).Count()
                 >= blobsBefore,
             "a deletion removed something from the store — snapshots are new state, never a delete (FR-SNP-002).");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unchanged_file_short_circuits_without_its_content_being_read()
     {
         var source = BuildSource();
@@ -205,26 +207,26 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                 CancellationToken.None);
 
         // Only the changed file was opened (NFR-PERF-003).
-        Assert.Equal(["readme.md"], source.OpenedPaths.Distinct());
+        SequenceAssert.AreEqual(["readme.md"], source.OpenedPaths.Distinct());
 
         var byPath = second.Files.ToDictionary(file => file.RelativePath);
-        Assert.True(byPath["docs/big.bin"].Reused);
-        Assert.True(byPath["docs/small.txt"].Reused);
-        Assert.False(byPath["readme.md"].Reused);
+        Assert.IsTrue(byPath["docs/big.bin"].Reused);
+        Assert.IsTrue(byPath["docs/small.txt"].Reused);
+        Assert.IsFalse(byPath["readme.md"].Reused);
 
         // The reused entries name the FIRST snapshot's file versions.
         var firstByPath = first.Files.ToDictionary(file => file.RelativePath);
-        Assert.Equal(firstByPath["docs/big.bin"].ObjectId, byPath["docs/big.bin"].ObjectId);
+        Assert.AreEqual(firstByPath["docs/big.bin"].ObjectId, byPath["docs/big.bin"].ObjectId);
 
         // Both snapshots list identically-shaped trees in the catalogue.
         var snapshots = catalogue.EnumerateSnapshots();
-        Assert.Equal(2, snapshots.Count);
-        Assert.Equal(
+        Assert.AreEqual(2, snapshots.Count);
+        SequenceAssert.AreEqual(
             catalogue.ListDirectory(Enumerable.Repeat((byte)0xA1, 16).ToArray(), "docs").Select(entry => entry.Path),
             catalogue.ListDirectory(Enumerable.Repeat((byte)0xB2, 16).ToArray(), "docs").Select(entry => entry.Path));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_changed_file_stores_only_the_segments_the_index_does_not_already_locate()
     {
         // One file: 4 × 64 KiB segments. The second version changes only
@@ -255,21 +257,21 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // The file re-archived (mtime changed) — but the three unchanged
         // segments were already located by the index, so the second
         // publication's data blobs carry exactly one segment record.
-        var file = Assert.Single(second.Files);
-        Assert.False(file.Reused);
-        Assert.Equal(4, file.Archive!.SegmentReferences.Count);
-        Assert.Equal(1, second.ContentBlobs.Sum(blob => blob.RecordCount));
+        var file = Assert.ContainsSingle(second.Files);
+        Assert.IsFalse(file.Reused);
+        Assert.AreEqual(4, file.Archive!.SegmentReferences.Count);
+        Assert.AreEqual(1, second.ContentBlobs.Sum(blob => blob.RecordCount));
 
         // And the second version still restores byte-identical.
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(file.Archive.SegmentReferences, restored, CancellationToken.None);
-        Assert.True(restore.Success, restore.FailureDetail);
-        Assert.Equal(changed.Content, restored.ToArray());
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(changed.Content, restored.ToArray());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_rebuilt_catalogue_answers_the_same_queries_and_disables_the_short_circuit()
     {
         var source = BuildSource();
@@ -302,24 +304,24 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var report = await CatalogueProjector.ProjectAsync(
             rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
 
-        Assert.Equal(1, report.Snapshots);
+        Assert.AreEqual(1, report.Snapshots);
 
         // The same answers as the live catalogue.
-        var snapshot = Assert.Single(rebuilt.EnumerateSnapshots());
-        Assert.Equal(liveSnapshots[0].SnapshotId.ToArray(), snapshot.SnapshotId.ToArray());
-        Assert.Equal(liveSnapshots[0].RootTree, snapshot.RootTree);
-        Assert.Equal(liveSnapshots[0].CapturedAt, snapshot.CapturedAt);
-        Assert.Equal(1, snapshot.SignatureState);
-        Assert.Equal(
+        var snapshot = Assert.ContainsSingle(rebuilt.EnumerateSnapshots());
+        SequenceAssert.AreEqual(liveSnapshots[0].SnapshotId.ToArray(), snapshot.SnapshotId.ToArray());
+        Assert.AreEqual(liveSnapshots[0].RootTree, snapshot.RootTree);
+        Assert.AreEqual(liveSnapshots[0].CapturedAt, snapshot.CapturedAt);
+        Assert.AreEqual(1, snapshot.SignatureState);
+        SequenceAssert.AreEqual(
             liveListing,
             rebuilt.ListDirectory(snapshot.SnapshotId.Span, "docs").Select(entry => entry.Path));
 
         // Identity is scan-time local fact, never durable (02 §2): gone
         // after rebuild, so the short-circuit re-reads rather than trusts.
         var entry = rebuilt.LookupPath(snapshot.SnapshotId.Span, "docs/big.bin");
-        Assert.NotNull(entry!.ModifiedAt);
-        Assert.Null(entry.IdentityDevice);
-        Assert.Null(entry.IdentityFileId);
+        Assert.IsNotNull(entry!.ModifiedAt);
+        Assert.IsNull(entry.IdentityDevice);
+        Assert.IsNull(entry.IdentityFileId);
 
         source.OpenedPaths.Clear();
         var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
@@ -333,12 +335,15 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // Every file re-read — conservative, never wrong — while segment
         // reuse still holds: the index locates every segment, so no new
         // data records are written at all.
-        Assert.Equal(3, source.OpenedPaths.Distinct().Count());
-        Assert.All(second.Files, file => Assert.False(file.Reused));
-        Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.AreEqual(3, source.OpenedPaths.Distinct().Count());
+        foreach (var file in second.Files)
+        {
+            Assert.IsFalse(file.Reused);
+        }
+        Assert.AreEqual(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_new_version_of_a_file_names_the_version_it_replaced()
     {
         var source = BuildSource();
@@ -368,13 +373,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // every version claims to be the first, and a file's history is a
         // set of unrelated objects that happen to share a path.
         var after = second.Files.Single(file => file.RelativePath == "readme.md");
-        Assert.NotEqual(before, after.ObjectId);
+        Assert.AreNotEqual(before, after.ObjectId);
 
         var manifest = await ReadManifestAsync(store, keys, catalogue, after.ObjectId);
-        Assert.Equal(before, manifest.ParentVersion);
+        Assert.AreEqual(before, manifest.ParentVersion);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_renamed_file_keeps_its_ancestry_rather_than_starting_over()
     {
         var source = new FakeFileSystemSource();
@@ -393,7 +398,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         // The same file, moved. Same inode, same content, same mtime — only
         // the path changed, which is exactly what a rename is.
-        Assert.True(source.Remove("docs/before.bin"));
+        Assert.IsTrue(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
         source.OpenedPaths.Clear();
 
@@ -411,29 +416,29 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // brand-new file with no history — permanently, because the manifest
         // is immutable. Identity is what makes it the same file.
         var manifest = await ReadManifestAsync(store, keys, catalogue, after.ObjectId);
-        Assert.Equal(before, manifest.ParentVersion);
+        Assert.AreEqual(before, manifest.ParentVersion);
 
         // A new manifest, not the prior object re-emitted: the name changed,
         // and a manifest states its own name.
-        Assert.NotEqual(before, after.ObjectId);
-        Assert.Equal("after.bin"u8.ToArray(), manifest.Name.ToArray());
+        Assert.AreNotEqual(before, after.ObjectId);
+        SequenceAssert.AreEqual("after.bin"u8.ToArray(), manifest.Name.ToArray());
 
         // Content is not duplicated — every segment resolves to what the
         // first snapshot already wrote.
-        Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.AreEqual(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
 
         // And it is not re-read either. The prior manifest is fetched and
         // rewritten under the new name, so a moved file costs one record read
         // rather than the whole file (architecture 06 §4.2). Reading it and
         // then discarding every segment as a duplicate is the cost this path
         // exists to stop paying.
-        Assert.Empty(source.OpenedPaths);
+        Assert.IsEmpty(source.OpenedPaths);
 
         // Everything the rename did not change is inherited verbatim, because
         // it describes bytes nothing re-examined.
-        Assert.Equal(priorManifest.WholeFileHash.ToArray(), manifest.WholeFileHash.ToArray());
-        Assert.Equal(priorManifest.LogicalLength, manifest.LogicalLength);
-        Assert.Equal(
+        SequenceAssert.AreEqual(priorManifest.WholeFileHash.ToArray(), manifest.WholeFileHash.ToArray());
+        Assert.AreEqual(priorManifest.LogicalLength, manifest.LogicalLength);
+        SequenceAssert.AreEqual(
             priorManifest.SegmentReferences.Select(reference => reference.ObjectId),
             manifest.SegmentReferences.Select(reference => reference.ObjectId));
 
@@ -448,10 +453,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        Assert.Equal(after.ObjectId, third.Files.Single(file => file.RelativePath == "archive/after.bin").ObjectId);
+        Assert.AreEqual(after.ObjectId, third.Files.Single(file => file.RelativePath == "archive/after.bin").ObjectId);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_rename_keeps_its_ancestry_after_the_catalogue_has_been_rebuilt()
     {
         var source = new FakeFileSystemSource();
@@ -488,10 +493,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // The premise: a rebuild recovers paths but not identities, so the
         // catalogue can no longer say which file an inode belongs to.
         var priorSnapshotId = Enumerable.Repeat((byte)0xE1, 16).ToArray();
-        Assert.Null(rebuilt.LookupIdentity(priorSnapshotId, original.IdentityDevice!.Value, 4_242));
+        Assert.IsNull(rebuilt.LookupIdentity(priorSnapshotId, original.IdentityDevice!.Value, 4_242));
 
         // The same file, moved, in exactly that window.
-        Assert.True(source.Remove("docs/before.bin"));
+        Assert.IsTrue(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
 
         var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
@@ -505,10 +510,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // local database happened to be cold.
         var after = second.Files.Single(file => file.RelativePath == "archive/after.bin");
         var manifest = await ReadManifestAsync(store, keys, rebuilt, after.ObjectId);
-        Assert.Equal(original.ObjectId, manifest.ParentVersion);
+        Assert.AreEqual(original.ObjectId, manifest.ParentVersion);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_file_untouched_for_several_snapshots_still_finds_its_ancestor_when_it_moves()
     {
         var source = new FakeFileSystemSource();
@@ -561,7 +566,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                 rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
         }
 
-        Assert.True(source.Remove("docs/quiet.bin"));
+        Assert.IsTrue(source.Remove("docs/quiet.bin"));
         source.AddFile("archive/moved.bin", Deterministic(3_000, 21), fileId: 7_777);
 
         var final = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
@@ -575,10 +580,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var moved = final.Files.Single(file => file.RelativePath == "archive/moved.bin");
         var manifest = await ReadManifestAsync(store, keys, rebuilt, moved.ObjectId);
 
-        Assert.Equal(original, manifest.ParentVersion);
+        Assert.AreEqual(original, manifest.ParentVersion);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_source_identity_hints_are_advisory_and_their_absence_costs_only_the_rename()
     {
         var source = new FakeFileSystemSource();
@@ -605,7 +610,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             hintKeys.Add(entry.Key);
         }
 
-        Assert.NotEmpty(hintKeys);
+        Assert.IsNotEmpty(hintKeys);
         foreach (var key in hintKeys)
         {
             await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
@@ -626,7 +631,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                 rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
         }
 
-        Assert.True(source.Remove("docs/before.bin"));
+        Assert.IsTrue(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
 
         var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
@@ -639,11 +644,11 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         // The file captures, and the only thing lost is the link to what it
         // used to be — which is what "advisory" costs when it is missing.
-        Assert.Null(manifest.ParentVersion);
+        Assert.IsNull(manifest.ParentVersion);
     }
 
 
-    [Fact]
+    [TestMethod]
     public async Task A_snapshot_rewrites_metadata_for_what_changed_and_not_for_the_repository()
     {
         // 1 024 files across 32 directories: enough that "proportional to the
@@ -685,7 +690,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // a tree names its children by identifier and those identifiers moved.
         // Every other directory encodes to the bytes it encoded to last time,
         // is therefore the same object, and is not written again.
-        Assert.Equal(4, second.MetadataBlobs.Sum(blob => blob.RecordCount));
+        Assert.AreEqual(4, second.MetadataBlobs.Sum(blob => blob.RecordCount));
 
         var before = first.MetadataBlobs.Sum(blob => blob.Length);
         var after = second.MetadataBlobs.Sum(blob => blob.Length);
@@ -694,7 +699,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // tree costs a few per cent of a full one, not most of it. Without
         // manifest reuse this was 18 % and rising with the file count, since
         // every directory in the repository was rewritten every run.
-        Assert.True(
+        Assert.IsTrue(
             after * 20 < before,
             $"The second snapshot rewrote {after} bytes of metadata against the first's {before}.");
 
@@ -705,12 +710,12 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // key, a hint is written once per version and this measures it
         // (06 §11, Q21).
         var growth = afterSecond - afterFirst;
-        Assert.True(
+        Assert.IsTrue(
             growth * 20 < afterFirst,
             $"The second snapshot added {growth} bytes to a {afterFirst}-byte store.");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_published_delta_carries_a_digest_of_every_blob_it_covers()
     {
         var source = BuildSource();
@@ -730,19 +735,19 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var record = StandaloneRecordFraming.Parse(deltaBytes);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-        Assert.True(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
 
         var decoded = IndexDeltaCodec.Decode(plaintext);
         var delta = decoded.Delta;
 
-        Assert.NotEmpty(delta.CoveredBlobIds);
-        Assert.Equal(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests.Count);
+        Assert.IsNotEmpty(delta.CoveredBlobIds);
+        Assert.AreEqual(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests.Count);
 
         // The signature covers the digests, so what the receiving participant
         // checks against is what the writer asserted (07 §2, §2.2).
         using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
         {
-            Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+            Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
         }
 
         // And each digest is the digest of the blob it names, over the bytes
@@ -755,14 +760,14 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             var bytes = await ReadObjectAsync(store, byId[delta.CoveredBlobIds[i]]);
             var expected = System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 16));
 
-            Assert.Equal(expected, delta.CoveredBlobDigests[i].ToArray());
+            SequenceAssert.AreEqual(expected, delta.CoveredBlobDigests[i].ToArray());
         }
     }
 
     private static async Task<byte[]> ReadObjectAsync(LocalFileSystemObjectStore store, ObjectKey key)
     {
         using var read = await store.OpenReadAsync(key, range: null, CancellationToken.None);
-        Assert.Equal(OpenReadOutcome.Found, read.Outcome);
+        Assert.AreEqual(OpenReadOutcome.Found, read.Outcome);
 
         using var buffer = new MemoryStream();
         await read.Content!.CopyToAsync(buffer, CancellationToken.None);
@@ -776,7 +781,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
-        Assert.Equal(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
         return FileVersionManifestCodec.Decode(read.Plaintext!);
     }
 }

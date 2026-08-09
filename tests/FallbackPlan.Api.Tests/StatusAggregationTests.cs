@@ -7,11 +7,12 @@ namespace FallbackPlan.Api.Tests;
 /// NFR-OPS-006 and ADR-0028 §8: a fleet view is where one green tick per
 /// machine is most tempting and most wrong.
 /// </summary>
+[TestClass]
 public sealed class StatusAggregationTests
 {
     private const ulong Now = 1_700_000_000_000;
 
-    [Fact]
+    [TestMethod]
     public void An_unreachable_service_is_stale_with_an_age_never_healthy_and_never_failed()
     {
         var observation = new MachineObservation(
@@ -22,27 +23,27 @@ public sealed class StatusAggregationTests
 
         var summary = StatusRollup.Summarise(observation, Now);
 
-        Assert.True(summary.IsStale);
-        Assert.Equal(90_000UL, summary.StaleForMilliseconds);
+        Assert.IsTrue(summary.IsStale);
+        Assert.AreEqual(90_000UL, summary.StaleForMilliseconds);
 
         // Not healthy: the last thing heard was good news, and the console does
         // not know whether it is still true. Not failed either — neither is known.
-        Assert.Null(summary.State);
+        Assert.IsNull(summary.State);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_machine_never_heard_from_is_stale_rather_than_never_backed_up()
     {
         var summary = StatusRollup.Summarise(
             new MachineObservation("new-machine", Status: null, LastContactUnixMilliseconds: 0, Reachable: false),
             Now);
 
-        Assert.True(summary.IsStale);
-        Assert.Null(summary.State);
-        Assert.Empty(summary.Detail);
+        Assert.IsTrue(summary.IsStale);
+        Assert.IsNull(summary.State);
+        Assert.IsEmpty(summary.Detail);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_summary_is_derived_from_detail_that_stays_reachable()
     {
         var observation = new MachineObservation(
@@ -53,17 +54,17 @@ public sealed class StatusAggregationTests
 
         var summary = StatusRollup.Summarise(observation, Now);
 
-        Assert.False(summary.IsStale);
-        Assert.Equal(ProtectionState.Degraded, summary.State);
+        Assert.IsFalse(summary.IsStale);
+        Assert.AreEqual(ProtectionState.Degraded, summary.State);
 
         // The detail travels with the summary. A roll-up that discarded it
         // would be the only copy of the answer, and the never-merge rules only
         // hold while the components remain visible.
-        Assert.Equal(2, summary.Detail.Count);
-        Assert.Contains(summary.Detail, set => set.Status.State == ProtectionState.Verified);
+        Assert.AreEqual(2, summary.Detail.Count);
+        Assert.Contains(set => set.Status.State == ProtectionState.Verified, summary.Detail);
     }
 
-    [Fact]
+    [TestMethod]
     public void Degraded_and_unrecoverable_never_merge()
     {
         // NFR-OPS-002 across machines. Unrecoverable means data is already
@@ -77,11 +78,11 @@ public sealed class StatusAggregationTests
                 Reachable: true),
             Now);
 
-        Assert.Equal(ProtectionState.Unrecoverable, summary.State);
-        Assert.Contains(summary.Detail, set => set.Status.State == ProtectionState.Degraded);
+        Assert.AreEqual(ProtectionState.Unrecoverable, summary.State);
+        Assert.Contains(set => set.Status.State == ProtectionState.Degraded, summary.Detail);
     }
 
-    [Fact]
+    [TestMethod]
     public void Never_backed_up_outranks_a_protected_sibling_in_the_headline()
     {
         // Enum order would put NeverBackedUp first and therefore mildest, which
@@ -95,10 +96,10 @@ public sealed class StatusAggregationTests
                 Reachable: true),
             Now);
 
-        Assert.Equal(ProtectionState.NeverBackedUp, summary.State);
+        Assert.AreEqual(ProtectionState.NeverBackedUp, summary.State);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_roll_up_never_invents_a_state_outside_the_vocabulary()
     {
         var every = Enum.GetValues<ProtectionState>();
@@ -109,7 +110,7 @@ public sealed class StatusAggregationTests
         Assert.Contains(summary.State!.Value, every);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_fleet_summarises_machine_by_machine()
     {
         var fleet = StatusRollup.Summarise(
@@ -119,9 +120,9 @@ public sealed class StatusAggregationTests
             ],
             Now);
 
-        Assert.Equal(2, fleet.Count);
-        Assert.False(fleet[0].IsStale);
-        Assert.True(fleet[1].IsStale);
+        Assert.AreEqual(2, fleet.Count);
+        Assert.IsFalse(fleet[0].IsStale);
+        Assert.IsTrue(fleet[1].IsStale);
     }
 
     private static StatusResult Status(params ProtectionState[] states) =>

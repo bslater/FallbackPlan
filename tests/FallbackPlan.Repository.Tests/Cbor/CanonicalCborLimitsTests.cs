@@ -1,4 +1,5 @@
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Cbor;
 
@@ -7,9 +8,10 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 /// length above the caller's maximum is refused from the length prefix alone,
 /// never by allocating first and measuring afterwards.
 /// </summary>
+[TestClass]
 public sealed class CanonicalCborLimitsTests
 {
-    [Fact]
+    [TestMethod]
     public void Byte_string_longer_than_the_stated_maximum_is_refused()
     {
         // 100-byte string, canonical prefix 58 64.
@@ -19,20 +21,20 @@ public sealed class CanonicalCborLimitsTests
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadByteString(maxLength: 10));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadByteString(maxLength: 10));
     }
 
-    [Fact]
+    [TestMethod]
     public void Byte_string_within_the_maximum_is_read()
     {
         var bytes = Convert.FromHexString("43010203");
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Equal([1, 2, 3], reader.ReadByteString(maxLength: 10));
+        SequenceAssert.AreEqual<byte>([1, 2, 3], reader.ReadByteString(maxLength: 10));
     }
 
-    [Fact]
+    [TestMethod]
     public void Text_string_longer_than_the_stated_maximum_is_refused()
     {
         // 100-character text string, canonical prefix 78 64.
@@ -43,10 +45,10 @@ public sealed class CanonicalCborLimitsTests
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadTextString(maxUtf8Length: 10));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadTextString(maxUtf8Length: 10));
     }
 
-    [Fact]
+    [TestMethod]
     public void Array_longer_than_the_stated_maximum_is_refused()
     {
         // Five-element array of zeros.
@@ -54,14 +56,14 @@ public sealed class CanonicalCborLimitsTests
 
         var reader = new CanonicalCborReader(bytes);
 
-        Assert.Throws<CborFormatException>(() => reader.ReadStartArray(maxCount: 4));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadStartArray(maxCount: 4));
     }
 
-    [Fact]
+    [TestMethod]
     public void Fixed_length_byte_string_read_rejects_the_wrong_length()
     {
         var reader = new CanonicalCborReader(Convert.FromHexString("43010203"));
 
-        Assert.Throws<CborFormatException>(() => reader.ReadFixedByteString(expectedLength: 16));
+        Assert.ThrowsExactly<CborFormatException>(() => reader.ReadFixedByteString(expectedLength: 16));
     }
 }

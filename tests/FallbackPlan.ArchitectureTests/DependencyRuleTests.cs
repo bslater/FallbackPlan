@@ -1,7 +1,10 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using NetArchTest.Rules;
-using Xunit;
+
+// NetArchTest and MSTest both call their outcome type TestResult.
+using TestResult = NetArchTest.Rules.TestResult;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.ArchitectureTests;
 
@@ -24,6 +27,7 @@ namespace FallbackPlan.ArchitectureTests;
 /// intent. The caveat is recorded here rather than silently deleted, because a
 /// test whose strength changed is worth saying so once.
 /// </summary>
+[TestClass]
 public sealed class DependencyRuleTests
 {
     private static Assembly Domain => typeof(Domain.AssemblyMarker).Assembly;
@@ -76,7 +80,7 @@ public sealed class DependencyRuleTests
 
     private static void AssertPasses(TestResult result, string rule)
     {
-        Assert.True(
+        Assert.IsTrue(
             result.IsSuccessful,
             $"{rule}\nOffending types:\n  " +
             string.Join("\n  ", result.FailingTypeNames ?? []));
@@ -87,7 +91,7 @@ public sealed class DependencyRuleTests
     /// depend on nothing. A single infrastructure reference here would make the
     /// whole layering advisory.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Domain_has_no_infrastructure_dependencies()
     {
         AssertPasses(
@@ -111,7 +115,7 @@ public sealed class DependencyRuleTests
     /// and the recovery tool is the last line of defence when everything else has
     /// failed. See docs/architecture/08-restore-and-recovery.md section 5.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Repository_Format_has_no_provider_or_host_dependencies()
     {
         AssertPasses(
@@ -133,7 +137,7 @@ public sealed class DependencyRuleTests
     /// project's licence to the importer's dependencies (ADR-0001, ADR-0015) and
     /// pull a parser for untrusted archives inside the trust boundary (T-15).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Core_does_not_reference_import_implementations()
     {
         foreach (var assembly in new[] { Domain, Format, Crypto, StorageAbstractions })
@@ -152,7 +156,7 @@ public sealed class DependencyRuleTests
     /// Kopia and others can feed the same pipeline without any of them reaching
     /// into the core. It must therefore know nothing about the repository engine.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Import_Abstractions_depends_only_on_Domain()
     {
         AssertPasses(
@@ -171,7 +175,7 @@ public sealed class DependencyRuleTests
     /// identically from another, which is only true if the abstraction knows
     /// nothing about any concrete provider.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Storage_Abstractions_knows_no_concrete_provider()
     {
         AssertPasses(
@@ -198,7 +202,7 @@ public sealed class DependencyRuleTests
     /// Repository.Format only (Format for EntryMetadata/SourceFilesystem,
     /// the shapes the scanner emits).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Filesystem_depends_only_on_Domain_and_Format()
     {
         foreach (var assembly in new[] { Filesystem, FilesystemLocal })
@@ -227,7 +231,7 @@ public sealed class DependencyRuleTests
     /// specification, which is the one class of defect this project cannot
     /// recover from (ADR-0005).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Crypto_does_not_depend_on_higher_layers()
     {
         AssertPasses(
@@ -262,7 +266,7 @@ public sealed class DependencyRuleTests
     /// small enough to build and run on a clean machine when everything else
     /// has already failed (NFR-PORT-001).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Third_party_cryptography_stays_on_its_allowlist()
     {
         // An allowlist of two, not a tier. ADR-0019 §1 classifies dependencies by
@@ -299,7 +303,7 @@ public sealed class DependencyRuleTests
     /// would double the unaudited surface for zero gain and make "which one
     /// derived this repository's KEK" a per-callsite accident.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void No_source_assembly_references_the_test_only_argon2id_oracle()
     {
         foreach (var assembly in AllSourceAssemblies)
@@ -333,7 +337,7 @@ public sealed class DependencyRuleTests
     /// committed external/packages feed, ADR-0021) is the containment that
     /// exists right now, so it is the thing to pin.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Repository_Crypto_is_where_third_party_cryptography_actually_lives()
     {
         AssertProjectReferences("FallbackPlan.Repository.Crypto", "<PackageReference Include=\"Bodu.Security.Cryptography\" />");
@@ -353,7 +357,7 @@ public sealed class DependencyRuleTests
     /// admits — a third arriving here is the thing to catch, and it would
     /// otherwise arrive silently.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Recovery_tool_closure_admits_only_the_two_intended_bodu_packages()
     {
         AssertPasses(
@@ -377,7 +381,7 @@ public sealed class DependencyRuleTests
     /// signal that a policy decision has leaked out of the layer that owns
     /// it, so it should fail here and be made deliberately.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Only_Application_may_reference_the_recurrence_engine()
     {
         foreach (var assembly in AllSourceAssemblies.Where(a => a != Application))
@@ -400,7 +404,7 @@ public sealed class DependencyRuleTests
     /// recurrence reference moves out of Application, this fails and the
     /// move becomes a decision rather than a drift.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Application_is_where_the_recurrence_engine_actually_lives()
     {
         AssertProjectReferences(
@@ -423,7 +427,7 @@ public sealed class DependencyRuleTests
     /// makes this layer need a clock. The rule above pins it to this
     /// project.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Application_depends_only_on_Domain()
     {
         AssertPasses(
@@ -449,7 +453,7 @@ public sealed class DependencyRuleTests
     /// excluded assemblies) and the project file (an exact whitelist, so a
     /// transitive smuggle via a new ProjectReference fails loudly).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Recovery_depends_on_format_crypto_packing_and_storage_only()
     {
         AssertPasses(
@@ -473,7 +477,7 @@ public sealed class DependencyRuleTests
             .Order()
             .ToArray();
 
-        Assert.Equal(
+        SequenceAssert.AreEqual(
             ["FallbackPlan.Repository.Crypto", "FallbackPlan.Repository.Format",
              "FallbackPlan.Repository.Packing", "FallbackPlan.Storage.Abstractions", "FallbackPlan.Storage.Local"],
             references);
@@ -483,7 +487,7 @@ public sealed class DependencyRuleTests
     {
         var project = Path.Combine(RepositoryRoot(), "src", projectName, projectName + ".csproj");
 
-        Assert.True(File.Exists(project), $"Expected project file at {project}.");
+        Assert.IsTrue(File.Exists(project), $"Expected project file at {project}.");
 
         Assert.Contains(expectedReference, File.ReadAllText(project), StringComparison.Ordinal);
     }
@@ -498,7 +502,7 @@ public sealed class DependencyRuleTests
     private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
     {
         var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
-        Assert.NotNull(root);
+        Assert.IsNotNull(root);
         return root;
     }
 
@@ -525,7 +529,7 @@ public sealed class DependencyRuleTests
     /// through the contract would be a second writer, which
     /// <c>04-concurrency-and-publication.md</c> §9 forbids.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Api_reaches_nothing_below_domain()
     {
         AssertPasses(
@@ -547,7 +551,7 @@ public sealed class DependencyRuleTests
     /// (NFR-OPS-005). A recovery tool that needed a running service would not
     /// be a recovery tool.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void Recovery_references_neither_the_contract_nor_the_application_layer()
     {
         AssertPasses(
@@ -564,7 +568,7 @@ public sealed class DependencyRuleTests
     /// front ends may reference <c>Application</c>. That exception is why this
     /// is the one place the rule must be checked rather than assumed.
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void The_cli_is_the_only_front_end_permitted_the_application_layer()
     {
         var reference = Types.InAssembly(Cli)
@@ -573,7 +577,7 @@ public sealed class DependencyRuleTests
             .GetTypes()
             .ToList();
 
-        Assert.True(
+        Assert.IsTrue(
             reference.Count > 0,
             "The CLI's direct-mode exception exists only while it actually uses Application; if this canary "
             + "stops holding, the exception should be removed rather than left as dead permission.");
@@ -583,7 +587,7 @@ public sealed class DependencyRuleTests
     /// The keystore holds unlocked key material for the service account and
     /// must not become a route to anything else (NFR-SEC-009).
     /// </summary>
-    [Fact]
+    [TestMethod]
     public void The_keystore_knows_nothing_about_repositories()
     {
         AssertPasses(

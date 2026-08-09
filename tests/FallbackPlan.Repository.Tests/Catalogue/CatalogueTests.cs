@@ -12,6 +12,7 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// resolver agrees with <see cref="IndexPrecedence"/> on every input — two
 /// implementations of 07 §3 that must never diverge.
 /// </summary>
+[TestClass]
 public sealed class CatalogueTests : IDisposable
 {
     private static readonly RepositoryId Repo =
@@ -52,7 +53,7 @@ public sealed class CatalogueTests : IDisposable
         return DeltaId.FromBytes(bytes);
     }
 
-    [Fact]
+    [TestMethod]
     public void Applying_the_same_delta_twice_is_a_no_op()
     {
         using var catalogue = Open();
@@ -68,11 +69,11 @@ public sealed class CatalogueTests : IDisposable
         catalogue.ApplyDelta(Delta(1), delta);
         catalogue.ApplyDelta(Delta(1), delta);
 
-        Assert.Equal(1, catalogue.AppliedDeltaCount());
-        Assert.NotNull(catalogue.ResolveLocation(Object(1)));
+        Assert.AreEqual(1, catalogue.AppliedDeltaCount());
+        Assert.IsNotNull(catalogue.ResolveLocation(Object(1)));
     }
 
-    [Fact]
+    [TestMethod]
     public void The_sql_resolver_agrees_with_IndexPrecedence_on_randomized_entry_sets()
     {
         // Two implementations of 07 §3 — the in-memory resolver and the SQL
@@ -112,15 +113,15 @@ public sealed class CatalogueTests : IDisposable
             var expected = IndexPrecedence.Resolve(candidates, _ => BlobState.Live, [])!;
             var actual = catalogue.ResolveLocation(objectId)!;
 
-            Assert.Equal(expected.Entry.BlobId, actual.BlobId);
-            Assert.Equal(expected.Entry.PhysicalOffset, actual.PhysicalOffset);
-            Assert.Equal(expected.Generation, actual.Generation);
-            Assert.Equal(expected.WriterId, actual.WriterId);
-            Assert.Equal(expected.Sequence, actual.Sequence);
+            Assert.AreEqual(expected.Entry.BlobId, actual.BlobId);
+            Assert.AreEqual(expected.Entry.PhysicalOffset, actual.PhysicalOffset);
+            Assert.AreEqual(expected.Generation, actual.Generation);
+            Assert.AreEqual(expected.WriterId, actual.WriterId);
+            Assert.AreEqual(expected.Sequence, actual.Sequence);
         }
     }
 
-    [Fact]
+    [TestMethod]
     public void A_deleted_blob_winner_is_excluded_and_reported()
     {
         using var catalogue = Open();
@@ -146,11 +147,11 @@ public sealed class CatalogueTests : IDisposable
 
         // The generation-2 winner names a deleted blob: superseded (rule 3),
         // the generation-1 location serves, and the anomaly is recorded.
-        Assert.Equal(Blob(1), resolved!.BlobId);
-        Assert.Contains(catalogue.Findings(), finding => finding.Kind == DamageKind.MissingBlob);
+        Assert.AreEqual(Blob(1), resolved!.BlobId);
+        Assert.Contains(finding => finding.Kind == DamageKind.MissingBlob, catalogue.Findings());
     }
 
-    [Fact]
+    [TestMethod]
     public void A_repository_mismatch_drops_and_rebuilds_the_cache()
     {
         using (var catalogue = Open())
@@ -170,11 +171,11 @@ public sealed class CatalogueTests : IDisposable
 
         // The cache belonged to a different repository: dropped, not merged
         // (FR-MAN-002 — the catalogue is disposable, never authoritative).
-        Assert.Equal(0, reopened.AppliedDeltaCount());
-        Assert.Null(reopened.ResolveLocation(Object(1)));
+        Assert.AreEqual(0, reopened.AppliedDeltaCount());
+        Assert.IsNull(reopened.ResolveLocation(Object(1)));
     }
 
-    [Fact]
+    [TestMethod]
     public void Dedup_lookup_round_trips_by_content_identifier()
     {
         using var catalogue = Open();
@@ -182,8 +183,8 @@ public sealed class CatalogueTests : IDisposable
         var contentId = ContentId.FromBytes(System.Security.Cryptography.SHA256.HashData("segment"u8));
         catalogue.RecordSegmentDedup(contentId, Object(7));
 
-        Assert.Equal(Object(7), catalogue.LookupByContent(contentId));
-        Assert.Null(catalogue.LookupByContent(ContentId.FromBytes(System.Security.Cryptography.SHA256.HashData("other"u8))));
+        Assert.AreEqual(Object(7), catalogue.LookupByContent(contentId));
+        Assert.IsNull(catalogue.LookupByContent(ContentId.FromBytes(System.Security.Cryptography.SHA256.HashData("other"u8))));
     }
 
     /// <inheritdoc />

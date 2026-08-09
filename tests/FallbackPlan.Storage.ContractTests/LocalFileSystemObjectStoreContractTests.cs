@@ -8,6 +8,7 @@ namespace FallbackPlan.Storage.ContractTests;
 /// <see cref="LocalFileSystemObjectStore"/> over a per-test temporary
 /// directory.
 /// </summary>
+[TestClass]
 public sealed class LocalFileSystemObjectStoreContractTests : ObjectStoreContractTests, IDisposable
 {
     private readonly string _root =

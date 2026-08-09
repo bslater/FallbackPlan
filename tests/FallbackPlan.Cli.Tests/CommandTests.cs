@@ -7,37 +7,38 @@ namespace FallbackPlan.Cli.Tests;
 /// it. Each test asserts the exit code and the observable effect, not the
 /// exact prose of a message.
 /// </summary>
+[TestClass]
 public sealed class CommandTests : IDisposable
 {
     private readonly CliHarness _cli = new();
 
-    [Fact]
+    [TestMethod]
     public async Task Init_creates_a_repository_that_opens_again()
     {
         var init = await _cli.RunWithoutStateAsync("init");
 
-        Assert.Equal(0, init.ExitCode);
-        Assert.True(Directory.Exists(_cli.RepositoryPath));
+        Assert.AreEqual(0, init.ExitCode);
+        Assert.IsTrue(Directory.Exists(_cli.RepositoryPath));
 
         // A second init must refuse rather than overwrite keys.
         var again = await _cli.RunWithoutStateAsync("init");
-        Assert.NotEqual(0, again.ExitCode);
+        Assert.AreNotEqual(0, again.ExitCode);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Archive_then_verify_and_inspect_round_trip_one_file()
     {
         await _cli.InitAsync();
         var source = _cli.WriteFile("notes.txt", new string('a', 5_000));
 
         var archive = await _cli.RunAsync("archive", source);
-        Assert.True(archive.ExitCode == 0, archive.All);
+        Assert.IsTrue(archive.ExitCode == 0, archive.All);
 
         var verify = await _cli.RunAsync("verify", "--level", "records");
-        Assert.True(verify.ExitCode == 0, verify.All);
+        Assert.IsTrue(verify.ExitCode == 0, verify.All);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Backup_publishes_a_tree_and_snapshots_lists_it()
     {
         await _cli.InitAsync();
@@ -46,14 +47,14 @@ public sealed class CommandTests : IDisposable
         var root = Path.Combine(_cli.WorkPath, "tree");
 
         var backup = await _cli.RunAsync("backup", root);
-        Assert.True(backup.ExitCode == 0, backup.All);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
 
         var snapshots = await _cli.RunAsync("snapshots");
-        Assert.True(snapshots.ExitCode == 0, snapshots.All);
-        Assert.False(string.IsNullOrWhiteSpace(snapshots.Output), "snapshots printed nothing after a backup");
+        Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(snapshots.Output), "snapshots printed nothing after a backup");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Ls_lists_a_directory_inside_a_snapshot()
     {
         await _cli.InitAsync();
@@ -64,11 +65,11 @@ public sealed class CommandTests : IDisposable
         var snapshot = await FirstSnapshotIdAsync();
         var listing = await _cli.RunAsync("ls", snapshot);
 
-        Assert.True(listing.ExitCode == 0, listing.All);
+        Assert.IsTrue(listing.ExitCode == 0, listing.All);
         Assert.Contains("one.txt", listing.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Restore_writes_the_files_back_with_their_contents()
     {
         await _cli.InitAsync();
@@ -80,13 +81,13 @@ public sealed class CommandTests : IDisposable
         var destination = Path.Combine(_cli.WorkPath, "restored");
 
         var restore = await _cli.RunAsync("restore", snapshot, "--output", destination);
-        Assert.True(restore.ExitCode == 0, restore.All);
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
 
-        Assert.Equal("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
-        Assert.Equal("second", File.ReadAllText(Path.Combine(destination, "nested", "two.txt")));
+        Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
+        Assert.AreEqual("second", File.ReadAllText(Path.Combine(destination, "nested", "two.txt")));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Check_reports_a_healthy_repository()
     {
         await _cli.InitAsync();
@@ -95,10 +96,10 @@ public sealed class CommandTests : IDisposable
 
         var check = await _cli.RunAsync("check");
 
-        Assert.True(check.ExitCode == 0, check.All);
+        Assert.IsTrue(check.ExitCode == 0, check.All);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Rebuild_index_restores_the_catalogue_after_it_is_deleted()
     {
         await _cli.InitAsync();
@@ -114,14 +115,14 @@ public sealed class CommandTests : IDisposable
         }
 
         var rebuild = await _cli.RunAsync("rebuild-index");
-        Assert.True(rebuild.ExitCode == 0, rebuild.All);
+        Assert.IsTrue(rebuild.ExitCode == 0, rebuild.All);
 
         var snapshots = await _cli.RunAsync("snapshots");
-        Assert.True(snapshots.ExitCode == 0, snapshots.All);
-        Assert.False(string.IsNullOrWhiteSpace(snapshots.Output), "the rebuilt catalogue lists no snapshots");
+        Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(snapshots.Output), "the rebuilt catalogue lists no snapshots");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Key_export_writes_a_recovery_kit()
     {
         await _cli.InitAsync();
@@ -130,26 +131,26 @@ public sealed class CommandTests : IDisposable
 
         var export = await _cli.RunAsync("key-export", "--output", kit);
 
-        Assert.True(export.ExitCode == 0, export.All);
-        Assert.True(new FileInfo(kit).Length > 0, "the exported kit is empty");
+        Assert.IsTrue(export.ExitCode == 0, export.All);
+        Assert.IsTrue(new FileInfo(kit).Length > 0, "the exported kit is empty");
 
         // The transcribable text form is written alongside it (FR-KIT-003).
-        Assert.True(File.Exists(kit + ".txt"), "the text form of the kit was not written");
+        Assert.IsTrue(File.Exists(kit + ".txt"), "the text form of the kit was not written");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Status_reports_per_set_protection()
     {
         await _cli.InitAsync();
 
         var status = await _cli.RunAsync("status");
 
-        Assert.True(status.ExitCode == 0, status.All);
+        Assert.IsTrue(status.ExitCode == 0, status.All);
     }
 
     // ------------------------------------------------------------ failures
 
-    [Fact]
+    [TestMethod]
     public async Task A_missing_passphrase_variable_fails_without_a_stack_trace()
     {
         await _cli.InitAsync();
@@ -160,33 +161,33 @@ public sealed class CommandTests : IDisposable
             "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET",
             "--state", _cli.StatePath);
 
-        Assert.NotEqual(0, result.ExitCode);
+        Assert.AreNotEqual(0, result.ExitCode);
         Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Opening_a_repository_that_does_not_exist_fails_cleanly()
     {
         var result = await _cli.RunAsync("snapshots");
 
-        Assert.NotEqual(0, result.ExitCode);
+        Assert.AreNotEqual(0, result.ExitCode);
         Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unknown_command_is_refused()
     {
         var result = await CliHarness.RunRawAsync("definitely-not-a-command");
 
-        Assert.NotEqual(0, result.ExitCode);
+        Assert.AreNotEqual(0, result.ExitCode);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Help_lists_the_commands()
     {
         var result = await CliHarness.RunRawAsync("--help");
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("backup", result.Output, StringComparison.Ordinal);
         Assert.Contains("restore", result.Output, StringComparison.Ordinal);
     }
@@ -194,16 +195,16 @@ public sealed class CommandTests : IDisposable
     private async Task<string> FirstSnapshotIdAsync()
     {
         var snapshots = await _cli.RunAsync("snapshots");
-        Assert.True(snapshots.ExitCode == 0, snapshots.All);
+        Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
 
         var first = snapshots.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault();
-        Assert.NotNull(first);
+        Assert.IsNotNull(first);
 
         // The identifier is the leading hex token of the listing line.
         var token = first!.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
-        Assert.True(token.Length >= 8, $"could not read a snapshot id from '{first}'");
+        Assert.IsTrue(token.Length >= 8, $"could not read a snapshot id from '{first}'");
         return token;
     }
 

@@ -1,6 +1,7 @@
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -10,6 +11,7 @@ namespace FallbackPlan.InterruptionTests;
 /// stored bytes is detected, classified, and scoped — and a snapshot whose
 /// objects were not touched stays restorable through every case.
 /// </summary>
+[TestClass]
 public sealed class CorruptionHarnessTests : InterruptionHarness
 {
     private async Task<(byte[] Data, RepositoryKeySet Keys, Repository.Crypto.KeyHierarchy Hierarchy, Storage.Local.LocalFileSystemObjectStore Store)>
@@ -38,7 +40,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         await File.WriteAllBytesAsync(path, bytes);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_envelope_flip_fails_the_blob_at_open_and_is_scoped_to_it()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -50,12 +52,12 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         await FlipByteAsync(FirstDataBlobPath(), 20);
 
         using var reader = new RepositoryReader(Repo, keys, store);
-        var exception = await Assert.ThrowsAsync<BlobFormatException>(async () =>
+        var exception = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
             await reader.LoadBlobsAsync(CancellationToken.None));
         Assert.Contains("authentication", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_record_header_flip_is_a_format_violation_scoped_to_its_record()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -76,14 +78,14 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
             if (read.Outcome != RecordReadOutcome.Ok)
             {
                 failures++;
-                Assert.Equal(RecordReadOutcome.FormatViolation, read.Outcome);
+                Assert.AreEqual(RecordReadOutcome.FormatViolation, read.Outcome);
             }
         }
 
-        Assert.Equal(1, failures);
+        Assert.AreEqual(1, failures);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_tag_flip_is_an_authentication_failure_scoped_to_its_record()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -93,7 +95,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         using var probe = new RepositoryReader(Repo, keys, store);
         await probe.LoadBlobsAsync(CancellationToken.None);
         var victim = probe.AllRecords.First();
-        Assert.True(probe.TryLocateRecord(victim.ObjectId, out var storeKey, out var entry));
+        Assert.IsTrue(probe.TryLocateRecord(victim.ObjectId, out var storeKey, out var entry));
 
         // The tag is the 16 bytes after the stored payload.
         var path = Path.Combine(StoreRoot, storeKey.Value.Replace('/', Path.DirectorySeparatorChar));
@@ -103,10 +105,10 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(victim.ObjectId, CancellationToken.None);
 
-        Assert.Equal(RecordReadOutcome.AuthenticationFailed, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.AuthenticationFailed, read.Outcome);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_footer_flip_fails_the_blob_at_open()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -121,10 +123,10 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         await FlipByteAsync(path, (int)(length - FooterLocator.Length - 4));
 
         using var reader = new RepositoryReader(Repo, keys, store);
-        await Assert.ThrowsAsync<BlobFormatException>(async () => await reader.LoadBlobsAsync(CancellationToken.None));
+        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () => await reader.LoadBlobsAsync(CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_corrupted_standalone_snapshot_fails_authentication_and_emits_nothing()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -139,11 +141,11 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         var record = StandaloneRecordFraming.Parse(await File.ReadAllBytesAsync(snapshotPath));
         var metadataKey = keys.DeriveClassKey(Domain.BlobClass.Metadata, record.KeyGeneration);
 
-        Assert.False(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
-        Assert.Empty(plaintext);
+        Assert.IsFalse(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+        Assert.IsEmpty(plaintext);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_snapshot_sealed_for_another_repository_is_rejected_on_replay()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -161,10 +163,10 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
             Convert.FromHexString("ffffffffffffffffffffffffffffffff"));
         var metadataKey = keys.DeriveClassKey(Domain.BlobClass.Metadata, record.KeyGeneration);
 
-        Assert.False(StandaloneRecordCipher.TryOpen(record, otherRepository, metadataKey, out _));
+        Assert.IsFalse(StandaloneRecordCipher.TryOpen(record, otherRepository, metadataKey, out _));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_missing_blob_refuses_the_restore_with_the_segment_named()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
@@ -178,10 +180,10 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
 
         // The snapshot's manifest still decodes (metadata blobs intact), but
         // the restore refuses — no partial file, the missing segment named.
-        await Assert.ThrowsAnyAsync<Exception>(async () => await RestoreSnapshotAsync(store, keys, 0xA1));
+        await Assert.ThrowsAsync<Exception>(async () => await RestoreSnapshotAsync(store, keys, 0xA1));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Untouched_snapshots_survive_every_corruption_of_a_second_backup()
     {
         var (baseline, keys, hierarchy, store) = await PublishAsync();
@@ -208,6 +210,6 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
 
         // Corruption is local (04 §7): the first snapshot's objects were not
         // touched, and it restores byte-identically.
-        Assert.Equal(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
     }
 }

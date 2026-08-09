@@ -20,6 +20,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a repository the first already filled, and what the second does with the
 /// first's segments is the whole of the decision.
 /// </summary>
+[TestClass]
 public sealed class DedupTrustDomainTests : ArchiveTestHarness
 {
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
@@ -27,7 +28,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     private static readonly WriterId SecondWriter =
         WriterId.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"));
 
-    [Fact]
+    [TestMethod]
     public async Task A_single_writer_reuses_its_own_segments_without_a_verification_read()
     {
         var store = new CountingObjectStore(CreateStore());
@@ -55,27 +56,27 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        Assert.Equal(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.Empty(catalogue.Findings());
+        Assert.AreEqual(0, second.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(catalogue.Findings());
 
         // Not "few reads" — none. A writer's own segments are recognised by
         // attribution, and attribution costs a catalogue lookup, so the second
         // backup of an unchanged tree reads nothing from the store at all.
-        Assert.Equal(readsBefore, store.Reads);
+        Assert.AreEqual(readsBefore, store.Reads);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_repository_domain_reuses_another_writers_segments_after_confirming_them()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
 
         // Confirmed, then referenced: no content record is written for bytes
         // the repository already holds, and nothing was found wrong with them.
-        Assert.Equal(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.Empty(second.Catalogue.Findings());
+        Assert.AreEqual(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(second.Catalogue.Findings());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_device_domain_refuses_another_writers_segments_and_stores_its_own()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Device);
@@ -85,11 +86,11 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // same content twice. That cost is the point — this is the domain for
         // a user who does not want their backup to depend on another member's
         // record being honest.
-        Assert.True(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
-        Assert.Empty(second.Catalogue.Findings());
+        Assert.IsTrue(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
+        Assert.IsEmpty(second.Catalogue.Findings());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_unverified_domain_reuses_another_writers_segments_without_reading_them()
     {
         using var second = await SecondWriterPublishes(
@@ -100,11 +101,11 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // control: it is the same corruption the default domain catches below,
         // so the two tests together show the read is what makes the difference
         // rather than something else about the fixture.
-        Assert.Equal(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.Empty(second.Catalogue.Findings());
+        Assert.AreEqual(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(second.Catalogue.Findings());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_segment_that_does_not_verify_is_written_again_and_reported()
     {
         using var second = await SecondWriterPublishes(
@@ -114,14 +115,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // decrypt to what its identifier claims, so it is not referenced. The
         // backup still succeeds — this writer has the real bytes in front of it
         // and stores them.
-        Assert.True(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
+        Assert.IsTrue(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
 
         var findings = second.Catalogue.Findings();
-        Assert.Contains(findings, finding => finding.Kind == DamageKind.CorruptRecord);
-        Assert.Contains(findings, finding => finding.Detail.Contains("offered for reuse", StringComparison.Ordinal));
+        Assert.Contains(finding => finding.Kind == DamageKind.CorruptRecord, findings);
+        Assert.Contains(finding => finding.Detail.Contains("offered for reuse", StringComparison.Ordinal), findings);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_confirmed_segment_is_not_confirmed_again()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
@@ -145,13 +146,13 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        Assert.Equal(0, third.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.Empty(second.Catalogue.Findings());
+        Assert.AreEqual(0, third.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(second.Catalogue.Findings());
 
         // The measured shape of the cost ADR-0006 asked to see: the reads that
         // confirmed the other writer's objects happened once, and the backup
         // that followed issued fewer than that to publish the same tree.
-        Assert.True(
+        Assert.IsTrue(
             second.Store.Reads - readsToVerify < readsToVerify,
             $"the confirming publication read {readsToVerify} times; the next read "
             + $"{second.Store.Reads - readsToVerify}");

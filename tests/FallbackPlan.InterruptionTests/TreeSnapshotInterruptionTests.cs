@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -12,6 +13,7 @@ namespace FallbackPlan.InterruptionTests;
 /// proven over the scanner-driven pipeline. Wave V grows this into the full
 /// row-by-row matrix.
 /// </summary>
+[TestClass]
 public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 {
     private readonly string _sourceRoot =
@@ -52,19 +54,19 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     // An explicit initializer rather than a collection expression: Visual
     // Studio's analyzer lowers the expression through a path that trips
     // CA1825 (observed on Windows), and warnings are errors everywhere.
-    public static TheoryData<PublicationStep> KillPoints() => new()
-    {
-        PublicationStep.PublishIntent,
-        PublicationStep.UploadBlobs,
-        PublicationStep.PublishIndexDeltas,
-        PublicationStep.PublishSnapshot,
-        PublicationStep.RetireIntent,
-    };
+    public static IEnumerable<object[]> KillPoints() =>
+    [
+        [PublicationStep.PublishIntent],
+        [PublicationStep.UploadBlobs],
+        [PublicationStep.PublishIndexDeltas],
+        [PublicationStep.PublishSnapshot],
+        [PublicationStep.RetireIntent],
+    ];
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(4)]
     public async Task A_tree_publishes_identically_at_any_concurrency(int concurrency)
     {
         var files = BuildSourceTree();
@@ -75,8 +77,8 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var published = await CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency)
             .PublishAsync(TreeJob(0xC4), CancellationToken.None);
 
-        Assert.Equal(files.Count, published.Files.Count);
-        Assert.Empty(published.Failures);
+        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.IsEmpty(published.Failures);
 
         // NFR-PERF-002 over the scanner-driven path. The single-stream theory
         // in ConcurrentUploadTests covers one file; this is the multi-file case,
@@ -85,11 +87,11 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         foreach (var file in published.Files)
         {
             var archive = file.Archive;
-            Assert.NotNull(archive);
+            Assert.IsNotNull(archive);
 
             var content = files[file.RelativePath.Replace('\\', '/')];
-            Assert.Equal(SHA256.HashData(content), archive.WholeFileHash);
-            Assert.Equal(content.Length, archive.LogicalLength);
+            SequenceAssert.AreEqual(SHA256.HashData(content), archive.WholeFileHash);
+            Assert.AreEqual(content.Length, archive.LogicalLength);
 
             // 06 §3.2: the encoded references must ascend by logical offset and
             // tile the file exactly. Producing segments concurrently is allowed;
@@ -97,16 +99,16 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
             long expectedOffset = 0;
             foreach (var reference in archive.SegmentReferences)
             {
-                Assert.Equal(expectedOffset, reference.LogicalOffset);
+                Assert.AreEqual(expectedOffset, reference.LogicalOffset);
                 expectedOffset += reference.LogicalLength;
             }
 
-            Assert.Equal(content.Length, expectedOffset);
+            Assert.AreEqual(content.Length, expectedOffset);
         }
     }
 
-    [Theory]
-    [MemberData(nameof(KillPoints))]
+    [TestMethod]
+    [DynamicData(nameof(KillPoints))]
     public async Task A_killed_tree_publication_never_harms_the_committed_snapshot_and_a_fresh_process_completes(
         PublicationStep killAfter)
     {
@@ -124,22 +126,22 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         }
 
         // The tree publication dies between steps.
-        await Assert.ThrowsAsync<PublicationKilledException>(async () =>
+        await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
             await CreateOrchestrator(store, keys, hierarchy, new KillAfter(killAfter))
                 .PublishAsync(TreeJob(0xB2), CancellationToken.None));
 
         // The committed snapshot is untouched by the wreckage.
-        Assert.Equal(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));
 
         // A fresh process completes the same tree job end to end.
         var published = await CreateOrchestrator(store, keys, hierarchy)
             .PublishAsync(TreeJob(0xB3), CancellationToken.None);
 
-        Assert.Equal(3, published.Files.Count);
-        Assert.Empty(published.Failures);
+        Assert.AreEqual(3, published.Files.Count);
+        Assert.IsEmpty(published.Failures);
 
         // And the baseline still restores after completion.
-        Assert.Equal(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));
     }
 
     /// <inheritdoc />

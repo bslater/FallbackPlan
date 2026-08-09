@@ -7,18 +7,19 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 /// below a creation minimum yields its named defect; the findings are
 /// mode-independent facts the caller turns into refusal or warning.
 /// </summary>
+[TestClass]
 public sealed class Argon2ParameterValidationTests
 {
-    [Fact]
+    [TestMethod]
     public void The_creation_minimums_validate_clean()
     {
-        Assert.True(Argon2Parameters.CreationMinimums.ValidateCreationMinimums().IsValid);
+        Assert.IsTrue(Argon2Parameters.CreationMinimums.ValidateCreationMinimums().IsValid);
     }
 
-    [Theory]
-    [InlineData(64 * 1024 - 1, 3u, (byte)4, "kdf_memory_below_creation_minimum")]
-    [InlineData(64 * 1024, 2u, (byte)4, "kdf_iterations_below_creation_minimum")]
-    [InlineData(64 * 1024, 3u, (byte)3, "kdf_parallelism_below_creation_minimum")]
+    [TestMethod]
+    [DataRow(64u * 1024 - 1, 3u, (byte)4, "kdf_memory_below_creation_minimum")]
+    [DataRow(64u * 1024, 2u, (byte)4, "kdf_iterations_below_creation_minimum")]
+    [DataRow(64u * 1024, 3u, (byte)3, "kdf_parallelism_below_creation_minimum")]
     public void Each_below_minimum_value_yields_its_named_defect(
         uint memoryKiB, uint iterations, byte parallelism, string expectedDefect)
     {
@@ -26,21 +27,21 @@ public sealed class Argon2ParameterValidationTests
 
         var result = parameters.ValidateCreationMinimums();
 
-        Assert.False(result.IsValid);
-        Assert.True(result.Has(expectedDefect));
+        Assert.IsFalse(result.IsValid);
+        Assert.IsTrue(result.Has(expectedDefect));
     }
 
-    [Fact]
+    [TestMethod]
     public void All_below_minimum_values_are_reported_together()
     {
         var parameters = new Argon2Parameters { MemoryKiB = 8, Iterations = 1, Parallelism = 1 };
 
         var result = parameters.ValidateCreationMinimums();
 
-        Assert.Equal(3, result.Defects.Count);
+        Assert.AreEqual(3, result.Defects.Count);
     }
 
-    [Fact]
+    [TestMethod]
     public void Repository_creation_settings_carry_kdf_defects_through()
     {
         var settings = RepositoryCreationSettings.Default with
@@ -51,8 +52,8 @@ public sealed class Argon2ParameterValidationTests
 
         var result = settings.Validate();
 
-        Assert.False(result.IsValid);
-        Assert.True(result.Has("kdf_memory_below_creation_minimum"));
-        Assert.True(result.Has("created_by_empty"));
+        Assert.IsFalse(result.IsValid);
+        Assert.IsTrue(result.Has("kdf_memory_below_creation_minimum"));
+        Assert.IsTrue(result.Has("created_by_empty"));
     }
 }

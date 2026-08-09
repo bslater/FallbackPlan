@@ -3,6 +3,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Index;
 
@@ -13,6 +14,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// loader verifies and applies them, void deltas fill crash-skipped
 /// numbers, and gaps surface as damage only after the bounded patience.
 /// </summary>
+[TestClass]
 public sealed class IndexPlaneTests : IDisposable
 {
     private static readonly RepositoryId Repo =
@@ -48,7 +50,7 @@ public sealed class IndexPlaneTests : IDisposable
             IndexEntryType.Insertion);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_covered_blob_digest_round_trips_and_is_covered_by_the_signature()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -68,18 +70,18 @@ public sealed class IndexPlaneTests : IDisposable
         var signedBytes = IndexDeltaCodec.EncodeForSigning(delta);
         var decoded = IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(signedBytes)));
 
-        Assert.Equal(digest, Assert.Single(decoded.Delta.CoveredBlobDigests).ToArray());
-        Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        SequenceAssert.AreEqual(digest, Assert.ContainsSingle(decoded.Delta.CoveredBlobDigests).ToArray());
+        Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
 
         // Key 10 sorts after the signature and is signed anyway — the
         // signature covers every key except itself (07 §2), which is the rule
         // that let a field be added without renumbering an established one.
         // A digest that changes must change the signed bytes.
         var altered = delta with { CoveredBlobDigests = [Enumerable.Repeat((byte)0x5B, 32).ToArray()] };
-        Assert.NotEqual(signedBytes, IndexDeltaCodec.EncodeForSigning(altered));
+        Assert.AreNotEqual(signedBytes, IndexDeltaCodec.EncodeForSigning(altered));
     }
 
-    [Fact]
+    [TestMethod]
     public void Covered_blob_digests_are_parallel_to_the_covered_blobs_or_absent()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -105,17 +107,17 @@ public sealed class IndexPlaneTests : IDisposable
 
         // The same validation guards both directions — a writer cannot
         // produce this object and a reader would refuse it if one appeared.
-        Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(delta));
+        Assert.ThrowsExactly<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(delta));
 
         var wrongWidth = delta with
         {
             CoveredBlobDigests = [new byte[31], new byte[31]],
         };
 
-        Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(wrongWidth));
+        Assert.ThrowsExactly<IndexFormatException>(() => IndexDeltaCodec.EncodeForSigning(wrongWidth));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_delta_round_trips_through_the_two_pass_signature()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -136,18 +138,18 @@ public sealed class IndexPlaneTests : IDisposable
 
         var decoded = IndexDeltaCodec.Decode(stored);
 
-        Assert.Equal(signedBytes, decoded.SignedBytes.ToArray());
-        Assert.True(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
-        Assert.Equal(delta.Sequence, decoded.Delta.Sequence);
-        Assert.Equal(2, decoded.Delta.Entries.Count);
-        Assert.Equal(delta.PredecessorDeltaId, decoded.Delta.PredecessorDeltaId);
+        SequenceAssert.AreEqual(signedBytes, decoded.SignedBytes.ToArray());
+        Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+        Assert.AreEqual(delta.Sequence, decoded.Delta.Sequence);
+        Assert.AreEqual(2, decoded.Delta.Entries.Count);
+        Assert.AreEqual(delta.PredecessorDeltaId, decoded.Delta.PredecessorDeltaId);
 
         // The packed-profiles wire form unpacks losslessly.
-        Assert.Equal((ushort)0x0001, decoded.Delta.Entries[0].CompressionProfileValue);
-        Assert.Equal((ushort)0x0001, decoded.Delta.Entries[0].EncryptionProfileValue);
+        Assert.AreEqual((ushort)0x0001, decoded.Delta.Entries[0].CompressionProfileValue);
+        Assert.AreEqual((ushort)0x0001, decoded.Delta.Entries[0].EncryptionProfileValue);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_multi_shard_delta_omits_key_5_and_round_trips()
     {
         // Object ids are HMAC outputs, so real deltas span shards — key 5 is
@@ -161,13 +163,13 @@ public sealed class IndexPlaneTests : IDisposable
             Entries = [Entry(0x11, 1), Entry(0x22, 1)],
         };
 
-        Assert.NotEqual(delta.Entries[0].Shard, delta.Entries[1].Shard);
+        Assert.AreNotEqual(delta.Entries[0].Shard, delta.Entries[1].Shard);
 
         var decoded = IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, new byte[64]));
-        Assert.Null(decoded.Delta.Shard);
+        Assert.IsNull(decoded.Delta.Shard);
     }
 
-    [Fact]
+    [TestMethod]
     public void A_declared_shard_that_mismatches_an_entry_is_refused()
     {
         var delta = new IndexDelta
@@ -179,10 +181,10 @@ public sealed class IndexPlaneTests : IDisposable
             Entries = [Entry(0x22, 1)],
         };
 
-        Assert.Throws<IndexFormatException>(() => IndexDeltaCodec.Encode(delta, new byte[64]));
+        Assert.ThrowsExactly<IndexFormatException>(() => IndexDeltaCodec.Encode(delta, new byte[64]));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_checkpoint_round_trips_with_computed_shard_hashes()
     {
         var entries = new List<IndexEntry> { Entry(0x11, 1), Entry(0x22, 2), Entry(0x11, 3) };
@@ -201,19 +203,19 @@ public sealed class IndexPlaneTests : IDisposable
 
         var decoded = CheckpointCodec.Decode(CheckpointCodec.Encode(checkpoint, new byte[64]));
 
-        Assert.Equal(shardSet, decoded.Checkpoint.ShardSet);
-        Assert.Equal(3, decoded.Checkpoint.Entries.Count);
-        Assert.Equal((ulong)9, decoded.Checkpoint.WriterWatermarks[0].HighestSequence);
+        SequenceAssert.AreEqual(shardSet, decoded.Checkpoint.ShardSet);
+        Assert.AreEqual(3, decoded.Checkpoint.Entries.Count);
+        Assert.AreEqual((ulong)9, decoded.Checkpoint.WriterWatermarks[0].HighestSequence);
 
         // The hashes are reader-recomputable from the entries themselves.
         var (recomputedSet, recomputedHashes) = ShardHashes.Compute(decoded.Checkpoint.Entries);
-        Assert.Equal(decoded.Checkpoint.ShardSet, recomputedSet);
-        Assert.Equal(
+        SequenceAssert.AreEqual(decoded.Checkpoint.ShardSet, recomputedSet);
+        SequenceAssert.AreEqual(
             decoded.Checkpoint.ShardHashesList.Select(hash => Convert.ToHexString(hash.Span)),
             recomputedHashes.Select(Convert.ToHexString));
     }
 
-    [Fact]
+    [TestMethod]
     public void A_checkpoint_with_an_unenumerated_shard_is_refused()
     {
         var checkpoint = new Checkpoint
@@ -225,10 +227,10 @@ public sealed class IndexPlaneTests : IDisposable
             WriterId = Writer,
         };
 
-        Assert.Throws<IndexFormatException>(() => CheckpointCodec.Encode(checkpoint, new byte[64]));
+        Assert.ThrowsExactly<IndexFormatException>(() => CheckpointCodec.Encode(checkpoint, new byte[64]));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Publish_and_load_round_trips_with_verified_signatures()
     {
         var store = CreateStore();
@@ -248,14 +250,14 @@ public sealed class IndexPlaneTests : IDisposable
             currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, blobState: null,
             CancellationToken.None);
 
-        Assert.Empty(state.Findings);
-        Assert.Empty(state.UnresolvedGaps);
-        Assert.Equal(2, state.Deltas.Count);
-        Assert.Equal(3, state.Resolved.Count);
-        Assert.True(state.Resolved.ContainsKey(Entry(1, 1).ObjectId));
+        Assert.IsEmpty(state.Findings);
+        Assert.IsEmpty(state.UnresolvedGaps);
+        Assert.AreEqual(2, state.Deltas.Count);
+        Assert.AreEqual(3, state.Resolved.Count);
+        Assert.IsTrue(state.Resolved.ContainsKey(Entry(1, 1).ObjectId));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_crash_skipped_sequence_gets_a_void_delta_and_the_gap_closes()
     {
         var store = CreateStore();
@@ -265,11 +267,11 @@ public sealed class IndexPlaneTests : IDisposable
         // anything is published for it.
         var sequence = CreateSequence();
         var skipped = sequence.AllocateNext();
-        Assert.Equal(1UL, skipped);
+        Assert.AreEqual(1UL, skipped);
 
         // Run 2: recover — the pending number is a void-delta obligation.
         var recovered = CreateSequence();
-        Assert.Equal([skipped], recovered.RecoveredObligations);
+        SequenceAssert.AreEqual([skipped], recovered.RecoveredObligations);
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, recovered))
         {
@@ -286,12 +288,12 @@ public sealed class IndexPlaneTests : IDisposable
 
         // The void fills sequence 1; sequence 2 carries the entries. No gap,
         // no damage, and the void contributed nothing.
-        Assert.Empty(state.Findings);
-        Assert.Empty(state.UnresolvedGaps);
-        Assert.Single(state.Resolved);
+        Assert.IsEmpty(state.Findings);
+        Assert.IsEmpty(state.UnresolvedGaps);
+        Assert.ContainsSingle(state.Resolved);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_unaccounted_gap_is_patient_then_damage()
     {
         var store = CreateStore();
@@ -313,24 +315,24 @@ public sealed class IndexPlaneTests : IDisposable
         // Inside patience: unresolved, not damage — a reader MUST NOT block
         // and MUST NOT interpret silence as an empty delta (07 §4).
         var patient = await loader.LoadAsync(0, gapPatienceGenerations: 2, null, null, CancellationToken.None);
-        Assert.Empty(patient.Findings);
-        Assert.Equal([(Writer, 2UL)], patient.UnresolvedGaps);
+        Assert.IsEmpty(patient.Findings);
+        SequenceAssert.AreEqual([(Writer, 2UL)], patient.UnresolvedGaps);
 
         // Past patience: a damage finding, surfaced rather than blocking.
         var exhausted = await loader.LoadAsync(
             currentGeneration: 5, gapPatienceGenerations: 2, null, null, CancellationToken.None);
-        var finding = Assert.Single(exhausted.Findings);
-        Assert.Equal(DamageKind.MissingIndexObject, finding.Kind);
+        var finding = Assert.ContainsSingle(exhausted.Findings);
+        Assert.AreEqual(DamageKind.MissingIndexObject, finding.Kind);
 
         // An accounting callback (a journal record, an intent-covered blob)
         // resolves the same gap without damage (ADR-0022 §Decision 7).
         var accounted = await loader.LoadAsync(
             5, 2, (_, gap) => ValueTask.FromResult(gap == 2), null, CancellationToken.None);
-        Assert.Empty(accounted.Findings);
-        Assert.Empty(accounted.UnresolvedGaps);
+        Assert.IsEmpty(accounted.Findings);
+        Assert.IsEmpty(accounted.UnresolvedGaps);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_tampered_index_object_is_a_security_finding_and_excluded()
     {
         var store = CreateStore();
@@ -351,7 +353,7 @@ public sealed class IndexPlaneTests : IDisposable
         var record = FallbackPlan.Repository.Format.Records.StandaloneRecordFraming.Parse(
             await File.ReadAllBytesAsync(deltaPath));
         var metadataKey = hierarchy.DeriveMetadataKey(KeyGeneration.Zero);
-        Assert.True(FallbackPlan.Repository.Packing.StandaloneRecordCipher.TryOpen(
+        Assert.IsTrue(FallbackPlan.Repository.Packing.StandaloneRecordCipher.TryOpen(
             record, Repo, metadataKey, out var plaintext));
 
         var forged = IndexDeltaCodec.Decode(plaintext);
@@ -370,11 +372,11 @@ public sealed class IndexPlaneTests : IDisposable
 
         // A bad signature is substitution or forgery, not a bad disk
         // (06 §6.1) — the object is excluded and the finding says security.
-        Assert.Contains(state.Findings, finding => finding.Kind == DamageKind.SecurityFinding);
-        Assert.Empty(state.Resolved);
+        Assert.Contains(finding => finding.Kind == DamageKind.SecurityFinding, state.Findings);
+        Assert.IsEmpty(state.Resolved);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_checkpoint_subsumes_deltas_and_newer_deltas_still_apply()
     {
         var store = CreateStore();
@@ -402,13 +404,13 @@ public sealed class IndexPlaneTests : IDisposable
         using var loader = new IndexLoader(store, Repo, hierarchy);
         var state = await loader.LoadAsync(1, 2, null, null, CancellationToken.None);
 
-        Assert.Empty(state.Findings);
-        Assert.Single(state.Checkpoints);
-        Assert.Equal(3, state.Resolved.Count);
-        Assert.True(state.Resolved.ContainsKey(Entry(3, 2).ObjectId));
+        Assert.IsEmpty(state.Findings);
+        Assert.ContainsSingle(state.Checkpoints);
+        Assert.AreEqual(3, state.Resolved.Count);
+        Assert.IsTrue(state.Resolved.ContainsKey(Entry(3, 2).ObjectId));
     }
 
-    [Fact]
+    [TestMethod]
     public void The_sequence_store_survives_process_restarts()
     {
         var sequence = CreateSequence();
@@ -418,8 +420,8 @@ public sealed class IndexPlaneTests : IDisposable
 
         var reloaded = CreateSequence();
 
-        Assert.Equal([second], reloaded.RecoveredObligations);
-        Assert.Equal(3UL, reloaded.AllocateNext());
+        SequenceAssert.AreEqual([second], reloaded.RecoveredObligations);
+        Assert.AreEqual(3UL, reloaded.AllocateNext());
     }
 
     /// <inheritdoc />

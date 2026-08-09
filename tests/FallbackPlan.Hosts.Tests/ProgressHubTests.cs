@@ -14,6 +14,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// boundary directly rather than through a job, so they say what the rule is
 /// and cannot go quiet under load the way a timing-dependent test can.
 /// </remarks>
+[TestClass]
 public sealed class ProgressHubTests : IDisposable
 {
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromSeconds(30));
@@ -21,7 +22,7 @@ public sealed class ProgressHubTests : IDisposable
     private static JobProgress Progress(string jobId, JobState state) =>
         new(jobId, state, FilesSeen: 10, FilesDone: 0, FilesReused: 0, FilesFailed: 0, BytesSeen: 4096, BytesStored: 0);
 
-    [Fact]
+    [TestMethod]
     public async Task A_watcher_is_subscribed_from_the_call_not_from_the_first_enumeration()
     {
         var hub = new ProgressHub();
@@ -36,12 +37,12 @@ public sealed class ProgressHubTests : IDisposable
 
         await using var enumerator = events.GetAsyncEnumerator(_timeout.Token);
 
-        Assert.True(await enumerator.MoveNextAsync());
-        Assert.Equal("job-1", enumerator.Current.Progress.JobId);
-        Assert.Equal(JobState.Scanning, enumerator.Current.Progress.State);
+        Assert.IsTrue(await enumerator.MoveNextAsync());
+        Assert.AreEqual("job-1", enumerator.Current.Progress.JobId);
+        Assert.AreEqual(JobState.Scanning, enumerator.Current.Progress.State);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_watcher_receives_nothing_reported_before_it_asked_to_watch()
     {
         var hub = new ProgressHub();
@@ -56,11 +57,11 @@ public sealed class ProgressHubTests : IDisposable
 
         await using var enumerator = events.GetAsyncEnumerator(_timeout.Token);
 
-        Assert.True(await enumerator.MoveNextAsync());
-        Assert.Equal(JobState.Packing, enumerator.Current.Progress.State);
+        Assert.IsTrue(await enumerator.MoveNextAsync());
+        Assert.AreEqual(JobState.Packing, enumerator.Current.Progress.State);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Completing_ends_a_watcher_that_never_enumerated()
     {
         var hub = new ProgressHub();
@@ -75,10 +76,10 @@ public sealed class ProgressHubTests : IDisposable
 
         await using var enumerator = events.GetAsyncEnumerator(_timeout.Token);
 
-        Assert.False(await enumerator.MoveNextAsync());
+        Assert.IsFalse(await enumerator.MoveNextAsync());
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Every_watcher_sees_the_same_event()
     {
         var hub = new ProgressHub();
@@ -90,12 +91,12 @@ public sealed class ProgressHubTests : IDisposable
         await using var firstEvents = first.GetAsyncEnumerator(_timeout.Token);
         await using var secondEvents = second.GetAsyncEnumerator(_timeout.Token);
 
-        Assert.True(await firstEvents.MoveNextAsync());
-        Assert.True(await secondEvents.MoveNextAsync());
+        Assert.IsTrue(await firstEvents.MoveNextAsync());
+        Assert.IsTrue(await secondEvents.MoveNextAsync());
 
         // One report, one sequence number, however many watchers.
-        Assert.Equal(firstEvents.Current.Sequence, secondEvents.Current.Sequence);
-        Assert.Equal(JobState.Publishing, firstEvents.Current.Progress.State);
+        Assert.AreEqual(firstEvents.Current.Sequence, secondEvents.Current.Sequence);
+        Assert.AreEqual(JobState.Publishing, firstEvents.Current.Progress.State);
     }
 
     /// <inheritdoc />

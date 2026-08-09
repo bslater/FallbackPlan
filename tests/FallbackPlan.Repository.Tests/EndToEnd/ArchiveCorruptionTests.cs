@@ -7,6 +7,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// NFR-REL-004, FR-RST-005): damage is detected, scoped to the record it
 /// touched, and never turns into a partial restore.
 /// </summary>
+[TestClass]
 public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 {
     private async Task<(ArchiveResult Result, RepositoryKeySet Keys, Storage.Local.LocalFileSystemObjectStore Store)> ArchiveAsync()
@@ -24,7 +25,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
     private string[] StoredBlobFiles() =>
         [.. Directory.EnumerateFiles(StoreRoot, "*", SearchOption.AllDirectories).Where(f => !f.Contains(".fbp-tmp", StringComparison.Ordinal)).Order()];
 
-    [Fact]
+    [TestMethod]
     public async Task A_flipped_ciphertext_byte_fails_exactly_its_record_and_refuses_the_restore()
     {
         var (result, keys, store) = await ArchiveAsync();
@@ -44,7 +45,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         using (var probe = new RepositoryReader(Repo, keys, store))
         {
             await probe.LoadBlobsAsync(CancellationToken.None);
-            Assert.True(probe.TryLocateRecord(victimReference.ObjectId, out var blobStoreKey, out victim));
+            Assert.IsTrue(probe.TryLocateRecord(victimReference.ObjectId, out var blobStoreKey, out victim));
             victimFile = Path.Combine(StoreRoot, blobStoreKey.Value.Replace('/', Path.DirectorySeparatorChar));
         }
 
@@ -63,23 +64,24 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
             if (read.Outcome != RecordReadOutcome.Ok)
             {
                 failures++;
-                Assert.Equal(reference.ObjectId, victimReference.ObjectId);
-                Assert.Equal(RecordReadOutcome.AuthenticationFailed, read.Outcome);
+                Assert.AreEqual(reference.ObjectId, victimReference.ObjectId);
+                Assert.AreEqual(RecordReadOutcome.AuthenticationFailed, read.Outcome);
             }
         }
 
-        Assert.Equal(1, failures);
+        Assert.AreEqual(1, failures);
 
         // The whole-file restore refuses rather than emitting partial output.
         using var destination = new MemoryStream();
         var restore = await reader.RestoreAsync(result.SegmentReferences, destination, CancellationToken.None);
 
-        Assert.False(restore.Success);
+        Assert.IsFalse(restore.Success);
+        Assert.IsNotNull(restore.FailureDetail);
         Assert.Contains("AuthenticationFailed", restore.FailureDetail, StringComparison.Ordinal);
-        Assert.Equal(0, destination.Length);
+        Assert.AreEqual(0, destination.Length);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_truncated_locator_is_refused_at_open()
     {
         var (_, keys, store) = await ArchiveAsync();
@@ -91,11 +93,11 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 
         using var reader = new RepositoryReader(Repo, keys, store);
 
-        await Assert.ThrowsAsync<BlobFormatException>(async () =>
+        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
             await reader.LoadBlobsAsync(CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Trailing_garbage_after_the_locator_is_a_damage_finding()
     {
         var (_, keys, store) = await ArchiveAsync();
@@ -107,11 +109,11 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 
         using var reader = new RepositoryReader(Repo, keys, store);
 
-        await Assert.ThrowsAsync<BlobFormatException>(async () =>
+        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
             await reader.LoadBlobsAsync(CancellationToken.None));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_blob_from_a_different_repository_fails_footer_authentication()
     {
         var (_, keys, store) = await ArchiveAsync();
@@ -122,7 +124,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 
         using var reader = new RepositoryReader(otherRepository, keys, store);
 
-        var exception = await Assert.ThrowsAsync<BlobFormatException>(async () =>
+        var exception = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
             await reader.LoadBlobsAsync(CancellationToken.None));
         Assert.Contains("authentication", exception.Message, StringComparison.OrdinalIgnoreCase);
     }

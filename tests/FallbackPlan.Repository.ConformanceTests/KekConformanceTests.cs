@@ -1,7 +1,7 @@
 using System.Text.Json;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
-using Xunit;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 
@@ -12,16 +12,17 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// which <c>Argon2idCrossVerificationTests</c> already covers (specification
 /// 03 §2; FR-ARCH-008).
 /// </summary>
+[TestClass]
 public sealed class KekConformanceTests
 {
-    [Fact]
+    [TestMethod]
     public void The_engine_kek_path_reproduces_the_pinned_vector()
     {
         using var vectors = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "argon2id.json")));
         var vectorCase = vectors.RootElement.GetProperty("cases").EnumerateArray().Single();
 
-        Assert.Equal("mandated_minimum_parameters", vectorCase.GetProperty("name").GetString());
+        Assert.AreEqual("mandated_minimum_parameters", vectorCase.GetProperty("name").GetString());
 
         using var passphrase = Passphrase.Create(vectorCase.GetProperty("password_utf8").GetString()!);
         var parameters = new Argon2Parameters
@@ -32,12 +33,12 @@ public sealed class KekConformanceTests
         };
         var salt = Convert.FromHexString(vectorCase.GetProperty("salt").GetString()!);
 
-        Assert.Equal(32u, vectorCase.GetProperty("tag_length").GetUInt32());
+        Assert.AreEqual(32u, vectorCase.GetProperty("tag_length").GetUInt32());
 
         using var result = KekDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.CreateRepository);
 
-        Assert.False(result.BelowCreationMinimums);
-        Assert.Equal(
+        Assert.IsFalse(result.BelowCreationMinimums);
+        SequenceAssert.AreEqual(
             vectorCase.GetProperty("tag").GetString(),
             Convert.ToHexStringLower(result.Kek.Bytes.ToArray()));
     }
