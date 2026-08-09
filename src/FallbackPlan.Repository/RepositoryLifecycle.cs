@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -205,21 +206,19 @@ public static class RepositoryLifecycle
 
         // Step 1: the descriptor — magic, digest, version, features.
         var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
-            ?? throw new RepositoryOpenException("No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).");
+            ?? throw new RepositoryOpenException(Strings.RepositoryLifecycle_NoRepositoryFormatObjectExists);
 
         var descriptor = RepositoryDescriptorCodec.Parse(descriptorBytes) switch
         {
             DescriptorParseResult.Ok ok => ok.Descriptor,
-            DescriptorParseResult.NotARepository => throw new RepositoryOpenException(
-                "The object at /repository-format is not a FallbackPlan repository descriptor (specification 01 §3.1)."),
-            DescriptorParseResult.IntegrityFailure => throw new RepositoryOpenException(
-                "The descriptor's digest does not verify — accidental corruption (specification 01 §3.1)."),
+            DescriptorParseResult.NotARepository => throw new RepositoryOpenException(Strings.RepositoryLifecycle_ObjectRepositoryFormatNotFallbackPlan),
+            DescriptorParseResult.IntegrityFailure => throw new RepositoryOpenException(Strings.RepositoryLifecycle_DescriptorSDigestDoesNot),
             DescriptorParseResult.UnsupportedRequiredFeatures unsupported => throw new RepositoryOpenException(
                 "The repository requires unimplemented features: " +
                 string.Join(", ", unsupported.Features.Select(feature => $"0x{feature:x4}")) +
                 " — refused, not guessed (specification 01 §3.2)."),
             DescriptorParseResult.FormatViolation violation => throw new RepositoryOpenException(violation.Message),
-            var other => throw new RepositoryOpenException($"Unrecognised descriptor parse outcome {other}."),
+            var other => throw new RepositoryOpenException(Strings.FormatRepositoryLifecycle_UnrecognisedDescriptorParseOutcome(other)),
         };
 
         // Step 2: the KEK, from the descriptor's public parameters. Stored
@@ -280,8 +279,7 @@ public static class RepositoryLifecycle
             throw lastUnwrapFailure;
         }
 
-        throw new RepositoryOpenException(
-            "The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).");
+        throw new RepositoryOpenException(Strings.RepositoryLifecycle_DescriptorPresentButKeysListed);
     }
 
     /// <summary>
@@ -304,11 +302,11 @@ public static class RepositoryLifecycle
         ThrowHelper.ThrowIfNull(passphrase);
 
         var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
-            ?? throw new RepositoryOpenException("No repository descriptor exists at /repository-format.");
+            ?? throw new RepositoryOpenException(Strings.RepositoryLifecycle_NoRepositoryDescriptorExistsRepository);
 
         if (RepositoryDescriptorCodec.Parse(descriptorBytes) is not DescriptorParseResult.Ok { Descriptor: var descriptor })
         {
-            throw new RepositoryOpenException("The descriptor does not verify — nothing is exported from an unverifiable repository.");
+            throw new RepositoryOpenException(Strings.RepositoryLifecycle_DescriptorDoesNotVerify);
         }
 
         using var derivation = KekDerivation.Derive(
@@ -363,8 +361,7 @@ public static class RepositoryLifecycle
 
         if (result.Outcome != PutOutcome.Created)
         {
-            throw new IOException(
-                $"The store refused '{key}' with {result.Outcome} — an existing object at this key means the location already holds a repository (specification 01 §4).");
+            throw new IOException(Strings.FormatRepositoryLifecycle_StoreRefusedWith(key, result.Outcome));
         }
     }
 

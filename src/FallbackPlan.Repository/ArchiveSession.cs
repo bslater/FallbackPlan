@@ -13,6 +13,7 @@ using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Segmentation;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -824,7 +825,7 @@ public sealed class ArchiveSession : IAsyncDisposable
 
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
-                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
+                throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
             }
 
             EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));

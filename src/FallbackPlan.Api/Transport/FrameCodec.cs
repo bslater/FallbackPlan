@@ -1,6 +1,7 @@
 using Bodu;
 using System.Buffers.Binary;
 using System.Text.Json;
+using FallbackPlan.Api.Resources;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -38,8 +39,7 @@ public static class FrameCodec
         var payload = JsonSerializer.SerializeToUtf8Bytes(frame, SerializerOptions);
         if (payload.Length > MaximumFrameBytes)
         {
-            throw new InvalidOperationException(
-                $"A {payload.Length}-byte frame exceeds the {MaximumFrameBytes}-byte limit.");
+            throw new InvalidOperationException(Strings.FormatFrameCodec_ByteFrameExceedsByteLimit(payload.Length, MaximumFrameBytes));
         }
 
         var prefix = new byte[4];
@@ -67,24 +67,23 @@ public static class FrameCodec
         var length = BinaryPrimitives.ReadInt32BigEndian(prefix);
         if (length is <= 0 or > MaximumFrameBytes)
         {
-            throw new InvalidDataException(
-                $"A frame declared {length} bytes, which is outside 1..{MaximumFrameBytes}.");
+            throw new InvalidDataException(Strings.FormatFrameCodec_FrameDeclaredBytesWhichOutside(length, MaximumFrameBytes));
         }
 
         var payload = new byte[length];
         if (!await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false))
         {
-            throw new InvalidDataException("A frame ended before its declared length.");
+            throw new InvalidDataException(Strings.FrameCodec_FrameEndedBeforeDeclaredLength);
         }
 
         try
         {
             return JsonSerializer.Deserialize<WireFrame>(payload, SerializerOptions)
-                ?? throw new InvalidDataException("A frame decoded to nothing.");
+                ?? throw new InvalidDataException(Strings.FrameCodec_FrameDecodedNothing);
         }
         catch (JsonException exception)
         {
-            throw new InvalidDataException($"A frame was not valid JSON: {exception.Message}", exception);
+            throw new InvalidDataException(Strings.FormatFrameCodec_FrameNotValidJSON(exception.Message), exception);
         }
     }
 
@@ -98,7 +97,7 @@ public static class FrameCodec
             if (got == 0)
             {
                 return read != 0
-                    ? throw new InvalidDataException("The peer closed mid-frame.")
+                    ? throw new InvalidDataException(Strings.FrameCodec_PeerClosedMidFrame)
                     : false;
             }
 

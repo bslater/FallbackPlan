@@ -1,0 +1,484 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Repository.Format.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="CanonicalCborReader_ArrayDeclaresItemsLimitHere" xml:space="preserve">
+    <value>Array declares {0} items; the limit here is {1}.</value>
+  </data>
+  <data name="CanonicalCborReader_ByteStringBytesExactlyRequired" xml:space="preserve">
+    <value>Byte string is {0} bytes; exactly {1} required.</value>
+  </data>
+  <data name="CanonicalCborReader_ByteStringDeclaresBytesLimit" xml:space="preserve">
+    <value>Byte string declares {0} bytes; the limit here is {1}.</value>
+  </data>
+  <data name="CanonicalCborReader_CBORInputViolatesDeterministicEncoding" xml:space="preserve">
+    <value>CBOR input violates the deterministic encoding profile.</value>
+  </data>
+  <data name="CanonicalCborReader_CBORIntegerOutRangeRequired" xml:space="preserve">
+    <value>CBOR integer is out of range for the required width.</value>
+  </data>
+  <data name="CanonicalCborReader_CBORItemNotRequiredType" xml:space="preserve">
+    <value>CBOR item is not of the required type.</value>
+  </data>
+  <data name="CanonicalCborReader_CBORTagsForbiddenFormatV" xml:space="preserve">
+    <value>CBOR tags are forbidden; format v1 defines none (specification 00 §4.1 rule 6).</value>
+  </data>
+  <data name="CanonicalCborReader_FloatingPointValuesForbidden" xml:space="preserve">
+    <value>Floating-point values are forbidden (specification 00 §4.1 rule 5).</value>
+  </data>
+  <data name="CanonicalCborReader_IndefiniteLengthArray" xml:space="preserve">
+    <value>Indefinite-length array.</value>
+  </data>
+  <data name="CanonicalCborReader_IndefiniteLengthMap" xml:space="preserve">
+    <value>Indefinite-length map.</value>
+  </data>
+  <data name="CanonicalCborReader_MapKeysMustUnsignedIntegers" xml:space="preserve">
+    <value>Map keys must be unsigned integers (specification 00 §4.2).</value>
+  </data>
+  <data name="CanonicalCborReader_TextStringDeclaresUTFBytes" xml:space="preserve">
+    <value>Text string declares {0} UTF-8 bytes; the limit here is {1}.</value>
+  </data>
+  <data name="CanonicalCborReader_TrailingBytesAfterRootCBOR" xml:space="preserve">
+    <value>Trailing bytes after the root CBOR value.</value>
+  </data>
+  <data name="CanonicalCborReader_UnsupportedCBORItemFormatObject" xml:space="preserve">
+    <value>Unsupported CBOR item '{0}' in a format object.</value>
+  </data>
+  <data name="CanonicalCborReader_ValueDoesNotFitU" xml:space="preserve">
+    <value>Value {0} does not fit a u16.</value>
+  </data>
+  <data name="CanonicalCborReader_ValueDoesNotFitU2" xml:space="preserve">
+    <value>Value {0} does not fit a u8.</value>
+  </data>
+  <data name="ErrorManifestCodec_ErrorManifestCarriesExactlyKey" xml:space="preserve">
+    <value>The error manifest carries exactly key 1 (specification 06 §8).</value>
+  </data>
+  <data name="ErrorManifestCodec_ErrorManifestNotCanonicalCBOR" xml:space="preserve">
+    <value>The error manifest is not canonical CBOR: {0}</value>
+  </data>
+  <data name="ErrorManifestCodec_FailureEntryCarriesUnknownKey" xml:space="preserve">
+    <value>A failure entry carries an unknown key; specification 06 §8.1 assigns keys 1-3 only.</value>
+  </data>
+  <data name="ErrorManifestCodec_FailureEntryOmitsMandatoryKey" xml:space="preserve">
+    <value>A failure entry omits a mandatory key (specification 06 §8.1).</value>
+  </data>
+  <data name="ErrorManifestCodec_FailureReasonUnassigned" xml:space="preserve">
+    <value>Failure reason {0} is unassigned (specification 06 §8.1).</value>
+  </data>
+  <data name="FileVersionManifestCodec_AlternateStreamExactlyThreeElements" xml:space="preserve">
+    <value>An alternate stream is exactly three elements (specification 06 §4.1).</value>
+  </data>
+  <data name="FileVersionManifestCodec_CaptureDiagnosticsPresentOnlyWhen" xml:space="preserve">
+    <value>capture_diagnostics is present only when non-empty (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_CoverageBreaksOffsetNextPiece" xml:space="preserve">
+    <value>Coverage breaks at offset {0}: the next piece starts at {1}. References and sparse extents MUST cover [0, logical_length) exactly, without gaps or overlap (specification 06 §3.2).</value>
+  </data>
+  <data name="FileVersionManifestCodec_EncodedManifestBytesMetadataLimit" xml:space="preserve">
+    <value>The encoded manifest is {0} bytes; the metadata limit is 16 MiB (specification 00 §8).</value>
+  </data>
+  <data name="FileVersionManifestCodec_EntryKindUnassigned" xml:space="preserve">
+    <value>entry_kind {0} is unassigned (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ExtendedAttributeExactlyTwoByte" xml:space="preserve">
+    <value>An extended attribute is exactly two byte strings (specification 06 §4.1).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ManifestCarriesUnknownKeySpecification" xml:space="preserve">
+    <value>The manifest carries an unknown key; specification 06 §4 assigns keys 1-13 only, and a reader MUST reject rather than skip (06 §3.1).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ManifestNotCanonicalCBOR" xml:space="preserve">
+    <value>The manifest is not canonical CBOR: {0}</value>
+  </data>
+  <data name="FileVersionManifestCodec_ManifestOmitsMandatoryKey" xml:space="preserve">
+    <value>The manifest omits a mandatory key (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_MetadataMapCarriesUnknownKey" xml:space="preserve">
+    <value>The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-10 only.</value>
+  </data>
+  <data name="FileVersionManifestCodec_NameNormalisationUnassigned" xml:space="preserve">
+    <value>name_normalisation {0} is unassigned (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ReferencesSparseExtentsCoverBytes" xml:space="preserve">
+    <value>References and sparse extents cover {0} bytes; logical_length declares {1} (specification 06 §3.2).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SegmentReferenceExactlyThreeElements" xml:space="preserve">
+    <value>A segment reference is exactly three elements; got {0} — a fourth element is where physical location would smuggle in (specification 06 §3, §3.1).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SegmentReferenceSOffsetMust" xml:space="preserve">
+    <value>A segment reference's offset must be non-negative and its length positive (specification 06 §3).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SegmentReferencesExceedMaximum" xml:space="preserve">
+    <value>{0} segment references exceed the 1 048 576 maximum — a file this large requires a larger segment size (specification 06 §3.2).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SegmentReferencesMUSTOrderedAscending" xml:space="preserve">
+    <value>Segment references MUST be ordered by ascending logical_offset (specification 06 §3.2).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SparseExtentExactlyTwoElements" xml:space="preserve">
+    <value>A sparse extent is exactly two elements; got {0} (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_SparseExtentSLengthMust" xml:space="preserve">
+    <value>A sparse extent's length must be positive (specification 06 §4).</value>
+  </data>
+  <data name="FileVersionManifestCodec_WholeFileHashExactlyBytes" xml:space="preserve">
+    <value>whole_file_hash is exactly 32 bytes (specification 06 §4).</value>
+  </data>
+  <data name="FooterAad_FooterAADExactlyBytesGot" xml:space="preserve">
+    <value>The footer AAD is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="KeyBundleCodec_KeyBundleBytesLimit" xml:space="preserve">
+    <value>Key bundle is {0} bytes; the limit is {1} (specification 00 §8).</value>
+  </data>
+  <data name="KeyBundleCodec_KeyBundleMissingRequiredField" xml:space="preserve">
+    <value>Key bundle is missing a required field (specification 03 §3.1).</value>
+  </data>
+  <data name="KeyBundle_MasterKeyExactlyBytes" xml:space="preserve">
+    <value>The master key is exactly 32 bytes (specification 03 §3.1).</value>
+  </data>
+  <data name="KeyObjectFraming_KeyObjectBytesDeclaredBundle" xml:space="preserve">
+    <value>Key object is {0} bytes; the declared bundle length implies exactly {1}.</value>
+  </data>
+  <data name="KeyObjectFraming_KeyObjectBytesFramingAlone" xml:space="preserve">
+    <value>Key object is {0} bytes; the framing alone requires {1}.</value>
+  </data>
+  <data name="KeyObjectFraming_NotKeyObjectFBPKKEYSMagic" xml:space="preserve">
+    <value>Not a key object: the FBPKKEYS magic is absent.</value>
+  </data>
+  <data name="KeyObjectFraming_WrapNonceExactlyBytes" xml:space="preserve">
+    <value>The wrap nonce is exactly {0} bytes.</value>
+  </data>
+  <data name="KeyObjectFraming_WrapProfileXNotPermitted" xml:space="preserve">
+    <value>Wrap profile 0x{0:x4} is not permitted: format v1 requires aes-256-gcm-v1 (0x0001) (specification 03 §3).</value>
+  </data>
+  <data name="KeyObjectFraming_WrapTagExactlyBytes" xml:space="preserve">
+    <value>The wrap tag is exactly {0} bytes.</value>
+  </data>
+  <data name="KeyObjectFraming_WrappedBundleBytesLimit" xml:space="preserve">
+    <value>The wrapped bundle is {0} bytes; the limit is {1} (specification 00 §8).</value>
+  </data>
+  <data name="KeyObjectFraming_WrappedBundleDeclaresBytesLimit" xml:space="preserve">
+    <value>Wrapped bundle declares {0} bytes; the limit is {1} (specification 00 §8).</value>
+  </data>
+  <data name="PolicyManifestCodec_BlobWriteProfileCarriesUnknown" xml:space="preserve">
+    <value>blob_write_profile carries an unknown key (ADR-0022 §Decision 6).</value>
+  </data>
+  <data name="PolicyManifestCodec_PolicyManifestCarriesUnknownKey" xml:space="preserve">
+    <value>The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-9 only.</value>
+  </data>
+  <data name="PolicyManifestCodec_PolicyManifestNotCanonicalCBOR" xml:space="preserve">
+    <value>The policy manifest is not canonical CBOR: {0}</value>
+  </data>
+  <data name="PolicyManifestCodec_PolicyManifestOmitsMandatoryKey" xml:space="preserve">
+    <value>The policy manifest omits a mandatory key (specification 06 §7).</value>
+  </data>
+  <data name="PolicyManifestCodec_SegmentationParametersCarriesUnknownKey" xml:space="preserve">
+    <value>segmentation_parameters carries an unknown key (ADR-0022 §Decision 6).</value>
+  </data>
+  <data name="RecordAad_RecordAADExactlyBytesGot" xml:space="preserve">
+    <value>The record AAD is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="RecordHeader_CompressionProfileXUnknownRefused" xml:space="preserve">
+    <value>Compression profile 0x{0:x4} is unknown; refused, not guessed (specification 00 §3).</value>
+  </data>
+  <data name="RecordHeader_EncryptionProfileXUnknownRefused" xml:space="preserve">
+    <value>Encryption profile 0x{0:x4} is unknown; refused, not guessed (specification 00 §3).</value>
+  </data>
+  <data name="RecordHeader_LogicalLengthZero" xml:space="preserve">
+    <value>logical_length is zero — a damage finding: zero-length files produce no records (specification 04 §2.1).</value>
+  </data>
+  <data name="RecordHeader_NotAssignedObjectType" xml:space="preserve">
+    <value>Not an assigned object type (specification 02 §3.1).</value>
+  </data>
+  <data name="RecordHeader_ObjectTypeXNotAssigned" xml:space="preserve">
+    <value>Object type 0x{0:x2} is not assigned — including the reserved 0x07 (specification 02 §3.1).</value>
+  </data>
+  <data name="RecordHeader_OrdinalExceeds" xml:space="preserve">
+    <value>Ordinal {0} exceeds {1} (specification 04 §2.1).</value>
+  </data>
+  <data name="RecordHeader_RecordHeaderBytesGot" xml:space="preserve">
+    <value>A record header is {0} bytes; got {1}.</value>
+  </data>
+  <data name="RecordHeader_RecordHeaderExactlyBytesGot" xml:space="preserve">
+    <value>A record header is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="RecordHeader_RecordMarkerXAbsent" xml:space="preserve">
+    <value>The record marker 0x52 is absent (specification 04 §2.1).</value>
+  </data>
+  <data name="RecordHeader_StoredLengthExceedsMiBRecord" xml:space="preserve">
+    <value>stored_length {0} exceeds the 64 MiB record limit (specification 00 §8) — refused before allocation.</value>
+  </data>
+  <data name="RecordHeader_WithCompressionProfileNoneStored" xml:space="preserve">
+    <value>With compression profile none, stored_length equals logical_length (specification 04 §2.1).</value>
+  </data>
+  <data name="RecordHeader_WithCompressionProfileNoneStored2" xml:space="preserve">
+    <value>With compression profile none, stored_length must equal logical_length (specification 04 §2.1).</value>
+  </data>
+  <data name="RecordNonce_FooterNonceBytesGot" xml:space="preserve">
+    <value>The footer nonce is {0} bytes; got {1}.</value>
+  </data>
+  <data name="RecordNonce_RecordNonceBytesGot" xml:space="preserve">
+    <value>A record nonce is {0} or {1} bytes; got {2}.</value>
+  </data>
+  <data name="RecoveryKitCodec_DestinationCarriesExactlyKeys" xml:space="preserve">
+    <value>A destination carries exactly 4 keys (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_DestinationCarriesUnknownKey" xml:space="preserve">
+    <value>A destination carries an unknown key (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_FramedVersionBodyKeyDisagree" xml:space="preserve">
+    <value>The framed version ({0}) and body key 1 ({1}) disagree.</value>
+  </data>
+  <data name="RecoveryKitCodec_KdfParametersCarriesExactlyKeys" xml:space="preserve">
+    <value>kdf_parameters carries exactly 4 keys (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KdfParametersCarriesUnknownKey" xml:space="preserve">
+    <value>kdf_parameters carries an unknown key (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KdfSaltIssuingDeviceId" xml:space="preserve">
+    <value>kdf salt and issuing device id are 16 bytes each (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey" xml:space="preserve">
+    <value>Key 5 must be a verbatim FBPKKEYS key object (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitBodyCarriesUnknownKey" xml:space="preserve">
+    <value>The kit body carries an unknown key; a v1 kit assigns keys 1-10 only (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitBodyOmitsMandatoryKey" xml:space="preserve">
+    <value>The kit body omits a mandatory key (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitBytesFramingDeclares" xml:space="preserve">
+    <value>The kit is {0} bytes; the framing declares {1}.</value>
+  </data>
+  <data name="RecoveryKitCodec_KitChecksumDoesNotVerify" xml:space="preserve">
+    <value>The kit checksum does not verify — transcription or storage damage (specifications/recovery-kit §3).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitDeclaresByteBodyBound" xml:space="preserve">
+    <value>The kit declares a {0}-byte body; the bound is {1} (specifications/recovery-kit §3).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitFormatVersionNotSupported" xml:space="preserve">
+    <value>Kit format version {0} is not supported by this implementation (v1 only).</value>
+  </data>
+  <data name="RecoveryKitCodec_KitLeastBytesGot" xml:space="preserve">
+    <value>A kit is at least {0} bytes; got {1}.</value>
+  </data>
+  <data name="RecoveryKitCodec_NotFallbackPlanRecoveryKitFBPKRKIT" xml:space="preserve">
+    <value>Not a FallbackPlan recovery kit: the FBPKRKIT magic is absent.</value>
+  </data>
+  <data name="RecoveryKitCodec_RepositoryIdKdfSaltIssuing" xml:space="preserve">
+    <value>repository_id, kdf salt, and issuing device id are 16 bytes each.</value>
+  </data>
+  <data name="RecoveryKitCodec_VKitBodyCarriesExactly" xml:space="preserve">
+    <value>A v1 kit body carries exactly 10 keys; got {0} (specifications/recovery-kit §2).</value>
+  </data>
+  <data name="RecoveryKitText_LineLineCheckDoesNot" xml:space="preserve">
+    <value>Line {0}: the line check does not verify — a transcription error on this line (specifications/recovery-kit §4).</value>
+  </data>
+  <data name="RecoveryKitText_LineTooShortCarryPayload" xml:space="preserve">
+    <value>Line {0}: too short to carry payload and check.</value>
+  </data>
+  <data name="RecoveryKitText_NoPayloadLinesFound" xml:space="preserve">
+    <value>No payload lines found — not a recovery-kit text form.</value>
+  </data>
+  <data name="RecoveryKitText_PayloadDoesNotDecodeAs" xml:space="preserve">
+    <value>The payload does not decode as base32 (specifications/recovery-kit §4).</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_DescriptorBodyBytesLimit" xml:space="preserve">
+    <value>The descriptor body is {0} bytes; the limit is {1} (specification 01 §3.1).</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_KDFSaltExactlyBytes" xml:space="preserve">
+    <value>The KDF salt is exactly 16 bytes (specification 01 §3.3).</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_KdfParametersCarriesKeysSpecification" xml:space="preserve">
+    <value>kdf_parameters carries {0} keys; specification 01 §3.3 defines exactly 5.</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_KdfParametersCarriesUnknownKey" xml:space="preserve">
+    <value>kdf_parameters carries an unknown key (specification 01 §3.3).</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_KdfParametersOmitsSalt" xml:space="preserve">
+    <value>kdf_parameters omits the salt (specification 01 §3.3).</value>
+  </data>
+  <data name="RepositoryDescriptorCodec_KdfProfileXNotArgon" xml:space="preserve">
+    <value>kdf_profile 0x{0:x4} is not Argon2id (0x0001); refused, not guessed (specification 00 §3).</value>
+  </data>
+  <data name="SnapshotManifestCodec_CaptureStatusUnassigned" xml:space="preserve">
+    <value>capture_status {0} is unassigned (specification 06 §6).</value>
+  </data>
+  <data name="SnapshotManifestCodec_ConsistencyMethodUnassigned" xml:space="preserve">
+    <value>consistency_method {0} is unassigned (specification 06 §6).</value>
+  </data>
+  <data name="SnapshotManifestCodec_SnapshotIdDeviceIdBackup" xml:space="preserve">
+    <value>snapshot_id, device_id, and backup_set_id are 16 bytes each (specification 06 §6).</value>
+  </data>
+  <data name="SnapshotManifestCodec_SnapshotManifestCarriesUnknownKey" xml:space="preserve">
+    <value>The snapshot manifest carries an unknown key; specification 06 §6 assigns keys 1-17 only.</value>
+  </data>
+  <data name="SnapshotManifestCodec_SnapshotManifestNotCanonicalCBOR" xml:space="preserve">
+    <value>The snapshot manifest is not canonical CBOR: {0}</value>
+  </data>
+  <data name="SnapshotManifestCodec_SnapshotManifestOmitsMandatoryKey" xml:space="preserve">
+    <value>The snapshot manifest omits a mandatory key (specification 06 §6).</value>
+  </data>
+  <data name="SnapshotManifestCodec_SnapshotSignatureExactlyBytes" xml:space="preserve">
+    <value>A snapshot signature is exactly 64 bytes (specification 06 §6).</value>
+  </data>
+  <data name="SnapshotManifestCodec_SourceFilesystemCarriesUnknownKey" xml:space="preserve">
+    <value>source_filesystem carries an unknown key (ADR-0022 §Decision 6; ADR-0026 §Decision 7).</value>
+  </data>
+  <data name="SnapshotManifestCodec_SourceFilesystemOmitsMandatoryKey" xml:space="preserve">
+    <value>source_filesystem omits a mandatory key (ADR-0022 §Decision 6).</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SnapshotIdentifierExactlyBytes" xml:space="preserve">
+    <value>A snapshot identifier is exactly 16 bytes.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintCarriesCapture" xml:space="preserve">
+    <value>A source-identity hint carries the capture time at key 5.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintCarriesExactly" xml:space="preserve">
+    <value>A source-identity hint carries exactly keys 1-5 (specification 06 §11).</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintCarriesObject" xml:space="preserve">
+    <value>A source-identity hint carries the object identifier at key 4.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintCarriesSnapshot" xml:space="preserve">
+    <value>A source-identity hint carries the snapshot identifier at key 3.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintCarriesSource" xml:space="preserve">
+    <value>A source-identity hint carries the source key at key 2.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintNotCanonical" xml:space="preserve">
+    <value>The source-identity hint is not canonical CBOR: {0}</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentityHintOpensWith" xml:space="preserve">
+    <value>A source-identity hint opens with key 1, the schema version.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceIdentitySchemaUnknownReader" xml:space="preserve">
+    <value>Source-identity schema {0} is unknown; this reader implements {1}.</value>
+  </data>
+  <data name="SourceIdentityHintCodec_SourceKeyExactlyBytes" xml:space="preserve">
+    <value>A source key is exactly {0} bytes.</value>
+  </data>
+  <data name="StandaloneRecordFraming_BlobSaltExactlyBytes" xml:space="preserve">
+    <value>The blob salt is exactly {0} bytes.</value>
+  </data>
+  <data name="StandaloneRecordFraming_DestinationMustHoldBytes" xml:space="preserve">
+    <value>The destination must hold {0} bytes.</value>
+  </data>
+  <data name="StandaloneRecordFraming_NotFallbackPlanStandaloneMetadataRecord" xml:space="preserve">
+    <value>Not a FallbackPlan standalone metadata record — the FBPKSREC magic is absent.</value>
+  </data>
+  <data name="StandaloneRecordFraming_ObjectBytesHeaderDeclares" xml:space="preserve">
+    <value>The object is {0} bytes; the header declares {1} — data beyond the sealed layout is a damage finding.</value>
+  </data>
+  <data name="StandaloneRecordFraming_StandaloneRecordLeastBytesGot" xml:space="preserve">
+    <value>A standalone record is at least {0} bytes; got {1} (ADR-0022).</value>
+  </data>
+  <data name="StandaloneRecordFraming_StandaloneRecordSOrdinalExactly" xml:space="preserve">
+    <value>A standalone record's ordinal is exactly 0; got {0} (ADR-0022 §Decision 1).</value>
+  </data>
+  <data name="StandaloneRecordFraming_StoredLengthExceedsMiBMetadata" xml:space="preserve">
+    <value>stored_length {0} exceeds the 16 MiB metadata bound (specification 00 §8) — refused before allocation.</value>
+  </data>
+  <data name="TreeChain_ContinuationsMUSTNOTCarryMetadata" xml:space="preserve">
+    <value>Continuations MUST NOT carry metadata, name, or name_normalisation (specification 06 §9).</value>
+  </data>
+  <data name="TreeChain_EachManifestExceptLastCarries" xml:space="preserve">
+    <value>Each manifest except the last carries continuation; the last omits it (specification 06 §9).</value>
+  </data>
+  <data name="TreeChain_EveryEntryManifestMUSTSort" xml:space="preserve">
+    <value>Every entry in a manifest MUST sort strictly after every entry in its predecessor (specification 06 §9).</value>
+  </data>
+  <data name="TreeChain_FirstManifestChainCarriesName" xml:space="preserve">
+    <value>The first manifest of a chain carries name, name_normalisation, and metadata (specification 06 §9).</value>
+  </data>
+  <data name="TreeChain_TreeChainLeastOneManifest" xml:space="preserve">
+    <value>A tree chain has at least one manifest (specification 06 §9).</value>
+  </data>
+  <data name="TreeManifestCodec_EncodedTreeManifestBytesDirectory" xml:space="preserve">
+    <value>The encoded tree manifest is {0} bytes; a directory this large MUST shard (specification 06 §9).</value>
+  </data>
+  <data name="TreeManifestCodec_MetadataNameNameNormalisationRide" xml:space="preserve">
+    <value>metadata, name, and name_normalisation ride together on the first manifest of a chain and are absent from continuations (specification 06 §9).</value>
+  </data>
+  <data name="TreeManifestCodec_TreeEntriesMUSTSortedRaw" xml:space="preserve">
+    <value>Tree entries MUST be sorted by the raw bytes of name, ascending (specification 06 §5).</value>
+  </data>
+  <data name="TreeManifestCodec_TreeEntryExactlyThreeElements" xml:space="preserve">
+    <value>A tree entry is exactly three elements; got {0} (specification 06 §5).</value>
+  </data>
+  <data name="TreeManifestCodec_TreeMUSTNOTContainTwo" xml:space="preserve">
+    <value>A tree MUST NOT contain two entries with the same name bytes (specification 06 §5).</value>
+  </data>
+  <data name="TreeManifestCodec_TreeManifestCarriesUnknownKey" xml:space="preserve">
+    <value>The tree manifest carries an unknown key; specification 06 §5 assigns keys 1-5 only.</value>
+  </data>
+  <data name="TreeManifestCodec_TreeManifestNotCanonicalCBOR" xml:space="preserve">
+    <value>The tree manifest is not canonical CBOR: {0}</value>
+  </data>
+  <data name="TreeManifestCodec_TreeManifestOmitsEntries" xml:space="preserve">
+    <value>The tree manifest omits its entries (specification 06 §5).</value>
+  </data>
+  <data name="ZstdSegmentCodec_DestinationMustHoldLeastPlaintext" xml:space="preserve">
+    <value>The destination must hold at least the plaintext length — a stored-compressed frame is never larger.</value>
+  </data>
+  <data name="ZstdSegmentCodec_MaximumSegmentSizeUnset" xml:space="preserve">
+    <value>The maximum segment size is unset.</value>
+  </data>
+  <data name="ZstdSegmentDecompressor_FrameProducedBytesRecordS" xml:space="preserve">
+    <value>The frame produced {0} bytes; the record's logical length is {1} (specification 10 §4.1).</value>
+  </data>
+  <data name="ZstdSegmentDecompressor_StoredBytesNotOneStandard" xml:space="preserve">
+    <value>Stored bytes are not one standard Zstandard frame producing exactly the record's logical length (specification 10 §4.1).</value>
+  </data>
+</root>

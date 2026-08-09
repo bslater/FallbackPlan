@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -32,12 +33,12 @@ public sealed class BlobEnvelope
     {
         if (!Enum.IsDefined(blobClass))
         {
-            throw new ArgumentException($"Blob class 0x{(ushort)blobClass:x4} is not defined (specification 05 §2).", nameof(blobClass));
+            throw new ArgumentException(Strings.FormatBlobEnvelope_BlobClassXNotDefined((ushort)blobClass), nameof(blobClass));
         }
 
         if (blobSalt.Length != 32)
         {
-            throw new ArgumentException("The blob salt is exactly 32 bytes (specification 05 §2).", nameof(blobSalt));
+            throw new ArgumentException(Strings.BlobEnvelope_BlobSaltExactlyBytes, nameof(blobSalt));
         }
 
         FormatVersion = formatVersion;
@@ -79,7 +80,7 @@ public sealed class BlobEnvelope
     {
         if (destination.Length != Length)
         {
-            throw new ArgumentException($"A blob envelope is exactly {Length} bytes; got {destination.Length}.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobEnvelope_BlobEnvelopeExactlyBytesGot(Length, destination.Length), nameof(destination));
         }
 
         Magic.CopyTo(destination);
@@ -102,18 +103,18 @@ public sealed class BlobEnvelope
     {
         if (data.Length < Length)
         {
-            throw new BlobFormatException($"A blob envelope is {Length} bytes; got {data.Length}.");
+            throw new BlobFormatException(Strings.FormatBlobEnvelope_BlobEnvelopeBytesGot(Length, data.Length));
         }
 
         if (!data[..8].SequenceEqual(Magic))
         {
-            throw new BlobFormatException("Not a FallbackPlan blob: the FBPKBLOB magic is absent.");
+            throw new BlobFormatException(Strings.BlobEnvelope_NotFallbackPlanBlobFBPKBLOBMagic);
         }
 
         var classValue = BinaryPrimitives.ReadUInt16BigEndian(data[10..]);
         if (!Enum.IsDefined((BlobClass)classValue))
         {
-            throw new BlobFormatException($"Blob class 0x{classValue:x4} is not defined (specification 05 §2).");
+            throw new BlobFormatException(Strings.FormatBlobEnvelope_BlobClassXNotDefined(classValue));
         }
 
         return new BlobEnvelope(

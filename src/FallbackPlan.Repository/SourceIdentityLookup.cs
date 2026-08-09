@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -182,8 +183,7 @@ internal readonly record struct SourceKey(ulong High, ulong Low)
             ? new SourceKey(
                 System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(value),
                 System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(value[8..]))
-            : throw new ArgumentException(
-                $"A source key is exactly {SourceIdentityHint.SourceKeyLength} bytes.", nameof(value));
+            : throw new ArgumentException(Strings.Formatstruct_SourceKeyExactlyBytes(SourceIdentityHint.SourceKeyLength), nameof(value));
 }
 
 /// <summary>

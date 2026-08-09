@@ -2,6 +2,7 @@ using Bodu;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -174,15 +175,13 @@ public static class SessionBinding
 
         if (contribution.TlsPublicKeyHash.Length != TlsPublicKeyHashLength)
         {
-            throw new ArgumentException(
-                $"A channel binding is {TlsPublicKeyHashLength} bytes; got {contribution.TlsPublicKeyHash.Length}.",
+            throw new ArgumentException(Strings.FormatSessionBinding_ChannelBindingBytesGot(TlsPublicKeyHashLength, contribution.TlsPublicKeyHash.Length),
                 parameter);
         }
 
         if (contribution.Nonce.Length != NonceLength)
         {
-            throw new ArgumentException(
-                $"A binding nonce is {NonceLength} bytes; got {contribution.Nonce.Length}.", parameter);
+            throw new ArgumentException(Strings.FormatSessionBinding_BindingNonceBytesGot(NonceLength, contribution.Nonce.Length), parameter);
         }
     }
 }

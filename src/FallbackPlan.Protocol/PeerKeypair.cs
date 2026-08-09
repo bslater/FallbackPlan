@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Bodu.Security.Cryptography;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -66,8 +67,7 @@ public sealed class PeerKeypair : IDisposable
     {
         if (privateKey.Length != PrivateKeyLength)
         {
-            throw new ArgumentException(
-                $"A peer private key is {PrivateKeyLength} bytes; got {privateKey.Length}.", nameof(privateKey));
+            throw new ArgumentException(Strings.FormatPeerKeypair_PeerPrivateKeyBytesGot(PrivateKeyLength, privateKey.Length), nameof(privateKey));
         }
 
         var key = Ed25519.Create();

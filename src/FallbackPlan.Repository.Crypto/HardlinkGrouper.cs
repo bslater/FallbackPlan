@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -24,7 +25,7 @@ public sealed class HardlinkGrouper : IDisposable
     {
         if (contentIdKey.Length != 32)
         {
-            throw new ArgumentException("The content-ID key is exactly 32 bytes.", nameof(contentIdKey));
+            throw new ArgumentException(Strings.HardlinkGrouper_ContentIDKeyExactlyBytes, nameof(contentIdKey));
         }
 
         _contentIdKey = contentIdKey.ToArray();

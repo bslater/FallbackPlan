@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Repository.Index.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="CheckpointCodec_CheckpointCarriesEntryShardBut" xml:space="preserve">
+    <value>The checkpoint carries an entry in shard {0} but does not enumerate it in shard_set (specification 07 §8).</value>
+  </data>
+  <data name="CheckpointCodec_CheckpointCarriesUnknownKeySpecification" xml:space="preserve">
+    <value>The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-9 only.</value>
+  </data>
+  <data name="CheckpointCodec_CheckpointNotCanonicalCBOR" xml:space="preserve">
+    <value>The checkpoint is not canonical CBOR: {0}</value>
+  </data>
+  <data name="CheckpointCodec_CheckpointOmitsMandatoryKey" xml:space="preserve">
+    <value>The checkpoint omits a mandatory key (specification 07 §5).</value>
+  </data>
+  <data name="CheckpointCodec_CheckpointSignatureExactlyBytes" xml:space="preserve">
+    <value>A checkpoint signature is exactly 64 bytes (specification 07 §5).</value>
+  </data>
+  <data name="CheckpointCodec_ShardSetShardHashesPositionally" xml:space="preserve">
+    <value>shard_set and shard_hashes are positionally parallel and must agree in length (specification 07 §5).</value>
+  </data>
+  <data name="CheckpointCodec_WriterWatermarkExactlyWriterId" xml:space="preserve">
+    <value>A writer watermark is exactly [writer_id, highest_sequence] (specification 07 §5 key 3).</value>
+  </data>
+  <data name="IndexDeltaCodec_CoveredBlobDigestByteSHA" xml:space="preserve">
+    <value>A covered blob digest is a 32-byte SHA-256 (specification 07 §2.2).</value>
+  </data>
+  <data name="IndexDeltaCodec_CoveredBlobDigestsElementsAgainst" xml:space="preserve">
+    <value>covered_blob_digests has {0} elements against {1} covered blobs; the arrays are parallel or absent (specification 07 §2.2).</value>
+  </data>
+  <data name="IndexDeltaCodec_DeltaCarriesUnknownKeySpecification" xml:space="preserve">
+    <value>The delta carries an unknown key; specification 07 §2 assigns keys 1-10 only.</value>
+  </data>
+  <data name="IndexDeltaCodec_DeltaDeclaresShardButCarries" xml:space="preserve">
+    <value>The delta declares shard {0} but carries an entry in shard {1} (ADR-0022 §Decision 4).</value>
+  </data>
+  <data name="IndexDeltaCodec_DeltaNotCanonicalCBOR" xml:space="preserve">
+    <value>The delta is not canonical CBOR: {0}</value>
+  </data>
+  <data name="IndexDeltaCodec_DeltaOmitsMandatoryKey" xml:space="preserve">
+    <value>The delta omits a mandatory key (specification 07 §2).</value>
+  </data>
+  <data name="IndexDeltaCodec_DeltaSignatureExactlyBytes" xml:space="preserve">
+    <value>A delta signature is exactly 64 bytes (specification 07 §2).</value>
+  </data>
+  <data name="IndexDeltaCodec_EntryTypeUnassigned" xml:space="preserve">
+    <value>entry_type {0} is unassigned (specification 07 §2.1).</value>
+  </data>
+  <data name="IndexDeltaCodec_IndexEntryExactlySixElements" xml:space="preserve">
+    <value>An index entry is exactly six elements; got {0} (specification 07 §2.1).</value>
+  </data>
+  <data name="IndexDeltaCodec_VoidDeltaWellFormedSigned" xml:space="preserve">
+    <value>A void delta is well-formed and signed with empty entries and empty covered_blob_ids (specification 07 §4).</value>
+  </data>
+  <data name="IndexDeltaCodec_VoidPresentTrueOnlyVoid" xml:space="preserve">
+    <value>is_void is present and true only for a void delta (specification 07 §2 key 8).</value>
+  </data>
+  <data name="IndexPublisher_GenerationExceedsKeyHierarchyS" xml:space="preserve">
+    <value>Generation {0} exceeds the key hierarchy's u32 generation space (specification 03 §4).</value>
+  </data>
+  <data name="IndexPublisher_StoreRefusedIndexObjectWith" xml:space="preserve">
+    <value>The store refused index object '{0}' with a failed precondition.</value>
+  </data>
+  <data name="JournalPublisher_StoreRefusedJournalRecordWith" xml:space="preserve">
+    <value>The store refused journal record {0} with a failed precondition.</value>
+  </data>
+  <data name="JournalRecordCodec_AuditPayloadCarriesUnknownKey" xml:space="preserve">
+    <value>The audit payload carries an unknown key (specification 08 §6).</value>
+  </data>
+  <data name="JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned" xml:space="preserve">
+    <value>The audit payload is incomplete or carries an unassigned action (specification 08 §6; ADR-0022 §Decision 6).</value>
+  </data>
+  <data name="JournalRecordCodec_BackupSetIdExactlyBytes" xml:space="preserve">
+    <value>backup_set_id is exactly 16 bytes (specification 08 §3).</value>
+  </data>
+  <data name="JournalRecordCodec_IntentExtensionPayloadCarriesUnknown" xml:space="preserve">
+    <value>The intent-extension payload carries an unknown key (specification 08 §4).</value>
+  </data>
+  <data name="JournalRecordCodec_IntentExtensionPayloadIncomplete" xml:space="preserve">
+    <value>The intent-extension payload is incomplete (specification 08 §4).</value>
+  </data>
+  <data name="JournalRecordCodec_IntentRetirementPayloadCarriesUnknown" xml:space="preserve">
+    <value>The intent-retirement payload carries an unknown key (specification 08 §5).</value>
+  </data>
+  <data name="JournalRecordCodec_IntentRetirementPayloadIncompleteCarries" xml:space="preserve">
+    <value>The intent-retirement payload is incomplete or carries an unassigned outcome (specification 08 §5).</value>
+  </data>
+  <data name="JournalRecordCodec_JournalRecordCarriesUnknownKey" xml:space="preserve">
+    <value>The journal record carries an unknown key; specification 08 §2 assigns keys 1-6 only.</value>
+  </data>
+  <data name="JournalRecordCodec_JournalRecordNotCanonicalCBOR" xml:space="preserve">
+    <value>The journal record is not canonical CBOR: {0}</value>
+  </data>
+  <data name="JournalRecordCodec_JournalRecordOmitsMandatoryKey" xml:space="preserve">
+    <value>The journal record omits a mandatory key (specification 08 §2).</value>
+  </data>
+  <data name="JournalRecordCodec_JournalSignatureExactlyBytes" xml:space="preserve">
+    <value>A journal signature is exactly 64 bytes (specification 08 §2).</value>
+  </data>
+  <data name="JournalRecordCodec_PayloadPrecedesRecordKind" xml:space="preserve">
+    <value>The payload precedes record_kind — not canonical (00 §4.1).</value>
+  </data>
+  <data name="JournalRecordCodec_RecordKindDoesNotMatch" xml:space="preserve">
+    <value>record_kind {0} does not match its payload shape (specification 08 §2).</value>
+  </data>
+  <data name="JournalRecordCodec_RecordKindUnassigned" xml:space="preserve">
+    <value>record_kind {0} is unassigned (specification 08 §2).</value>
+  </data>
+  <data name="JournalRecordCodec_UnknownJournalPayloadShape" xml:space="preserve">
+    <value>Unknown journal payload shape.</value>
+  </data>
+  <data name="JournalRecordCodec_UnknownRecordKind" xml:space="preserve">
+    <value>Unknown record kind.</value>
+  </data>
+  <data name="JournalRecordCodec_WriteIntentPayloadCarriesUnknown" xml:space="preserve">
+    <value>The write-intent payload carries an unknown key (specification 08 §3).</value>
+  </data>
+  <data name="JournalRecordCodec_WriteIntentPayloadIncompleteCarries" xml:space="preserve">
+    <value>The write-intent payload is incomplete or carries an unassigned purpose (specification 08 §3).</value>
+  </data>
+</root>

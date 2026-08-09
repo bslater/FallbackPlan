@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Keys;
 
@@ -17,7 +18,7 @@ public sealed class KeyBundle : IDisposable
     {
         if (masterKey.Length != 32)
         {
-            throw new ArgumentException("The master key is exactly 32 bytes (specification 03 §3.1).", nameof(masterKey));
+            throw new ArgumentException(Strings.KeyBundle_MasterKeyExactlyBytes, nameof(masterKey));
         }
 
         _masterKey = masterKey.ToArray();

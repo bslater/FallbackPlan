@@ -2,6 +2,7 @@ using Bodu;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
 
@@ -98,13 +99,12 @@ public sealed class LocalState
             try
             {
                 var model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path), SerializerOptions)
-                    ?? throw new ClientStateException($"'{path}' holds no state object.");
+                    ?? throw new ClientStateException(Strings.FormatModel_HoldsNoStateObject(path));
                 return new LocalState(path, model);
             }
             catch (JsonException exception)
             {
-                throw new ClientStateException(
-                    $"'{path}' is not a valid state file: {exception.Message} — durable local state is never guessed.",
+                throw new ClientStateException(Strings.FormatModel_NotValidStateFile(path, exception.Message),
                     exception);
             }
         }
@@ -138,7 +138,7 @@ public sealed class LocalState
         return File.Exists(legacy)
             ? Convert.FromHexString(File.ReadAllText(legacy).Trim()) is { Length: 16 } bytes
                 ? Convert.ToHexString(bytes).ToLowerInvariant()
-                : throw new ClientStateException($"Legacy identity file '{legacy}' is not 16 bytes of hex.")
+                : throw new ClientStateException(Strings.FormatModel_LegacyIdentityFileNotBytes(legacy))
             : Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
     }
 }

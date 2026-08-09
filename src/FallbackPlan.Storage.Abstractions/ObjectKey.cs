@@ -1,3 +1,5 @@
+using FallbackPlan.Storage.Abstractions.Resources;
+
 namespace FallbackPlan.Storage.Abstractions;
 
 /// <summary>
@@ -32,7 +34,7 @@ public readonly struct ObjectKey : IEquatable<ObjectKey>, IComparable<ObjectKey>
     {
         if (!TryParse(value, out var key))
         {
-            throw new ArgumentException($"'{value}' is not a valid object key.", nameof(value));
+            throw new ArgumentException(Strings.FormatObjectKey_NotValidObjectKey(value), nameof(value));
         }
 
         return key;

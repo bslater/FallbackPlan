@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Bodu.Security.Cryptography;
 using FallbackPlan.Domain;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -55,8 +56,7 @@ public sealed record PeerIdentity
     {
         if (publicKey.Length != KeyLength)
         {
-            throw new ArgumentException(
-                $"A peer identity is {KeyLength} bytes; got {publicKey.Length}.", nameof(publicKey));
+            throw new ArgumentException(Strings.FormatPeerIdentity_PeerIdentityBytesGot(KeyLength, publicKey.Length), nameof(publicKey));
         }
 
         return new PeerIdentity(publicKey.ToArray());

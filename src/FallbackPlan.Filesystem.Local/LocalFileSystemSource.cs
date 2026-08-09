@@ -5,6 +5,7 @@ using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
 using Microsoft.Win32.SafeHandles;
+using FallbackPlan.Filesystem.Local.Resources;
 
 namespace FallbackPlan.Filesystem.Local;
 
@@ -103,7 +104,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
         if (!(root is not null && root.TryStatSelf(out var rootStat)) &&
             (!TryStat(full, out rootStat) || !rootStat.IsDirectory))
         {
-            throw new DirectoryNotFoundException($"'{rootPath}' is not a scannable directory.");
+            throw new DirectoryNotFoundException(Strings.FormatLocalFileSystemSource_NotScannableDirectory(rootPath));
         }
 
         var rootEntry = BuildEntry(full, relativePath: "", "/"u8.ToArray(), rootStat, options, root);
@@ -674,7 +675,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
         if (!OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException("Alternate data streams exist on Windows only.");
+            throw new PlatformNotSupportedException(Strings.LocalFileSystemSource_AlternateDataStreamsExistWindows);
         }
 
         return File.Open(entry.FullPath + ":" + streamName, new FileStreamOptions

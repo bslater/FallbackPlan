@@ -1,3 +1,5 @@
+using FallbackPlan.Storage.Abstractions.Resources;
+
 namespace FallbackPlan.Storage.Abstractions;
 
 /// <summary>
@@ -23,7 +25,7 @@ public readonly struct ObjectPrefix : IEquatable<ObjectPrefix>
     {
         if (!TryParse(value, out var prefix))
         {
-            throw new ArgumentException($"'{value}' cannot prefix any valid object key.", nameof(value));
+            throw new ArgumentException(Strings.FormatObjectPrefix_CannotPrefixAnyValidObject(value), nameof(value));
         }
 
         return prefix;

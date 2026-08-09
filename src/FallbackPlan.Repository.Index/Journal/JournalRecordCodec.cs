@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index.Journal;
 
@@ -32,7 +33,7 @@ public static class JournalRecordCodec
 
         if (signature.Length != 64)
         {
-            throw new IndexFormatException("A journal signature is exactly 64 bytes (specification 08 §2).");
+            throw new IndexFormatException(Strings.JournalRecordCodec_JournalSignatureExactlyBytes);
         }
 
         var writer = new CanonicalCborWriter();
@@ -50,7 +51,7 @@ public static class JournalRecordCodec
         }
         catch (CborFormatException exception)
         {
-            throw new IndexFormatException($"The journal record is not canonical CBOR: {exception.Message}", exception);
+            throw new IndexFormatException(Strings.FormatJournalRecordCodec_JournalRecordNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -95,12 +96,12 @@ public static class JournalRecordCodec
 
         if (!matches)
         {
-            throw new IndexFormatException($"record_kind {record.Kind} does not match its payload shape (specification 08 §2).");
+            throw new IndexFormatException(Strings.FormatJournalRecordCodec_RecordKindDoesNotMatch(record.Kind));
         }
 
         if (record.Payload is JournalPayload.WriteIntent intent && intent.BackupSetId.Length != 16)
         {
-            throw new IndexFormatException("backup_set_id is exactly 16 bytes (specification 08 §3).");
+            throw new IndexFormatException(Strings.JournalRecordCodec_BackupSetIdExactlyBytes);
         }
     }
 
@@ -193,7 +194,7 @@ public static class JournalRecordCodec
                 break;
 
             default:
-                throw new IndexFormatException("Unknown journal payload shape.");
+                throw new IndexFormatException(Strings.JournalRecordCodec_UnknownJournalPayloadShape);
         }
     }
 
@@ -216,7 +217,7 @@ public static class JournalRecordCodec
                     var kindValue = reader.ReadUInt16();
                     if (kindValue is < 1 or > 4)
                     {
-                        throw new IndexFormatException($"record_kind {kindValue} is unassigned (specification 08 §2).");
+                        throw new IndexFormatException(Strings.FormatJournalRecordCodec_RecordKindUnassigned(kindValue));
                     }
 
                     kind = (JournalRecordKind)kindValue;
@@ -235,7 +236,7 @@ public static class JournalRecordCodec
                     // ordering guarantees was already read.
                     if (kind is null)
                     {
-                        throw new IndexFormatException("The payload precedes record_kind — not canonical (00 §4.1).");
+                        throw new IndexFormatException(Strings.JournalRecordCodec_PayloadPrecedesRecordKind);
                     }
 
                     payload = ReadPayload(reader, kind.Value);
@@ -244,8 +245,7 @@ public static class JournalRecordCodec
                     signature = reader.ReadFixedByteString(64);
                     break;
                 default:
-                    throw new IndexFormatException(
-                        "The journal record carries an unknown key; specification 08 §2 assigns keys 1-6 only.");
+                    throw new IndexFormatException(Strings.JournalRecordCodec_JournalRecordCarriesUnknownKey);
             }
         }
 
@@ -254,7 +254,7 @@ public static class JournalRecordCodec
 
         if (kind is null || writerId is null || sequence is null || issuedAt is null || payload is null || signature is null)
         {
-            throw new IndexFormatException("The journal record omits a mandatory key (specification 08 §2).");
+            throw new IndexFormatException(Strings.JournalRecordCodec_JournalRecordOmitsMandatoryKey);
         }
 
         var record = new JournalRecord(kind.Value, writerId.Value, sequence.Value, issuedAt.Value, payload);
@@ -302,7 +302,7 @@ public static class JournalRecordCodec
                             purpose = reader.ReadUInt16();
                             break;
                         default:
-                            throw new IndexFormatException("The write-intent payload carries an unknown key (specification 08 §3).");
+                            throw new IndexFormatException(Strings.JournalRecordCodec_WriteIntentPayloadCarriesUnknown);
                     }
                 }
 
@@ -310,7 +310,7 @@ public static class JournalRecordCodec
 
                 if (backupSet is null || duration is null || expiry is null || purpose is null or < 1 or > 4)
                 {
-                    throw new IndexFormatException("The write-intent payload is incomplete or carries an unassigned purpose (specification 08 §3).");
+                    throw new IndexFormatException(Strings.JournalRecordCodec_WriteIntentPayloadIncompleteCarries);
                 }
 
                 return new JournalPayload.WriteIntent(backupSet.Value, intended, duration.Value, expiry.Value, (IntentPurpose)purpose.Value);
@@ -341,7 +341,7 @@ public static class JournalRecordCodec
                             duration = reader.ReadUnsignedInteger();
                             break;
                         default:
-                            throw new IndexFormatException("The intent-extension payload carries an unknown key (specification 08 §4).");
+                            throw new IndexFormatException(Strings.JournalRecordCodec_IntentExtensionPayloadCarriesUnknown);
                     }
                 }
 
@@ -349,7 +349,7 @@ public static class JournalRecordCodec
 
                 if (extends is null || duration is null)
                 {
-                    throw new IndexFormatException("The intent-extension payload is incomplete (specification 08 §4).");
+                    throw new IndexFormatException(Strings.JournalRecordCodec_IntentExtensionPayloadIncomplete);
                 }
 
                 return new JournalPayload.IntentExtension(extends.Value, additional, duration.Value);
@@ -371,7 +371,7 @@ public static class JournalRecordCodec
                             outcome = reader.ReadUInt16();
                             break;
                         default:
-                            throw new IndexFormatException("The intent-retirement payload carries an unknown key (specification 08 §5).");
+                            throw new IndexFormatException(Strings.JournalRecordCodec_IntentRetirementPayloadCarriesUnknown);
                     }
                 }
 
@@ -379,7 +379,7 @@ public static class JournalRecordCodec
 
                 if (retires is null || outcome is null or < 1 or > 3)
                 {
-                    throw new IndexFormatException("The intent-retirement payload is incomplete or carries an unassigned outcome (specification 08 §5).");
+                    throw new IndexFormatException(Strings.JournalRecordCodec_IntentRetirementPayloadIncompleteCarries);
                 }
 
                 return new JournalPayload.IntentRetirement(retires.Value, (IntentOutcome)outcome.Value);
@@ -415,7 +415,7 @@ public static class JournalRecordCodec
                             affected = reader.ReadUnsignedInteger();
                             break;
                         default:
-                            throw new IndexFormatException("The audit payload carries an unknown key (specification 08 §6).");
+                            throw new IndexFormatException(Strings.JournalRecordCodec_AuditPayloadCarriesUnknownKey);
                     }
                 }
 
@@ -423,14 +423,14 @@ public static class JournalRecordCodec
 
                 if (action is null or < 1 or > 4 || actor is null || affected is null)
                 {
-                    throw new IndexFormatException("The audit payload is incomplete or carries an unassigned action (specification 08 §6; ADR-0022 §Decision 6).");
+                    throw new IndexFormatException(Strings.JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned);
                 }
 
                 return new JournalPayload.Audit((AuditAction)action.Value, actor, affected.Value);
             }
 
             default:
-                throw new IndexFormatException("Unknown record kind.");
+                throw new IndexFormatException(Strings.JournalRecordCodec_UnknownRecordKind);
         }
     }
 }

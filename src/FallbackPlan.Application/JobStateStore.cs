@@ -2,6 +2,7 @@ using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
 
@@ -143,7 +144,7 @@ public sealed class JobStateStore
             var index = _jobs.FindIndex(job => job.Id == jobId);
             if (index < 0)
             {
-                throw new ClientStateException($"No job '{jobId}' exists in the journal.");
+                throw new ClientStateException(Strings.FormatJobStateStore_NoJobExistsJournal(jobId));
             }
 
             var updated = _jobs[index] with

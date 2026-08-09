@@ -1,6 +1,7 @@
 using Bodu;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local.Resources;
 
 namespace FallbackPlan.Storage.Local;
 
@@ -322,7 +323,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     {
         if (key.Value.Length == 0)
         {
-            throw new ArgumentException("The object key is empty.", nameof(key));
+            throw new ArgumentException(Strings.LocalFileSystemObjectStore_ObjectKeyEmpty, nameof(key));
         }
 
         var path = Path.GetFullPath(Path.Combine(
@@ -331,7 +332,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 
         if (!path.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
-            throw new IOException($"Key '{key}' resolves outside the store root.");
+            throw new IOException(Strings.FormatLocalFileSystemObjectStore_KeyResolvesOutsideStoreRoot(key));
         }
 
         // Walk every ancestor up to the root, not stopping at levels that do
@@ -343,7 +344,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             if (Directory.Exists(directory) &&
                 Directory.ResolveLinkTarget(directory, returnFinalTarget: false) is not null)
             {
-                throw new IOException($"Refusing to traverse the symlinked directory '{directory}' inside the store root.");
+                throw new IOException(Strings.FormatLocalFileSystemObjectStore_RefusingTraverseSymlinkedDirectoryInside(directory));
             }
 
             directory = Path.GetDirectoryName(directory);

@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -91,7 +92,7 @@ public sealed class BlobReader : IDisposable
 
         if (blobLength < BlobEnvelope.Length + BlobFooter.HeaderLength + RecordCipher.TagLength + FooterLocator.Length)
         {
-            throw new BlobFormatException($"A {blobLength}-byte object is too short to be a sealed blob (specification 05 §1).");
+            throw new BlobFormatException(Strings.FormatBlobReader_ByteObjectTooShortSealed(blobLength));
         }
 
         // Range read one: the locator — the last 16 bytes.
@@ -109,8 +110,7 @@ public sealed class BlobReader : IDisposable
 
         if (footerLength != BlobFooter.HeaderLength + cborLength + RecordCipher.TagLength)
         {
-            throw new BlobFormatException(
-                "The footer's declared table length does not reach the locator exactly — data beyond the sealed layout is a damage finding (specification 05 §5).");
+            throw new BlobFormatException(Strings.BlobReader_FooterSDeclaredTableLength);
         }
 
         // One further small read: the envelope's key-derivation selectors.
@@ -138,8 +138,7 @@ public sealed class BlobReader : IDisposable
         if (!authenticated)
         {
             CryptographicOperations.ZeroMemory(blobKey);
-            throw new BlobFormatException(
-                "The recovery footer failed authentication — the blob is damaged or does not belong to this repository (specification 05 §3).");
+            throw new BlobFormatException(Strings.BlobReader_RecoveryFooterFailedAuthentication);
         }
 
         var entries = BlobFooter.DecodeRecordTable(table, recordCount, blobLength);
@@ -266,8 +265,7 @@ public sealed class BlobReader : IDisposable
 
         if (result.Outcome != OpenReadOutcome.Found)
         {
-            throw new BlobFormatException(
-                $"Range [{offset}, {offset + length}) of blob object '{key}' could not be read: {result.Outcome}.");
+            throw new BlobFormatException(Strings.FormatBlobReader_RangeBlobObjectCouldNot(offset, offset + length, key, result.Outcome));
         }
 
         var buffer = new byte[length];
@@ -279,7 +277,7 @@ public sealed class BlobReader : IDisposable
 
             if (read == 0)
             {
-                throw new BlobFormatException($"Range read of '{key}' ended {buffer.Length - filled} bytes early.");
+                throw new BlobFormatException(Strings.FormatBlobReader_RangeReadEndedBytesEarly(key, buffer.Length - filled));
             }
 
             filled += read;

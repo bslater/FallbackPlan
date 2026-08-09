@@ -2,6 +2,7 @@ using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Application;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -122,9 +123,7 @@ public sealed class PeerGrantStore
             // Refused loudly, never quietly emptied. A corrupt job journal costs
             // history; a corrupt grant file costs every pairing this device
             // holds, and starting empty would silently unpair a fleet.
-            throw new ClientStateException(
-                $"The peer grants at '{path}' could not be read. Pairings are not rebuildable — "
-                + "restore the file or re-pair deliberately.", exception);
+            throw new ClientStateException(Strings.FormatPeerGrantStore_PeerGrantsCouldNotRead(path), exception);
         }
     }
 
@@ -139,8 +138,7 @@ public sealed class PeerGrantStore
         {
             if (!_grants.ContainsKey(Key(grant.Identity)) && _grants.Count >= MaximumGrants)
             {
-                throw new ClientStateException(
-                    $"This device already holds {MaximumGrants} peer grants, which is the limit.");
+                throw new ClientStateException(Strings.FormatPeerGrantStore_DeviceAlreadyHoldsPeerGrants(MaximumGrants));
             }
 
             _grants[Key(grant.Identity)] = grant;
@@ -229,7 +227,7 @@ public sealed class PeerGrantStore
         {
             if (!_grants.TryGetValue(Key(identity), out var grant))
             {
-                throw new ClientStateException($"No grant exists for peer {identity.Fingerprint}.");
+                throw new ClientStateException(Strings.FormatPeerGrantStore_NoGrantExistsPeer(identity.Fingerprint));
             }
 
             var narrowed = terms.Narrows(grant.Terms);

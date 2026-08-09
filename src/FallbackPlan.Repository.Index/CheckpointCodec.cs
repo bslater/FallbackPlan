@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -67,7 +68,7 @@ public static class CheckpointCodec
 
         if (signature.Length != 64)
         {
-            throw new IndexFormatException("A checkpoint signature is exactly 64 bytes (specification 07 §5).");
+            throw new IndexFormatException(Strings.CheckpointCodec_CheckpointSignatureExactlyBytes);
         }
 
         var writer = new CanonicalCborWriter();
@@ -85,7 +86,7 @@ public static class CheckpointCodec
         }
         catch (CborFormatException exception)
         {
-            throw new IndexFormatException($"The checkpoint is not canonical CBOR: {exception.Message}", exception);
+            throw new IndexFormatException(Strings.FormatCheckpointCodec_CheckpointNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -127,8 +128,7 @@ public static class CheckpointCodec
                         var pair = reader.ReadStartArray(maxCount: 2);
                         if (pair != 2)
                         {
-                            throw new IndexFormatException(
-                                "A writer watermark is exactly [writer_id, highest_sequence] (specification 07 §5 key 3).");
+                            throw new IndexFormatException(Strings.CheckpointCodec_WriterWatermarkExactlyWriterId);
                         }
 
                         watermarks.Add(new WriterWatermark(
@@ -170,8 +170,7 @@ public static class CheckpointCodec
                     signature = reader.ReadFixedByteString(64);
                     break;
                 default:
-                    throw new IndexFormatException(
-                        "The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-9 only.");
+                    throw new IndexFormatException(Strings.CheckpointCodec_CheckpointCarriesUnknownKeySpecification);
             }
         }
 
@@ -180,7 +179,7 @@ public static class CheckpointCodec
 
         if (generation is null || writerId is null || signature is null)
         {
-            throw new IndexFormatException("The checkpoint omits a mandatory key (specification 07 §5).");
+            throw new IndexFormatException(Strings.CheckpointCodec_CheckpointOmitsMandatoryKey);
         }
 
         var checkpoint = new Checkpoint
@@ -204,8 +203,7 @@ public static class CheckpointCodec
     {
         if (checkpoint.ShardSet.Count != checkpoint.ShardHashesList.Count)
         {
-            throw new IndexFormatException(
-                "shard_set and shard_hashes are positionally parallel and must agree in length (specification 07 §5).");
+            throw new IndexFormatException(Strings.CheckpointCodec_ShardSetShardHashesPositionally);
         }
 
         // A checkpoint MUST enumerate every shard it covers (07 §8): every
@@ -215,8 +213,7 @@ public static class CheckpointCodec
         {
             if (!covered.Contains(entry.Shard))
             {
-                throw new IndexFormatException(
-                    $"The checkpoint carries an entry in shard {entry.Shard} but does not enumerate it in shard_set (specification 07 §8).");
+                throw new IndexFormatException(Strings.FormatCheckpointCodec_CheckpointCarriesEntryShardBut(entry.Shard));
             }
         }
     }

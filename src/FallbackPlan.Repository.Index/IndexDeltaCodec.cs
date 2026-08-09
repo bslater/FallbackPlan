@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -84,7 +85,7 @@ public static class IndexDeltaCodec
 
         if (signature.Length != 64)
         {
-            throw new IndexFormatException("A delta signature is exactly 64 bytes (specification 07 §2).");
+            throw new IndexFormatException(Strings.IndexDeltaCodec_DeltaSignatureExactlyBytes);
         }
 
         var writer = new CanonicalCborWriter();
@@ -102,7 +103,7 @@ public static class IndexDeltaCodec
         }
         catch (CborFormatException exception)
         {
-            throw new IndexFormatException($"The delta is not canonical CBOR: {exception.Message}", exception);
+            throw new IndexFormatException(Strings.FormatIndexDeltaCodec_DeltaNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -169,8 +170,7 @@ public static class IndexDeltaCodec
                     reader.ReadEndArray();
                     break;
                 default:
-                    throw new IndexFormatException(
-                        "The delta carries an unknown key; specification 07 §2 assigns keys 1-10 only.");
+                    throw new IndexFormatException(Strings.IndexDeltaCodec_DeltaCarriesUnknownKeySpecification);
             }
         }
 
@@ -179,13 +179,12 @@ public static class IndexDeltaCodec
 
         if (writerId is null || sequence is null || generation is null || signature is null)
         {
-            throw new IndexFormatException("The delta omits a mandatory key (specification 07 §2).");
+            throw new IndexFormatException(Strings.IndexDeltaCodec_DeltaOmitsMandatoryKey);
         }
 
         if (isVoid == false)
         {
-            throw new IndexFormatException(
-                "is_void is present and true only for a void delta (specification 07 §2 key 8).");
+            throw new IndexFormatException(Strings.IndexDeltaCodec_VoidPresentTrueOnlyVoid);
         }
 
         var delta = new IndexDelta
@@ -210,8 +209,7 @@ public static class IndexDeltaCodec
     {
         if (delta.IsVoid && (delta.Entries.Count > 0 || delta.CoveredBlobIds.Count > 0))
         {
-            throw new IndexFormatException(
-                "A void delta is well-formed and signed with empty entries and empty covered_blob_ids (specification 07 §4).");
+            throw new IndexFormatException(Strings.IndexDeltaCodec_VoidDeltaWellFormedSigned);
         }
 
         // Parallel arrays or no array at all. Pairing what can be paired
@@ -219,17 +217,14 @@ public static class IndexDeltaCodec
         // worse than carrying no digest (specification 07 §2.2).
         if (delta.CoveredBlobDigests.Count > 0 && delta.CoveredBlobDigests.Count != delta.CoveredBlobIds.Count)
         {
-            throw new IndexFormatException(
-                $"covered_blob_digests has {delta.CoveredBlobDigests.Count} elements against " +
-                $"{delta.CoveredBlobIds.Count} covered blobs; the arrays are parallel or absent (specification 07 §2.2).");
+            throw new IndexFormatException(Strings.FormatIndexDeltaCodec_CoveredBlobDigestsElementsAgainst(delta.CoveredBlobDigests.Count, delta.CoveredBlobIds.Count));
         }
 
         foreach (var digest in delta.CoveredBlobDigests)
         {
             if (digest.Length != 32)
             {
-                throw new IndexFormatException(
-                    "A covered blob digest is a 32-byte SHA-256 (specification 07 §2.2).");
+                throw new IndexFormatException(Strings.IndexDeltaCodec_CoveredBlobDigestByteSHA);
             }
         }
 
@@ -241,8 +236,7 @@ public static class IndexDeltaCodec
             {
                 if (entry.Shard != shard)
                 {
-                    throw new IndexFormatException(
-                        $"The delta declares shard {shard} but carries an entry in shard {entry.Shard} (ADR-0022 §Decision 4).");
+                    throw new IndexFormatException(Strings.FormatIndexDeltaCodec_DeltaDeclaresShardButCarries(shard, entry.Shard));
                 }
             }
         }
@@ -277,8 +271,7 @@ public static class IndexDeltaCodec
             var elements = reader.ReadStartArray(maxCount: 8);
             if (elements != 6)
             {
-                throw new IndexFormatException(
-                    $"An index entry is exactly six elements; got {elements} (specification 07 §2.1).");
+                throw new IndexFormatException(Strings.FormatIndexDeltaCodec_IndexEntryExactlySixElements(elements));
             }
 
             var objectId = ObjectId.FromBytes(reader.ReadFixedByteString(32));
@@ -291,7 +284,7 @@ public static class IndexDeltaCodec
 
             if (entryType is < 1 or > 2)
             {
-                throw new IndexFormatException($"entry_type {entryType} is unassigned (specification 07 §2.1).");
+                throw new IndexFormatException(Strings.FormatIndexDeltaCodec_EntryTypeUnassigned(entryType));
             }
 
             var (compression, encryption) = IndexEntry.UnpackProfiles(packed);

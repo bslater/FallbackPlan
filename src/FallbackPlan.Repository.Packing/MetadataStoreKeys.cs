@@ -2,6 +2,7 @@ using System.Globalization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -88,7 +89,7 @@ public static class MetadataStoreKeys
     {
         if (value.Length != 16)
         {
-            throw new ArgumentException("The identifier is exactly 16 bytes.", name);
+            throw new ArgumentException(Strings.MetadataStoreKeys_IdentifierExactlyBytes, name);
         }
     }
 }

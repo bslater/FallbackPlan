@@ -170,7 +170,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-OPS-004 | [02 §5.1](../architecture/02-repository-format.md#51-purpose-and-sizing) | — | `Domain.Tests/CapturePolicyValidationTests` | 1 |
 | NFR-OPS-005 | [08 §6](../architecture/08-restore-and-recovery.md#6-what-must-survive-a-clean-machine) | [0013](../adr/0013-recovery-kit.md) | `ArchitectureTests/DependencyRuleTests` | 1 |
 | NFR-OPS-006 | [10 §3.1](../architecture/10-observability.md#31-how-a-client-learns-any-of-this) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/StatusAggregationTests` | 2 |
-| NFR-UX-001, 002 | [10 §1](../architecture/10-observability.md#1-user-level-status) | — | — *(not a test; accessibility and pseudo-localisation audits)* | 6 |
+| NFR-UX-001, 002 | [10 §1](../architecture/10-observability.md#1-user-level-status) | [0031](../adr/0031-exception-messages-are-resources.md) — externalisation built: 328 messages in per-assembly resx, drift checked in CI | — *(not a test; the remaining half is an accessibility and pseudo-localisation audit)* | 6 |
 | NFR-PORT-001 | [11 §5](../architecture/11-solution-structure.md#5-technology) | [0010](../adr/0010-local-store-separation.md) | `ArchitectureTests/DependencyRuleTests` | 0 |
 | NFR-PORT-002 | [11 §2](../architecture/11-solution-structure.md#2-dependency-rules) | — | `ArchitectureTests/DependencyRuleTests`, `Storage.ContractTests/ObjectStoreContractTests` | 0 |
 | NFR-PORT-003 | — | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.Tests/CanonicalCborRejectionTests`, `Repository.Tests/CanonicalCborRoundTripTests` | 0 |

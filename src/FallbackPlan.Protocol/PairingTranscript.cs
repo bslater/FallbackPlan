@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Bodu.Security.Cryptography;
 using FallbackPlan.Domain;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -102,8 +103,7 @@ public static class PairingTranscript
     {
         if (sharedSecret.Length != ExchangeKeyLength)
         {
-            throw new ArgumentException(
-                $"An X25519 shared secret is {ExchangeKeyLength} bytes; got {sharedSecret.Length}.", nameof(sharedSecret));
+            throw new ArgumentException(Strings.FormatPairingTranscript_XSharedSecretBytesGot(ExchangeKeyLength, sharedSecret.Length), nameof(sharedSecret));
         }
 
         var salt = new byte[NonceLength * 2];
@@ -168,14 +168,12 @@ public static class PairingTranscript
     {
         if (contribution.EphemeralPublicKey.Length != ExchangeKeyLength)
         {
-            throw new ArgumentException(
-                $"An ephemeral key is {ExchangeKeyLength} bytes; got {contribution.EphemeralPublicKey.Length}.", parameter);
+            throw new ArgumentException(Strings.FormatPairingTranscript_EphemeralKeyBytesGot(ExchangeKeyLength, contribution.EphemeralPublicKey.Length), parameter);
         }
 
         if (contribution.Nonce.Length != NonceLength)
         {
-            throw new ArgumentException(
-                $"A pairing nonce is {NonceLength} bytes; got {contribution.Nonce.Length}.", parameter);
+            throw new ArgumentException(Strings.FormatPairingTranscript_PairingNonceBytesGot(NonceLength, contribution.Nonce.Length), parameter);
         }
     }
 }
@@ -229,8 +227,7 @@ public sealed class PairingExchange : IDisposable
     {
         if (peerPublicKey.Length != PairingTranscript.ExchangeKeyLength)
         {
-            throw new ArgumentException(
-                $"An ephemeral key is {PairingTranscript.ExchangeKeyLength} bytes; got {peerPublicKey.Length}.",
+            throw new ArgumentException(Strings.FormatPairingTranscript_EphemeralKeyBytesGot(PairingTranscript.ExchangeKeyLength, peerPublicKey.Length),
                 nameof(peerPublicKey));
         }
 
@@ -239,8 +236,7 @@ public sealed class PairingExchange : IDisposable
         // compare. Refusing here is cheaper than reasoning about it later.
         if (X25519.IsLowOrderPoint(peerPublicKey))
         {
-            throw new ArgumentException(
-                "The peer offered a low-order X25519 point, which would fix the shared secret.", nameof(peerPublicKey));
+            throw new ArgumentException(Strings.PairingExchange_PeerOfferedLowOrderX, nameof(peerPublicKey));
         }
 
         return _exchange.DeriveSharedSecret(peerPublicKey);

@@ -1,4 +1,5 @@
 using ZstdSharp;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Compression;
 
@@ -41,15 +42,13 @@ public sealed class ZstdSegmentDecompressor : IDisposable
         }
         catch (ZstdException exception)
         {
-            throw new CompressionFormatException(
-                "Stored bytes are not one standard Zstandard frame producing exactly the record's logical length (specification 10 §4.1).",
+            throw new CompressionFormatException(Strings.ZstdSegmentDecompressor_StoredBytesNotOneStandard,
                 exception);
         }
 
         if (produced != destination.Length)
         {
-            throw new CompressionFormatException(
-                $"The frame produced {produced} bytes; the record's logical length is {destination.Length} (specification 10 §4.1).");
+            throw new CompressionFormatException(Strings.FormatZstdSegmentDecompressor_FrameProducedBytesRecordS(produced, destination.Length));
         }
     }
 

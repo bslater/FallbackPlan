@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Repository.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="Frame_EntryCannotLeaf" xml:space="preserve">
+    <value>A {0} entry cannot be a leaf.</value>
+  </data>
+  <data name="Frame_UnknownScanEvent" xml:space="preserve">
+    <value>Unknown scan event {0}.</value>
+  </data>
+  <data name="ManifestBuilder_StoreRefusedSnapshotObjectWith" xml:space="preserve">
+    <value>The store refused snapshot object '{0}' with a failed precondition.</value>
+  </data>
+  <data name="PreparedSegment_StoreRefusedBlobWithFailed" xml:space="preserve">
+    <value>The store refused blob '{0}' with a failed precondition.</value>
+  </data>
+  <data name="PublicationOrchestrator_ScanProducedNoRootDirectory" xml:space="preserve">
+    <value>The scan produced no root directory.</value>
+  </data>
+  <data name="RepositoryKeySet_BlobClassXNotDefined" xml:space="preserve">
+    <value>Blob class 0x{0:x4} is not defined (specification 05 §2).</value>
+  </data>
+  <data name="RepositoryLifecycle_DescriptorDoesNotVerify" xml:space="preserve">
+    <value>The descriptor does not verify — nothing is exported from an unverifiable repository.</value>
+  </data>
+  <data name="RepositoryLifecycle_DescriptorPresentButKeysListed" xml:space="preserve">
+    <value>The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).</value>
+  </data>
+  <data name="RepositoryLifecycle_DescriptorSDigestDoesNot" xml:space="preserve">
+    <value>The descriptor's digest does not verify — accidental corruption (specification 01 §3.1).</value>
+  </data>
+  <data name="RepositoryLifecycle_NoRepositoryDescriptorExistsRepository" xml:space="preserve">
+    <value>No repository descriptor exists at /repository-format.</value>
+  </data>
+  <data name="RepositoryLifecycle_NoRepositoryFormatObjectExists" xml:space="preserve">
+    <value>No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).</value>
+  </data>
+  <data name="RepositoryLifecycle_ObjectRepositoryFormatNotFallbackPlan" xml:space="preserve">
+    <value>The object at /repository-format is not a FallbackPlan repository descriptor (specification 01 §3.1).</value>
+  </data>
+  <data name="RepositoryLifecycle_StoreRefusedWith" xml:space="preserve">
+    <value>The store refused '{0}' with {1} — an existing object at this key means the location already holds a repository (specification 01 §4).</value>
+  </data>
+  <data name="RepositoryLifecycle_UnrecognisedDescriptorParseOutcome" xml:space="preserve">
+    <value>Unrecognised descriptor parse outcome {0}.</value>
+  </data>
+  <data name="struct_SourceKeyExactlyBytes" xml:space="preserve">
+    <value>A source key is exactly {0} bytes.</value>
+  </data>
+</root>

@@ -14,6 +14,7 @@ using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
+using FallbackPlan.Cli.Resources;
 
 namespace FallbackPlan.Cli;
 
@@ -255,10 +256,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
         // owns, which is the whole hazard the writer role exists to stop.
         if (request.SetName is null)
         {
-            throw new CliFailureException(
-                "A service is running and holds the writer role, so this backup would be run by the service — but a "
-                + "service can only run a configured backup set, not an ad-hoc directory. Pass --set <name>, or stop "
-                + "the service and re-run with --direct.");
+            throw new CliFailureException(Strings.ServiceGateway_ServiceRunningHoldsWriterRole);
         }
 
         var accepted = await client.ExecuteAsync(
@@ -267,8 +265,8 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
         var jobId = accepted switch
         {
             JobAcceptedResult job => job.JobId,
-            ServiceError error => throw new CliFailureException($"The service refused the backup: {error.Message}"),
-            _ => throw new CliFailureException($"The service answered a backup with {accepted.GetType().Name}."),
+            ServiceError error => throw new CliFailureException(Strings.FormatServiceGateway_ServiceRefusedBackup(error.Message)),
+            _ => throw new CliFailureException(Strings.FormatServiceGateway_ServiceAnsweredBackupWith(accepted.GetType().Name)),
         };
 
         var finished = await AwaitJobAsync(jobId, cancellationToken).ConfigureAwait(false);
@@ -346,8 +344,8 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
         return result switch
         {
             T expected => expected,
-            ServiceError error => throw new CliFailureException($"The service refused {what}: {error.Message}"),
-            _ => throw new CliFailureException($"The service answered {what} with {result.GetType().Name}."),
+            ServiceError error => throw new CliFailureException(Strings.FormatServiceGateway_ServiceRefused(what, error.Message)),
+            _ => throw new CliFailureException(Strings.FormatServiceGateway_ServiceAnsweredWith(what, result.GetType().Name)),
         };
     }
 
@@ -373,16 +371,16 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
             var listed = await client.ExecuteAsync(new ListJobsCommand(false), cancellationToken).ConfigureAwait(false);
             if (listed is ServiceError error)
             {
-                throw new CliFailureException($"The service stopped reporting the job: {error.Message}");
+                throw new CliFailureException(Strings.FormatServiceGateway_ServiceStoppedReportingJob(error.Message));
             }
 
             if (listed is not JobsResult jobs)
             {
-                throw new CliFailureException($"The service answered a job list with {listed.GetType().Name}.");
+                throw new CliFailureException(Strings.FormatServiceGateway_ServiceAnsweredJobListWith(listed.GetType().Name));
             }
 
             var job = jobs.Jobs.FirstOrDefault(candidate => string.Equals(candidate.Id, jobId, StringComparison.Ordinal))
-                ?? throw new CliFailureException($"The service forgot job '{jobId}' before it finished.");
+                ?? throw new CliFailureException(Strings.FormatServiceGateway_ServiceForgotJobBeforeFinished(jobId));
 
             if (HasSettled(job.State))
             {
@@ -416,7 +414,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         {
             var configuration = ClientConfiguration.Load(session.ConfigurationPath);
             var set = configuration.FindSet(setName)
-                ?? throw new CliFailureException($"No backup set named '{setName}' exists in {session.ConfigurationPath}.");
+                ?? throw new CliFailureException(Strings.FormatDirectGateway_NoBackupSetNamedExists(setName, session.ConfigurationPath));
             rootPath = set.Root;
             include = set.IncludeRules;
             exclude = set.ExcludeRules;
@@ -424,7 +422,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         }
         else
         {
-            rootPath = request.Root ?? throw new CliFailureException("Pass a root directory or --set <name>.");
+            rootPath = request.Root ?? throw new CliFailureException(Strings.DirectGateway_PassRootDirectorySetName);
             include = request.IncludeRules;
             exclude = request.ExcludeRules;
             backupSetId = session.BackupSetId;
@@ -432,7 +430,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
 
         if (!Directory.Exists(rootPath))
         {
-            throw new CliFailureException($"'{rootPath}' is not a directory.");
+            throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(rootPath));
         }
 
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
@@ -676,8 +674,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         if (request.Path is { Length: > 0 } wanted)
         {
             var entry = catalogue.LookupPath(snapshotId, wanted)
-                ?? throw new CliFailureException(
-                    $"'{wanted}' does not exist in snapshot {request.SnapshotId} — or the catalogue is stale; run `rebuild-index`.");
+                ?? throw new CliFailureException(Strings.FormatCliApplication_DoesNotExistSnapshot(wanted, request.SnapshotId));
             await RestoreEntryAsync(entry).ConfigureAwait(false);
         }
         else
@@ -685,8 +682,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             var roots = catalogue.ListDirectory(snapshotId, string.Empty);
             if (roots.Count == 0)
             {
-                throw new CliFailureException(
-                    $"The catalogue knows nothing under snapshot {request.SnapshotId} — run `rebuild-index` first.");
+                throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
             }
 
             foreach (var entry in roots)
@@ -713,7 +709,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         "locator" => VerifyLevel.LocatorAndFooter,
         "digest" => VerifyLevel.FooterAndDigest,
         "records" => VerifyLevel.EveryRecord,
-        _ => throw new CliFailureException($"'{level}' is not a verify level (locator | digest | records)."),
+        _ => throw new CliFailureException(Strings.FormatDirectGateway_NotVerifyLevelLocatorDigest(level)),
     };
 
     private static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();

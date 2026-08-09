@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -35,7 +36,7 @@ public sealed class StoreBlobKeyDeriver : IDisposable
     {
         if (keyIdKey.Length != 32)
         {
-            throw new ArgumentException("The key-ID key is exactly 32 bytes.", nameof(keyIdKey));
+            throw new ArgumentException(Strings.StoreBlobKeyDeriver_KeyIDKeyExactlyBytes, nameof(keyIdKey));
         }
 
         _keyIdKey = keyIdKey.ToArray();

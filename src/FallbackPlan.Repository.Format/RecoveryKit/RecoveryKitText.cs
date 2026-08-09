@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.RecoveryKit;
 
@@ -81,7 +82,7 @@ public static class RecoveryKitText
             var rest = line[(colon + 1)..].Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
             if (rest.Length <= GroupLength)
             {
-                throw new RecoveryKitFormatException($"Line {number}: too short to carry payload and check.");
+                throw new RecoveryKitFormatException(Strings.FormatRecoveryKitText_LineTooShortCarryPayload(number));
             }
 
             var linePayload = rest[..^GroupLength];
@@ -89,8 +90,7 @@ public static class RecoveryKitText
 
             if (!string.Equals(check, LineCheck(number, linePayload), StringComparison.Ordinal))
             {
-                throw new RecoveryKitFormatException(
-                    $"Line {number}: the line check does not verify — a transcription error on this line (specifications/recovery-kit §4).");
+                throw new RecoveryKitFormatException(Strings.FormatRecoveryKitText_LineLineCheckDoesNot(number));
             }
 
             payload.Append(linePayload);
@@ -99,14 +99,14 @@ public static class RecoveryKitText
 
         if (!sawPayload)
         {
-            throw new RecoveryKitFormatException("No payload lines found — not a recovery-kit text form.");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitText_NoPayloadLinesFound);
         }
 
         var encoded = payload.ToString();
         var framed = new byte[encoded.Length * 5 / 8];
         if (!Base32.TryDecode(encoded, framed, out var written))
         {
-            throw new RecoveryKitFormatException("The payload does not decode as base32 (specifications/recovery-kit §4).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitText_PayloadDoesNotDecodeAs);
         }
 
         return framed.AsSpan(0, written).ToArray();

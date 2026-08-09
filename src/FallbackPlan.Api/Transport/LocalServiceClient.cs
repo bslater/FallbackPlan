@@ -2,6 +2,7 @@ using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using FallbackPlan.Api.Resources;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -85,8 +86,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
                 is not HelloAcknowledgementFrame acknowledgement)
             {
-                throw new ServiceConnectionException(
-                    $"The service at '{address}' did not answer the contract handshake.");
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceDidNotAnswerContract(address));
             }
 
             if (!acknowledgement.Accepted)
@@ -97,8 +97,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
 
             if (!ContractVersion.TryParse(acknowledgement.ContractVersion, out var serviceVersion))
             {
-                throw new ServiceConnectionException(
-                    $"The service reported contract version '{acknowledgement.ContractVersion}', which is not a version.");
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceReportedContractVersionWhich(acknowledgement.ContractVersion));
             }
 
             return new LocalServiceClient(stream, address, serviceVersion);
@@ -125,10 +124,9 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             return frame switch
             {
                 ResponseFrame response when response.Id == id => response.Result,
-                ResponseFrame response => throw new ServiceConnectionException(
-                    $"The service answered request {response.Id} while {id} was outstanding."),
-                null => throw new ServiceConnectionException("The service closed the connection without answering."),
-                _ => throw new ServiceConnectionException("The service sent a frame that is not a response."),
+                ResponseFrame response => throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceAnsweredRequestWhileOutstanding(response.Id, id)),
+                null => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceClosedConnectionWithoutAnswering),
+                _ => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceSentFrameNotResponse),
             };
         }
         finally
@@ -282,7 +280,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException)
             {
                 await pipe.DisposeAsync().ConfigureAwait(false);
-                throw new ServiceConnectionException($"No service is listening on '{address}'.", exception);
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_NoServiceListening(address), exception);
             }
         }
 
@@ -295,7 +293,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
         catch (Exception exception) when (exception is SocketException or IOException)
         {
             socket.Dispose();
-            throw new ServiceConnectionException($"No service is listening on '{address}'.", exception);
+            throw new ServiceConnectionException(Strings.FormatLocalServiceClient_NoServiceListening(address), exception);
         }
     }
 }

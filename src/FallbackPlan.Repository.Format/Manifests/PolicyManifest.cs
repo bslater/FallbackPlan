@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
@@ -142,7 +143,7 @@ public static class PolicyManifestCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException($"The policy manifest is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatPolicyManifestCodec_PolicyManifestNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -184,8 +185,7 @@ public static class PolicyManifestCodec
                                 cdcWindow = reader.ReadByte();
                                 break;
                             default:
-                                throw new ManifestValidationException(
-                                    "segmentation_parameters carries an unknown key (ADR-0022 §Decision 6).");
+                                throw new ManifestValidationException(Strings.PolicyManifestCodec_SegmentationParametersCarriesUnknownKey);
                         }
                     }
 
@@ -216,8 +216,7 @@ public static class PolicyManifestCodec
                                 blobRecords = reader.ReadUInt32();
                                 break;
                             default:
-                                throw new ManifestValidationException(
-                                    "blob_write_profile carries an unknown key (ADR-0022 §Decision 6).");
+                                throw new ManifestValidationException(Strings.PolicyManifestCodec_BlobWriteProfileCarriesUnknown);
                         }
                     }
 
@@ -233,8 +232,7 @@ public static class PolicyManifestCodec
                     exclude = ReadRules(reader);
                     break;
                 default:
-                    throw new ManifestValidationException(
-                        "The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-9 only.");
+                    throw new ManifestValidationException(Strings.PolicyManifestCodec_PolicyManifestCarriesUnknownKey);
             }
         }
 
@@ -245,7 +243,7 @@ public static class PolicyManifestCodec
             thresholdPermille is null || encryptionProfile is null || blobTarget is null ||
             blobMax is null || blobRecords is null || trustDomain is null)
         {
-            throw new ManifestValidationException("The policy manifest omits a mandatory key (specification 06 §7).");
+            throw new ManifestValidationException(Strings.PolicyManifestCodec_PolicyManifestOmitsMandatoryKey);
         }
 
         return new PolicyManifest
@@ -341,7 +339,7 @@ public static class ErrorManifestCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException($"The error manifest is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatErrorManifestCodec_ErrorManifestNotCanonicalCBOR(exception.Message), exception);
         }
     }
 
@@ -352,7 +350,7 @@ public static class ErrorManifestCodec
 
         if (mapCount != 1 || reader.ReadKey() != 1)
         {
-            throw new ManifestValidationException("The error manifest carries exactly key 1 (specification 06 §8).");
+            throw new ManifestValidationException(Strings.ErrorManifestCodec_ErrorManifestCarriesExactlyKey);
         }
 
         var failureCount = reader.ReadStartArray(maxCount: 1_000_000);
@@ -383,7 +381,7 @@ public static class ErrorManifestCodec
                         var value = reader.ReadUInt16();
                         if (value is < 1 or > 7)
                         {
-                            throw new ManifestValidationException($"Failure reason {value} is unassigned (specification 06 §8.1).");
+                            throw new ManifestValidationException(Strings.FormatErrorManifestCodec_FailureReasonUnassigned(value));
                         }
 
                         reason = (CaptureFailureReason)value;
@@ -392,8 +390,7 @@ public static class ErrorManifestCodec
                         detail = reader.ReadTextString(maxUtf8Length: 4096);
                         break;
                     default:
-                        throw new ManifestValidationException(
-                            "A failure entry carries an unknown key; specification 06 §8.1 assigns keys 1-3 only.");
+                        throw new ManifestValidationException(Strings.ErrorManifestCodec_FailureEntryCarriesUnknownKey);
                 }
             }
 
@@ -401,7 +398,7 @@ public static class ErrorManifestCodec
 
             if (components is null || reason is null || detail is null)
             {
-                throw new ManifestValidationException("A failure entry omits a mandatory key (specification 06 §8.1).");
+                throw new ManifestValidationException(Strings.ErrorManifestCodec_FailureEntryOmitsMandatoryKey);
             }
 
             failures.Add(new CaptureFailure(components, reason.Value, detail));

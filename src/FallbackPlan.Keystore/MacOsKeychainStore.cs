@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Keystore.Resources;
 
 namespace FallbackPlan.Keystore;
 
@@ -49,7 +50,7 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
         if (status != 0)
         {
-            throw new KeystoreException($"The macOS keychain refused a lookup for '{account}' (status {status}).");
+            throw new KeystoreException(Strings.FormatMacOsKeychainStore_MacOSKeychainRefusedLookupStatus(account, status));
         }
 
         try
@@ -101,7 +102,7 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
             if (status != 0)
             {
-                throw new KeystoreException($"The macOS keychain refused to store '{account}' (status {status}).");
+                throw new KeystoreException(Strings.FormatMacOsKeychainStore_MacOSKeychainRefusedStoreStatus(account, status));
             }
 
             if (item != nint.Zero)
@@ -135,7 +136,7 @@ internal sealed partial class MacOsKeychainStore : IPassphraseStore
 
         if (status != 0)
         {
-            throw new KeystoreException($"The macOS keychain refused a lookup for '{account}' (status {status}).");
+            throw new KeystoreException(Strings.FormatMacOsKeychainStore_MacOSKeychainRefusedLookupStatus(account, status));
         }
 
         _ = SecKeychainItemFreeContent(nint.Zero, data);

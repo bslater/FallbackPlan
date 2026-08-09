@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Keystore.Resources;
 
 namespace FallbackPlan.Keystore;
 
@@ -101,8 +102,6 @@ public static class PlatformKeystore
         // Never a silent fallback to something weaker. A platform this does not
         // support says so, and the operator keeps using --passphrase-env
         // knowingly rather than unknowingly.
-        throw new KeystoreException(
-            $"No keystore is implemented for {Environment.OSVersion.Platform}. Unattended unlock is unavailable "
-            + "on this platform; pass the passphrase by environment-variable name instead.");
+        throw new KeystoreException(Strings.FormatPlatformKeystore_NoKeystoreImplementedUnattendedUnlock(Environment.OSVersion.Platform));
     }
 }

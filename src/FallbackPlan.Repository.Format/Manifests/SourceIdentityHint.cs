@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Manifests;
 
@@ -84,13 +85,12 @@ public static class SourceIdentityHintCodec
 
         if (hint.SourceKey.Length != SourceIdentityHint.SourceKeyLength)
         {
-            throw new ArgumentException(
-                $"A source key is exactly {SourceIdentityHint.SourceKeyLength} bytes.", nameof(hint));
+            throw new ArgumentException(Strings.FormatSourceIdentityHintCodec_SourceKeyExactlyBytes(SourceIdentityHint.SourceKeyLength), nameof(hint));
         }
 
         if (hint.SnapshotId.Length != 16)
         {
-            throw new ArgumentException("A snapshot identifier is exactly 16 bytes.", nameof(hint));
+            throw new ArgumentException(Strings.SourceIdentityHintCodec_SnapshotIdentifierExactlyBytes, nameof(hint));
         }
 
         var writer = new CanonicalCborWriter();
@@ -120,8 +120,7 @@ public static class SourceIdentityHintCodec
         }
         catch (CborFormatException exception)
         {
-            throw new ManifestValidationException(
-                $"The source-identity hint is not canonical CBOR: {exception.Message}", exception);
+            throw new ManifestValidationException(Strings.FormatSourceIdentityHintCodec_SourceIdentityHintNotCanonical(exception.Message), exception);
         }
     }
 
@@ -131,47 +130,44 @@ public static class SourceIdentityHintCodec
 
         if (reader.ReadStartMap() != 5)
         {
-            throw new ManifestValidationException(
-                "A source-identity hint carries exactly keys 1-5 (specification 06 §11).");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintCarriesExactly);
         }
 
         if (reader.ReadKey() != 1)
         {
-            throw new ManifestValidationException("A source-identity hint opens with key 1, the schema version.");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintOpensWith);
         }
 
         var schemaVersion = reader.ReadUInt16();
         if (schemaVersion != SourceIdentityHint.CurrentSchemaVersion)
         {
-            throw new ManifestValidationException(
-                $"Source-identity schema {schemaVersion} is unknown; this reader implements " +
-                $"{SourceIdentityHint.CurrentSchemaVersion}.");
+            throw new ManifestValidationException(Strings.FormatSourceIdentityHintCodec_SourceIdentitySchemaUnknownReader(schemaVersion, SourceIdentityHint.CurrentSchemaVersion));
         }
 
         if (reader.ReadKey() != 2)
         {
-            throw new ManifestValidationException("A source-identity hint carries the source key at key 2.");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintCarriesSource);
         }
 
         var sourceKey = reader.ReadFixedByteString(SourceIdentityHint.SourceKeyLength);
 
         if (reader.ReadKey() != 3)
         {
-            throw new ManifestValidationException("A source-identity hint carries the snapshot identifier at key 3.");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintCarriesSnapshot);
         }
 
         var snapshotId = reader.ReadFixedByteString(16);
 
         if (reader.ReadKey() != 4)
         {
-            throw new ManifestValidationException("A source-identity hint carries the object identifier at key 4.");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintCarriesObject);
         }
 
         var objectId = ObjectId.FromBytes(reader.ReadFixedByteString(ObjectId.Size));
 
         if (reader.ReadKey() != 5)
         {
-            throw new ManifestValidationException("A source-identity hint carries the capture time at key 5.");
+            throw new ManifestValidationException(Strings.SourceIdentityHintCodec_SourceIdentityHintCarriesCapture);
         }
 
         var capturedAt = reader.ReadUnsignedInteger();

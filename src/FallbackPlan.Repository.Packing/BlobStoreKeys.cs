@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -21,7 +22,7 @@ public static class BlobStoreKeys
         {
             BlobClass.Data => "data",
             BlobClass.Metadata => "meta",
-            _ => throw new ArgumentException($"Blob class 0x{(ushort)blobClass:x4} is not defined (specification 05 §2).", nameof(blobClass)),
+            _ => throw new ArgumentException(Strings.FormatBlobEnvelope_BlobClassXNotDefined((ushort)blobClass), nameof(blobClass)),
         };
 
         return ObjectKey.Parse($"blobs/{classSegment}/{rendered[..4]}/{rendered}");

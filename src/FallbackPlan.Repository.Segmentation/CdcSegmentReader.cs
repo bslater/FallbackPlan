@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Domain;
+using FallbackPlan.Repository.Segmentation.Resources;
 
 namespace FallbackPlan.Repository.Segmentation;
 
@@ -40,13 +41,12 @@ public sealed class CdcSegmentReader : ISegmentReader
 
         if (!source.CanRead)
         {
-            throw new ArgumentException("The source stream must be readable.", nameof(source));
+            throw new ArgumentException(Strings.CdcSegmentReader_SourceStreamMustReadable, nameof(source));
         }
 
         if (parameters.TargetSize == 0)
         {
-            throw new ArgumentException(
-                "The cdc parameters are unset; construct them via CdcParameters.Create (specification 09 §3.1).",
+            throw new ArgumentException(Strings.CdcSegmentReader_CdcParametersUnsetConstructThem,
                 nameof(parameters));
         }
 
@@ -65,8 +65,7 @@ public sealed class CdcSegmentReader : ISegmentReader
     {
         if (buffer.Length < _parameters.MaxSize)
         {
-            throw new ArgumentException(
-                $"The buffer must hold the maximum segment size ({_parameters.MaxSize} bytes); got {buffer.Length}.",
+            throw new ArgumentException(Strings.FormatCdcSegmentReader_BufferMustHoldMaximumSegment(_parameters.MaxSize, buffer.Length),
                 nameof(buffer));
         }
 

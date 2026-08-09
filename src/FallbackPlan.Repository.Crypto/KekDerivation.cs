@@ -2,6 +2,7 @@ using Bodu;
 using Bodu.Security.Cryptography;
 using FallbackPlan.Domain.Configuration;
 using KdfParameters = FallbackPlan.Domain.Configuration.Argon2Parameters;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -43,7 +44,7 @@ public static class KekDerivation
 
         if (salt.Length != SaltLength)
         {
-            throw new ArgumentException($"The KDF salt is exactly {SaltLength} bytes; got {salt.Length}.", nameof(salt));
+            throw new ArgumentException(Strings.FormatKekDerivation_KDFSaltExactlyBytesGot(SaltLength, salt.Length), nameof(salt));
         }
 
         var findings = parameters.ValidateCreationMinimums();

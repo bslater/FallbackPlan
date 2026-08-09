@@ -5,6 +5,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.Cli.Resources;
 
 namespace FallbackPlan.Cli;
 
@@ -85,8 +86,7 @@ public sealed class CliSession : IDisposable
     {
         var value = Environment.GetEnvironmentVariable(environmentVariable);
         return string.IsNullOrEmpty(value)
-            ? throw new CliFailureException(
-                $"Environment variable '{environmentVariable}' is unset or empty — the passphrase is passed by name, never on the command line.")
+            ? throw new CliFailureException(Strings.FormatCliSession_EnvironmentVariableUnsetEmpty(environmentVariable))
             : Passphrase.Create(value);
     }
 

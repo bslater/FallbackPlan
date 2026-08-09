@@ -1,5 +1,6 @@
 using System.Formats.Cbor;
 using System.Text;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Cbor;
 
@@ -39,7 +40,7 @@ public sealed class CanonicalCborReader
     /// <summary>Begins reading a map and returns its definite entry count.</summary>
     public int ReadStartMap() =>
         Guard(static reader =>
-            reader.ReadStartMap() ?? throw new CborFormatException("Indefinite-length map."));
+            reader.ReadStartMap() ?? throw new CborFormatException(Strings.CanonicalCborReader_IndefiniteLengthMap));
 
     /// <summary>Ends the current map.</summary>
     public void ReadEndMap() => Guard(static reader => reader.ReadEndMap());
@@ -51,11 +52,11 @@ public sealed class CanonicalCborReader
     public int ReadStartArray(int maxCount)
     {
         var count = Guard(static reader =>
-            reader.ReadStartArray() ?? throw new CborFormatException("Indefinite-length array."));
+            reader.ReadStartArray() ?? throw new CborFormatException(Strings.CanonicalCborReader_IndefiniteLengthArray));
 
         if (count > maxCount)
         {
-            throw new CborFormatException($"Array declares {count} items; the limit here is {maxCount}.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_ArrayDeclaresItemsLimitHere(count, maxCount));
         }
 
         return count;
@@ -72,7 +73,7 @@ public sealed class CanonicalCborReader
     {
         if (Guard(static reader => reader.PeekState()) != CborReaderState.UnsignedInteger)
         {
-            throw new CborFormatException("Map keys must be unsigned integers (specification 00 §4.2).");
+            throw new CborFormatException(Strings.CanonicalCborReader_MapKeysMustUnsignedIntegers);
         }
 
         return Guard(static reader => reader.ReadUInt32());
@@ -90,7 +91,7 @@ public sealed class CanonicalCborReader
         var value = ReadUInt32();
         if (value > ushort.MaxValue)
         {
-            throw new CborFormatException($"Value {value} does not fit a u16.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_ValueDoesNotFitU(value));
         }
 
         return (ushort)value;
@@ -102,7 +103,7 @@ public sealed class CanonicalCborReader
         var value = ReadUInt32();
         if (value > byte.MaxValue)
         {
-            throw new CborFormatException($"Value {value} does not fit a u8.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_ValueDoesNotFitU2(value));
         }
 
         return (byte)value;
@@ -129,7 +130,7 @@ public sealed class CanonicalCborReader
 
         if (slice.Length > maxLength)
         {
-            throw new CborFormatException($"Byte string declares {slice.Length} bytes; the limit here is {maxLength}.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_ByteStringDeclaresBytesLimit(slice.Length, maxLength));
         }
 
         return slice.ToArray();
@@ -146,7 +147,7 @@ public sealed class CanonicalCborReader
 
         if (slice.Length != expectedLength)
         {
-            throw new CborFormatException($"Byte string is {slice.Length} bytes; exactly {expectedLength} required.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_ByteStringBytesExactlyRequired(slice.Length, expectedLength));
         }
 
         return slice.ToArray();
@@ -162,7 +163,7 @@ public sealed class CanonicalCborReader
 
         if (slice.Length > maxUtf8Length)
         {
-            throw new CborFormatException($"Text string declares {slice.Length} UTF-8 bytes; the limit here is {maxUtf8Length}.");
+            throw new CborFormatException(Strings.FormatCanonicalCborReader_TextStringDeclaresUTFBytes(slice.Length, maxUtf8Length));
         }
 
         return Encoding.UTF8.GetString(slice.Span);
@@ -199,7 +200,7 @@ public sealed class CanonicalCborReader
 
             case CborReaderState.StartArray:
                 var itemCount = Guard(static reader =>
-                    reader.ReadStartArray() ?? throw new CborFormatException("Indefinite-length array."));
+                    reader.ReadStartArray() ?? throw new CborFormatException(Strings.CanonicalCborReader_IndefiniteLengthArray));
                 for (var i = 0; i < itemCount; i++)
                 {
                     SkipValue();
@@ -222,13 +223,13 @@ public sealed class CanonicalCborReader
             case CborReaderState.HalfPrecisionFloat:
             case CborReaderState.SinglePrecisionFloat:
             case CborReaderState.DoublePrecisionFloat:
-                throw new CborFormatException("Floating-point values are forbidden (specification 00 §4.1 rule 5).");
+                throw new CborFormatException(Strings.CanonicalCborReader_FloatingPointValuesForbidden);
 
             case CborReaderState.Tag:
-                throw new CborFormatException("CBOR tags are forbidden; format v1 defines none (specification 00 §4.1 rule 6).");
+                throw new CborFormatException(Strings.CanonicalCborReader_CBORTagsForbiddenFormatV);
 
             case var state:
-                throw new CborFormatException($"Unsupported CBOR item '{state}' in a format object.");
+                throw new CborFormatException(Strings.FormatCanonicalCborReader_UnsupportedCBORItemFormatObject(state));
         }
     }
 
@@ -242,7 +243,7 @@ public sealed class CanonicalCborReader
         // when bytes remain, so the byte count is the authoritative check.
         if (Guard(static reader => reader.PeekState()) != CborReaderState.Finished || _reader.BytesRemaining != 0)
         {
-            throw new CborFormatException("Trailing bytes after the root CBOR value.");
+            throw new CborFormatException(Strings.CanonicalCborReader_TrailingBytesAfterRootCBOR);
         }
     }
 
@@ -254,15 +255,15 @@ public sealed class CanonicalCborReader
         }
         catch (CborContentException exception)
         {
-            throw new CborFormatException("CBOR input violates the deterministic encoding profile.", exception);
+            throw new CborFormatException(Strings.CanonicalCborReader_CBORInputViolatesDeterministicEncoding, exception);
         }
         catch (InvalidOperationException exception)
         {
-            throw new CborFormatException("CBOR item is not of the required type.", exception);
+            throw new CborFormatException(Strings.CanonicalCborReader_CBORItemNotRequiredType, exception);
         }
         catch (OverflowException exception)
         {
-            throw new CborFormatException("CBOR integer is out of range for the required width.", exception);
+            throw new CborFormatException(Strings.CanonicalCborReader_CBORIntegerOutRangeRequired, exception);
         }
     }
 

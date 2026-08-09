@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Domain.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="BlobId_BlobIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A blob identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="BlobId_DestinationMustHoldLeastBytes" xml:space="preserve">
+    <value>Destination must hold at least {0} bytes.</value>
+  </data>
+  <data name="CheckpointId_CheckpointIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A checkpoint identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="ContentId_ContentIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A content identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="DeltaId_DeltaIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A delta identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="KeyId_KeyIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A key identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="ObjectId_ObjectIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>An object identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="RepositoryId_RepositoryIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A repository identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="StoreBlobKey_StoreBlobKeyExactlyBytes" xml:space="preserve">
+    <value>A store blob key is exactly {0} bytes; got {1}.</value>
+  </data>
+  <data name="WriterId_WriterIdentifierExactlyBytesGot" xml:space="preserve">
+    <value>A writer identifier is exactly {0} bytes; got {1}.</value>
+  </data>
+</root>

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using FallbackPlan.Domain.Resources;
 
 namespace FallbackPlan.Domain.Identifiers;
 
@@ -38,7 +39,7 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     {
         if (bytes.Length != Size)
         {
-            throw new ArgumentException($"An object identifier is exactly {Size} bytes; got {bytes.Length}.", nameof(bytes));
+            throw new ArgumentException(Strings.FormatObjectId_ObjectIdentifierExactlyBytesGot(Size, bytes.Length), nameof(bytes));
         }
 
         return new ObjectId(
@@ -56,7 +57,7 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     {
         if (destination.Length < Size)
         {
-            throw new ArgumentException($"Destination must hold at least {Size} bytes.", nameof(destination));
+            throw new ArgumentException(Strings.FormatBlobId_DestinationMustHoldLeastBytes(Size), nameof(destination));
         }
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, _a);

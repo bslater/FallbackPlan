@@ -5,6 +5,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.Descriptor;
 
@@ -40,7 +41,7 @@ public static class RepositoryDescriptorCodec
 
         if (descriptor.KdfSalt.Length != 16)
         {
-            throw new ArgumentException("The KDF salt is exactly 16 bytes (specification 01 §3.3).", nameof(descriptor));
+            throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
         var writer = new CanonicalCborWriter();
@@ -90,8 +91,7 @@ public static class RepositoryDescriptorCodec
 
         if (body.Length > FormatLimits.MaxDescriptorCborLength)
         {
-            throw new ArgumentException(
-                $"The descriptor body is {body.Length} bytes; the limit is {FormatLimits.MaxDescriptorCborLength} (specification 01 §3.1).",
+            throw new ArgumentException(Strings.FormatRepositoryDescriptorCodec_DescriptorBodyBytesLimit(body.Length, FormatLimits.MaxDescriptorCborLength),
                 nameof(descriptor));
         }
 
@@ -274,8 +274,7 @@ public static class RepositoryDescriptorCodec
 
         if (count != 5)
         {
-            throw new CborFormatException(
-                $"kdf_parameters carries {count} keys; specification 01 §3.3 defines exactly 5.");
+            throw new CborFormatException(Strings.FormatRepositoryDescriptorCodec_KdfParametersCarriesKeysSpecification(count));
         }
 
         uint memory = 0;
@@ -291,8 +290,7 @@ public static class RepositoryDescriptorCodec
                     var profile = reader.ReadUInt16();
                     if (profile != KdfProfileArgon2id)
                     {
-                        throw new CborFormatException(
-                            $"kdf_profile 0x{profile:x4} is not Argon2id (0x0001); refused, not guessed (specification 00 §3).");
+                        throw new CborFormatException(Strings.FormatRepositoryDescriptorCodec_KdfProfileXNotArgon(profile));
                     }
 
                     break;
@@ -309,7 +307,7 @@ public static class RepositoryDescriptorCodec
                     parallelism = reader.ReadByte();
                     break;
                 default:
-                    throw new CborFormatException("kdf_parameters carries an unknown key (specification 01 §3.3).");
+                    throw new CborFormatException(Strings.RepositoryDescriptorCodec_KdfParametersCarriesUnknownKey);
             }
         }
 
@@ -317,7 +315,7 @@ public static class RepositoryDescriptorCodec
 
         if (salt is null)
         {
-            throw new CborFormatException("kdf_parameters omits the salt (specification 01 §3.3).");
+            throw new CborFormatException(Strings.RepositoryDescriptorCodec_KdfParametersOmitsSalt);
         }
 
         return (new Argon2Parameters { MemoryKiB = memory, Iterations = iterations, Parallelism = parallelism }, salt);

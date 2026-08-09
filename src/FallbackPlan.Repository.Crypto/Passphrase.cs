@@ -1,6 +1,7 @@
 using Bodu;
 using System.Security.Cryptography;
 using System.Text;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -42,8 +43,7 @@ public sealed class Passphrase : IDisposable
 
         if (value.Length == 0)
         {
-            throw new ArgumentException(
-                "An empty passphrase is refused at repository creation. The primitive accepts one, so refusing is the engine's job (specification 03 §2.1).",
+            throw new ArgumentException(Strings.Passphrase_EmptyPassphraseRefusedRepositoryCreation,
                 nameof(value));
         }
 

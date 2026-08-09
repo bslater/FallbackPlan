@@ -40,7 +40,7 @@ BUILT = re.compile(r"^\*\*Built:\*\* .+$", re.M)
 
 # Paths that are prose or documentation rather than a code citation. Documented
 # links are already resolved by check-links.py, so they are skipped here.
-NOT_CODE = re.compile(r"^(LICENSE|LICENSING\.md|CONTRIBUTING\.md|nuget\.config|external/|specifications/)")
+NOT_CODE = re.compile(r"^(LICENSE|LICENSING\.md|CONTRIBUTING\.md|nuget\.config|external/|specifications/|eng/)")
 
 
 def adrs_on_disk() -> set[str]:
@@ -92,7 +92,10 @@ def resolves(token: str) -> bool:
     if not tail:
         return True
 
-    pattern = tail if tail.endswith("*") else f"{tail}.cs"
+    # A citation may already name the file — `Resources/Strings.g.cs` — in
+    # which case appending another suffix looks for Strings.g.cs.cs and fails
+    # on a path that is right there.
+    pattern = tail if tail.endswith(("*", ".cs")) else f"{tail}.cs"
     if not pattern.endswith(".cs") and "*" not in pattern:
         pattern += ".cs"
 

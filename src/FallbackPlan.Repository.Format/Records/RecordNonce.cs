@@ -1,3 +1,5 @@
+using FallbackPlan.Repository.Format.Resources;
+
 namespace FallbackPlan.Repository.Format.Records;
 
 /// <summary>
@@ -27,8 +29,7 @@ public static class RecordNonce
     {
         if (destination.Length is not (AesGcmLength or XChaChaLength))
         {
-            throw new ArgumentException(
-                $"A record nonce is {AesGcmLength} or {XChaChaLength} bytes; got {destination.Length}.",
+            throw new ArgumentException(Strings.FormatRecordNonce_RecordNonceBytesGot(AesGcmLength, XChaChaLength, destination.Length),
                 nameof(destination));
         }
 
@@ -46,8 +47,7 @@ public static class RecordNonce
     {
         if (destination.Length != AesGcmLength)
         {
-            throw new ArgumentException(
-                $"The footer nonce is {AesGcmLength} bytes; got {destination.Length}.",
+            throw new ArgumentException(Strings.FormatRecordNonce_FooterNonceBytesGot(AesGcmLength, destination.Length),
                 nameof(destination));
         }
 

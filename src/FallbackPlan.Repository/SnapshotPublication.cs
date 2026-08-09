@@ -12,6 +12,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -234,7 +235,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var rootTreeId = walker.RootTreeId
-                ?? throw new InvalidOperationException("The scan produced no root directory.");
+                ?? throw new InvalidOperationException(Strings.PublicationOrchestrator_ScanProducedNoRootDirectory);
             _observer?.AfterStep(PublicationStep.ScanSource);
 
             reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
@@ -558,7 +559,7 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 default:
-                    throw new InvalidOperationException($"Unknown scan event {scanEvent.GetType().Name}.");
+                    throw new InvalidOperationException(Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name));
             }
         }
 
@@ -627,7 +628,7 @@ public sealed partial class PublicationOrchestrator
                     ScanEntryKind.File => await CaptureFileAsync(entry, cancellationToken).ConfigureAwait(false),
                     ScanEntryKind.Symlink => ZeroContentVersion(entry, EntryKind.Symlink),
                     ScanEntryKind.Special => ZeroContentVersion(entry, EntryKind.Special),
-                    _ => throw new InvalidOperationException($"A {entry.Kind} entry cannot be a leaf."),
+                    _ => throw new InvalidOperationException(Strings.FormatFrame_EntryCannotLeaf(entry.Kind)),
                 };
 
                 if (manifest is null)

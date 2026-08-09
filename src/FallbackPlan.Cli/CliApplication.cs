@@ -16,6 +16,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.Cli.Resources;
 
 namespace FallbackPlan.Cli;
 
@@ -174,7 +175,7 @@ public static class CliApplication
             }
             catch (Exception exception) when (exception is FormatException or ArgumentException)
             {
-                throw new CliFailureException($"'{hex}' is not a 64-hex-digit object identifier.");
+                throw new CliFailureException(Strings.FormatCliApplication_NotHexDigitObjectIdentifier(hex));
             }
         }
 
@@ -222,7 +223,7 @@ public static class CliApplication
                 var filePath = parse.GetValue(fileArgument)!;
                 if (!File.Exists(filePath))
                 {
-                    throw new CliFailureException($"'{filePath}' does not exist.");
+                    throw new CliFailureException(Strings.FormatCliApplication_DoesNotExist(filePath));
                 }
 
                 using var session = await OpenWritingSessionAsync(parse, "archive", cancellationToken).ConfigureAwait(false);
@@ -292,7 +293,7 @@ public static class CliApplication
                 var metadata = await session.Store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
                 if (!metadata.Found)
                 {
-                    throw new CliFailureException($"No object exists at '{key.Value}'.");
+                    throw new CliFailureException(Strings.FormatCliApplication_NoObjectExists(key.Value));
                 }
 
                 using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Hierarchy.DeriveContentIdKey());
@@ -335,13 +336,13 @@ public static class CliApplication
 
                 if (!reader.TryLocateRecord(objectId, out _, out var entry))
                 {
-                    throw new CliFailureException("No record with that object identifier exists in any loaded blob.");
+                    throw new CliFailureException(Strings.CliApplication_NoRecordWithObjectIdentifier);
                 }
 
                 var read = await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
                 if (read.Outcome != RecordReadOutcome.Ok)
                 {
-                    throw new CliFailureException($"The record failed to read: {read.Outcome}.");
+                    throw new CliFailureException(Strings.FormatCliApplication_RecordFailedRead(read.Outcome));
                 }
 
                 output.WriteLine($"object type    {entry.ObjectType}");
@@ -449,7 +450,7 @@ public static class CliApplication
                 {
                     if (parse.GetValue(targetSnapshotOption) is not null)
                     {
-                        throw new CliFailureException("--target-snapshot requires --forensic; the checkpoint-plus-delta rebuild is already bounded.");
+                        throw new CliFailureException(Strings.CliApplication_TargetSnapshotRequiresForensicCheckpoint);
                     }
 
                     var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
@@ -509,7 +510,7 @@ public static class CliApplication
                     var read = await reader.ReadSegmentAsync(ParseObjectId(manifestIdHex), cancellationToken).ConfigureAwait(false);
                     if (read.Outcome != RecordReadOutcome.Ok)
                     {
-                        throw new CliFailureException($"The manifest record failed to read: {read.Outcome}.");
+                        throw new CliFailureException(Strings.FormatCliApplication_ManifestRecordFailedRead(read.Outcome));
                     }
 
                     using var engine = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
@@ -556,13 +557,13 @@ public static class CliApplication
                 }
                 else
                 {
-                    throw new CliFailureException("Pass --manifest <object-id> or --snapshot <snapshot-id>.");
+                    throw new CliFailureException(Strings.CliApplication_PassManifestObjectIdSnapshot);
                 }
 
                 var read = await reader.ReadSegmentAsync(manifestId, cancellationToken).ConfigureAwait(false);
                 if (read.Outcome != RecordReadOutcome.Ok)
                 {
-                    throw new CliFailureException($"The manifest record failed to read: {read.Outcome}.");
+                    throw new CliFailureException(Strings.FormatCliApplication_ManifestRecordFailedRead(read.Outcome));
                 }
 
                 var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
@@ -578,7 +579,7 @@ public static class CliApplication
                 if (!result.Success)
                 {
                     File.Delete(outputPath);
-                    throw new CliFailureException($"Restore refused: {result.FailureDetail}");
+                    throw new CliFailureException(Strings.FormatCliApplication_RestoreRefused(result.FailureDetail));
                 }
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -615,16 +616,16 @@ public static class CliApplication
                     var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, cancellationToken).ConfigureAwait(false);
                     if (treeRead.Outcome != RecordReadOutcome.Ok)
                     {
-                        throw new CliFailureException($"The snapshot's root tree failed to read: {treeRead.Outcome}.");
+                        throw new CliFailureException(Strings.FormatCliApplication_SnapshotSRootTreeFailed(treeRead.Outcome));
                     }
 
                     var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
                     var file = tree.Entries.FirstOrDefault(treeEntry => treeEntry.EntryKind == EntryKind.File)
-                        ?? throw new CliFailureException("The snapshot's tree holds no file entry.");
+                        ?? throw new CliFailureException(Strings.CliApplication_SnapshotSTreeHoldsNo);
                     return file.ObjectId;
                 }
 
-                throw new CliFailureException($"No snapshot {snapshotHex} exists in this repository.");
+                throw new CliFailureException(Strings.FormatCliApplication_NoSnapshotExistsRepository(snapshotHex));
             }
         }
 
@@ -750,14 +751,12 @@ public static class CliApplication
                     if (!catalogue.EnumerateSnapshots().Any(
                             snapshot => snapshot.SnapshotId.Span.SequenceEqual(snapshotId)))
                     {
-                        throw new CliFailureException(
-                            $"snapshot {Hex(snapshotId)} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.");
+                        throw new CliFailureException(Strings.FormatCliApplication_SnapshotNotCatalogue(Hex(snapshotId)));
                     }
 
                     if (path.Length > 0 && catalogue.LookupPath(snapshotId, path) is null)
                     {
-                        throw new CliFailureException(
-                            $"'{path}' does not exist in snapshot {Hex(snapshotId)} — or the catalogue is stale; run `rebuild-index`.");
+                        throw new CliFailureException(Strings.FormatCliApplication_DoesNotExistSnapshot(path, Hex(snapshotId)));
                     }
                 }
 

@@ -6,6 +6,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
 
@@ -125,8 +126,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         if (encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
-            throw new ArgumentException(
-                "Format version 1 admits one record AEAD, aes-256-gcm-v1 (specification 03 §6); any other profile is refused, not guessed.",
+            throw new ArgumentException(Strings.BlobWriter_FormatVersionAdmitsOneRecord,
                 nameof(encryptionProfile));
         }
 
@@ -141,7 +141,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
         else
         {
-            throw new ArgumentException($"A blob salt is exactly {BlobKeyDeriver.BlobSaltLength} bytes.", nameof(blobSalt));
+            throw new ArgumentException(Strings.FormatBlobWriter_BlobSaltExactlyBytes(BlobKeyDeriver.BlobSaltLength), nameof(blobSalt));
         }
 
         var envelope = new BlobEnvelope(
@@ -480,8 +480,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         if (!CanAppend(storedPayload.Length))
         {
-            throw new InvalidOperationException(
-                "The record does not fit this blob; seal and start a new one — records are never split (specification 04 §8).");
+            throw new InvalidOperationException(Strings.BlobWriter_RecordDoesNotFitBlob);
         }
 
         var ordinal = (uint)_entries.Count;

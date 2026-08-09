@@ -5,6 +5,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -227,7 +228,7 @@ public sealed class IndexPublisher : IDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused index object '{key}' with a failed precondition.");
+            throw new IOException(Strings.FormatIndexPublisher_StoreRefusedIndexObjectWith(key));
         }
     }
 
@@ -235,8 +236,7 @@ public sealed class IndexPublisher : IDisposable
     {
         if (generation > uint.MaxValue)
         {
-            throw new IndexFormatException(
-                $"Generation {generation} exceeds the key hierarchy's u32 generation space (specification 03 §4).");
+            throw new IndexFormatException(Strings.FormatIndexPublisher_GenerationExceedsKeyHierarchyS(generation));
         }
 
         return new KeyGeneration((uint)generation);

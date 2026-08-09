@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
@@ -29,7 +30,7 @@ internal static class KeyedFileIdentity
     {
         if (deviceId.Length != 16)
         {
-            throw new ArgumentException("The device identifier is exactly 16 bytes.", nameof(deviceId));
+            throw new ArgumentException(Strings.KeyedFileIdentity_DeviceIdentifierExactlyBytes, nameof(deviceId));
         }
 
         Span<byte> message = stackalloc byte[label.Length + 16 + 8];

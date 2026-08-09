@@ -6,6 +6,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Index.Resources;
 
 namespace FallbackPlan.Repository.Index.Journal;
 
@@ -89,7 +90,7 @@ public sealed class JournalPublisher : IDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused journal record {sequence} with a failed precondition.");
+            throw new IOException(Strings.FormatJournalPublisher_StoreRefusedJournalRecordWith(sequence));
         }
 
         _sequence.MarkAccounted(sequence);

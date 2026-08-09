@@ -8,6 +8,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
 
@@ -220,7 +221,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
 
         if (put.Outcome == PutOutcome.PreconditionFailed)
         {
-            throw new IOException($"The store refused snapshot object '{key}' with a failed precondition.");
+            throw new IOException(Strings.FormatManifestBuilder_StoreRefusedSnapshotObjectWith(key));
         }
     }
 
@@ -305,7 +306,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
 
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
-                throw new IOException($"The store refused blob '{storeKey}' with a failed precondition.");
+                throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
             }
 
             FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(

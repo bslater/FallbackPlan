@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
+using FallbackPlan.Repository.Format.Resources;
 
 namespace FallbackPlan.Repository.Format.RecoveryKit;
 
@@ -74,33 +75,29 @@ public static class RecoveryKitCodec
         var span = data.Span;
         if (span.Length < HeaderLength + ChecksumLength)
         {
-            throw new RecoveryKitFormatException(
-                $"A kit is at least {HeaderLength + ChecksumLength} bytes; got {span.Length}.");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_KitLeastBytesGot(HeaderLength + ChecksumLength, span.Length));
         }
 
         if (!span[..8].SequenceEqual(Magic))
         {
-            throw new RecoveryKitFormatException("Not a FallbackPlan recovery kit: the FBPKRKIT magic is absent.");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_NotFallbackPlanRecoveryKitFBPKRKIT);
         }
 
         var framedVersion = BinaryPrimitives.ReadUInt16BigEndian(span[8..]);
         if (framedVersion != 1)
         {
-            throw new RecoveryKitFormatException(
-                $"Kit format version {framedVersion} is not supported by this implementation (v1 only).");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_KitFormatVersionNotSupported(framedVersion));
         }
 
         var bodyLength = BinaryPrimitives.ReadUInt32BigEndian(span[12..]);
         if (bodyLength > MaxBodyLength)
         {
-            throw new RecoveryKitFormatException(
-                $"The kit declares a {bodyLength}-byte body; the bound is {MaxBodyLength} (specifications/recovery-kit §3).");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_KitDeclaresByteBodyBound(bodyLength, MaxBodyLength));
         }
 
         if (span.Length != HeaderLength + (int)bodyLength + ChecksumLength)
         {
-            throw new RecoveryKitFormatException(
-                $"The kit is {span.Length} bytes; the framing declares {HeaderLength + bodyLength + ChecksumLength}.");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_KitBytesFramingDeclares(span.Length, HeaderLength + bodyLength + ChecksumLength));
         }
 
         // Checksum before the body is interpreted (§3) — a transcription or
@@ -109,16 +106,14 @@ public static class RecoveryKitCodec
         SHA256.HashData(span[..(HeaderLength + (int)bodyLength)], digest);
         if (!digest.SequenceEqual(span[(HeaderLength + (int)bodyLength)..]))
         {
-            throw new RecoveryKitFormatException(
-                "The kit checksum does not verify — transcription or storage damage (specifications/recovery-kit §3).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitChecksumDoesNotVerify);
         }
 
         var kit = DecodeBody(data.Slice(HeaderLength, (int)bodyLength));
 
         if (kit.KitFormatVersion != framedVersion)
         {
-            throw new RecoveryKitFormatException(
-                $"The framed version ({framedVersion}) and body key 1 ({kit.KitFormatVersion}) disagree.");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_FramedVersionBodyKeyDisagree(framedVersion, kit.KitFormatVersion));
         }
 
         return kit;
@@ -128,13 +123,12 @@ public static class RecoveryKitCodec
     {
         if (kit.KdfSalt.Length != 16 || kit.IssuingDeviceId.Length != 16)
         {
-            throw new RecoveryKitFormatException("kdf salt and issuing device id are 16 bytes each (specifications/recovery-kit §2).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KdfSaltIssuingDeviceId);
         }
 
         if (!kit.KeyObject.Span.StartsWith(Keys.KeyObjectFraming.Magic))
         {
-            throw new RecoveryKitFormatException(
-                "Key 5 must be a verbatim FBPKKEYS key object (specifications/recovery-kit §2).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey);
         }
     }
 
@@ -196,8 +190,7 @@ public static class RecoveryKitCodec
         var count = reader.ReadStartMap();
         if (count != 10)
         {
-            throw new RecoveryKitFormatException(
-                $"A v1 kit body carries exactly 10 keys; got {count} (specifications/recovery-kit §2).");
+            throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_VKitBodyCarriesExactly(count));
         }
 
         ushort? version = null, formatVersion = null;
@@ -231,7 +224,7 @@ public static class RecoveryKitCodec
                     var kdfCount = reader.ReadStartMap();
                     if (kdfCount != 4)
                     {
-                        throw new RecoveryKitFormatException("kdf_parameters carries exactly 4 keys (specifications/recovery-kit §2).");
+                        throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KdfParametersCarriesExactlyKeys);
                     }
 
                     for (var j = 0; j < kdfCount; j++)
@@ -251,7 +244,7 @@ public static class RecoveryKitCodec
                                 salt = reader.ReadByteString(maxLength: 16);
                                 break;
                             default:
-                                throw new RecoveryKitFormatException("kdf_parameters carries an unknown key (specifications/recovery-kit §2).");
+                                throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KdfParametersCarriesUnknownKey);
                         }
                     }
 
@@ -264,7 +257,7 @@ public static class RecoveryKitCodec
                         var fieldCount = reader.ReadStartMap();
                         if (fieldCount != 4)
                         {
-                            throw new RecoveryKitFormatException("A destination carries exactly 4 keys (specifications/recovery-kit §2).");
+                            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_DestinationCarriesExactlyKeys);
                         }
 
                         string? kind = null, endpoint = null, container = null, prefix = null;
@@ -285,7 +278,7 @@ public static class RecoveryKitCodec
                                     prefix = reader.ReadTextString(maxUtf8Length: 1024);
                                     break;
                                 default:
-                                    throw new RecoveryKitFormatException("A destination carries an unknown key (specifications/recovery-kit §2).");
+                                    throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_DestinationCarriesUnknownKey);
                             }
                         }
 
@@ -305,8 +298,7 @@ public static class RecoveryKitCodec
                     instructions = reader.ReadTextString(maxUtf8Length: 16 * 1024);
                     break;
                 default:
-                    throw new RecoveryKitFormatException(
-                        "The kit body carries an unknown key; a v1 kit assigns keys 1-10 only (specifications/recovery-kit §2).");
+                    throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitBodyCarriesUnknownKey);
             }
         }
 
@@ -317,18 +309,17 @@ public static class RecoveryKitCodec
             || keyObject is null || memory is null || iterations is null || parallelism is null || salt is null
             || deviceId is null || issuedAt is null || instructions is null)
         {
-            throw new RecoveryKitFormatException("The kit body omits a mandatory key (specifications/recovery-kit §2).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitBodyOmitsMandatoryKey);
         }
 
         if (repositoryId.Length != 16 || salt.Length != 16 || deviceId.Length != 16)
         {
-            throw new RecoveryKitFormatException("repository_id, kdf salt, and issuing device id are 16 bytes each.");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_RepositoryIdKdfSaltIssuing);
         }
 
         if (!keyObject.AsSpan().StartsWith(Keys.KeyObjectFraming.Magic))
         {
-            throw new RecoveryKitFormatException(
-                "Key 5 must be a verbatim FBPKKEYS key object (specifications/recovery-kit §2).");
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey);
         }
 
         return new RecoveryKit
