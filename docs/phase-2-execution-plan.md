@@ -314,7 +314,49 @@ Still owed before peer-to-peer replication itself: peer-protocol documents 03
 (replication), 04 (verification) and 05 (quotas). Their behaviour is fixed in
 architecture 09 §1, §5 and §6; what is missing is the wire encoding.
 
-### 2. NFR-PERF-007 on the reference machine
+### 2. The proof debt the pipeline integrity review left on the table
+
+The [pipeline integrity review](review/2026-08-pipeline-integrity-review.md)
+read the built pipeline back against the documents and fixed everything it
+graded — the durability of the writer sequence, the refusal guards on reused
+identifiers, session disposal, spool hygiene, the restore assembly check —
+each proven by a test that failed first. What it deliberately did not invent
+is the test infrastructure below. Each item says what "done" looks like.
+
+1. **Cancel a live publication** —
+   [T-2](review/2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
+   five named tests, owed before Phase 2 closes and reaffirmed by the review
+   as the top test debt. Done when all five exist and pass, including the
+   `ServiceCommandHandler` positive path.
+2. **A store that tears and forgets** — a fault-injecting provider that can
+   deliver a torn object, a lost directory entry after an acknowledged put
+   (the documented `Storage.Local` power-loss window), and an acknowledgement
+   for an object that later vanishes. Done when the interruption suite runs
+   its kill matrix over it and the 04 §5.1 claims still hold.
+3. **Kills inside steps, and the four boundaries the matrix omits**
+   (`ScanSource`, `SegmentAndSeal`, `VerifyAcknowledgements`, `Complete`).
+   Done when the matrix is row-complete against 04 §5.1.
+4. **An interrupted restore** — kill mid-restore, inspect the destination:
+   no partial file visible as complete, and the rerun completes. Done when
+   both are asserted.
+5. **The stale-local-state family** — a catalogue behind the store, a
+   catalogue ahead of the store, a stale dedup cache. The rolled-back
+   sequence file is covered (`SequenceRollbackTests`); the rest of the
+   family is not. Done when each has a named test or a written reason it
+   cannot happen.
+6. **Two real processes** — the writer-role lock and the spool-directory
+   ownership have never been raced across process boundaries; the review
+   documented the ownership rule and left enforcement here. Done when a
+   second process is actually spawned and refused.
+7. **Contract-suite atomicity** (phase 3, with the second provider) — the
+   portable `Storage.ContractTests` do not require atomic visibility or
+   crash durability, so a second provider could pass while offering neither.
+   A design decision about what the contract *requires*, then tests.
+8. **Sample read-back after upload** (with the first remote provider) —
+   architecture 04 §5's optional step-5 sampling, worth building when
+   acknowledgements are less honest than a local fsync.
+
+### 3. NFR-PERF-007 on the reference machine
 
 The one exit criterion no amount of container measurement can close. Everything
 on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
@@ -375,14 +417,7 @@ The lesson is the one the watch list exists for: a plausible mechanism that
 explains a flake is not proof it is the only one. The eager-subscription fix was
 right and necessary, and stopping there was the error.
 
-### 2. NFR-PERF-007 on the reference machine
-
-The one exit criterion no amount of container measurement can close. Everything
-on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
-versions against each other; the ≥400 MB/s figure is stated against a machine
-none of it ran on.
-
-### Watch list — open
+#### Open
 
 `Repository.Tests/EndToEnd/AgentPassTests.A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent`
 fails roughly one run in twelve under four-way parallel full-suite load, on

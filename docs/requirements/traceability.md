@@ -84,14 +84,14 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-SNP-007 | [04 §6.4](../architecture/04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) | [0018](../adr/0018-replica-failure-domains.md) | — *(untested; phase 2)* | 2 |
 | FR-SNP-004 | [04 §4](../architecture/04-concurrency-and-publication.md#4-write-intent) | [0009](../adr/0009-garbage-collection-safety.md) | `InterruptionTests/ConcurrentUploadTests` | 0 |
 | FR-SNP-005 | [04 §4.2.1](../architecture/04-concurrency-and-publication.md#421-expiry-needs-two-conditions-not-one) | [0009](../adr/0009-garbage-collection-safety.md) | `Repository.Tests/JournalTests` | 4 |
-| FR-SNP-006 | [02 §5.3](../architecture/02-repository-format.md#53-spooling-and-sealing) | [0016](../adr/0016-blob-identifier-formation.md) | `Repository.Tests/BlobStoreKeysTests` | 0 |
+| FR-SNP-006 | [02 §5.3](../architecture/02-repository-format.md#53-spooling-and-sealing) | [0016](../adr/0016-blob-identifier-formation.md) | `Repository.Tests/BlobStoreKeysTests`, `InterruptionTests/SequenceRollbackTests` | 0 |
 
 ### Restore and recovery kit
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
 | FR-RST-001 | [08 §1](../architecture/08-restore-and-recovery.md#1-restore-paths) | — | `Repository.Tests/RestorePlanTests` *(in part: snapshot, path and destination end to end; the device, time and file-version selectors do not exist yet — phase 2)* | 1 |
-| FR-RST-002 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/ArchiveRoundTripTests`, `Repository.Tests/ForensicRebuildTests` | 0 |
+| FR-RST-002 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/ArchiveRoundTripTests`, `Repository.Tests/ForensicRebuildTests`, `Repository.Tests/RestoreAssemblyTests` | 0 |
 | FR-RST-003 | [08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-004 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/RestorePlanTests` | 1 |
 | FR-RST-005 | [08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) | — | `Repository.Tests/ArchiveCorruptionTests` | 1 |
@@ -145,7 +145,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-PERF-012, 015 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ForensicRebuildTests`, `Repository.Tests/RestorePlanTests` | 0 |
 | NFR-PERF-014 | [02 §7.1](../architecture/02-repository-format.md#71-structure) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/IndexSizeTests` *(marginal cost ~68 B/object; the fixed 65 536-shard hash table dominates below ~200 000 objects)* | 0 |
 | NFR-PERF-013 | [10 §2](../architecture/10-observability.md#2-technical-metrics) | — | — *(untested; ADR-0029's implementation notes say the CPU cap should be measured rather than inferred from the setting's name, and it has not been)* | 1 |
-| NFR-REL-001, 005 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | `InterruptionTests/BlobSpoolResumeTests`, `InterruptionTests/PublicationInterruptionTests`, `Repository.FuzzTests/ParserFuzzTests` | 0 |
+| NFR-REL-001, 005 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | `InterruptionTests/BlobSpoolResumeTests`, `InterruptionTests/PublicationInterruptionTests`, `InterruptionTests/SequenceRollbackTests`, `InterruptionTests/SessionDisposalTests`, `InterruptionTests/SpoolHygieneTests`, `InterruptionTests/VoidObligationTests`, `Repository.FuzzTests/ParserFuzzTests` | 0 |
 | NFR-REL-002, 007 | [11 §3](../architecture/11-solution-structure.md#3-local-state-separation) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueRebuildTests`, `Repository.Tests/LocalStateSeparationTests` | 1 |
 | NFR-REL-003, 006 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/ForensicRebuildTests` | 0 |
 | NFR-REL-004 | [02 §8.3](../architecture/02-repository-format.md#83-rebuild-never-repairs) | — | `InterruptionTests/CorruptionHarnessTests`, `Repository.Tests/ArchiveCorruptionTests` | 0 |
