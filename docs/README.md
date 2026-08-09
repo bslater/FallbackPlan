@@ -108,6 +108,7 @@ Architecture documents explain *why*; the specification says *what bytes*. Where
 
 - [Architecture review, August 2026](review/2026-08-architecture-review.md) — 6 critical, 7 high, 8 medium findings against the original proposal
 - [Pressure test, August 2026](review/2026-08-fix-pressure-test.md) — the six fixes read back as an implementation contract: 3 critical, 7 high, 5 medium. No fix reversed; two were unsound as written
+- [Duplicati learnings, August 2026](review/2026-08-duplicati-learnings.md) — another engine's fifteen years of field defects read as a test-design input: 14 themes, 22 tests to add, one gap serious enough to fix before Phase 2 closes
 - [Original proposal](review/2026-08-original-proposal.md) — preserved verbatim, superseded
 
 ---
