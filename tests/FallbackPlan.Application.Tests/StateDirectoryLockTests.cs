@@ -17,7 +17,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     public StateDirectoryLockTests() => Directory.CreateDirectory(_root);
 
     [TestMethod]
-    public void The_first_caller_takes_the_writer_role()
+    public void Acquire_WhenTheRoleIsFree_ShouldGrantItAndRecordTheOwner()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 
@@ -27,7 +27,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     }
 
     [TestMethod]
-    public void A_second_caller_is_refused_and_the_holder_is_named()
+    public void Acquire_WhenAnotherRoleHoldsIt_ShouldThrowNamingTheHolder()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 
@@ -43,7 +43,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     }
 
     [TestMethod]
-    public void Releasing_the_role_lets_the_next_caller_take_it()
+    public void TryAcquire_WhenTheHolderHasReleasedIt_ShouldGrantTheRole()
     {
         using (StateDirectoryLock.Acquire(_root, StateDirectoryLock.DirectRole))
         {
@@ -55,7 +55,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     }
 
     [TestMethod]
-    public void Describing_the_holder_reports_nothing_when_the_role_is_free()
+    public void DescribeHolderOrNull_WhenTheRoleIsFree_ShouldReturnNull()
     {
         Assert.IsNull(StateDirectoryLock.DescribeHolderOrNull(_root));
 
@@ -67,7 +67,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     }
 
     [TestMethod]
-    public void An_orphaned_owner_file_does_not_block_acquisition()
+    public void Acquire_WhenAnOrphanedOwnerFileRemains_ShouldStillGrantTheRole()
     {
         // The owner file is informational. If a crash leaves one behind, the
         // operating system has already released the handle — which is exactly
@@ -81,7 +81,7 @@ public sealed class StateDirectoryLockTests : IDisposable
     }
 
     [TestMethod]
-    public void A_stale_holder_that_is_no_longer_running_is_reported_as_such()
+    public void Acquire_WhenTheNamedHolderIsNoLongerRunning_ShouldSaySoInTheRefusal()
     {
         using var held = StateDirectoryLock.Acquire(_root, StateDirectoryLock.ServiceRole);
 

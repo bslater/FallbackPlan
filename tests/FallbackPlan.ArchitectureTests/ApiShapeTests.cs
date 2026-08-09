@@ -20,7 +20,7 @@ namespace FallbackPlan.ArchitectureTests;
 public sealed class ApiShapeTests
 {
     [TestMethod]
-    public void Every_contract_operation_is_asynchronous_and_cancellable()
+    public void ContractOperations_EveryMethod_IsAsynchronousAndCancellable()
     {
         var offenders = new List<string>();
 
@@ -52,7 +52,7 @@ public sealed class ApiShapeTests
     }
 
     [TestMethod]
-    public void Progress_is_streamed_rather_than_returned_as_a_collection()
+    public void ContractOperations_ProgressReporting_StreamsRatherThanReturningACollection()
     {
         // A ten-hour backup's progress cannot be a list you get at the end.
         var watch = typeof(IFallbackPlanService).GetMethod(nameof(IFallbackPlanService.WatchAsync));
@@ -65,7 +65,7 @@ public sealed class ApiShapeTests
     }
 
     [TestMethod]
-    public void Every_outcome_is_a_result_type_rather_than_an_exception()
+    public void ContractOperations_EveryOutcome_IsAResultTypeRatherThanAnException()
     {
         // Expected failures are values. An exception crossing a process
         // boundary loses its type, and its stack means nothing on the far side.
@@ -84,7 +84,7 @@ public sealed class ApiShapeTests
     }
 
     [TestMethod]
-    public void The_contract_carries_no_exception_types()
+    public void ContractSurface_PublicTypes_IncludeNoExceptionTypes()
     {
         var offenders = typeof(ServiceResult).Assembly
             .GetTypes()

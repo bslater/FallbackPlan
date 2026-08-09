@@ -13,7 +13,7 @@ public sealed class StatusAggregationTests
     private const ulong Now = 1_700_000_000_000;
 
     [TestMethod]
-    public void An_unreachable_service_is_stale_with_an_age_never_healthy_and_never_failed()
+    public void StatusRollUp_ServiceIsUnreachable_ReportsStaleWithAnAgeRatherThanHealthyOrFailed()
     {
         var observation = new MachineObservation(
             "laptop",
@@ -32,7 +32,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void A_machine_never_heard_from_is_stale_rather_than_never_backed_up()
+    public void StatusRollUp_MachineNeverHeardFrom_ReportsStaleRatherThanNeverBackedUp()
     {
         var summary = StatusRollup.Summarise(
             new MachineObservation("new-machine", Status: null, LastContactUnixMilliseconds: 0, Reachable: false),
@@ -44,7 +44,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void A_summary_is_derived_from_detail_that_stays_reachable()
+    public void StatusRollUp_SummaryRequested_KeepsTheDetailItWasDerivedFrom()
     {
         var observation = new MachineObservation(
             "desktop",
@@ -65,7 +65,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void Degraded_and_unrecoverable_never_merge()
+    public void StatusRollUp_DegradedAndUnrecoverableTogether_KeepsThemDistinct()
     {
         // NFR-OPS-002 across machines. Unrecoverable means data is already
         // gone; degraded means act soon. A roll-up that showed one for the
@@ -83,7 +83,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void Never_backed_up_outranks_a_protected_sibling_in_the_headline()
+    public void StatusRollUp_NeverBackedUpBesideAProtectedSibling_HeadlinesNeverBackedUp()
     {
         // Enum order would put NeverBackedUp first and therefore mildest, which
         // it is not: a set that has never been captured is among the loudest
@@ -100,7 +100,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void A_roll_up_never_invents_a_state_outside_the_vocabulary()
+    public void StatusRollUp_AnyCombinationOfInputs_ReturnsOnlyDefinedStates()
     {
         var every = Enum.GetValues<ProtectionState>();
         var summary = StatusRollup.Summarise(
@@ -111,7 +111,7 @@ public sealed class StatusAggregationTests
     }
 
     [TestMethod]
-    public void A_fleet_summarises_machine_by_machine()
+    public void FleetStatus_SeveralMachines_SummarisesEachSeparately()
     {
         var fleet = StatusRollup.Summarise(
             [

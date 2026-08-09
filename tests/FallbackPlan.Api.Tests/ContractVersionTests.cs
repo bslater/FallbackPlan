@@ -42,14 +42,14 @@ public sealed class ContractVersionTests : IDisposable
     }
 
     [TestMethod]
-    public void Compatibility_is_by_major_so_additive_changes_do_not_break_a_peer()
+    public void IsCompatibleWith_WhenOnlyTheMinorDiffers_ShouldReturnTrue()
     {
         Assert.IsTrue(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(1, 9)));
         Assert.IsFalse(new ContractVersion(1, 0).IsCompatibleWith(new ContractVersion(2, 0)));
     }
 
     [TestMethod]
-    public void A_mismatch_message_names_both_versions()
+    public void DescribeMismatch_WhenMajorsDiffer_ShouldNameBothVersions()
     {
         var message = ContractVersion.DescribeMismatch(new ContractVersion(1, 0), new ContractVersion(3, 4));
 
@@ -58,7 +58,7 @@ public sealed class ContractVersionTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_client_speaking_an_incompatible_contract_is_refused_by_name_not_disconnected()
+    public async Task ContractNegotiation_ClientSpeaksIncompatibleMajor_RefusesByNameRatherThanDisconnecting()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -78,7 +78,7 @@ public sealed class ContractVersionTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_connected_client_learns_the_version_the_service_speaks()
+    public async Task ContractNegotiation_ClientConnects_ReportsTheVersionTheServiceSpeaks()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);

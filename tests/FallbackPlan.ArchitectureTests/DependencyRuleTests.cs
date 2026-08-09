@@ -92,7 +92,7 @@ public sealed class DependencyRuleTests
     /// whole layering advisory.
     /// </summary>
     [TestMethod]
-    public void Domain_has_no_infrastructure_dependencies()
+    public void Domain_DependencyClosure_ContainsNoInfrastructure()
     {
         AssertPasses(
             Types.InAssembly(Domain)
@@ -116,7 +116,7 @@ public sealed class DependencyRuleTests
     /// failed. See docs/architecture/08-restore-and-recovery.md section 5.
     /// </summary>
     [TestMethod]
-    public void Repository_Format_has_no_provider_or_host_dependencies()
+    public void RepositoryFormat_DependencyClosure_ContainsNoProviderOrHost()
     {
         AssertPasses(
             Types.InAssembly(Format)
@@ -138,7 +138,7 @@ public sealed class DependencyRuleTests
     /// pull a parser for untrusted archives inside the trust boundary (T-15).
     /// </summary>
     [TestMethod]
-    public void Core_does_not_reference_import_implementations()
+    public void CoreAssemblies_DependencyClosure_ReferencesNoImportImplementation()
     {
         foreach (var assembly in new[] { Domain, Format, Crypto, StorageAbstractions })
         {
@@ -157,7 +157,7 @@ public sealed class DependencyRuleTests
     /// into the core. It must therefore know nothing about the repository engine.
     /// </summary>
     [TestMethod]
-    public void Import_Abstractions_depends_only_on_Domain()
+    public void ImportAbstractions_DependencyClosure_ReachesOnlyDomain()
     {
         AssertPasses(
             Types.InAssembly(ImportAbstractions)
@@ -176,7 +176,7 @@ public sealed class DependencyRuleTests
     /// nothing about any concrete provider.
     /// </summary>
     [TestMethod]
-    public void Storage_Abstractions_knows_no_concrete_provider()
+    public void StorageAbstractions_DependencyClosure_KnowsNoConcreteProvider()
     {
         AssertPasses(
             Types.InAssembly(StorageAbstractions)
@@ -203,7 +203,7 @@ public sealed class DependencyRuleTests
     /// the shapes the scanner emits).
     /// </summary>
     [TestMethod]
-    public void Filesystem_depends_only_on_Domain_and_Format()
+    public void Filesystem_DependencyClosure_ReachesOnlyDomainAndFormat()
     {
         foreach (var assembly in new[] { Filesystem, FilesystemLocal })
         {
@@ -232,7 +232,7 @@ public sealed class DependencyRuleTests
     /// recover from (ADR-0005).
     /// </summary>
     [TestMethod]
-    public void Crypto_does_not_depend_on_higher_layers()
+    public void RepositoryCrypto_DependencyClosure_ReachesNoHigherLayer()
     {
         AssertPasses(
             Types.InAssembly(Crypto)
@@ -267,7 +267,7 @@ public sealed class DependencyRuleTests
     /// has already failed (NFR-PORT-001).
     /// </summary>
     [TestMethod]
-    public void Third_party_cryptography_stays_on_its_allowlist()
+    public void ThirdPartyCryptography_EveryAssemblyOffTheAllowlist_ReferencesNone()
     {
         // An allowlist of two, not a tier. ADR-0019 §1 classifies dependencies by
         // blast radius: Repository.Crypto is format-critical, because a defect
@@ -304,7 +304,7 @@ public sealed class DependencyRuleTests
     /// derived this repository's KEK" a per-callsite accident.
     /// </summary>
     [TestMethod]
-    public void No_source_assembly_references_the_test_only_argon2id_oracle()
+    public void Argon2idOracle_EverySourceAssembly_ReferencesTheTestOnlyPackageNowhere()
     {
         foreach (var assembly in AllSourceAssemblies)
         {
@@ -338,7 +338,7 @@ public sealed class DependencyRuleTests
     /// exists right now, so it is the thing to pin.
     /// </summary>
     [TestMethod]
-    public void Repository_Crypto_is_where_third_party_cryptography_actually_lives()
+    public void ThirdPartyCryptography_ProjectFileCanary_StaysInRepositoryCrypto()
     {
         AssertProjectReferences("FallbackPlan.Repository.Crypto", "<PackageReference Include=\"Bodu.Security.Cryptography\" />");
     }
@@ -358,7 +358,7 @@ public sealed class DependencyRuleTests
     /// otherwise arrive silently.
     /// </summary>
     [TestMethod]
-    public void Recovery_tool_closure_admits_only_the_two_intended_bodu_packages()
+    public void RecoveryToolClosure_BoduPackages_AdmitsOnlyTheTwoIntended()
     {
         AssertPasses(
             Types.InAssembly(Format)
@@ -382,7 +382,7 @@ public sealed class DependencyRuleTests
     /// it, so it should fail here and be made deliberately.
     /// </summary>
     [TestMethod]
-    public void Only_Application_may_reference_the_recurrence_engine()
+    public void RecurrenceEngine_EveryAssemblyBesidesApplication_ReferencesItNowhere()
     {
         foreach (var assembly in AllSourceAssemblies.Where(a => a != Application))
         {
@@ -405,7 +405,7 @@ public sealed class DependencyRuleTests
     /// move becomes a decision rather than a drift.
     /// </summary>
     [TestMethod]
-    public void Application_is_where_the_recurrence_engine_actually_lives()
+    public void RecurrenceEngine_ProjectFileCanary_StaysInApplication()
     {
         AssertProjectReferences(
             "FallbackPlan.Application", "<PackageReference Include=\"Bodu.Globalization.Recurrence\" />");
@@ -428,7 +428,7 @@ public sealed class DependencyRuleTests
     /// project.
     /// </summary>
     [TestMethod]
-    public void Application_depends_only_on_Domain()
+    public void Application_DependencyClosure_ReachesOnlyDomain()
     {
         AssertPasses(
             Types.InAssembly(Application)
@@ -454,7 +454,7 @@ public sealed class DependencyRuleTests
     /// transitive smuggle via a new ProjectReference fails loudly).
     /// </summary>
     [TestMethod]
-    public void Recovery_depends_on_format_crypto_packing_and_storage_only()
+    public void RecoveryTool_DependencyClosure_ReachesOnlyFormatCryptoPackingAndStorage()
     {
         AssertPasses(
             Types.InAssembly(Recovery)
@@ -530,7 +530,7 @@ public sealed class DependencyRuleTests
     /// <c>04-concurrency-and-publication.md</c> §9 forbids.
     /// </summary>
     [TestMethod]
-    public void Api_reaches_nothing_below_domain()
+    public void Api_DependencyClosure_ReachesNothingBelowDomain()
     {
         AssertPasses(
             Types.InAssembly(Api)
@@ -552,7 +552,7 @@ public sealed class DependencyRuleTests
     /// be a recovery tool.
     /// </summary>
     [TestMethod]
-    public void Recovery_references_neither_the_contract_nor_the_application_layer()
+    public void RecoveryTool_DependencyClosure_ReferencesNeitherContractNorApplication()
     {
         AssertPasses(
             Types.InAssembly(Recovery)
@@ -569,7 +569,7 @@ public sealed class DependencyRuleTests
     /// is the one place the rule must be checked rather than assumed.
     /// </summary>
     [TestMethod]
-    public void The_cli_is_the_only_front_end_permitted_the_application_layer()
+    public void ApplicationLayer_EveryFrontEndBesidesTheCli_ReferencesItNowhere()
     {
         var reference = Types.InAssembly(Cli)
             .That()
@@ -588,7 +588,7 @@ public sealed class DependencyRuleTests
     /// must not become a route to anything else (NFR-SEC-009).
     /// </summary>
     [TestMethod]
-    public void The_keystore_knows_nothing_about_repositories()
+    public void Keystore_DependencyClosure_KnowsNothingAboutRepositories()
     {
         AssertPasses(
             Types.InAssembly(Keystore)

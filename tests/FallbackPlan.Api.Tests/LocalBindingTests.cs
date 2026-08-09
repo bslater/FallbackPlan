@@ -24,7 +24,7 @@ public sealed class LocalBindingTests : IDisposable
     private CancellationToken Timeout => _timeout.Token;
 
     [TestMethod]
-    public async Task A_command_travels_to_the_service_and_its_result_comes_back()
+    public async Task LocalBinding_CommandSentOverTheEndpoint_ReturnsTheServicesResult()
     {
         var service = new FakeService
         {
@@ -44,7 +44,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Several_commands_travel_over_one_connection_in_order()
+    public async Task LocalBinding_SeveralCommandsOnOneConnection_PreservesTheirOrder()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -60,7 +60,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_error_result_crosses_the_boundary_as_a_result_not_an_exception()
+    public async Task LocalBinding_ServiceReturnsAnError_CrossesTheBoundaryAsAResult()
     {
         // NFR-PORT-004. An exception thrown on the far side loses its type and
         // its stack means nothing here, so every outcome a caller might handle
@@ -82,7 +82,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Progress_events_stream_to_a_watching_client()
+    public async Task LocalBinding_ClientIsWatching_StreamsProgressEvents()
     {
         var service = new FakeService();
         await using var listener = LocalServiceListener.Start(service, _state);
@@ -147,7 +147,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Connecting_when_no_service_is_listening_fails_with_a_stated_reason()
+    public async Task Connect_WhenNoServiceIsListening_ShouldThrowWithAStatedReason()
     {
         var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(
             () => LocalServiceClient.ConnectAsync(_state, "test", Timeout).AsTask());
@@ -156,7 +156,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_default_service_binds_a_filesystem_endpoint_and_never_a_port()
+    public async Task ServiceBinding_DefaultConfiguration_BindsAFilesystemEndpointAndNoPort()
     {
         // FR-SVC-003, and the property this whole binding exists for:
         // topologies 1 and 2 carry no port and no credential to talk to your
@@ -189,7 +189,7 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public void The_remote_binding_is_absent_until_enabled_and_refuses_without_pairing()
+    public void RemoteBinding_NotEnabledOrUnpaired_RefusesToListen()
     {
         Assert.IsTrue(RemoteBindingOptions.Disabled.TryValidate(out var noReason));
         Assert.IsNull(noReason);

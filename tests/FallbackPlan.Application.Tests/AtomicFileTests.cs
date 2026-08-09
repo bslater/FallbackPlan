@@ -18,7 +18,7 @@ public sealed class AtomicFileTests : IDisposable
     public AtomicFileTests() => Directory.CreateDirectory(_root);
 
     [TestMethod]
-    public void A_write_creates_the_file_and_its_directory()
+    public void WriteAllText_WhenTheDirectoryDoesNotExist_ShouldCreateItAndWriteTheFile()
     {
         var path = Path.Combine(_root, "nested", "state.json");
 
@@ -28,7 +28,7 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
-    public void A_write_leaves_no_temporary_file_behind()
+    public void WriteAllText_WhenReplacingAnExistingFile_ShouldLeaveNoTemporaryFileBehind()
     {
         var path = Path.Combine(_root, "state.json");
 
@@ -40,7 +40,7 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
-    public void The_previous_contents_survive_until_the_replacement_is_complete()
+    public void WriteAllText_WhenReplacingRepeatedly_ShouldNeverExposeATruncatedFile()
     {
         // The property that matters: at no instant does the destination hold a
         // truncated file. Observing the instant directly needs a crash, so the
@@ -58,7 +58,7 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
-    public void Concurrent_writers_in_one_process_do_not_collide_on_a_temporary_name()
+    public void WriteAllText_WhenCalledConcurrently_ShouldNotCollideOnATemporaryName()
     {
         // Under single ownership two writers here would be a bug, but a fixed
         // temp name is the kind of assumption that is safe until it is not —
