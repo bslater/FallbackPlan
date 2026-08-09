@@ -21,7 +21,7 @@ public sealed class ZstdSegmentCodecTests
         [.. Enumerable.Repeat("compressible segment content "u8.ToArray(), length / 29 + 1).SelectMany(text => text).Take(length)];
 
     [TestMethod]
-    public void Round_trip_is_byte_identical()
+    public void ZstdSegmentCodec_CompressedThenDecompressed_RoundTripsByteIdentically()
     {
         using var codec = CreateCodec();
         var plaintext = Compressible(50_000);
@@ -37,7 +37,7 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
-    public void Output_is_a_single_standard_zstd_frame()
+    public void ZstdSegmentCodec_AnyOutput_IsASingleStandardZstdFrame()
     {
         using var codec = CreateCodec();
         var plaintext = Compressible(10_000);
@@ -50,7 +50,7 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
-    public void Incompressible_input_is_stored_uncompressed()
+    public void ZstdSegmentCodec_InputIsIncompressible_StoresItUncompressed()
     {
         using var codec = CreateCodec();
         var plaintext = new byte[10_000];
@@ -62,7 +62,7 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
-    public void Decompress_refuses_a_frame_exceeding_the_logical_length()
+    public void Decompress_WhenTheFrameExceedsTheLogicalLength_ShouldThrow()
     {
         // A record's logical_length is the hard output limit (10 §4.1): a
         // frame claiming more is refused, never allocated for.
@@ -76,7 +76,7 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
-    public void Decompress_refuses_a_short_result()
+    public void Decompress_WhenTheResultIsShorterThanDeclared_ShouldThrow()
     {
         using var codec = CreateCodec();
         var plaintext = Compressible(10_000);
@@ -88,7 +88,7 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
-    public void Decompress_refuses_trailing_bytes_after_the_frame()
+    public void Decompress_WhenBytesTrailTheFrame_ShouldThrow()
     {
         using var codec = CreateCodec();
         var plaintext = Compressible(10_000);
@@ -104,13 +104,13 @@ public sealed class ZstdSegmentCodecTests
     [DataRow(0)]
     [DataRow(20)]
     [DataRow(-1)]
-    public void Levels_outside_one_to_nineteen_are_refused(int level)
+    public void ZstdSegmentCodec_CompressionLevelIsOutOfRange_IsRefused(int level)
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new ZstdSegmentCodec(level, SixtyFourKiB));
     }
 
     [TestMethod]
-    public void The_threshold_is_a_permille_value()
+    public void ZstdSegmentCodec_TheStorageThreshold_IsAPermilleValue()
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
             CompressionThreshold.StoreCompressed(1000, 1, 1001));

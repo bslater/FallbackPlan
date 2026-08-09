@@ -74,7 +74,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_plan_surfaces_case_collisions_and_degradations_before_any_byte_moves()
+    public async Task RestorePlan_CaseCollisionsAndDegradations_AreSurfacedBeforeAnyByteMoves()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/Readme.txt", Deterministic(100, 1));
@@ -115,7 +115,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Execution_displaces_applies_metadata_after_content_and_accounts_for_everything()
+    public async Task RestoreExecution_AnExistingFileIsInTheWay_DisplacesItAndAppliesMetadataAfterContent()
     {
         var content = Deterministic(50_000, 5);
         var source = new FakeFileSystemSource();
@@ -180,7 +180,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     [PlatformCondition(TestPlatforms.Posix, "restoring mode bits is a POSIX concern; Windows carries an ACL the executor applies differently")]
     [PlatformTrait(TestPlatforms.Posix)]
     [UnsupportedOSPlatform("windows")]
-    public async Task Restored_files_carry_their_captured_posix_mode()
+    public async Task RestoreExecution_APosixSource_RestoresEachFilesCapturedMode()
     {
         // The metadata-after-content ordering is asserted platform-neutrally
         // above; this is the POSIX half of that contract — the captured mode
@@ -212,7 +212,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_targeted_forensic_rebuild_is_enough_to_restore_that_snapshot()
+    public async Task RestoreExecution_AfterATargetedForensicRebuild_RestoresThatSnapshot()
     {
         // Two snapshots; the drill targets only the first. The rebuilt
         // catalogue plus the repository must restore it even though the
@@ -269,7 +269,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     [DataRow("/etc/passwd")]
     [DataRow("data/sub\\file.bin")]
     [DataRow("C:/windows/system32/x.dll")]
-    public async Task A_path_that_is_not_plain_components_is_refused(string hostilePath)
+    public async Task RestorePlan_APathIsNotPlainComponents_IsRefused(string hostilePath)
     {
         // The store is written by other participants and holds historical
         // data, both of which the threat model treats as adversarial. A
@@ -307,7 +307,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_skipped_required_item_makes_the_restore_partial()
+    public async Task RestoreExecution_ARequiredItemIsSkipped_ReportsTheRestoreAsPartial()
     {
         // Architecture 08 §3: a restore that recovered 9 999 of 10 000 files
         // is a failed restore that recovered 9 999 files. "Nothing threw" is
@@ -351,7 +351,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Two_restores_of_one_path_do_not_destroy_the_first_displaced_copy()
+    public async Task RestoreExecution_TheSamePathRestoredTwice_KeepsTheFirstDisplacedCopy()
     {
         var (plan, target, reader, keys) = await OneRealItemAsync(0xD3);
 
@@ -392,7 +392,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Historical_content_lands_in_quarantine_unless_in_place_is_asked_for()
+    public async Task RestoreExecution_HistoricalContentWithoutInPlaceAsked_LandsInQuarantine()
     {
         var (plan, target, reader, keys) = await OneRealItemAsync(0xD4);
 
@@ -434,7 +434,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Restore_selects_by_snapshot_by_path_and_by_destination()
+    public async Task RestorePlan_SelectingBySnapshotPathAndDestination_ChoosesTheRightItems()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("keep/wanted.bin", Deterministic(3_000, 11));

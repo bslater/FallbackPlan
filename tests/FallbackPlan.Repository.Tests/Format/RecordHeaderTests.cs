@@ -33,7 +33,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Serialize_then_parse_round_trips()
+    public void RecordHeader_SerialisedThenParsed_RoundTrips()
     {
         var parsed = RecordHeader.Parse(SampleBytes());
 
@@ -47,7 +47,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Field_offsets_are_byte_exact()
+    public void RecordHeader_ASerialisedHeader_PlacesEveryFieldAtItsSpecifiedOffset()
     {
         var bytes = SampleBytes();
 
@@ -62,7 +62,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void A_bad_marker_is_refused()
+    public void RecordHeader_MarkerIsWrong_IsRefused()
     {
         var bytes = SampleBytes();
         bytes[0] = 0x00;
@@ -71,7 +71,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Logical_length_zero_is_a_damage_finding()
+    public void RecordHeader_LogicalLengthIsZero_IsADamageFinding()
     {
         var bytes = SampleBytes();
         bytes.AsSpan(10, 8).Clear();
@@ -81,7 +81,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Stored_length_over_64_mib_is_refused_before_allocation()
+    public void RecordHeader_StoredLengthExceedsSixtyFourMebibytes_IsRefusedBeforeAllocation()
     {
         var bytes = SampleBytes();
         bytes[18] = 0xFF;
@@ -93,7 +93,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void An_ordinal_above_65535_is_refused()
+    public void RecordHeader_OrdinalExceedsTheMaximum_IsRefused()
     {
         var bytes = SampleBytes();
         bytes[6] = 0x00;
@@ -108,7 +108,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void The_reserved_object_type_is_refused()
+    public void RecordHeader_ObjectTypeIsTheReservedOne_IsRefused()
     {
         var bytes = SampleBytes();
         bytes[1] = 0x07;
@@ -117,7 +117,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Unknown_profiles_are_refused_not_guessed()
+    public void RecordHeader_ProfileIsUnknown_IsRefusedRatherThanGuessed()
     {
         var unknownCompression = SampleBytes();
         unknownCompression[3] = 0x77;
@@ -129,7 +129,7 @@ public sealed class RecordHeaderTests
     }
 
     [TestMethod]
-    public void Profile_none_with_mismatched_lengths_is_refused()
+    public void RecordHeader_CompressionIsNoneAndLengthsDisagree_IsRefused()
     {
         var bytes = new byte[RecordHeader.Length];
         new RecordHeader(

@@ -26,7 +26,7 @@ public sealed class RepositoryDescriptorCodecTests
         UnstableFormat: unstable);
 
     [TestMethod]
-    public void A_descriptor_round_trips()
+    public void RepositoryDescriptor_EncodedAndDecoded_RoundTrips()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
 
@@ -41,7 +41,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void Serialization_is_deterministic()
+    public void RepositoryDescriptor_EncodedTwice_ProducesIdenticalBytes()
     {
         SequenceAssert.AreEqual(
             RepositoryDescriptorCodec.Serialize(Sample()),
@@ -49,7 +49,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void An_object_without_the_magic_is_not_a_repository_not_a_parse_error()
+    public void RepositoryDescriptor_MagicIsAbsent_SaysItIsNotARepositoryRatherThanAParseError()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
         bytes[0] ^= 0x01;
@@ -58,7 +58,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void A_flipped_body_byte_is_an_integrity_failure_not_a_parse_error()
+    public void RepositoryDescriptor_ABodyByteIsFlipped_IsAnIntegrityFailureRatherThanAParseError()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
         bytes[RepositoryDescriptorCodec.HeaderLength + 3] ^= 0x01;
@@ -69,7 +69,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void A_truncated_descriptor_is_a_format_violation()
+    public void RepositoryDescriptor_Truncated_IsAFormatViolation()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
 
@@ -78,7 +78,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void A_nonzero_reserved_field_is_ignored_on_read()
+    public void RepositoryDescriptor_ReservedFieldIsNonZero_IsIgnoredOnRead()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
 
@@ -94,7 +94,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void An_unknown_required_feature_is_refused_and_named()
+    public void RepositoryDescriptor_ARequiredFeatureIsUnknown_IsRefusedAndNamed()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample() with { RequiredFeatures = [0x0042] });
 
@@ -104,7 +104,7 @@ public sealed class RepositoryDescriptorCodecTests
     }
 
     [TestMethod]
-    public void A_declared_body_length_over_the_limit_is_refused_before_allocation()
+    public void RepositoryDescriptor_DeclaredBodyLengthExceedsTheLimit_IsRefusedBeforeAllocation()
     {
         var bytes = RepositoryDescriptorCodec.Serialize(Sample());
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(12), 200_000);

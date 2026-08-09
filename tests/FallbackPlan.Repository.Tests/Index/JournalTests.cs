@@ -40,7 +40,7 @@ public sealed class JournalTests
 
     [TestMethod]
     [DynamicData(nameof(EveryKind))]
-    public void Every_record_kind_round_trips_through_the_two_pass_signature(JournalRecord record)
+    public void JournalRecord_EveryKind_RoundTripsThroughTheTwoPassSignature(JournalRecord record)
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, new KeyGeneration(1));
@@ -61,7 +61,7 @@ public sealed class JournalTests
     }
 
     [TestMethod]
-    public void Verification_descends_generations_and_finds_the_signing_one()
+    public void JournalVerification_TheSigningGenerationIsOlder_DescendsGenerationsToFindIt()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
 
@@ -90,7 +90,7 @@ public sealed class JournalTests
     [DataRow(9UL, 50_000UL, false)]  // generation alone — a slow writer must not expire on siblings' activity
     [DataRow(3UL, 120_000UL, false)] // duration alone — wall clock alone reintroduces the clock dependency
     [DataRow(9UL, 120_000UL, true)]  // both — expired
-    public void Expiry_requires_both_conditions(ulong currentGeneration, ulong nowMs, bool expected)
+    public void IntentExpiry_OnlyOneConditionIsMet_DoesNotExpire(ulong currentGeneration, ulong nowMs, bool expected)
     {
         // Intent: expiry_generation 5, declared 100 000 ms, issued at 0,
         // skew margin 10 000 ms → duration door opens at 110 000 ms.
@@ -104,7 +104,7 @@ public sealed class JournalTests
     }
 
     [TestMethod]
-    public void The_skew_margin_delays_the_duration_door()
+    public void IntentExpiry_WithinTheSkewMargin_DelaysTheDurationCondition()
     {
         // Duration elapsed exactly, but the skew margin has not — not expired.
         Assert.IsFalse(IntentLifecycle.IsExpired(5, 100_000, 0, 9, 100_000, 10_000));
@@ -112,7 +112,7 @@ public sealed class JournalTests
     }
 
     [TestMethod]
-    public void The_survey_unions_extensions_honours_retirement_and_treats_unparseable_as_live()
+    public void IntentSurvey_ExtensionsRetirementsAndUnparseableRecords_UnionsCoverageAndTreatsUnparseableAsLive()
     {
         var records = new List<JournalRecord>
         {

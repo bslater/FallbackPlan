@@ -29,7 +29,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         WriterId.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"));
 
     [TestMethod]
-    public async Task A_single_writer_reuses_its_own_segments_without_a_verification_read()
+    public async Task DedupReuse_ASingleWritersOwnSegments_AreReusedWithNoVerificationRead()
     {
         var store = new CountingObjectStore(CreateStore());
         using var keys = CreateKeys();
@@ -66,7 +66,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_repository_domain_reuses_another_writers_segments_after_confirming_them()
+    public async Task RepositoryDomain_AnotherWritersSegments_AreConfirmedThenReused()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
 
@@ -77,7 +77,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_device_domain_refuses_another_writers_segments_and_stores_its_own()
+    public async Task DeviceDomain_AnotherWritersSegments_AreRefusedAndStoredAgain()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Device);
 
@@ -91,7 +91,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_unverified_domain_reuses_another_writers_segments_without_reading_them()
+    public async Task UnverifiedDomain_AnotherWritersSegments_AreReusedWithoutBeingRead()
     {
         using var second = await SecondWriterPublishes(
             DedupTrustDomain.RepositoryUnverified, corruptFirstWritersData: true);
@@ -106,7 +106,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_segment_that_does_not_verify_is_written_again_and_reported()
+    public async Task RepositoryDomain_ASegmentFailsVerification_IsWrittenAgainAndReported()
     {
         using var second = await SecondWriterPublishes(
             DedupTrustDomain.Repository, corruptFirstWritersData: true);
@@ -123,7 +123,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_confirmed_segment_is_not_confirmed_again()
+    public async Task RepositoryDomain_ASegmentAlreadyConfirmed_IsNotReadAgain()
     {
         using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
         var readsToVerify = second.Store.Reads;

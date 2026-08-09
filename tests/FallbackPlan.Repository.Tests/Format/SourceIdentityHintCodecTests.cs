@@ -34,7 +34,7 @@ public sealed class SourceIdentityHintCodecTests
     };
 
     [TestMethod]
-    public void A_hint_round_trips_exactly()
+    public void SourceIdentityHint_EncodedAndDecoded_RoundTripsExactly()
     {
         var decoded = SourceIdentityHintCodec.Decode(SourceIdentityHintCodec.Encode(Sample()));
 
@@ -44,7 +44,7 @@ public sealed class SourceIdentityHintCodecTests
     }
 
     [TestMethod]
-    public void The_same_hint_always_encodes_to_the_same_bytes()
+    public void SourceIdentityHint_EncodedTwice_ProducesIdenticalBytes()
     {
         SequenceAssert.AreEqual(SourceIdentityHintCodec.Encode(Sample()), SourceIdentityHintCodec.Encode(Sample()));
     }
@@ -52,7 +52,7 @@ public sealed class SourceIdentityHintCodecTests
     [TestMethod]
     [DataRow(15)]
     [DataRow(17)]
-    public void A_source_key_of_the_wrong_width_is_refused(int length)
+    public void SourceIdentityHint_SourceKeyIsTheWrongWidth_IsRefused(int length)
     {
         var hint = Sample() with { SourceKey = new byte[length] };
 
@@ -60,7 +60,7 @@ public sealed class SourceIdentityHintCodecTests
     }
 
     [TestMethod]
-    public void A_snapshot_identifier_of_the_wrong_width_is_refused()
+    public void SourceIdentityHint_SnapshotIdentifierIsTheWrongWidth_IsRefused()
     {
         var hint = Sample() with { SnapshotId = new byte[15] };
 
@@ -68,7 +68,7 @@ public sealed class SourceIdentityHintCodecTests
     }
 
     [TestMethod]
-    public void An_unknown_schema_version_is_refused_rather_than_guessed()
+    public void SourceIdentityHint_SchemaVersionIsUnknown_IsRefusedRatherThanGuessed()
     {
         var encoded = SourceIdentityHintCodec.Encode(Sample());
 
@@ -79,7 +79,7 @@ public sealed class SourceIdentityHintCodecTests
     }
 
     [TestMethod]
-    public void Trailing_bytes_are_refused()
+    public void SourceIdentityHint_TrailingBytesFollowTheDocument_AreRefused()
     {
         var encoded = SourceIdentityHintCodec.Encode(Sample());
 

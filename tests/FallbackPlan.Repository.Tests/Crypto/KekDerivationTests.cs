@@ -18,7 +18,7 @@ public sealed class KekDerivationTests
     [DataRow(64u * 1024 - 1, 3u, (byte)4, "kdf_memory_below_creation_minimum")]
     [DataRow(64u * 1024, 2u, (byte)4, "kdf_iterations_below_creation_minimum")]
     [DataRow(64u * 1024, 3u, (byte)3, "kdf_parallelism_below_creation_minimum")]
-    public void Creation_refuses_below_minimum_parameters_with_the_named_defect(
+    public void RepositoryCreation_KdfParametersBelowMinimum_RefusesNamingTheDefect(
         uint memoryKiB, uint iterations, byte parallelism, string expectedDefect)
     {
         using var passphrase = Passphrase.Create("a passphrase");
@@ -31,7 +31,7 @@ public sealed class KekDerivationTests
     }
 
     [TestMethod]
-    public void Opening_accepts_below_minimum_parameters_and_warns()
+    public void RepositoryOpen_KdfParametersBelowMinimum_SucceedsWithAWarning()
     {
         // Stored parameters are facts about existing bytes: tiny values keep
         // this test fast while exercising the warn path.
@@ -45,7 +45,7 @@ public sealed class KekDerivationTests
     }
 
     [TestMethod]
-    public void The_salt_is_exactly_sixteen_bytes()
+    public void KekDerivation_TheGeneratedSalt_IsExactlySixteenBytes()
     {
         using var passphrase = Passphrase.Create("a passphrase");
 
@@ -54,7 +54,7 @@ public sealed class KekDerivationTests
     }
 
     [TestMethod]
-    public void Different_salts_derive_different_keys()
+    public void KekDerivation_DifferentSalts_DeriveDifferentKeys()
     {
         using var passphrase = Passphrase.Create("a passphrase");
         var parameters = new Argon2Parameters { MemoryKiB = 64, Iterations = 1, Parallelism = 1 };

@@ -33,7 +33,7 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
         };
 
     [TestMethod]
-    public async Task Every_emitted_attribute_is_on_the_allowlist_and_the_instruments_fire()
+    public async Task Telemetry_EveryEmittedAttribute_IsOnTheAllowlistAndTheInstrumentsFire()
     {
         var captured = new ConcurrentBag<(string Instrument, KeyValuePair<string, object?>[] Tags)>();
 

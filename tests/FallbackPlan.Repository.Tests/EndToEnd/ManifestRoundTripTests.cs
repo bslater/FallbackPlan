@@ -19,7 +19,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 public sealed class ManifestRoundTripTests : ArchiveTestHarness
 {
     [TestMethod]
-    public async Task A_file_version_manifest_written_to_a_metadata_blob_reads_back_and_restores_the_file()
+    public async Task FileVersionManifest_WrittenToAMetadataBlob_ReadsBackAndRestoresTheFile()
     {
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
@@ -70,7 +70,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_standalone_snapshot_seals_under_its_bounded_prefix_and_opens_back()
+    public async Task StandaloneSnapshot_SealedUnderItsBoundedPrefix_OpensBack()
     {
         var store = CreateStore();
         using var keys = CreateKeys();

@@ -66,7 +66,7 @@ public sealed class AgentPassTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_due_set_runs_once_and_the_next_pass_skips_it()
+    public async Task AgentPass_ABackupSetIsDue_RunsItOnceAndSkipsItOnTheNextPass()
     {
         await CreateRepositoryAsync();
         WriteConfiguration("every 4h");
@@ -108,7 +108,7 @@ public sealed class AgentPassTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unscheduled_set_is_manual_only_never_an_error()
+    public async Task AgentPass_ABackupSetHasNoSchedule_ReportsManualOnlyRatherThanAnError()
     {
         await CreateRepositoryAsync();
         WriteConfiguration(schedule: null!);
@@ -118,7 +118,7 @@ public sealed class AgentPassTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent()
+    public async Task AgentPass_AMissingRootAndABadSchedule_AreClassifiedRecoverableAndPermanent()
     {
         await CreateRepositoryAsync();
 

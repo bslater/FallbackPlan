@@ -80,7 +80,7 @@ public sealed class IndexSizeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_checkpoint_costs_no_more_than_eighty_stored_bytes_per_distinct_object()
+    public async Task Checkpoint_AtScale_CostsNoMoreThanEightyStoredBytesPerDistinctObject()
     {
         const int smaller = 131_072;
         const int larger = 524_288;

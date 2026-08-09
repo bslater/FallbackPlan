@@ -18,7 +18,7 @@ public sealed class BlobStoreKeysTests
         StoreBlobKey.FromBytes(Convert.FromHexString("6fc6ed5b0ac59f95a4a936c8fce01488"));
 
     [TestMethod]
-    public void The_data_path_shape_matches_the_specification()
+    public void BlobStoreKey_ADataBlob_MatchesTheSpecifiedPathShape()
     {
         var objectKey = BlobStoreKeys.ForBlob(BlobClass.Data, Key);
 
@@ -26,13 +26,13 @@ public sealed class BlobStoreKeysTests
     }
 
     [TestMethod]
-    public void The_metadata_class_maps_to_meta()
+    public void BlobStoreKey_AMetadataBlob_MapsToTheMetaSegment()
     {
         Assert.StartsWith("blobs/meta/", BlobStoreKeys.ForBlob(BlobClass.Metadata, Key).Value, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public void The_shard_is_the_first_four_rendered_characters()
+    public void BlobStoreKey_AnyKey_ShardsOnItsFirstFourRenderedCharacters()
     {
         var objectKey = BlobStoreKeys.ForBlob(BlobClass.Data, Key);
         var components = objectKey.Components;

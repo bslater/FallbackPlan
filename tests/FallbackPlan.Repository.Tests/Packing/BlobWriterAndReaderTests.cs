@@ -77,7 +77,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Every_record_is_locatable_and_verifiable_from_the_blob_and_keys_alone()
+    public async Task BlobReader_TheBlobAndKeysAlone_LocatesAndVerifiesEveryRecord()
     {
         // The C2 acceptance criterion, verbatim: no index, no catalogue, no
         // in-memory state from the writer — only the stored object and keys.
@@ -100,7 +100,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_footer_is_reached_in_exactly_two_range_reads()
+    public async Task BlobReader_OpeningABlob_ReachesTheFooterInExactlyTwoRangeReads()
     {
         var store = CreateStore();
         var (key, length, _) = await WriteAndUploadAsync(store, recordCount: 3);
@@ -119,7 +119,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_failed_record_leaves_every_other_record_readable()
+    public async Task BlobReader_OneRecordIsDamaged_LeavesEveryOtherRecordReadable()
     {
         // Corruption is local (04 §7): flip one ciphertext byte of record 1.
         var store = CreateStore();
@@ -153,7 +153,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Target_size_and_record_count_both_trigger_should_seal()
+    public async Task BlobWriter_TargetSizeOrRecordCountReached_SignalsItShouldSeal()
     {
         var smallTarget = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 1_000, MaximumSizeBytes = 100_000 };
         await using (var writer = CreateWriter(smallTarget, counter: 1))
@@ -188,7 +188,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_record_that_would_exceed_the_maximum_is_refused_never_split()
+    public async Task BlobWriter_ARecordWouldExceedTheMaximum_IsRefusedRatherThanSplit()
     {
         var tiny = BlobWriteProfile.LocalDefault with { TargetSizeBytes = 1_000, MaximumSizeBytes = 2_000 };
         await using var writer = CreateWriter(tiny, counter: 3);
@@ -205,7 +205,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Truncating_the_locator_is_refused()
+    public async Task BlobReader_TheLocatorIsTruncated_RefusesToOpen()
     {
         var store = CreateStore();
         var (key, length, _) = await WriteAndUploadAsync(store, recordCount: 2);
@@ -219,7 +219,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Distinct_salts_separate_writers_sharing_a_counter()
+    public async Task BlobWriter_TwoWritersSharingACounter_AreSeparatedByDistinctSalts()
     {
         await using var first = CreateWriter(counter: 7);
         await using var second = BlobWriter.Create(

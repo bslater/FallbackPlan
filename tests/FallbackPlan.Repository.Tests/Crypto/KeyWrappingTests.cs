@@ -31,7 +31,7 @@ public sealed class KeyWrappingTests
     }
 
     [TestMethod]
-    public void Wrap_then_unwrap_round_trips()
+    public void WrapThenUnwrap_TheSamePassphrase_RoundTripsTheKey()
     {
         using var kek = CreateKek();
         var nonce = new byte[KeyWrapping.NonceLength];
@@ -46,7 +46,7 @@ public sealed class KeyWrappingTests
     }
 
     [TestMethod]
-    public void Every_unwrap_failure_is_indistinguishable()
+    public void Unwrap_AnyWrongInput_FailsIndistinguishably()
     {
         using var kek = CreateKek();
         using var wrongKek = CreateKek();

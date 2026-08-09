@@ -18,7 +18,7 @@ public sealed class ObjectIdDeriverTests
     [DataRow((byte)0x00)]
     [DataRow((byte)0x07)] // reserved store-key domain separator
     [DataRow((byte)0x10)]
-    public void Unassigned_object_types_are_refused(byte value)
+    public void Derive_WhenTheObjectTypeIsUnassigned_ShouldThrow(byte value)
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);
 
@@ -26,7 +26,7 @@ public sealed class ObjectIdDeriverTests
     }
 
     [TestMethod]
-    public void The_key_is_exactly_thirty_two_bytes()
+    public void ObjectIdDeriver_WhenTheKeyIsNotThirtyTwoBytes_ShouldThrow()
     {
         Assert.ThrowsExactly<ArgumentException>(() => new ObjectIdDeriver(new byte[31]));
         Assert.ThrowsExactly<ArgumentException>(() => new ObjectIdDeriver(new byte[33]));
@@ -34,7 +34,7 @@ public sealed class ObjectIdDeriverTests
     }
 
     [TestMethod]
-    public void Different_keys_produce_unrelated_identifiers()
+    public void Derive_DifferentContentIdKeys_ProduceUnrelatedIdentifiers()
     {
         var keyA = new byte[32];
         var keyB = new byte[32];
@@ -49,7 +49,7 @@ public sealed class ObjectIdDeriverTests
     }
 
     [TestMethod]
-    public void Different_object_types_produce_unrelated_identifiers()
+    public void Derive_DifferentObjectTypes_ProduceUnrelatedIdentifiers()
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);
 
@@ -59,7 +59,7 @@ public sealed class ObjectIdDeriverTests
     }
 
     [TestMethod]
-    public void Incremental_and_one_shot_hashing_agree()
+    public void ContentHasher_IncrementalAndOneShotHashing_Agree()
     {
         var plaintext = Enumerable.Range(0, 100_000).Select(value => (byte)value).ToArray();
 

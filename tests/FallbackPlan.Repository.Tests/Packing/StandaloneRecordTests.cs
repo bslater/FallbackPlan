@@ -39,7 +39,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void A_standalone_record_round_trips()
+    public void StandaloneRecord_SealedThenOpened_RoundTrips()
     {
         var (sealedBytes, objectId, payload) = SealSample();
 
@@ -57,7 +57,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void A_record_moved_between_repositories_fails_authentication()
+    public void StandaloneRecord_MovedBetweenRepositories_FailsAuthentication()
     {
         var (sealedBytes, _, _) = SealSample();
         var record = StandaloneRecordFraming.Parse(sealedBytes);
@@ -71,7 +71,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void A_tampered_ciphertext_byte_fails_authentication_and_emits_nothing()
+    public void StandaloneRecord_ACiphertextByteIsTampered_FailsAuthenticationAndEmitsNothing()
     {
         var (sealedBytes, _, _) = SealSample();
         sealedBytes[StandaloneRecordFraming.PrefixLength + RecordHeader.Length + 5] ^= 0x01;
@@ -83,7 +83,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void A_wrong_generation_key_fails_authentication()
+    public void StandaloneRecord_OpenedWithTheWrongGenerationKey_FailsAuthentication()
     {
         var (sealedBytes, _, _) = SealSample();
         var record = StandaloneRecordFraming.Parse(sealedBytes);
@@ -94,7 +94,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void Distinct_counters_produce_distinct_keys_for_one_salt()
+    public void StandaloneRecord_DistinctCountersUnderOneSalt_ProduceDistinctKeys()
     {
         // The shared sequence space is what makes (salt, writer, counter)
         // unique per object (ADR-0022 §Decision 1) — two counters must never
@@ -114,7 +114,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void An_object_without_the_magic_is_named_as_not_a_standalone_record()
+    public void StandaloneRecord_MagicIsAbsent_SaysItIsNotAStandaloneRecord()
     {
         var (sealedBytes, _, _) = SealSample();
         sealedBytes[0] ^= 0x01;
@@ -124,7 +124,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void Truncation_and_trailing_bytes_are_refused()
+    public void StandaloneRecord_TruncatedOrCarryingTrailingBytes_IsRefused()
     {
         var (sealedBytes, _, _) = SealSample();
 
@@ -135,7 +135,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void A_declared_length_over_the_metadata_bound_is_refused_before_allocation()
+    public void StandaloneRecord_DeclaredLengthExceedsTheMetadataBound_IsRefusedBeforeAllocation()
     {
         var (sealedBytes, _, _) = SealSample();
 
@@ -153,7 +153,7 @@ public sealed class StandaloneRecordTests
     }
 
     [TestMethod]
-    public void The_reserved_object_type_still_cannot_be_sealed()
+    public void StandaloneRecord_ObjectTypeIsTheReservedOne_CannotBeSealed()
     {
         var payload = "x"u8.ToArray();
 

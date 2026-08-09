@@ -51,7 +51,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_covered_blob_digest_round_trips_and_is_covered_by_the_signature()
+    public void IndexDelta_CoveredBlobDigests_RoundTripAndAreCoveredByTheSignature()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -82,7 +82,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void Covered_blob_digests_are_parallel_to_the_covered_blobs_or_absent()
+    public void IndexDelta_CoveredBlobDigests_AreParallelToTheCoveredBlobsOrAbsent()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -118,7 +118,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_delta_round_trips_through_the_two_pass_signature()
+    public void IndexDelta_SignedInTwoPasses_RoundTripsAndVerifies()
     {
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -150,7 +150,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_multi_shard_delta_omits_key_5_and_round_trips()
+    public void IndexDelta_SpanningSeveralShards_OmitsTheSingleShardKeyAndRoundTrips()
     {
         // Object ids are HMAC outputs, so real deltas span shards — key 5 is
         // absent (ADR-0022 §Decision 4). Distinct fill bytes land in
@@ -170,7 +170,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_declared_shard_that_mismatches_an_entry_is_refused()
+    public void IndexDelta_DeclaredShardDisagreesWithAnEntry_IsRefused()
     {
         var delta = new IndexDelta
         {
@@ -185,7 +185,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_checkpoint_round_trips_with_computed_shard_hashes()
+    public void Checkpoint_WithComputedShardHashes_RoundTrips()
     {
         var entries = new List<IndexEntry> { Entry(0x11, 1), Entry(0x22, 2), Entry(0x11, 3) };
         var (shardSet, hashes) = ShardHashes.Compute(entries);
@@ -216,7 +216,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void A_checkpoint_with_an_unenumerated_shard_is_refused()
+    public void Checkpoint_AShardIsNotEnumerated_IsRefused()
     {
         var checkpoint = new Checkpoint
         {
@@ -231,7 +231,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Publish_and_load_round_trips_with_verified_signatures()
+    public async Task IndexPlane_PublishedThenLoaded_RoundTripsWithVerifiedSignatures()
     {
         var store = CreateStore();
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -258,7 +258,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_crash_skipped_sequence_gets_a_void_delta_and_the_gap_closes()
+    public async Task IndexPlane_ACrashSkippedSequence_IsClosedByAVoidDelta()
     {
         var store = CreateStore();
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -294,7 +294,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unaccounted_gap_is_patient_then_damage()
+    public async Task IndexPlane_AnUnaccountedGap_IsToleratedForAWhileThenReportedAsDamage()
     {
         var store = CreateStore();
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -333,7 +333,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_tampered_index_object_is_a_security_finding_and_excluded()
+    public async Task IndexPlane_AnObjectIsTampered_IsExcludedAndReportedAsASecurityFinding()
     {
         var store = CreateStore();
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -377,7 +377,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_checkpoint_subsumes_deltas_and_newer_deltas_still_apply()
+    public async Task IndexPlane_ACheckpointSubsumesEarlierDeltas_StillAppliesNewerOnes()
     {
         var store = CreateStore();
         using var hierarchy = new KeyHierarchy(MasterKey);
@@ -411,7 +411,7 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
-    public void The_sequence_store_survives_process_restarts()
+    public void WriterSequence_AcrossProcessRestarts_SurvivesAndContinues()
     {
         var sequence = CreateSequence();
         var first = sequence.AllocateNext();

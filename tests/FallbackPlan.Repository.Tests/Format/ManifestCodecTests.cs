@@ -48,7 +48,7 @@ public sealed class ManifestCodecTests
     };
 
     [TestMethod]
-    public void A_file_version_manifest_round_trips_byte_identically()
+    public void FileVersionManifest_EncodedAndDecoded_RoundTripsByteIdentically()
     {
         var encoded = FileVersionManifestCodec.Encode(SampleFileVersion());
         var decoded = FileVersionManifestCodec.Decode(encoded);
@@ -60,7 +60,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void An_unknown_manifest_key_is_rejected_not_skipped()
+    public void FileVersionManifest_CarriesAnUnknownKey_IsRejectedRatherThanSkipped()
     {
         // Hand-build a manifest carrying key 14 — exactly where a physical
         // hint would smuggle in (06 §3.1; exit criterion 2's teeth).
@@ -76,7 +76,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_four_element_segment_reference_is_rejected()
+    public void FileVersionManifest_SegmentReferenceHasFourElements_IsRejected()
     {
         // A fourth array position is the other place a blob id could hide
         // (06 §3: "an array of exactly three elements").
@@ -99,7 +99,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_coverage_gap_is_rejected()
+    public void FileVersionManifest_SegmentReferencesLeaveAGap_IsRejected()
     {
         var manifest = SampleFileVersion() with
         {
@@ -116,7 +116,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void Overlapping_references_are_rejected()
+    public void FileVersionManifest_SegmentReferencesOverlap_IsRejected()
     {
         var manifest = SampleFileVersion() with
         {
@@ -132,7 +132,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void Sparse_extents_complete_the_coverage()
+    public void FileVersionManifest_SparseExtentsFillTheGaps_IsAccepted()
     {
         var manifest = SampleFileVersion() with
         {
@@ -152,7 +152,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_zero_length_file_has_empty_references_and_the_hash_of_the_empty_string()
+    public void FileVersionManifest_AZeroLengthFile_HasNoReferencesAndTheEmptyHash()
     {
         var manifest = SampleFileVersion() with
         {
@@ -168,7 +168,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void Tree_entries_out_of_byte_order_are_rejected()
+    public void TreeManifest_EntriesAreOutOfByteOrder_IsRejected()
     {
         var tree = new TreeManifest
         {
@@ -186,7 +186,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void Duplicate_tree_names_are_rejected_but_case_variants_are_legitimate()
+    public void TreeManifest_DuplicateNames_AreRejectedWhileCaseVariantsAreAccepted()
     {
         var duplicate = new TreeManifest
         {
@@ -217,7 +217,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_tree_chain_validates_and_flattens_in_chain_order()
+    public void TreeChain_AValidChain_ValidatesAndFlattensInChainOrder()
     {
         var head = new TreeManifest
         {
@@ -239,7 +239,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_chain_whose_shards_interleave_is_a_damage_finding()
+    public void TreeChain_ShardsInterleave_IsADamageFinding()
     {
         var head = new TreeManifest
         {
@@ -258,7 +258,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_continuation_carrying_head_fields_is_rejected()
+    public void TreeChain_AContinuationCarriesHeadFields_IsRejected()
     {
         var head = new TreeManifest
         {
@@ -297,7 +297,7 @@ public sealed class ManifestCodecTests
     };
 
     [TestMethod]
-    public void A_signed_snapshot_round_trips_and_verifies_through_the_two_pass_construction()
+    public void SnapshotManifest_SignedAndRoundTripped_VerifiesThroughTheTwoPassConstruction()
     {
         using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -317,7 +317,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_tampered_snapshot_field_fails_verification_as_a_security_finding()
+    public void SnapshotManifest_AFieldIsTampered_FailsVerificationAsASecurityFinding()
     {
         using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
@@ -336,7 +336,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void Absent_optional_snapshot_keys_are_omitted_not_nulled()
+    public void SnapshotManifest_OptionalKeysAreAbsent_AreOmittedRatherThanNulled()
     {
         var manifest = SampleSnapshot() with { ErrorManifest = null, ObservedClockSkewMs = null };
 
@@ -348,7 +348,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void A_policy_manifest_round_trips_under_both_segmentation_profiles()
+    public void PolicyManifest_UnderBothSegmentationProfiles_RoundTrips()
     {
         var fixedPolicy = new PolicyManifest
         {
@@ -389,7 +389,7 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
-    public void An_error_manifest_round_trips()
+    public void ErrorManifest_EncodedAndDecoded_RoundTrips()
     {
         var manifest = new ErrorManifest(
         [

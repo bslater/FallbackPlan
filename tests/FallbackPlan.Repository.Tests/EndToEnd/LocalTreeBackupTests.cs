@@ -34,7 +34,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_real_directory_tree_publishes_and_every_file_restores_byte_identical()
+    public async Task BackupAndRestore_ARealDirectoryTree_RestoresEveryFileByteIdentically()
     {
         var random = new Random(7);
         var files = new Dictionary<string, byte[]>

@@ -45,7 +45,7 @@ public sealed class IndexPrecedenceTests
             sequence);
 
     [TestMethod]
-    public void Rule_1_the_highest_generation_wins()
+    public void IndexPrecedence_EntriesAtDifferentGenerations_ChoosesTheHighest()
     {
         var older = Entry(blobSeed: 1, generation: 1, writerSeed: 9, sequence: 500);
         var newer = Entry(blobSeed: 2, generation: 2, writerSeed: 1, sequence: 1, IndexEntryType.Supersession);
@@ -60,7 +60,7 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
-    public void Rule_2_at_equal_generation_the_higher_writer_then_sequence_wins()
+    public void IndexPrecedence_EntriesAtEqualGeneration_ChoosesTheHigherWriterThenSequence()
     {
         var lowWriter = Entry(blobSeed: 1, generation: 3, writerSeed: 0x10, sequence: 99);
         var highWriter = Entry(blobSeed: 2, generation: 3, writerSeed: 0x20, sequence: 1);
@@ -76,7 +76,7 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
-    public void Rule_3_a_deleted_blob_winner_is_superseded_and_reported()
+    public void IndexPrecedence_TheWinnerNamesADeletedBlob_IsSupersededAndReported()
     {
         var deletedWinner = Entry(blobSeed: 1, generation: 5, writerSeed: 1, sequence: 10, IndexEntryType.Supersession);
         var liveLoser = Entry(blobSeed: 2, generation: 4, writerSeed: 1, sequence: 5);
@@ -95,7 +95,7 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
-    public void Every_candidate_deleted_resolves_to_nothing_with_findings()
+    public void IndexPrecedence_EveryCandidateNamesADeletedBlob_ResolvesToNothingWithFindings()
     {
         var findings = new List<DamageFinding>();
         var winner = IndexPrecedence.Resolve(
@@ -108,7 +108,7 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
-    public void Any_application_order_converges_on_the_same_state()
+    public void IndexPrecedence_AnyApplicationOrder_ConvergesOnTheSameState()
     {
         // 07 §6's claim, checked: the winner is a property of the entries,
         // not of arrival sequence. Build a messy multiset — duplicate
@@ -142,7 +142,7 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
-    public void Two_insertions_for_one_object_are_benign_and_either_location_serves()
+    public void IndexPrecedence_TwoLocationsForOneObject_AreBenignAndEitherServes()
     {
         // 07 §3: two writers independently stored the same content in
         // different blobs. Either serves — the resolver just picks the

@@ -16,7 +16,7 @@ public sealed class KeyBundleCodecTests
         new(Enumerable.Range(0, 32).Select(value => (byte)value).ToArray(), 3, 1, 1_722_600_000_000);
 
     [TestMethod]
-    public void Encode_then_decode_round_trips_byte_identically()
+    public void KeyBundle_EncodedAndDecoded_RoundTripsByteIdentically()
     {
         using var bundle = SampleBundle();
         var encoded = KeyBundleCodec.Encode(bundle);
@@ -31,7 +31,7 @@ public sealed class KeyBundleCodecTests
     }
 
     [TestMethod]
-    public void An_unknown_key_is_tolerated_and_skipped()
+    public void KeyBundle_CarriesAnUnknownKey_SkipsItAndDecodesTheRest()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(5);
@@ -53,7 +53,7 @@ public sealed class KeyBundleCodecTests
     }
 
     [TestMethod]
-    public void A_missing_required_field_is_refused()
+    public void KeyBundle_ARequiredFieldIsMissing_IsRefused()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(3);
@@ -69,7 +69,7 @@ public sealed class KeyBundleCodecTests
     }
 
     [TestMethod]
-    public void A_wrong_length_master_key_is_refused()
+    public void KeyBundle_MasterKeyIsTheWrongLength_IsRefused()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(4);
@@ -87,14 +87,14 @@ public sealed class KeyBundleCodecTests
     }
 
     [TestMethod]
-    public void Non_canonical_bundle_bytes_are_refused()
+    public void KeyBundle_BytesAreNonCanonical_AreRefused()
     {
         // Map with duplicate key 1 — violates the deterministic profile.
         Assert.ThrowsExactly<CborFormatException>(() => KeyBundleCodec.Decode(Convert.FromHexString("a201000100")));
     }
 
     [TestMethod]
-    public void A_bundle_over_the_size_limit_is_refused_before_parsing()
+    public void KeyBundle_ExceedsTheSizeLimit_IsRefusedBeforeParsing()
     {
         Assert.ThrowsExactly<KeyObjectFormatException>(() => KeyBundleCodec.Decode(new byte[4_097]));
     }

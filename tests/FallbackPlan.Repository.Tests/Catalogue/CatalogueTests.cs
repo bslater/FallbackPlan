@@ -54,7 +54,7 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
-    public void Applying_the_same_delta_twice_is_a_no_op()
+    public void ApplyDelta_TheSameDeltaTwice_IsANoOp()
     {
         using var catalogue = Open();
 
@@ -74,7 +74,7 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
-    public void The_sql_resolver_agrees_with_IndexPrecedence_on_randomized_entry_sets()
+    public void ResolveLocation_AnyRandomisedEntrySet_AgreesWithIndexPrecedence()
     {
         // Two implementations of 07 §3 — the in-memory resolver and the SQL
         // ORDER BY — must never diverge. Randomized parity over many objects
@@ -122,7 +122,7 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
-    public void A_deleted_blob_winner_is_excluded_and_reported()
+    public void ResolveLocation_TheWinningEntryNamesADeletedBlob_ExcludesItAndReportsAFinding()
     {
         using var catalogue = Open();
 
@@ -152,7 +152,7 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
-    public void A_repository_mismatch_drops_and_rebuilds_the_cache()
+    public void Open_RepositoryIdentityDiffers_DropsAndRebuildsTheCache()
     {
         using (var catalogue = Open())
         {
@@ -176,7 +176,7 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
-    public void Dedup_lookup_round_trips_by_content_identifier()
+    public void LookupByContent_ARecordedSegment_RoundTripsByContentIdentifier()
     {
         using var catalogue = Open();
 

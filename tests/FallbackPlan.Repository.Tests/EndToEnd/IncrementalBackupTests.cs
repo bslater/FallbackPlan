@@ -82,7 +82,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_live_catalogue_answers_snapshots_paths_and_listings_after_publication()
+    public async Task Catalogue_AfterPublication_AnswersSnapshotsPathsAndListings()
     {
         var source = BuildSource();
         var store = CreateStore();
@@ -123,7 +123,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_deleted_file_leaves_the_earlier_snapshot_whole_and_still_restorable()
+    public async Task Backup_AFileIsDeleted_LeavesTheEarlierSnapshotWholeAndRestorable()
     {
         var source = BuildSource();
         var store = CreateStore();
@@ -181,7 +181,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_unchanged_file_short_circuits_without_its_content_being_read()
+    public async Task IncrementalBackup_TheFileIsUnchanged_ShortCircuitsWithoutReadingItsContent()
     {
         var source = BuildSource();
         var store = CreateStore();
@@ -227,7 +227,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_changed_file_stores_only_the_segments_the_index_does_not_already_locate()
+    public async Task IncrementalBackup_TheFileChanged_StoresOnlyTheSegmentsTheIndexLacks()
     {
         // One file: 4 × 64 KiB segments. The second version changes only
         // the last segment, so exactly one new data record is written.
@@ -272,7 +272,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_rebuilt_catalogue_answers_the_same_queries_and_disables_the_short_circuit()
+    public async Task IncrementalBackup_TheCatalogueWasRebuilt_AnswersTheSameQueriesAndDisablesTheShortCircuit()
     {
         var source = BuildSource();
         var store = CreateStore();
@@ -344,7 +344,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_new_version_of_a_file_names_the_version_it_replaced()
+    public async Task FileVersion_TheFileChanged_NamesTheVersionItReplaced()
     {
         var source = BuildSource();
         var store = CreateStore();
@@ -380,7 +380,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_renamed_file_keeps_its_ancestry_rather_than_starting_over()
+    public async Task IncrementalBackup_TheFileWasRenamed_KeepsItsAncestryAndReadsNoContent()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
@@ -457,7 +457,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_rename_keeps_its_ancestry_after_the_catalogue_has_been_rebuilt()
+    public async Task IncrementalBackup_TheFileWasRenamedAfterACatalogueRebuild_StillKeepsItsAncestry()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
@@ -514,7 +514,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_file_untouched_for_several_snapshots_still_finds_its_ancestor_when_it_moves()
+    public async Task IncrementalBackup_AFileUntouchedForSeveralSnapshotsThenMoved_StillFindsItsAncestor()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/quiet.bin", Deterministic(3_000, 21), fileId: 7_777);
@@ -584,7 +584,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_source_identity_hints_are_advisory_and_their_absence_costs_only_the_rename()
+    public async Task SourceIdentityHints_DeletedFromTheStore_CostOnlyTheRenameAncestry()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
@@ -649,7 +649,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
 
     [TestMethod]
-    public async Task A_snapshot_rewrites_metadata_for_what_changed_and_not_for_the_repository()
+    public async Task IncrementalBackup_OneFileChanged_RewritesMetadataForItAloneAndNotTheRepository()
     {
         // 1 024 files across 32 directories: enough that "proportional to the
         // repository" and "proportional to the change" are far apart.
@@ -716,7 +716,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_published_delta_carries_a_digest_of_every_blob_it_covers()
+    public async Task IndexDelta_Published_CarriesADigestOfEveryBlobItCovers()
     {
         var source = BuildSource();
         var store = CreateStore();

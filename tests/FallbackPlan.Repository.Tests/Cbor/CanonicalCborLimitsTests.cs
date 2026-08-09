@@ -12,7 +12,7 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 public sealed class CanonicalCborLimitsTests
 {
     [TestMethod]
-    public void Byte_string_longer_than_the_stated_maximum_is_refused()
+    public void ReadByteString_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // 100-byte string, canonical prefix 58 64.
         var bytes = new byte[102];
@@ -25,7 +25,7 @@ public sealed class CanonicalCborLimitsTests
     }
 
     [TestMethod]
-    public void Byte_string_within_the_maximum_is_read()
+    public void ReadByteString_WhenWithinTheStatedMaximum_ShouldReturnIt()
     {
         var bytes = Convert.FromHexString("43010203");
 
@@ -35,7 +35,7 @@ public sealed class CanonicalCborLimitsTests
     }
 
     [TestMethod]
-    public void Text_string_longer_than_the_stated_maximum_is_refused()
+    public void ReadTextString_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // 100-character text string, canonical prefix 78 64.
         var bytes = new byte[102];
@@ -49,7 +49,7 @@ public sealed class CanonicalCborLimitsTests
     }
 
     [TestMethod]
-    public void Array_longer_than_the_stated_maximum_is_refused()
+    public void ReadArray_WhenLongerThanTheStatedMaximum_ShouldThrow()
     {
         // Five-element array of zeros.
         var bytes = Convert.FromHexString("850000000000");
@@ -60,7 +60,7 @@ public sealed class CanonicalCborLimitsTests
     }
 
     [TestMethod]
-    public void Fixed_length_byte_string_read_rejects_the_wrong_length()
+    public void ReadFixedLengthByteString_WhenTheLengthDiffers_ShouldThrow()
     {
         var reader = new CanonicalCborReader(Convert.FromHexString("43010203"));
 

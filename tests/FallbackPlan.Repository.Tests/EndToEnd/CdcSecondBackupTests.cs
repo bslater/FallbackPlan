@@ -18,7 +18,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_front_insertion_rewrites_only_the_first_segment()
+    public async Task CdcBackup_BytesInsertedAtTheFront_RewritesOnlyTheFirstSegment()
     {
         var original = BuildRandomFile(2_000_000, seed: 20260803);
         var store = CreateStore();
@@ -60,7 +60,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Changed_cdc_parameters_forbid_reuse_and_re_archive_in_full()
+    public async Task CdcBackup_ParametersChangedSinceTheLastRun_ForbidsReuseAndReArchivesInFull()
     {
         var original = BuildRandomFile(1_200_000, seed: 99);
         var store = CreateStore();
@@ -83,7 +83,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_unchanged_file_writes_no_records_under_cdc()
+    public async Task CdcBackup_TheFileIsUnchanged_WritesNoRecords()
     {
         var original = BuildRandomFile(1_000_000, seed: 5);
         var store = CreateStore();

@@ -94,7 +94,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Resume_produces_a_sealed_blob_byte_identical_to_an_uninterrupted_run()
+    public async Task SpoolResume_AfterAnInterruption_ProducesAByteIdenticalSealedBlob()
     {
         // Uninterrupted reference run: five records, sealed.
         var referenceDirectory = SpoolDirectory("reference");
@@ -163,7 +163,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_changed_codec_version_forces_restart_and_discards_the_spool()
+    public async Task SpoolResume_CodecVersionChanged_RestartsAndDiscardsTheSpool()
     {
         var directory = SpoolDirectory("codec");
         var writer = CreateWriter(directory, Pinned);
@@ -181,7 +181,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     [DataRow("segmentation_profile_changed")]
     [DataRow("segmentation_parameters_changed")]
     [DataRow("compression_profile_changed")]
-    public async Task Any_changed_pinned_field_forces_restart(string expectedReason)
+    public async Task SpoolResume_AnyPinnedFieldChanged_Restarts(string expectedReason)
     {
         var directory = SpoolDirectory(expectedReason);
         var writer = CreateWriter(directory, Pinned);
@@ -203,7 +203,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_changed_key_generation_forces_restart()
+    public async Task SpoolResume_KeyGenerationChanged_Restarts()
     {
         var directory = SpoolDirectory("generation");
         var writer = CreateWriter(directory, Pinned);
@@ -219,7 +219,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_torn_checkpoint_forces_restart()
+    public async Task SpoolResume_TheCheckpointIsTorn_Restarts()
     {
         var directory = SpoolDirectory("torn");
         var writer = CreateWriter(directory, Pinned);
@@ -238,7 +238,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_torn_spool_tail_forces_restart_and_discards_the_spool()
+    public async Task SpoolResume_TheSpoolTailIsTorn_RestartsAndDiscardsTheSpool()
     {
         var directory = SpoolDirectory("tail");
         var writer = CreateWriter(directory, Pinned);
@@ -265,7 +265,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_flipped_ciphertext_byte_forces_restart()
+    public async Task SpoolResume_ACiphertextByteIsFlipped_Restarts()
     {
         var directory = SpoolDirectory("flipped");
         var writer = CreateWriter(directory, Pinned);
@@ -289,7 +289,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_spool_from_another_repository_forces_restart()
+    public async Task SpoolResume_TheSpoolBelongsToAnotherRepository_Restarts()
     {
         var directory = SpoolDirectory("foreign");
         var writer = CreateWriter(directory, Pinned);
@@ -314,7 +314,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public void An_empty_spool_directory_reports_no_spool()
+    public void SpoolResume_TheSpoolDirectoryIsEmpty_ReportsNoSpool()
     {
         var directory = SpoolDirectory("empty");
         Directory.CreateDirectory(directory);
@@ -323,7 +323,7 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_restarted_blob_draws_a_fresh_salt_and_therefore_a_different_key()
+    public async Task SpoolRestart_ANewBlob_DrawsAFreshSaltAndADifferentKey()
     {
         // Restart is the safe failure precisely because a fresh CSPRNG salt
         // makes the new blob a different key (05 §6.2-§6.3) — ordinals

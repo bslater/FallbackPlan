@@ -68,7 +68,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Every_index_object_deleted_the_snapshot_still_restores_via_forensic_rebuild()
+    public async Task ForensicRebuild_EveryIndexObjectDeleted_StillRestoresTheSnapshot()
     {
         var (data, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -114,7 +114,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_targeted_rebuild_stops_before_scanning_every_data_blob()
+    public async Task ForensicRebuild_TargetedAtOneSnapshot_StopsBeforeScanningEveryDataBlob()
     {
         var (_, published, keys, hierarchy, store) = await PublishAsync(regions: 16);
         using var _keys = keys;
@@ -145,7 +145,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_deleted_data_blob_surfaces_as_a_missing_blob_finding()
+    public async Task ForensicRebuild_ADataBlobIsDeleted_SurfacesAMissingBlobFinding()
     {
         var (_, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -170,7 +170,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_corrupted_footer_is_a_scoped_finding_and_the_scan_continues()
+    public async Task ForensicRebuild_AFooterIsCorrupted_ScopesTheFindingAndContinuesScanning()
     {
         var (_, _, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -196,7 +196,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_whole_file_hash_catches_assembly_corruption_every_tag_passes()
+    public async Task Restore_SegmentsAreAssembledWrongThoughEveryTagPasses_IsCaughtByTheWholeFileHash()
     {
         var (data, published, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -248,7 +248,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Verify_levels_pass_on_an_intact_blob_and_level_2_catches_silent_alteration()
+    public async Task Verify_AnIntactBlobAndASilentlyAlteredOne_PassesTheFirstAndCatchesTheSecondAtLevelTwo()
     {
         var (_, published, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -278,7 +278,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_forensic_rebuild_of_a_tree_snapshot_repopulates_the_path_tables()
+    public async Task ForensicRebuild_ATreeSnapshot_RepopulatesThePathTables()
     {
         // A multi-directory tree snapshot, then a forensic rebuild into a
         // fresh catalogue: `ls` must work from footers alone (wave T2 —

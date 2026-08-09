@@ -79,7 +79,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         ClientVersion: "fallbackplan-tests/1.0");
 
     [TestMethod]
-    public async Task The_nine_step_order_holds_on_the_wire()
+    public async Task Publication_ObservedOnTheWire_FollowsTheNineStepOrder()
     {
         var data = BuildTestFile(regions: 6);
         var store = new RecordingStore(CreateStore());
@@ -120,7 +120,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_published_snapshot_reopens_from_a_cold_reader_and_restores()
+    public async Task PublishedSnapshot_ReopenedFromAColdReader_Restores()
     {
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
@@ -183,7 +183,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_intent_is_retired_and_the_survey_shows_nothing_live()
+    public async Task Publication_RunsToCompletion_RetiresItsIntentAndLeavesNothingLive()
     {
         var data = BuildTestFile(regions: 4);
         var store = CreateStore();
@@ -207,7 +207,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Observer_steps_arrive_in_order_and_a_throwing_observer_kills_between_steps()
+    public async Task Publication_WithAnObserverAttached_DeliversItsStepsInOrder()
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();
@@ -231,7 +231,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_throwing_observer_kills_between_steps_leaving_the_interrupted_state()
+    public async Task Publication_TheObserverThrowsBetweenSteps_LeavesTheStateThatStepHadReached()
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();

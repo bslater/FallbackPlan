@@ -92,7 +92,7 @@ public sealed class CodecRefusalTests
     }
 
     [TestMethod]
-    public void A_delta_carrying_a_key_the_specification_never_assigned_is_refused()
+    public void IndexDelta_CarriesAnUnassignedKey_IsRefused()
     {
         // Ignoring an unknown key would let a future — or forged — writer
         // smuggle meaning past a reader that cannot act on it (07 §2).
@@ -106,7 +106,7 @@ public sealed class CodecRefusalTests
     [DataRow(true, false, true, true)]   // no sequence
     [DataRow(true, true, false, true)]   // no generation
     [DataRow(true, true, true, false)]   // no signature
-    public void A_delta_missing_a_mandatory_key_is_refused(
+    public void IndexDelta_AMandatoryKeyIsMissing_IsRefused(
         bool writer, bool sequence, bool generation, bool signature)
     {
         var exception = Assert.ThrowsExactly<IndexFormatException>(() => IndexDeltaCodec.Decode(
@@ -117,7 +117,7 @@ public sealed class CodecRefusalTests
     }
 
     [TestMethod]
-    public void A_delta_whose_is_void_is_false_is_refused()
+    public void IndexDelta_IsVoidIsEncodedAsFalse_IsRefused()
     {
         // The key exists to mark a void delta, so present-and-false is a
         // third state the format does not have: writing it means the
@@ -128,7 +128,7 @@ public sealed class CodecRefusalTests
     }
 
     [TestMethod]
-    public void A_void_delta_declared_as_such_is_accepted()
+    public void IndexDelta_DeclaredVoid_IsAccepted()
     {
         // The other side of the rule: is_void present and true decodes, so
         // the refusal above is about the value and not about the key.
@@ -139,7 +139,7 @@ public sealed class CodecRefusalTests
     }
 
     [TestMethod]
-    public void Trailing_bytes_after_a_delta_are_refused()
+    public void IndexDelta_TrailingBytesFollowTheDocument_AreRefused()
     {
         // A decoder that stops at the end of the map would accept a record
         // with content appended after it — the shape a smuggling attack
@@ -152,7 +152,7 @@ public sealed class CodecRefusalTests
     }
 
     [TestMethod]
-    public void Empty_bytes_are_refused()
+    public void IndexDelta_InputIsEmpty_IsRefused()
     {
         Assert.Throws<Exception>(() => IndexDeltaCodec.Decode(ReadOnlyMemory<byte>.Empty));
     }

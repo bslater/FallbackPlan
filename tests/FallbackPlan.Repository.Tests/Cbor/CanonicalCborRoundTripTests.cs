@@ -12,7 +12,7 @@ namespace FallbackPlan.Repository.Tests.Cbor;
 public sealed class CanonicalCborRoundTripTests
 {
     [TestMethod]
-    public void A_nested_document_round_trips_byte_identically()
+    public void CanonicalCbor_ANestedDocument_RoundTripsByteIdentically()
     {
         var first = Encode();
         var second = ReencodeByReading(first);
@@ -78,7 +78,7 @@ public sealed class CanonicalCborRoundTripTests
     }
 
     [TestMethod]
-    public void The_writer_emits_map_entries_in_canonical_order_regardless_of_write_order()
+    public void CanonicalCborWriter_EntriesWrittenOutOfOrder_EmitsThemInCanonicalOrder()
     {
         var sorted = new CanonicalCborWriter();
         sorted.WriteStartMap(2);
@@ -100,7 +100,7 @@ public sealed class CanonicalCborRoundTripTests
     }
 
     [TestMethod]
-    public void Everything_the_writer_produces_validates()
+    public void CanonicalCborWriter_AnyDocumentItProduces_PassesTheValidator()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartArray(2);
@@ -112,10 +112,10 @@ public sealed class CanonicalCborRoundTripTests
     }
 
     [TestMethod]
-    public void Integer_keyed_maps_round_trip_byte_identically() =>
+    public void CanonicalCbor_AnIntegerKeyedMap_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this);
 
-    public static bool Integer_keyed_maps_round_trip_byte_identicallyProperty((uint Key, ulong Value)[]? entries)
+    public static bool CanonicalCbor_AnIntegerKeyedMap_RoundTripsByteIdenticallyProperty((uint Key, ulong Value)[]? entries)
     {
         entries ??= [];
         var distinct = entries
@@ -153,10 +153,10 @@ public sealed class CanonicalCborRoundTripTests
     }
 
     [TestMethod]
-    public void Byte_string_arrays_round_trip_byte_identically() =>
+    public void CanonicalCbor_AnArrayOfByteStrings_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this);
 
-    public static bool Byte_string_arrays_round_trip_byte_identicallyProperty(byte[][]? strings)
+    public static bool CanonicalCbor_AnArrayOfByteStrings_RoundTripsByteIdenticallyProperty(byte[][]? strings)
     {
         strings ??= [];
         var items = strings.Select(item => item ?? []).ToArray();

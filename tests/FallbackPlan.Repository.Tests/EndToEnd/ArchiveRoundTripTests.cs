@@ -27,7 +27,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
     private static partial Regex BlobKeyShape();
 
     [TestMethod]
-    public async Task A_test_file_is_split_backed_up_and_restored_byte_identical()
+    public async Task BackupAndRestore_FileExceedsBlobCapacity_SplitsAcrossBlobsAndPreservesExactByteOrder()
     {
         var original = BuildTestFile();
         var store = CreateStore();
@@ -75,7 +75,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_empty_file_produces_no_segments_no_records_and_no_blobs()
+    public async Task Backup_TheFileIsEmpty_ProducesNoSegmentsRecordsOrBlobs()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -102,7 +102,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Each_segment_is_individually_readable_by_object_identifier()
+    public async Task BlobReader_AnySegment_IsIndividuallyReadableByItsObjectIdentifier()
     {
         var original = BuildTestFile(regions: 6);
         var store = CreateStore();

@@ -45,7 +45,7 @@ public sealed class RecordCipherTests
     }
 
     [TestMethod]
-    public void A_record_opens_at_its_own_ordinal_and_repository()
+    public void RecordCipher_AtItsOwnOrdinalAndRepository_Opens()
     {
         var plaintext = "segment plaintext"u8.ToArray();
         var (ciphertext, tag) = SealAt(47, RepoA, plaintext);
@@ -56,7 +56,7 @@ public sealed class RecordCipherTests
     }
 
     [TestMethod]
-    public void A_record_moved_to_a_different_ordinal_fails_authentication()
+    public void RecordCipher_MovedToADifferentOrdinal_FailsAuthentication()
     {
         var (ciphertext, tag) = SealAt(47, RepoA, "segment plaintext"u8.ToArray());
 
@@ -64,7 +64,7 @@ public sealed class RecordCipherTests
     }
 
     [TestMethod]
-    public void A_record_moved_to_a_different_repository_fails_authentication()
+    public void RecordCipher_MovedToADifferentRepository_FailsAuthentication()
     {
         var (ciphertext, tag) = SealAt(47, RepoA, "segment plaintext"u8.ToArray());
 
@@ -72,7 +72,7 @@ public sealed class RecordCipherTests
     }
 
     [TestMethod]
-    public void Tampered_ciphertext_fails_and_no_plaintext_is_emitted()
+    public void RecordCipher_CiphertextIsTampered_FailsAndEmitsNoPlaintext()
     {
         var plaintext = "segment plaintext"u8.ToArray();
         var (ciphertext, tag) = SealAt(0, RepoA, plaintext);

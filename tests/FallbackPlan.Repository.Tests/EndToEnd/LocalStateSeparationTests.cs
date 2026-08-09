@@ -24,7 +24,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     private string StatePath => Path.Combine(_stateDirectory, "state.json");
 
     [TestMethod]
-    public void Identities_are_created_once_and_stable_across_reloads()
+    public void LocalState_ReloadedRepeatedly_KeepsTheIdentityItFirstCreated()
     {
         var first = LocalState.LoadOrCreate(_stateDirectory);
         var second = LocalState.LoadOrCreate(_stateDirectory);
@@ -37,7 +37,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void Legacy_phase_0_identity_files_are_absorbed_not_replaced()
+    public void LocalState_ALegacyIdentityFileExists_AbsorbsItRatherThanReplacingIt()
     {
         var legacyWriter = Enumerable.Repeat((byte)0xAB, 16).ToArray();
         File.WriteAllText(Path.Combine(_stateDirectory, "writer-id"), Convert.ToHexString(legacyWriter));
@@ -50,7 +50,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void Deleting_durable_state_loses_identity_but_touches_nothing_else()
+    public void LocalState_DurableStateIsDeleted_LosesTheIdentityAndNothingElse()
     {
         var original = LocalState.LoadOrCreate(_stateDirectory);
         new ClientConfiguration
@@ -74,7 +74,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void The_configuration_export_contains_no_identity_and_no_secret()
+    public void ConfigurationExport_AnyConfiguration_ContainsNoIdentityAndNoSecret()
     {
         var state = LocalState.LoadOrCreate(_stateDirectory);
         var configuration = new ClientConfiguration
@@ -98,7 +98,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void Unknown_configuration_fields_are_rejected_not_ignored()
+    public void ConfigurationLoad_AnUnknownField_IsRejectedRatherThanIgnored()
     {
         File.WriteAllText(ConfigPath, """{ "schema_version": 1, "backup_sets": [], "shedule": "daily" }""");
 
@@ -108,14 +108,14 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void A_future_schema_version_is_refused_not_guessed()
+    public void ConfigurationLoad_TheSchemaVersionIsFromTheFuture_IsRefusedRatherThanGuessed()
     {
         File.WriteAllText(ConfigPath, """{ "schema_version": 999, "backup_sets": [] }""");
         Assert.ThrowsExactly<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
     }
 
     [TestMethod]
-    public void Invalid_rules_are_refused_at_configuration_load()
+    public void ConfigurationLoad_ABackupSetCarriesInvalidRules_IsRefused()
     {
         File.WriteAllText(ConfigPath, $$"""
             { "schema_version": 1, "backup_sets": [
@@ -126,7 +126,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void Job_history_appends_and_survives_reload()
+    public void JobHistory_AppendedThenReloaded_Survives()
     {
         var state = LocalState.LoadOrCreate(_stateDirectory);
         state.RecordJob(new JobHistoryEntry
@@ -146,7 +146,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     }
 
     [TestMethod]
-    public void The_three_stores_are_three_files()
+    public void LocalState_DurableCacheAndConfiguration_AreThreeSeparateFiles()
     {
         LocalState.LoadOrCreate(_stateDirectory);
         ClientConfiguration.Default.Save(ConfigPath);

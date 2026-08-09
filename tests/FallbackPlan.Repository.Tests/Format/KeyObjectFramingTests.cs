@@ -23,7 +23,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void Field_offsets_are_byte_exact()
+    public void KeyObjectFraming_ASerialisedObject_PlacesEveryFieldAtItsSpecifiedOffset()
     {
         var wrapped = new byte[] { 0xAA, 0xBB, 0xCC };
         var bytes = SerializeSample(wrapped);
@@ -40,7 +40,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void Parse_round_trips_serialize()
+    public void KeyObjectFraming_SerialisedThenParsed_RoundTrips()
     {
         var wrapped = "wrapped-bundle"u8.ToArray();
         var parsed = KeyObjectFraming.Parse(SerializeSample(wrapped));
@@ -52,7 +52,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void Wrong_magic_is_named_as_not_a_key_object()
+    public void KeyObjectFraming_MagicIsWrong_SaysItIsNotAKeyObject()
     {
         var bytes = SerializeSample([0x01]);
         bytes[0] = (byte)'X';
@@ -63,7 +63,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void A_wrap_profile_other_than_aes_gcm_is_refused_in_v1()
+    public void KeyObjectFraming_WrapProfileIsNotAesGcm_IsRefusedInV1()
     {
         var bytes = SerializeSample([0x01]);
         bytes[11] = 0x02; // xchacha20-poly1305-v1 — its 24-byte nonce cannot fit the field
@@ -72,7 +72,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void A_bundle_length_over_the_limit_is_refused_before_allocation()
+    public void KeyObjectFraming_BundleLengthExceedsTheLimit_IsRefusedBeforeAllocation()
     {
         var bytes = SerializeSample([0x01]);
         bytes[40] = 0xFF;
@@ -84,7 +84,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void A_total_length_mismatching_the_declared_bundle_is_refused()
+    public void KeyObjectFraming_TotalLengthDisagreesWithTheDeclaredBundle_IsRefused()
     {
         var bytes = SerializeSample([0x01, 0x02]);
 
@@ -93,7 +93,7 @@ public sealed class KeyObjectFramingTests
     }
 
     [TestMethod]
-    public void The_aad_is_magic_version_profile_and_key_id()
+    public void KeyObjectFraming_TheAssociatedData_IsMagicVersionProfileAndKeyId()
     {
         var aad = KeyObjectFraming.BuildAad(1, KeyObjectFraming.KekProfileAes256GcmV1, SomeKeyId);
 

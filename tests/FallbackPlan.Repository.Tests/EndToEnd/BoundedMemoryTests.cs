@@ -52,7 +52,7 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     private const long LiveSetBound = 256 * Mebibyte;
 
     [TestMethod]
-    public async Task Eight_times_the_input_does_not_cost_eight_times_the_memory()
+    public async Task Archive_InputGrowsEightfold_KeepsPeakMemoryBounded()
     {
         var small = await MeasurePeakLiveSetAsync(32 * Mebibyte, firstCounter: 1);
         var large = await MeasurePeakLiveSetAsync(128 * Mebibyte, firstCounter: 10_000);

@@ -27,7 +27,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     };
 
     [TestMethod]
-    public async Task A_created_repository_opens_with_the_right_passphrase()
+    public async Task Repository_CreatedThenOpenedWithItsPassphrase_Opens()
     {
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
@@ -50,7 +50,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_wrong_passphrase_fails_indistinguishably_from_tampering()
+    public async Task RepositoryOpen_ThePassphraseIsWrong_FailsIndistinguishablyFromTampering()
     {
         var store = CreateStore();
         using (var passphrase = Passphrase.Create("correct horse battery staple"))
@@ -68,7 +68,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_empty_store_is_not_a_repository()
+    public async Task RepositoryOpen_TheStoreIsEmpty_SaysItIsNotARepository()
     {
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
@@ -80,7 +80,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Creating_over_an_existing_repository_is_refused()
+    public async Task RepositoryCreate_ARepositoryAlreadyExists_IsRefused()
     {
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
@@ -94,7 +94,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_corrupted_descriptor_is_reported_as_corruption()
+    public async Task RepositoryOpen_TheDescriptorIsCorrupted_ReportsCorruption()
     {
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
@@ -114,7 +114,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_opened_repository_archives_and_restores()
+    public async Task Repository_OpenedFromDisk_ArchivesAndRestores()
     {
         // The bootstrap composes with the record path: create, open, archive
         // through the opened key set, restore byte-identical.

@@ -90,7 +90,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_multi_file_tree_publishes_and_restores_from_a_cold_reader()
+    public async Task TreePublication_AMultiFileTree_PublishesAndRestoresFromAColdReader()
     {
         var source = new FakeFileSystemSource();
         var alpha = Deterministic(200_000, 3);
@@ -146,7 +146,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task The_snapshot_records_probe_parents_policy_and_complete_status()
+    public async Task SnapshotManifest_APublishedSnapshot_RecordsProbeParentsPolicyAndStatus()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("a.bin", Deterministic(1000, 1));
@@ -210,7 +210,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Failures_produce_an_error_manifest_and_partial_status_and_the_rest_still_captures()
+    public async Task TreePublication_SomeFilesFail_ProducesAnErrorManifestAndCapturesTheRest()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("good.bin", Deterministic(5000, 2));
@@ -252,7 +252,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Excluded_paths_are_pruned_and_are_not_failures()
+    public async Task TreePublication_AnExcludeRuleMatches_PrunesThePathWithoutRecordingAFailure()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("keep/data.bin", Deterministic(1000, 4));
@@ -272,7 +272,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Invalid_rules_are_refused_before_any_byte_is_written()
+    public async Task TreePublication_TheRulesAreInvalid_IsRefusedBeforeAnyByteIsWritten()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("a.bin", [1, 2, 3]);
@@ -295,7 +295,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Hardlinked_files_share_a_group_and_singletons_carry_none()
+    public async Task TreePublication_HardlinkedFiles_ShareAGroupWhileSingletonsCarryNone()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("one.bin", Deterministic(2000, 6), linkCount: 2, fileId: 42);
@@ -330,7 +330,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Symlinks_and_specials_are_zero_content_versions_with_their_shapes()
+    public async Task TreePublication_SymlinksAndSpecialFiles_BecomeZeroContentVersionsCarryingTheirShape()
     {
         var source = new FakeFileSystemSource();
         source.AddNode(new FakeFileSystemSource.Node
@@ -375,7 +375,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Sparse_files_store_only_data_and_restore_with_zeroes()
+    public async Task TreePublication_ASparseFile_StoresOnlyItsDataAndRestoresTheZeroes()
     {
         // 64 KiB data ‖ 128 KiB hole ‖ 64 KiB data. The backing content
         // materialises the hole as zeroes; the scanner reports the extent.
@@ -416,7 +416,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Alternate_streams_become_single_segment_records_and_oversize_is_error_reason_6()
+    public async Task TreePublication_AlternateStreams_BecomeSingleSegmentRecordsAndOversizeIsAnErrorManifestEntry()
     {
         var source = new FakeFileSystemSource();
         var withStream = source.AddFile("carrier.bin", Deterministic(3000, 15));
@@ -456,7 +456,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_file_changing_mid_read_is_reread_and_diagnosed_when_it_never_settles()
+    public async Task TreePublication_AFileChangesMidRead_IsRereadAndDiagnosedWhenItNeverSettles()
     {
         var source = new FakeFileSystemSource();
         var restless = source.AddFile("restless.bin", Deterministic(4000, 20));
@@ -486,7 +486,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_name_that_comes_to_mean_a_different_object_is_recorded_as_a_substitution()
+    public async Task TreePublication_ANameComesToMeanADifferentObject_IsRecordedAsASubstitution()
     {
         var source = new FakeFileSystemSource();
         var swapped = source.AddFile("swapped.bin", Deterministic(4000, 22), fileId: 900);
@@ -521,7 +521,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Blob_continuity_spans_files_instead_of_sealing_per_file()
+    public async Task TreePublication_ManySmallFiles_KeepsBlobContinuityInsteadOfSealingPerFile()
     {
         // 40 files of 1 KiB under a 256 KiB blob target: continuity means a
         // handful of blobs, one-per-file would mean 40.
@@ -543,7 +543,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_directory_too_wide_for_one_manifest_shards_into_a_valid_chain()
+    public async Task TreePublication_ADirectoryTooWideForOneManifest_ShardsIntoAValidChain()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("seed.bin", Deterministic(100, 1));
@@ -598,7 +598,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public void Source_filesystem_limits_round_trip_through_the_snapshot_codec()
+    public void SnapshotManifest_SourceFilesystemLimits_RoundTripThroughTheCodec()
     {
         var manifest = new SnapshotManifest
         {

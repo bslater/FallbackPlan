@@ -58,7 +58,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_synthetic_legacy_archive_imports_through_the_native_pipeline_and_restores()
+    public async Task LegacyImport_ASyntheticArchive_ImportsThroughTheNativePipelineAndRestores()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -103,7 +103,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_imported_manifest_stripped_of_provenance_is_byte_identical_to_a_native_one()
+    public async Task LegacyImport_AManifestStrippedOfProvenance_IsByteIdenticalToANativeOne()
     {
         var store = CreateStore();
         using var keys = CreateKeys();

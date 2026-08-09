@@ -17,7 +17,7 @@ public sealed class MapKeyOrderingTests
     private const string SortedMap = "a700000100170018180018ff00190100001a0001000000";
 
     [TestMethod]
-    public void Keys_in_encoded_byte_order_are_accepted()
+    public void MapKeyOrdering_KeysInEncodedByteOrder_AreAccepted()
     {
         CanonicalCbor.Validate(Convert.FromHexString(SortedMap));
     }
@@ -25,13 +25,13 @@ public sealed class MapKeyOrderingTests
     [TestMethod]
     [DataRow("a700000100181800170018ff00190100001a0001000000")] // 24 before 23
     [DataRow("a70000010017001818001901000018ff001a0001000000")] // 256 before 255
-    public void Transposed_keys_are_rejected(string hex)
+    public void MapKeyOrdering_TransposedKeys_AreRejected(string hex)
     {
         Assert.ThrowsExactly<CborFormatException>(() => CanonicalCbor.Validate(Convert.FromHexString(hex)));
     }
 
     [TestMethod]
-    public void The_writer_produces_exactly_the_documented_order()
+    public void CanonicalCborWriter_AnyKeySet_ProducesExactlyTheDocumentedOrder()
     {
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(7);

@@ -20,64 +20,64 @@ public sealed class CanonicalCborRejectionTests
     }
 
     [TestMethod]
-    public void Rejects_indefinite_length_byte_string() => AssertRejected("5f4100ff");
+    public void CanonicalCbor_IndefiniteLengthByteString_IsRejected() => AssertRejected("5f4100ff");
 
     [TestMethod]
-    public void Rejects_indefinite_length_text_string() => AssertRejected("7f6161ff");
+    public void CanonicalCbor_IndefiniteLengthTextString_IsRejected() => AssertRejected("7f6161ff");
 
     [TestMethod]
-    public void Rejects_indefinite_length_array() => AssertRejected("9f00ff");
+    public void CanonicalCbor_IndefiniteLengthArray_IsRejected() => AssertRejected("9f00ff");
 
     [TestMethod]
-    public void Rejects_indefinite_length_map() => AssertRejected("bf0100ff");
+    public void CanonicalCbor_IndefiniteLengthMap_IsRejected() => AssertRejected("bf0100ff");
 
     [TestMethod]
-    public void Rejects_non_shortest_unsigned_integer_zero_in_two_bytes() => AssertRejected("1800");
+    public void CanonicalCbor_ZeroEncodedInTwoBytes_IsRejected() => AssertRejected("1800");
 
     [TestMethod]
-    public void Rejects_non_shortest_unsigned_integer_twenty_four_in_three_bytes() => AssertRejected("190018");
+    public void CanonicalCbor_TwentyFourEncodedInThreeBytes_IsRejected() => AssertRejected("190018");
 
     [TestMethod]
-    public void Rejects_non_shortest_byte_string_length_prefix() => AssertRejected("5803010203");
+    public void CanonicalCbor_NonShortestByteStringLengthPrefix_IsRejected() => AssertRejected("5803010203");
 
     [TestMethod]
-    public void Rejects_unsorted_map_keys() => AssertRejected("a202000100");
+    public void CanonicalCbor_UnsortedMapKeys_AreRejected() => AssertRejected("a202000100");
 
     [TestMethod]
-    public void Rejects_duplicate_map_keys() => AssertRejected("a201000100");
+    public void CanonicalCbor_DuplicateMapKeys_AreRejected() => AssertRejected("a201000100");
 
     [TestMethod]
-    public void Rejects_half_precision_float() => AssertRejected("f93c00");
+    public void CanonicalCbor_HalfPrecisionFloat_IsRejected() => AssertRejected("f93c00");
 
     [TestMethod]
-    public void Rejects_single_precision_float() => AssertRejected("fa47c35000");
+    public void CanonicalCbor_SinglePrecisionFloat_IsRejected() => AssertRejected("fa47c35000");
 
     [TestMethod]
-    public void Rejects_double_precision_float() => AssertRejected("fb3ff199999999999a");
+    public void CanonicalCbor_DoublePrecisionFloat_IsRejected() => AssertRejected("fb3ff199999999999a");
 
     [TestMethod]
-    public void Rejects_tagged_value() => AssertRejected("c060");
+    public void CanonicalCbor_TaggedValue_IsRejected() => AssertRejected("c060");
 
     [TestMethod]
-    public void Rejects_text_string_map_key() => AssertRejected("a1616100");
+    public void CanonicalCbor_TextStringMapKey_IsRejected() => AssertRejected("a1616100");
 
     [TestMethod]
-    public void Rejects_negative_integer_map_key() => AssertRejected("a12000");
+    public void CanonicalCbor_NegativeIntegerMapKey_IsRejected() => AssertRejected("a12000");
 
     [TestMethod]
-    public void Rejects_null_value() => AssertRejected("f6");
+    public void CanonicalCbor_NullValue_IsRejected() => AssertRejected("f6");
 
     [TestMethod]
-    public void Rejects_undefined_value() => AssertRejected("f7");
+    public void CanonicalCbor_UndefinedValue_IsRejected() => AssertRejected("f7");
 
     [TestMethod]
-    public void Rejects_trailing_bytes_after_the_root_value() => AssertRejected("0000");
+    public void CanonicalCbor_TrailingBytesAfterTheRootValue_AreRejected() => AssertRejected("0000");
 
     [TestMethod]
-    public void Rejects_truncated_input() => AssertRejected("a1");
+    public void CanonicalCbor_TruncatedInput_IsRejected() => AssertRejected("a1");
 
     [TestMethod]
-    public void Rejects_float_nested_inside_a_skipped_unknown_value()
+    public void CanonicalCbor_FloatNestedInsideASkippedValue_IsRejected()
     {
         // Map {1: [1.0h]} — the float hides inside a value a reader with an
         // unknown-key schema would skip; the skip walk must still refuse it.
@@ -91,7 +91,7 @@ public sealed class CanonicalCborRejectionTests
     }
 
     [TestMethod]
-    public void Rejects_non_shortest_integer_nested_inside_a_skipped_value()
+    public void CanonicalCbor_NonShortestIntegerNestedInsideASkippedValue_IsRejected()
     {
         // Map {1: 0x1800} — non-shortest zero inside the skipped value.
         var bytes = Convert.FromHexString("a1011800");

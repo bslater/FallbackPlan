@@ -92,7 +92,7 @@ public sealed class KitDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_kit_and_passphrase_restore_everything_with_no_local_state()
+    public async Task RecoveryDrill_AKitAndItsPassphraseAlone_RestoreEverythingWithNoLocalState()
     {
         var (store, kit, files) = await CreateBackedUpRepositoryAsync();
 
@@ -125,7 +125,7 @@ public sealed class KitDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_wrong_passphrase_opens_nothing()
+    public async Task RecoveryDrill_ThePassphraseIsWrong_OpensNothing()
     {
         var (store, kit, _) = await CreateBackedUpRepositoryAsync();
 
@@ -134,7 +134,7 @@ public sealed class KitDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_transcription_error_is_caught_at_the_offending_line()
+    public async Task RecoveryDrill_TheKitTextIsMistranscribed_IsCaughtAtTheOffendingLine()
     {
         var (_, kit, _) = await CreateBackedUpRepositoryAsync();
         var text = RecoveryKitText.Render(RecoveryKitCodec.Serialize(kit));

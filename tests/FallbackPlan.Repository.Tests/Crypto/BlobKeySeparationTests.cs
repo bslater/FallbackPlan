@@ -22,10 +22,10 @@ public sealed class BlobKeySeparationTests
     }
 
     [TestMethod]
-    public void Distinct_writers_with_an_identical_csprng_stream_derive_distinct_keys() =>
+    public void BlobKeyDerivation_DistinctWritersSharingACsprngStream_DeriveDistinctKeys() =>
         PropertyCheck.Holds(this);
 
-    public static bool Distinct_writers_with_an_identical_csprng_stream_derive_distinct_keysProperty(byte[]? saltSeed, byte writerDifference)
+    public static bool BlobKeyDerivation_DistinctWritersSharingACsprngStream_DeriveDistinctKeysProperty(byte[]? saltSeed, byte writerDifference)
     {
         // The identical CSPRNG stream is modelled by giving both writers the
         // same blob salt — the only random derivation input. Writer identity
@@ -42,10 +42,10 @@ public sealed class BlobKeySeparationTests
     }
 
     [TestMethod]
-    public void Adjacent_counters_derive_distinct_keys() =>
+    public void BlobKeyDerivation_AdjacentCounters_DeriveDistinctKeys() =>
         PropertyCheck.Holds(this);
 
-    public static bool Adjacent_counters_derive_distinct_keysProperty(byte[]? saltSeed, ulong counter)
+    public static bool BlobKeyDerivation_AdjacentCounters_DeriveDistinctKeysProperty(byte[]? saltSeed, ulong counter)
     {
         var salt = PadTo32(saltSeed);
         var classKey = new byte[32];
@@ -57,10 +57,10 @@ public sealed class BlobKeySeparationTests
     }
 
     [TestMethod]
-    public void Different_class_keys_derive_distinct_keys() =>
+    public void BlobKeyDerivation_DifferentClassKeys_DeriveDistinctKeys() =>
         PropertyCheck.Holds(this);
 
-    public static bool Different_class_keys_derive_distinct_keysProperty(byte classKeyDifference)
+    public static bool BlobKeyDerivation_DifferentClassKeys_DeriveDistinctKeysProperty(byte classKeyDifference)
     {
         var salt = new byte[32];
         var writer = WriterId.FromBytes(new byte[WriterId.Size]);

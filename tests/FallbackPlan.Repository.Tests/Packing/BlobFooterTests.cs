@@ -23,7 +23,7 @@ public sealed class BlobFooterTests
         ObjectType.SegmentRecord);
 
     [TestMethod]
-    public void The_record_table_round_trips()
+    public void RecordTable_EncodedAndDecoded_RoundTrips()
     {
         var entries = new[] { Entry(0, 88), Entry(1, 88 + 54 + 100 + 16) };
 
@@ -34,7 +34,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void A_count_mismatch_is_refused()
+    public void RecordTable_DeclaredCountDisagreesWithTheEntries_IsRefused()
     {
         var encoded = BlobFooter.EncodeRecordTable([Entry(0, 88)]);
 
@@ -42,7 +42,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void Out_of_order_ordinals_are_refused()
+    public void RecordTable_OrdinalsAreOutOfOrder_IsRefused()
     {
         var encoded = BlobFooter.EncodeRecordTable([Entry(1, 88), Entry(0, 500)]);
 
@@ -50,7 +50,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void Overlapping_offsets_are_refused()
+    public void RecordTable_EntryOffsetsOverlap_IsRefused()
     {
         // Record 1 starts before record 0 ends.
         var encoded = BlobFooter.EncodeRecordTable([Entry(0, 88), Entry(1, 100)]);
@@ -59,7 +59,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void An_entry_extending_past_the_blob_is_refused()
+    public void RecordTable_AnEntryExtendsPastTheBlob_IsRefused()
     {
         var encoded = BlobFooter.EncodeRecordTable([Entry(0, 88, stored: 10_000)]);
 
@@ -67,7 +67,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void A_declared_table_over_the_metadata_limit_is_refused_before_allocation()
+    public void RecordTable_DeclaredSizeExceedsTheMetadataLimit_IsRefusedBeforeAllocation()
     {
         var header = new byte[BlobFooter.HeaderLength];
         BlobFooter.WriteHeader(1, cborLength: (uint)FormatLimits.MaxMetadataObjectSize + 1, header);
@@ -76,7 +76,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void A_record_count_over_the_limit_is_refused()
+    public void RecordTable_RecordCountExceedsTheLimit_IsRefused()
     {
         var header = new byte[BlobFooter.HeaderLength];
         BlobFooter.WriteHeader((uint)FormatLimits.MaxRecordsPerBlob + 1, 100, header);
@@ -85,7 +85,7 @@ public sealed class BlobFooterTests
     }
 
     [TestMethod]
-    public void An_absent_footer_magic_names_the_locator_as_the_suspect()
+    public void BlobFooter_MagicIsAbsent_NamesTheLocatorAsTheSuspect()
     {
         var header = new byte[BlobFooter.HeaderLength];
         BlobFooter.WriteHeader(1, 100, header);

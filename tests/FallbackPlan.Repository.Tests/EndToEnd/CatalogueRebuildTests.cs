@@ -26,7 +26,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
 
     [TestMethod]
-    public async Task A_deleted_catalogue_rebuilds_from_the_index_and_restores()
+    public async Task Catalogue_DeletedOutright_RebuildsFromTheIndexAndStillRestores()
     {
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();

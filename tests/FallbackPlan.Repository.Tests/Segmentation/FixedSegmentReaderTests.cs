@@ -15,7 +15,7 @@ public sealed class FixedSegmentReaderTests
     private static readonly SegmentSize SixtyFourKiB = SegmentSize.Create(64 * 1024);
 
     [TestMethod]
-    public async Task An_empty_stream_yields_no_segments()
+    public async Task FixedSegmentReader_TheStreamIsEmpty_YieldsNoSegments()
     {
         var reader = new FixedSegmentReader(new MemoryStream(), SixtyFourKiB);
 
@@ -23,7 +23,7 @@ public sealed class FixedSegmentReaderTests
     }
 
     [TestMethod]
-    public async Task Only_the_final_segment_may_be_short()
+    public async Task FixedSegmentReader_AnyInput_LeavesOnlyTheFinalSegmentShort()
     {
         var reader = new FixedSegmentReader(new MemoryStream(new byte[150_000]), SixtyFourKiB);
         var buffer = new byte[SixtyFourKiB.Bytes];
@@ -42,7 +42,7 @@ public sealed class FixedSegmentReaderTests
     }
 
     [TestMethod]
-    public async Task An_exact_multiple_has_no_short_segment()
+    public async Task FixedSegmentReader_LengthIsAnExactMultiple_ProducesNoShortSegment()
     {
         var reader = new FixedSegmentReader(new MemoryStream(new byte[2 * SixtyFourKiB.Bytes]), SixtyFourKiB);
         var buffer = new byte[SixtyFourKiB.Bytes];
@@ -57,7 +57,7 @@ public sealed class FixedSegmentReaderTests
     }
 
     [TestMethod]
-    public async Task Short_reads_from_the_stream_still_fill_whole_segments()
+    public async Task FixedSegmentReader_TheStreamReturnsShortReads_StillFillsWholeSegments()
     {
         // A source that trickles one byte per read must not produce short
         // segments anywhere but the end (09 §2.1).
@@ -74,7 +74,7 @@ public sealed class FixedSegmentReaderTests
     }
 
     [TestMethod]
-    public void Two_tebibyte_boundary_arithmetic_stays_exact_without_allocation()
+    public void FixedSegmentReader_AtTheTwoTebibyteBoundary_KeepsArithmeticExactWithoutAllocating()
     {
         const long TwoTiB = 2L * 1024 * 1024 * 1024 * 1024;
 
@@ -89,14 +89,14 @@ public sealed class FixedSegmentReaderTests
     }
 
     [TestMethod]
-    public void A_default_segment_size_is_refused()
+    public void FixedSegmentReader_SegmentSizeIsTheDefaultStructValue_IsRefused()
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => FixedSegmentation.SegmentCount(100, default));
         Assert.ThrowsExactly<ArgumentException>(() => new FixedSegmentReader(new MemoryStream(), default));
     }
 
     [TestMethod]
-    public async Task A_buffer_smaller_than_one_segment_is_refused()
+    public async Task FixedSegmentReader_TheBufferIsSmallerThanOneSegment_IsRefused()
     {
         var reader = new FixedSegmentReader(new MemoryStream(new byte[10]), SixtyFourKiB);
 

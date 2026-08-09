@@ -26,7 +26,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         [.. Directory.EnumerateFiles(StoreRoot, "*", SearchOption.AllDirectories).Where(f => !f.Contains(".fbp-tmp", StringComparison.Ordinal)).Order()];
 
     [TestMethod]
-    public async Task A_flipped_ciphertext_byte_fails_exactly_its_record_and_refuses_the_restore()
+    public async Task Restore_ACiphertextByteIsFlipped_FailsThatRecordAloneAndRefusesTheRestore()
     {
         var (result, keys, store) = await ArchiveAsync();
         using var _ = keys;
@@ -82,7 +82,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_truncated_locator_is_refused_at_open()
+    public async Task BlobReader_TheLocatorIsTruncated_RefusesAtOpen()
     {
         var (_, keys, store) = await ArchiveAsync();
         using var _ = keys;
@@ -98,7 +98,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Trailing_garbage_after_the_locator_is_a_damage_finding()
+    public async Task BlobReader_BytesTrailTheLocator_IsADamageFinding()
     {
         var (_, keys, store) = await ArchiveAsync();
         using var _ = keys;
@@ -114,7 +114,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_blob_from_a_different_repository_fails_footer_authentication()
+    public async Task BlobReader_TheBlobBelongsToAnotherRepository_FailsFooterAuthentication()
     {
         var (_, keys, store) = await ArchiveAsync();
         using var _ = keys;

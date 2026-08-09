@@ -16,7 +16,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 public sealed class SecondBackupReuseTests : ArchiveTestHarness
 {
     [TestMethod]
-    public async Task Changing_one_segment_writes_exactly_one_record()
+    public async Task SecondBackup_OneSegmentChanged_WritesExactlyOneRecord()
     {
         var original = BuildTestFile();
         var store = CreateStore();
@@ -66,7 +66,7 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_unchanged_file_writes_no_records_at_all()
+    public async Task SecondBackup_TheFileIsUnchanged_WritesNoRecords()
     {
         var original = BuildTestFile(regions: 6);
         var store = CreateStore();
@@ -86,7 +86,7 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task An_appended_tail_writes_only_the_tail_records()
+    public async Task SecondBackup_BytesAppendedToTheTail_WritesOnlyTheTailRecords()
     {
         var original = BuildTestFile(regions: 6); // 768 KiB — 12 exact segments
         var store = CreateStore();
@@ -118,7 +118,7 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task A_changed_segment_size_forbids_reuse_and_re_archives_in_full()
+    public async Task SecondBackup_SegmentSizeChanged_ForbidsReuseAndReArchivesInFull()
     {
         var original = BuildTestFile(regions: 6);
         var store = CreateStore();

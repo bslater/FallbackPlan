@@ -28,7 +28,7 @@ public sealed class BlobEnvelopeTests
     }
 
     [TestMethod]
-    public void Field_offsets_are_byte_exact()
+    public void BlobEnvelope_ASerialisedEnvelope_PlacesEveryFieldAtItsSpecifiedOffset()
     {
         var bytes = SampleBytes();
 
@@ -44,7 +44,7 @@ public sealed class BlobEnvelopeTests
     }
 
     [TestMethod]
-    public void Parse_round_trips()
+    public void BlobEnvelope_SerialisedThenParsed_RoundTrips()
     {
         var parsed = BlobEnvelope.Parse(SampleBytes());
 
@@ -55,7 +55,7 @@ public sealed class BlobEnvelopeTests
     }
 
     [TestMethod]
-    public void An_absent_magic_says_not_a_blob()
+    public void BlobEnvelope_MagicIsAbsent_SaysItIsNotABlob()
     {
         var bytes = SampleBytes();
         bytes[0] = (byte)'X';
@@ -65,7 +65,7 @@ public sealed class BlobEnvelopeTests
     }
 
     [TestMethod]
-    public void An_undefined_class_is_refused()
+    public void BlobEnvelope_BlobClassIsUndefined_IsRefused()
     {
         var bytes = SampleBytes();
         bytes[11] = 0x03;

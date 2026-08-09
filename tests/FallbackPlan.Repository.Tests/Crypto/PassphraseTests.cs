@@ -12,7 +12,7 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 public sealed class PassphraseTests
 {
     [TestMethod]
-    public void Empty_passphrase_is_rejected_at_repository_creation()
+    public void RepositoryCreation_PassphraseIsEmpty_IsRejected()
     {
         // The acceptance criterion, verbatim: Argon2id itself accepts a
         // zero-length password, so refusing is the engine's job.
@@ -20,7 +20,7 @@ public sealed class PassphraseTests
     }
 
     [TestMethod]
-    public void Composed_and_decomposed_input_produce_identical_bytes()
+    public void Passphrase_ComposedAndDecomposedInput_ProduceIdenticalBytes()
     {
         // "café" with a precomposed é (U+00E9) and with e + combining acute
         // (U+0301): the same passphrase typed on different operating systems.
@@ -31,7 +31,7 @@ public sealed class PassphraseTests
     }
 
     [TestMethod]
-    public void Ascii_input_is_utf8_verbatim_with_no_trailing_newline()
+    public void Passphrase_AsciiInput_IsUtf8VerbatimWithNoTrailingNewline()
     {
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
@@ -39,7 +39,7 @@ public sealed class PassphraseTests
     }
 
     [TestMethod]
-    public void Rendering_is_redacted()
+    public void Passphrase_RenderedToString_IsRedacted()
     {
         using var passphrase = Passphrase.Create("secret words");
 

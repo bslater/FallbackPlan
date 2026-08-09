@@ -25,7 +25,7 @@ public sealed class ApplicationServiceTests : IDisposable
     [DataRow("every 30m")]
     [DataRow("every 1d")]
     [DataRow("daily at 02:30")]
-    public void Valid_schedules_parse(string text)
+    public void ScheduleParsing_AValidExpression_Parses(string text)
     {
         Assert.IsTrue(Schedule.TryParse(text, out var schedule, out var defect), defect);
         Assert.AreEqual(text, schedule!.Text);
@@ -37,14 +37,14 @@ public sealed class ApplicationServiceTests : IDisposable
     [DataRow("every 4x")]
     [DataRow("daily at 25:00")]
     [DataRow("daily at noon")]
-    public void Invalid_schedules_are_refused_with_the_defect_named(string text)
+    public void ScheduleParsing_AnInvalidExpression_IsRefusedWithTheDefectNamed(string text)
     {
         Assert.IsFalse(Schedule.TryParse(text, out _, out var defect));
         Assert.Contains(text, defect!, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public void An_interval_schedule_is_due_once_per_interval_and_missed_runs_coalesce()
+    public void IntervalSchedule_RunsAreMissed_ComesDueOncePerIntervalAndCoalescesTheBacklog()
     {
         Assert.IsTrue(Schedule.TryParse("every 4h", out var schedule, out _));
 
@@ -63,7 +63,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void A_daily_schedule_runs_once_per_calendar_day_at_its_time()
+    public void DailySchedule_AnyDay_ComesDueOncePerCalendarDayAtItsTime()
     {
         Assert.IsTrue(Schedule.TryParse("daily at 02:30", out var schedule, out _));
 
@@ -99,7 +99,7 @@ public sealed class ApplicationServiceTests : IDisposable
 
     [TestMethod]
     [DynamicData(nameof(ScheduleOffsets))]
-    public void Daily_schedule_answers_do_not_depend_on_the_machine_timezone(int offsetHours, int offsetMinutes)
+    public void DailySchedule_AnyMachineTimezone_ComesDueAtTheSameLocalTime(int offsetHours, int offsetMinutes)
     {
         // IsDue is a pure function of its arguments, so the same wall-clock
         // scenario expressed in ANY offset gives the answers asserted in UTC
@@ -130,7 +130,7 @@ public sealed class ApplicationServiceTests : IDisposable
 
     [TestMethod]
     [DynamicData(nameof(ScheduleOffsets))]
-    public void Interval_schedule_answers_do_not_depend_on_the_machine_timezone(int offsetHours, int offsetMinutes)
+    public void IntervalSchedule_AnyMachineTimezone_ComesDueAtTheSameInstants(int offsetHours, int offsetMinutes)
     {
         var offset = new TimeSpan(offsetHours, offsetMinutes, 0);
         Assert.IsTrue(Schedule.TryParse("every 4h", out var schedule, out _));
@@ -150,7 +150,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void The_job_journal_records_transitions_and_anchors_the_schedule()
+    public void JobJournal_AJobRunsToCompletion_RecordsItsTransitionsAndAnchorsTheSchedule()
     {
         var store = JobStateStore.Open(_stateDirectory);
         var job = store.Begin("set-1", 1_000);
@@ -169,7 +169,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void Recoverable_and_permanent_failures_stay_distinct()
+    public void JobJournal_RecoverableAndPermanentFailures_StayDistinct()
     {
         var store = JobStateStore.Open(_stateDirectory);
         var recoverable = store.Begin("set-1", 1_000);
@@ -183,7 +183,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void A_corrupt_job_journal_is_set_aside_and_never_fatal()
+    public void JobJournal_TheFileIsCorrupt_IsSetAsideRatherThanFailingTheRun()
     {
         File.WriteAllText(Path.Combine(_stateDirectory, "jobs.json"), "{ not json");
 
@@ -205,7 +205,7 @@ public sealed class ApplicationServiceTests : IDisposable
     };
 
     [TestMethod]
-    public void A_same_device_store_is_captured_and_never_protected()
+    public void BackupSetStatus_TheStoreIsOnTheSourceDevice_ReportsCapturedRatherThanProtected()
     {
         // PT-8: the most common consumer configuration — repository on the
         // same disk as the source — is real protection against mistakes and
@@ -218,7 +218,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void Degraded_and_unrecoverable_are_never_merged()
+    public void BackupSetStatus_DegradedAndUnrecoverableTogether_KeepsThemDistinct()
     {
         var degraded = StatusDeriver.Derive(HealthyInputs() with { DestinationReachable = false });
         var unrecoverable = StatusDeriver.Derive(HealthyInputs() with { RequiredObjectsMissing = true });
@@ -238,7 +238,7 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void Verified_always_carries_coverage_and_age_never_a_bare_tick()
+    public void BackupSetStatus_Verified_CarriesCoverageAndAgeRatherThanABareTick()
     {
         var detail = new VerificationDetail(Coverage: 0.35, VerifiedAtUnixMilliseconds: 1_722_500_000_000);
         var verified = StatusDeriver.Derive(HealthyInputs() with { LastVerification = detail });
@@ -252,14 +252,14 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void A_partial_snapshot_is_a_warning_and_never_silently_green()
+    public void BackupSetStatus_TheLatestSnapshotIsPartial_ReportsAWarningRatherThanGreen()
     {
         var status = StatusDeriver.Derive(HealthyInputs() with { LatestCaptureStatus = 2 });
         Assert.Contains(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), status.Warnings);
     }
 
     [TestMethod]
-    public void No_snapshot_means_never_backed_up_not_an_error()
+    public void BackupSetStatus_NoSnapshotExists_ReportsNeverBackedUpRatherThanAnError()
     {
         var status = StatusDeriver.Derive(HealthyInputs() with { LatestSnapshotAt = null });
         Assert.AreEqual(ProtectionState.NeverBackedUp, status.State);
