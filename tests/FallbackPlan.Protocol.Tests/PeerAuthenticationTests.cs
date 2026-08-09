@@ -21,7 +21,7 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
-    public void A_proof_verifies_against_the_transcript_both_sides_build()
+    public void ChannelProof_TheTranscriptBothSidesBuild_Verifies()
     {
         using var initiator = PeerKeypair.Generate();
         using var responder = PeerKeypair.Generate();
@@ -35,7 +35,7 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
-    public void A_proof_does_not_verify_under_the_other_role()
+    public void ChannelProof_CheckedUnderTheOtherRole_FailsToVerify()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -51,7 +51,7 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
-    public void A_proof_from_another_connection_does_not_verify_on_this_one()
+    public void ChannelProof_FromAnotherConnection_FailsToVerifyOnThisOne()
     {
         using var initiator = PeerKeypair.Generate();
         using var responder = PeerKeypair.Generate();
@@ -68,7 +68,7 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
-    public void A_changed_nonce_invalidates_the_proof()
+    public void ChannelProof_NonceChanged_FailsToVerify()
     {
         using var initiator = PeerKeypair.Generate();
         using var responder = PeerKeypair.Generate();
@@ -86,13 +86,13 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
-    public void Nonces_are_fresh_each_time()
+    public void SessionNonce_GeneratedRepeatedly_IsFreshEachTime()
     {
         Assert.AreNotEqual(SessionBinding.Nonce(), SessionBinding.Nonce());
     }
 
     [TestMethod]
-    public void A_binding_of_the_wrong_length_is_rejected_at_the_boundary()
+    public void SessionBinding_WrongLength_IsRejectedAtTheBoundary()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -162,7 +162,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
         new(_answerer, store, PeerSessionRole.Responder, _answererBinding, _diallerBinding);
 
     [TestMethod]
-    public void Two_paired_peers_authenticate_each_other()
+    public void PeerAuthentication_TwoPairedPeers_AuthenticateEachOther()
     {
         var diallerStore = Store("dialler");
         var answererStore = Store("answerer");
@@ -179,7 +179,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_session_starts_encrypted_and_unauthenticated()
+    public void PeerSession_JustOpened_IsEncryptedAndUnauthenticated()
     {
         // The state 02 §2 exists to name: TLS is done, and it has established
         // nobody's identity.
@@ -190,7 +190,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_hello_is_not_permitted_before_authentication()
+    public void PeerSession_HelloSentBeforeAuthentication_IsRefused()
     {
         var diallerStore = Store("dialler");
         var answererStore = Store("answerer");
@@ -211,7 +211,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_refusal_is_permitted_in_every_state()
+    public void PeerSession_AnyState_PermitsARefusal()
     {
         // The alternative to being allowed to say "no" in a state that forbids
         // saying anything is hanging up silently.
@@ -222,7 +222,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void An_unpaired_peer_is_refused_before_any_signature_is_checked()
+    public void PeerAuthentication_PeerIsUnpaired_RefusesBeforeCheckingAnySignature()
     {
         var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => Responder(Store("answerer")).Accept(SessionAuth.Create(_dialler.Identity)));
@@ -231,7 +231,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_dialler_that_reaches_the_wrong_device_says_so()
+    public void PeerAuthentication_DiallerReachesTheWrongDevice_SaysSoInTheRefusal()
     {
         using var stranger = PeerKeypair.Generate();
 
@@ -249,7 +249,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_responder_expecting_nobody_reports_not_paired_rather_than_guessing()
+    public void PeerAuthentication_ResponderExpectsNobody_ReportsNotPairedRatherThanGuessing()
     {
         using var stranger = PeerKeypair.Generate();
 
@@ -266,7 +266,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_man_in_the_middle_relaying_valid_proofs_is_caught_by_both_sides()
+    public void PeerAuthentication_ManInTheMiddleRelaysValidProofs_IsCaughtByBothSides()
     {
         var diallerStore = Store("dialler");
         var answererStore = Store("answerer");
@@ -302,7 +302,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void A_proof_arriving_before_the_claim_it_proves_is_refused()
+    public void PeerAuthentication_ProofArrivesBeforeItsClaim_IsRefused()
     {
         var store = Store("dialler");
         Pin(store, _answerer.Identity);
@@ -314,7 +314,7 @@ public sealed class PeerAuthenticatorTests : IDisposable
     }
 
     [TestMethod]
-    public void An_authenticated_session_opens_and_will_not_authenticate_twice()
+    public void PeerSession_AlreadyAuthenticated_RefusesASecondAuthentication()
     {
         var diallerStore = Store("dialler");
         var answererStore = Store("answerer");
@@ -355,7 +355,7 @@ public sealed class EphemeralTlsCertificateTests
     }
 
     [TestMethod]
-    public void Every_connection_gets_a_different_key()
+    public void PeerSession_EachConnection_DerivesADifferentKey()
     {
         using var first = Create();
         using var second = Create();
@@ -366,7 +366,7 @@ public sealed class EphemeralTlsCertificateTests
     }
 
     [TestMethod]
-    public void The_binding_is_the_hash_of_the_public_key_as_the_peer_would_compute_it()
+    public void SessionBinding_AnyCertificate_IsTheHashOfItsPublicKey()
     {
         using var certificate = Create();
 
@@ -377,7 +377,7 @@ public sealed class EphemeralTlsCertificateTests
     }
 
     [TestMethod]
-    public void It_carries_no_identity_a_reader_could_mistake_for_one()
+    public void SessionCertificate_AnyCertificate_CarriesNoIdentityAReaderCouldMistakeForOne()
     {
         using var certificate = Create();
 

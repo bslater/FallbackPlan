@@ -52,7 +52,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Open_reports_the_repository_the_kit_belongs_to()
+    public async Task Open_ARecoveryKit_ReportsTheRepositoryItBelongsTo()
     {
         var kit = await PrepareAsync();
 
@@ -64,7 +64,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_transcribable_text_kit_opens_the_repository_too()
+    public async Task Open_TheTranscribableTextKit_OpensTheRepositoryToo()
     {
         var kit = await PrepareAsync();
 
@@ -77,7 +77,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Snapshots_lists_what_the_store_holds()
+    public async Task Snapshots_AKitAndItsStore_ListsWhatTheStoreHolds()
     {
         var kit = await PrepareAsync();
 
@@ -88,7 +88,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_writes_the_files_back_from_the_kit_alone()
+    public async Task Restore_TheKitAlone_WritesTheFilesBack()
     {
         var kit = await PrepareAsync();
 
@@ -108,7 +108,7 @@ public sealed class RecoveryHostTests : IDisposable
     // ------------------------------------------------------------ failures
 
     [TestMethod]
-    public async Task A_wrong_passphrase_is_refused_with_a_stated_reason()
+    public async Task Open_PassphraseIsWrong_RefusesWithAStatedReason()
     {
         var kit = await PrepareAsync();
 
@@ -130,7 +130,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unset_passphrase_variable_is_refused_by_name()
+    public async Task RecoveryHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var kit = await PrepareAsync();
 
@@ -143,7 +143,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_missing_option_is_refused_by_name()
+    public async Task RecoveryHost_ARequiredOptionIsMissing_RefusesNamingIt()
     {
         var result = await RunAsync("open", "--repo", _harness.RepositoryPath);
 
@@ -152,7 +152,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_damaged_kit_is_refused_rather_than_half_read()
+    public async Task Open_TheKitIsDamaged_RefusesRatherThanReadingItHalfway()
     {
         var kit = await PrepareAsync();
 
@@ -173,7 +173,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_kit_file_that_does_not_exist_is_refused_cleanly()
+    public async Task Open_TheKitFileDoesNotExist_RefusesWithAMessage()
     {
         await _harness.CreateRepositoryAsync();
 
@@ -187,7 +187,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restoring_an_unknown_snapshot_is_refused()
+    public async Task Restore_SnapshotIsUnknown_RefusesWithAMessage()
     {
         var kit = await PrepareAsync();
 
@@ -203,7 +203,7 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unknown_command_is_refused()
+    public async Task RecoveryHost_VerbIsUnknown_RefusesWithNonZeroExit()
     {
         var kit = await PrepareAsync();
 

@@ -13,7 +13,7 @@ public sealed class CommandTests : IDisposable
     private readonly CliHarness _cli = new();
 
     [TestMethod]
-    public async Task Init_creates_a_repository_that_opens_again()
+    public async Task Init_ANewDirectory_CreatesARepositoryThatOpensAgain()
     {
         var init = await _cli.RunWithoutStateAsync("init");
 
@@ -26,7 +26,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Archive_then_verify_and_inspect_round_trip_one_file()
+    public async Task ArchiveVerifyAndInspect_OneFile_RoundTripsItsContent()
     {
         await _cli.InitAsync();
         var source = _cli.WriteFile("notes.txt", new string('a', 5_000));
@@ -39,7 +39,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Backup_publishes_a_tree_and_snapshots_lists_it()
+    public async Task Backup_ATreeOfFiles_PublishesASnapshotThatSnapshotsLists()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -55,7 +55,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Ls_lists_a_directory_inside_a_snapshot()
+    public async Task Ls_ADirectoryInsideASnapshot_ListsItsEntries()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -70,7 +70,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_writes_the_files_back_with_their_contents()
+    public async Task Restore_APublishedSnapshot_WritesEveryFileBackWithItsContent()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -88,7 +88,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Check_reports_a_healthy_repository()
+    public async Task Check_AnUndamagedRepository_ReportsItHealthy()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -100,7 +100,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Rebuild_index_restores_the_catalogue_after_it_is_deleted()
+    public async Task RebuildIndex_AfterTheCatalogueIsDeleted_RestoresItFromTheRepository()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -123,7 +123,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Key_export_writes_a_recovery_kit()
+    public async Task KeyExport_AnOpenRepository_WritesARecoveryKit()
     {
         await _cli.InitAsync();
         Directory.CreateDirectory(_cli.WorkPath);
@@ -139,7 +139,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Status_reports_per_set_protection()
+    public async Task Status_SeveralBackupSets_ReportsProtectionForEach()
     {
         await _cli.InitAsync();
 
@@ -151,7 +151,7 @@ public sealed class CommandTests : IDisposable
     // ------------------------------------------------------------ failures
 
     [TestMethod]
-    public async Task A_missing_passphrase_variable_fails_without_a_stack_trace()
+    public async Task Command_PassphraseVariableIsUnset_FailsWithAMessageAndNoStackTrace()
     {
         await _cli.InitAsync();
 
@@ -166,7 +166,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Opening_a_repository_that_does_not_exist_fails_cleanly()
+    public async Task Command_RepositoryDoesNotExist_FailsWithAMessageAndNoStackTrace()
     {
         var result = await _cli.RunAsync("snapshots");
 
@@ -175,7 +175,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unknown_command_is_refused()
+    public async Task Command_VerbIsUnknown_RefusesWithNonZeroExit()
     {
         var result = await CliHarness.RunRawAsync("definitely-not-a-command");
 
@@ -183,7 +183,7 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Help_lists_the_commands()
+    public async Task Help_NoArguments_ListsEveryCommand()
     {
         var result = await CliHarness.RunRawAsync("--help");
 

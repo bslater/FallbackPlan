@@ -30,7 +30,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task No_arguments_prints_help_rather_than_failing()
+    public async Task AgentHost_NoArguments_PrintsHelpRatherThanFailing()
     {
         var result = await RunAsync();
 
@@ -51,7 +51,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unset_passphrase_variable_is_refused_by_name()
+    public async Task AgentHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var result = await RunAsync(
             "run",
@@ -67,7 +67,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_due_set_runs_once_and_reports_it()
+    public async Task AgentPass_ABackupSetIsDue_RunsItOnceAndReportsIt()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -86,7 +86,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_manual_only_set_is_skipped_and_still_succeeds()
+    public async Task AgentPass_ABackupSetIsManualOnly_SkipsItAndStillSucceeds()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -106,7 +106,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_second_pass_skips_the_set_it_just_ran()
+    public async Task AgentPass_RunTwiceInsideTheInterval_SkipsTheSetItJustRan()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -132,7 +132,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_set_whose_root_is_missing_fails_the_pass_without_a_stack_trace()
+    public async Task AgentPass_ABackupSetsRootIsMissing_FailsWithoutAStackTrace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 4h");
@@ -152,7 +152,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_wrong_passphrase_is_refused_without_a_stack_trace()
+    public async Task AgentHost_PassphraseIsWrong_RefusesWithoutAStackTrace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");

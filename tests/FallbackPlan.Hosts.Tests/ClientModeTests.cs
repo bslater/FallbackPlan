@@ -18,7 +18,7 @@ public sealed class ClientModeTests : IDisposable
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
 
     [TestMethod]
-    public async Task With_no_service_running_a_write_takes_direct_mode_and_says_so()
+    public async Task WriteCommand_NoServiceIsRunning_TakesDirectModeAndSaysSo()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -36,7 +36,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task While_a_service_holds_the_role_a_direct_write_is_refused_naming_the_holder()
+    public async Task DirectWrite_AServiceHoldsTheWriterRole_IsRefusedNamingTheHolder()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -61,7 +61,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_read_command_still_works_alongside_a_running_service()
+    public async Task ReadCommand_AServiceIsRunning_StillSucceeds()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -83,7 +83,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_client_and_the_service_answer_the_same_question_the_same_way()
+    public async Task ReadCommand_AskedOfClientAndService_ReturnsTheSameAnswer()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -104,7 +104,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_backup_is_run_by_the_service_when_one_is_listening()
+    public async Task Backup_AServiceIsListening_IsRunByTheService()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -125,7 +125,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_ad_hoc_root_is_refused_while_a_service_holds_the_role_and_says_what_to_do()
+    public async Task AdHocRoot_AServiceHoldsTheWriterRole_IsRefusedWithRemedialAdvice()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -146,7 +146,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Direct_is_refused_while_a_service_holds_the_writer_role()
+    public async Task DirectMode_AServiceHoldsTheWriterRole_IsRefused()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -167,7 +167,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_same_backup_set_captures_the_same_way_through_either_path()
+    public async Task Backup_RunDirectlyAndThroughTheService_CapturesIdentically()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -200,7 +200,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_read_verb_is_answered_by_the_service_when_one_is_listening()
+    public async Task ReadVerb_AServiceIsListening_IsAnsweredByTheService()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -226,7 +226,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_restore_routed_through_the_service_writes_the_files()
+    public async Task Restore_RoutedThroughTheService_WritesTheFiles()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -256,7 +256,7 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Verifying_one_file_version_stays_direct_and_says_why()
+    public async Task Verify_OneFileVersion_StaysDirectAndSaysWhy()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");

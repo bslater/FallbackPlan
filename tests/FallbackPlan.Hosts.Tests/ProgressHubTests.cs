@@ -23,7 +23,7 @@ public sealed class ProgressHubTests : IDisposable
         new(jobId, state, FilesSeen: 10, FilesDone: 0, FilesReused: 0, FilesFailed: 0, BytesSeen: 4096, BytesStored: 0);
 
     [TestMethod]
-    public async Task A_watcher_is_subscribed_from_the_call_not_from_the_first_enumeration()
+    public async Task Watch_WhenCalled_ShouldSubscribeImmediatelyRatherThanOnFirstEnumeration()
     {
         var hub = new ProgressHub();
 
@@ -43,7 +43,7 @@ public sealed class ProgressHubTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_watcher_receives_nothing_reported_before_it_asked_to_watch()
+    public async Task Watch_EventsReportedBeforeTheCall_DeliversNoneOfThem()
     {
         var hub = new ProgressHub();
 
@@ -62,7 +62,7 @@ public sealed class ProgressHubTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Completing_ends_a_watcher_that_never_enumerated()
+    public async Task Complete_AWatcherThatNeverEnumerated_EndsItCleanly()
     {
         var hub = new ProgressHub();
 
@@ -80,7 +80,7 @@ public sealed class ProgressHubTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Every_watcher_sees_the_same_event()
+    public async Task ProgressHub_SeveralWatchers_DeliversTheSameEventToEach()
     {
         var hub = new ProgressHub();
 

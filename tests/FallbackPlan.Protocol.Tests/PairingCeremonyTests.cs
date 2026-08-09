@@ -50,7 +50,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void Two_sides_of_one_ceremony_see_the_same_string()
+    public void ShortAuthenticationString_BothSidesOfOneCeremony_Agree()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -66,7 +66,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void A_relay_between_two_ceremonies_cannot_make_the_strings_agree()
+    public void ShortAuthenticationString_ARelayBetweenTwoCeremonies_Differs()
     {
         // The attack: Mallory runs one ceremony with Alice and another with Bob,
         // and needs the string Alice sees to equal the string Bob sees. Both of
@@ -83,7 +83,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void Substituting_either_identity_changes_the_string()
+    public void ShortAuthenticationString_EitherIdentitySubstituted_Changes()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -114,7 +114,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void Changing_the_protocol_version_changes_the_string()
+    public void ShortAuthenticationString_ProtocolVersionChanged_Changes()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -133,7 +133,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void Swapping_the_roles_changes_the_string()
+    public void ShortAuthenticationString_RolesSwapped_Changes()
     {
         using var one = Side.Create();
         using var two = Side.Create();
@@ -153,7 +153,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void A_confirmation_verifies_against_its_signer_and_no_one_else()
+    public void PairingConfirmation_SignedByOnePeer_VerifiesOnlyAgainstThatSigner()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -167,7 +167,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void A_confirmation_over_a_different_transcript_does_not_verify()
+    public void PairingConfirmation_OverADifferentTranscript_FailsToVerify()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -185,7 +185,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void The_confirmation_label_separates_it_from_the_derivation()
+    public void PairingConfirmation_SharingATranscriptWithTheDerivation_UsesADistinctLabel()
     {
         using var offerer = Side.Create();
         using var responder = Side.Create();
@@ -200,7 +200,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void A_low_order_point_is_refused_rather_than_agreed_with()
+    public void DeriveSharedSecret_WhenTheContributionIsALowOrderPoint_ShouldThrow()
     {
         using var side = Side.Create();
 
@@ -214,7 +214,7 @@ public sealed class PairingCeremonyTests
     }
 
     [TestMethod]
-    public void A_wrong_length_contribution_is_refused()
+    public void DeriveSharedSecret_WhenTheContributionIsTheWrongLength_ShouldThrow()
     {
         using var keypair = PeerKeypair.Generate();
         var good = new byte[PairingTranscript.ExchangeKeyLength];
@@ -240,7 +240,7 @@ public sealed class PairingCeremonyTests
 public sealed class PeerIdentityTests
 {
     [TestMethod]
-    public void A_keypair_round_trips_through_its_private_seed()
+    public void PeerKeyPair_RestoredFromItsPrivateSeed_RoundTrips()
     {
         using var original = PeerKeypair.Generate();
         var seed = original.ExportPrivateKey();
@@ -257,7 +257,7 @@ public sealed class PeerIdentityTests
     }
 
     [TestMethod]
-    public void Two_generated_keypairs_are_different_peers()
+    public void PeerKeyPair_GeneratedTwice_ProducesDifferentPeers()
     {
         using var one = PeerKeypair.Generate();
         using var two = PeerKeypair.Generate();
@@ -267,7 +267,7 @@ public sealed class PeerIdentityTests
     }
 
     [TestMethod]
-    public void A_fingerprint_is_stable_and_base32()
+    public void PeerFingerprint_TheSameIdentity_IsStableAndRenderedBase32()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -282,7 +282,7 @@ public sealed class PeerIdentityTests
     }
 
     [TestMethod]
-    public void An_identity_is_its_key_and_nothing_else()
+    public void PeerIdentity_TwoIdentitiesWithTheSameKey_AreEqual()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -295,14 +295,14 @@ public sealed class PeerIdentityTests
     }
 
     [TestMethod]
-    public void A_key_of_the_wrong_length_is_not_an_identity()
+    public void PeerIdentity_WhenTheKeyIsTheWrongLength_ShouldThrow()
     {
         Assert.ThrowsExactly<ArgumentException>(() => PeerIdentity.FromPublicKey(new byte[31]));
         Assert.ThrowsExactly<ArgumentException>(() => PeerIdentity.FromPublicKey(RandomNumberGenerator.GetBytes(64)));
     }
 
     [TestMethod]
-    public void A_signature_of_the_wrong_length_does_not_verify()
+    public void Verify_WhenTheSignatureIsTheWrongLength_ShouldReturnFalse()
     {
         using var keypair = PeerKeypair.Generate();
         var data = "x"u8.ToArray();

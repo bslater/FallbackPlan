@@ -23,7 +23,7 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
         _ => ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false));
 
     [TestMethod]
-    public async Task A_symlinked_directory_inside_the_root_refuses_the_operation()
+    public async Task Store_ASymlinkedDirectoryInsideTheRoot_RefusesTheOperation()
     {
         var store = new LocalFileSystemObjectStore(_root);
         Directory.CreateDirectory(_outside);
@@ -51,7 +51,7 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_write_spool_never_appears_in_listings()
+    public async Task List_WhileAPutIsSpooling_OmitsTheSpoolFile()
     {
         var store = new LocalFileSystemObjectStore(_root);
         await store.PutAsync(ObjectKey.Parse("repository-format"), Content([0x01]), PutConditions.None, CancellationToken.None);
@@ -70,7 +70,7 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_completed_put_is_immediately_readable_with_the_correct_length()
+    public async Task Put_OnceComplete_IsImmediatelyReadableAtItsFullLength()
     {
         var store = new LocalFileSystemObjectStore(_root);
         var payload = new byte[65_536];
@@ -85,7 +85,7 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_failed_content_factory_leaves_no_spool_residue()
+    public async Task Put_WhenTheContentFactoryThrows_LeavesNoSpoolResidue()
     {
         var store = new LocalFileSystemObjectStore(_root);
 

@@ -13,7 +13,7 @@ namespace FallbackPlan.Protocol.Tests;
 public sealed class PeerFrameTests
 {
     [TestMethod]
-    public async Task A_frame_written_is_a_frame_read()
+    public async Task Frame_WrittenThenRead_RoundTrips()
     {
         var hello = new SessionHello(1, 3, ["a", "b"], ["a"], "1.0.0-test", new PeerTerms(1_024, "every 1h", 4));
 
@@ -29,7 +29,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public async Task A_clean_close_is_not_an_error()
+    public async Task FrameReader_StreamClosedCleanly_ReportsEndRatherThanAnError()
     {
         using var stream = new MemoryStream();
 
@@ -38,7 +38,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public async Task A_close_part_way_through_a_frame_is_an_error()
+    public async Task FrameReader_StreamClosedMidFrame_ReportsAnError()
     {
         using var stream = new MemoryStream();
         await PeerFrame.WriteAsync(
@@ -54,7 +54,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public async Task An_oversized_frame_is_refused_before_it_is_allocated()
+    public async Task FrameReader_FrameExceedsTheLimit_RefusesBeforeAllocating()
     {
         // Four bytes claiming 4 GiB. A reader that allocates first and checks
         // second dies here, which is exactly the shape T-7 describes — so the
@@ -71,7 +71,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public void Non_canonical_cbor_is_refused_rather_than_read_leniently()
+    public void FrameReader_BodyIsNonCanonicalCbor_RefusesRatherThanReadingLeniently()
     {
         // Keys out of order. Two encodings of one message is the ambiguity
         // deterministic encoding exists to remove, so accepting this would give
@@ -89,7 +89,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public void A_body_whose_first_key_is_not_the_message_type_is_refused()
+    public void FrameReader_FirstKeyIsNotTheMessageType_Refuses()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(1);
@@ -102,7 +102,7 @@ public sealed class PeerFrameTests
     }
 
     [TestMethod]
-    public async Task An_unknown_message_type_reaches_the_caller_to_be_refused()
+    public async Task FrameReader_MessageTypeIsUnknown_SurfacesItToTheCaller()
     {
         using var stream = new MemoryStream();
         await PeerFrame.WriteAsync(stream, new UnknownMessage(), CancellationToken.None);
@@ -138,7 +138,7 @@ public sealed class PeerFrameTests
 public sealed class PeerSessionMessageTests
 {
     [TestMethod]
-    public void A_hello_without_terms_round_trips()
+    public void SessionHello_WithoutTerms_RoundTrips()
     {
         var hello = new SessionHello(1, 1, [], [], "1.0.0", Terms: null);
 
@@ -151,7 +151,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_hello_whose_range_runs_backwards_is_refused()
+    public void SessionHello_VersionRangeRunsBackwards_IsRefused()
     {
         var hello = new SessionHello(5, 2, [], [], "1.0.0", Terms: null);
 
@@ -162,7 +162,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_hello_that_omits_its_range_is_refused()
+    public void SessionHello_VersionRangeOmitted_IsRefused()
     {
         // Absent, not merely zero. A reader that defaults a missing range to
         // 0–0 would negotiate with a peer that never said what it speaks.
@@ -181,7 +181,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_feature_identifier_that_is_not_lower_case_ascii_is_refused()
+    public void SessionHello_FeatureIdentifierIsNotLowerCaseAscii_IsRefused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(4);
@@ -207,7 +207,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void An_empty_feature_identifier_is_refused()
+    public void SessionHello_FeatureIdentifierIsEmpty_IsRefused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(4);
@@ -232,7 +232,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_hello_with_more_features_than_the_limit_is_refused()
+    public void SessionHello_MoreFeaturesThanTheLimit_IsRefused()
     {
         var tooMany = Enumerable.Range(0, SessionHello.MaximumFeatures + 1)
             .Select(i => $"f{i}").ToList();
@@ -244,7 +244,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_key_this_version_does_not_know_is_skipped_within_a_known_message()
+    public void SessionHello_CarriesAKeyThisVersionDoesNotKnow_SkipsItAndDecodesTheRest()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(4);
@@ -268,7 +268,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void An_acceptance_round_trips()
+    public void SessionAccept_EncodedAndDecoded_RoundTrips()
     {
         var accept = new SessionAccept(3, ["one", "two"]);
 
@@ -279,7 +279,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void An_authentication_claim_round_trips()
+    public void AuthenticationClaim_EncodedAndDecoded_RoundTrips()
     {
         using var keypair = PeerKeypair.Generate();
         var auth = SessionAuth.Create(keypair.Identity);
@@ -291,7 +291,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void An_authentication_proof_round_trips()
+    public void AuthenticationProof_EncodedAndDecoded_RoundTrips()
     {
         var proof = new SessionAuthProof(Enumerable.Range(0, 64).Select(i => (byte)i).ToArray());
 
@@ -326,7 +326,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_proof_that_is_not_a_signature_length_is_refused()
+    public void AuthenticationProof_NotASignatureLength_IsRefused()
     {
         var writer = new CborWriter(CborConformanceMode.Canonical);
         writer.WriteStartMap(2);
@@ -343,7 +343,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_refusal_carries_the_code_a_client_branches_on()
+    public void SessionRefusal_AnyRefusal_CarriesTheCodeAClientBranchesOn()
     {
         var refusal = SessionRefuse.From(
             new PeerProtocolException(PeerRefusalReason.Revoked, "This pairing was revoked."));
@@ -355,7 +355,7 @@ public sealed class PeerSessionMessageTests
     }
 
     [TestMethod]
-    public void A_refusal_text_is_truncated_on_a_character_boundary()
+    public void SessionRefusal_TextExceedsTheLimit_TruncatesOnACharacterBoundary()
     {
         // The text is written for this side's operator and served to a stranger,
         // so it is clipped rather than allowed to grow — and clipped without
@@ -383,7 +383,7 @@ public sealed class PeerSessionNegotiationTests
         new(minimum, maximum, offered ?? [], required ?? [], "1.0.0", null);
 
     [TestMethod]
-    public void The_highest_version_both_sides_speak_wins()
+    public void VersionSelection_RangesOverlap_ChoosesTheHighestBothSidesSpeak()
     {
         Assert.AreEqual(3, PeerSessionNegotiation.SelectVersion(Hello(1, 5), Hello(2, 3)));
         Assert.AreEqual(3, PeerSessionNegotiation.SelectVersion(Hello(2, 3), Hello(1, 5)));
@@ -391,7 +391,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void Selection_does_not_depend_on_which_side_is_asking()
+    public void VersionSelection_ArgumentsSwapped_ChoosesTheSameVersion()
     {
         // Both sides compute this alone, from the same two hellos, and never
         // exchange another message about it. If the function were not symmetric
@@ -412,7 +412,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void Ranges_that_do_not_overlap_are_refused_naming_both()
+    public void VersionSelection_RangesDoNotOverlap_RefusesNamingBoth()
     {
         var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerSessionNegotiation.SelectVersion(Hello(1, 2), Hello(7, 9)));
@@ -426,7 +426,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void Features_in_effect_are_the_intersection()
+    public void FeatureNegotiation_BothSidesOfferFeatures_KeepsTheIntersection()
     {
         var effect = PeerSessionNegotiation.SelectFeatures(
             Hello(1, 1, offered: ["a", "b", "c"]),
@@ -436,7 +436,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void The_intersection_is_ordered_so_both_sides_write_the_same_list()
+    public void FeatureNegotiation_TheSameIntersection_IsOrderedIdenticallyOnBothSides()
     {
         var ours = Hello(1, 1, offered: ["zeta", "alpha", "mu"]);
         var theirs = Hello(1, 1, offered: ["mu", "zeta", "alpha"]);
@@ -450,7 +450,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void A_required_feature_the_peer_does_not_offer_refuses_the_session()
+    public void FeatureNegotiation_PeerDoesNotOfferARequiredFeature_RefusesTheSession()
     {
         var refused = Assert.ThrowsExactly<PeerProtocolException>(
             () => PeerSessionNegotiation.SelectFeatures(
@@ -462,7 +462,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void A_feature_the_peer_requires_of_us_is_checked_too()
+    public void FeatureNegotiation_PeerRequiresAFeatureOfUs_ChecksItToo()
     {
         // They would refuse anyway. Refusing first costs a message and avoids
         // the half-open state 02 §6 says must not exist.
@@ -475,7 +475,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void Requiring_something_both_sides_offer_is_fine()
+    public void FeatureNegotiation_RequiredFeatureIsOfferedByBoth_AcceptsTheSession()
     {
         var effect = PeerSessionNegotiation.SelectFeatures(
             Hello(1, 1, offered: ["a", "b"], required: ["a"]),
@@ -485,7 +485,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void Version_one_offers_no_features_and_two_such_peers_still_agree()
+    public void FeatureNegotiation_NeitherSideOffersAnyFeature_StillAgrees()
     {
         var hello = PeerSessionNegotiation.Hello("1.0.0");
 
@@ -498,7 +498,7 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void A_destination_hello_carries_its_terms_and_a_sources_does_not()
+    public void SessionHello_SentByADestination_CarriesTermsWhereASourcesDoesNot()
     {
         var terms = new PeerTerms(500_000_000_000, "every 1h", 4);
 

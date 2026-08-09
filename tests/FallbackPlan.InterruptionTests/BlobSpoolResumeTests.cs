@@ -29,7 +29,7 @@ namespace FallbackPlan.InterruptionTests;
 public sealed class BlobSpoolResumeTests : InterruptionHarness
 {
     [TestMethod]
-    public async Task A_job_killed_with_a_blob_open_leaves_a_resumable_spool()
+    public async Task BlobSpool_JobKilledWithABlobOpen_LeavesAResumableSpool()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -49,7 +49,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_resumed_spool_re_emits_its_sealed_bytes_verbatim()
+    public async Task BlobSpool_ResumedAfterAKill_ReEmitsItsSealedBytesVerbatim()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -75,7 +75,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_torn_spool_tail_restarts_rather_than_truncating()
+    public async Task BlobSpool_TailIsTorn_RestartsTheBlobRatherThanTruncatingIt()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -103,7 +103,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Damage_inside_a_spooled_record_restarts()
+    public async Task BlobSpool_RecordIsDamaged_RestartsTheBlobRatherThanResuming()
     {
         var store = CreateStore();
         using var keys = CreateKeys();

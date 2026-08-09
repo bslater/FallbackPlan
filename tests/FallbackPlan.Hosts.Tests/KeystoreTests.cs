@@ -23,7 +23,7 @@ public sealed class KeystoreTests : IDisposable
     public KeystoreTests() => Directory.CreateDirectory(_state);
 
     [TestMethod]
-    public void A_passphrase_round_trips_through_this_platforms_keystore()
+    public void Keystore_APassphrase_RoundTripsThroughThisPlatformsStore()
     {
         var store = PlatformKeystore.For(_state);
         var account = _state;
@@ -46,7 +46,7 @@ public sealed class KeystoreTests : IDisposable
     }
 
     [TestMethod]
-    public void Removing_what_is_not_stored_is_not_an_error()
+    public void Remove_WhenNothingIsStored_ShouldSucceedWithoutError()
     {
         var store = PlatformKeystore.For(_state);
         store.Delete(_state);
@@ -54,7 +54,7 @@ public sealed class KeystoreTests : IDisposable
     }
 
     [TestMethod]
-    public void Distinct_state_directories_hold_distinct_entries()
+    public void Keystore_TwoStateDirectories_HoldDistinctEntries()
     {
         var other = Path.Combine(_state, "other");
         Directory.CreateDirectory(other);

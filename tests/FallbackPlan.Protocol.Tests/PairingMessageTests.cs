@@ -21,7 +21,7 @@ public sealed class PairingMessageTests
         new(identity, exchange.PublicKey, exchange.Nonce);
 
     [TestMethod]
-    public void An_offer_round_trips()
+    public void PairingOffer_EncodedAndDecoded_RoundTrips()
     {
         using var keypair = PeerKeypair.Generate();
         using var exchange = PairingExchange.Start();
@@ -35,7 +35,7 @@ public sealed class PairingMessageTests
     }
 
     [TestMethod]
-    public void An_acceptance_round_trips_with_and_without_terms()
+    public void PairingAcceptance_WithAndWithoutTerms_RoundTrips()
     {
         using var keypair = PeerKeypair.Generate();
         using var exchange = PairingExchange.Start();
@@ -54,7 +54,7 @@ public sealed class PairingMessageTests
     }
 
     [TestMethod]
-    public void A_confirmation_and_a_refusal_round_trip()
+    public void PairingConfirmationAndRefusal_EncodedAndDecoded_RoundTrip()
     {
         var confirm = new PairConfirm(Enumerable.Range(0, 64).Select(i => (byte)i).ToArray());
         Assert.AreEqual(confirm, PairConfirm.Read(PeerFrame.Decode(PeerFrame.Encode(confirm)).Body));
@@ -66,7 +66,7 @@ public sealed class PairingMessageTests
     }
 
     [TestMethod]
-    public void A_label_longer_than_the_limit_is_refused_rather_than_truncated()
+    public void PairingOffer_LabelExceedsTheLimit_IsRefusedRatherThanTruncated()
     {
         using var keypair = PeerKeypair.Generate();
         using var exchange = PairingExchange.Start();
@@ -107,7 +107,7 @@ public sealed class PairingMessageTests
     }
 
     [TestMethod]
-    public void A_whole_ceremony_runs_through_encoded_frames_and_both_sides_agree()
+    public void PairingCeremony_RunOverEncodedFrames_LeavesBothSidesAgreeing()
     {
         using var offererKey = PeerKeypair.Generate();
         using var responderKey = PeerKeypair.Generate();

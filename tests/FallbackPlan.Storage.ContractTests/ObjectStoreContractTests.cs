@@ -32,7 +32,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Put_then_open_read_round_trips_bytes()
+    public async Task PutThenOpenRead_AnyContent_RoundTripsTheBytes()
     {
         var store = CreateStore();
         var key = ObjectKey.Parse("blobs/data/abcd/roundtrip");
@@ -46,7 +46,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Ranged_read_returns_exactly_the_requested_slice()
+    public async Task OpenRead_GivenARange_ReturnsExactlyThatSlice()
     {
         var store = CreateStore();
 
@@ -65,7 +65,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task A_range_past_the_end_reports_range_not_satisfiable_as_a_result()
+    public async Task OpenRead_RangeStartsPastTheEnd_ReportsRangeNotSatisfiableAsAResult()
     {
         var store = CreateStore();
 
@@ -83,7 +83,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Metadata_reports_length_for_an_existing_object()
+    public async Task GetMetadata_AnExistingObject_ReportsItsLength()
     {
         var store = CreateStore();
         var key = ObjectKey.Parse("index/delta/0000000000000001/meta");
@@ -96,7 +96,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Metadata_reports_not_found_as_a_result_not_an_exception()
+    public async Task GetMetadata_AMissingObject_ReportsNotFoundAsAResult()
     {
         var store = CreateStore();
 
@@ -106,7 +106,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Open_read_of_a_missing_object_reports_not_found_as_a_result()
+    public async Task OpenRead_AMissingObject_ReportsNotFoundAsAResult()
     {
         var store = CreateStore();
 
@@ -116,7 +116,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task A_second_put_of_the_same_key_reports_already_exists_not_an_exception()
+    public async Task Put_SameKeyASecondTime_ReportsAlreadyExistsAsAResult()
     {
         // The doc's own scenario (§2.2): an idempotent retry of a write that
         // in fact succeeded is the most common expected outcome.
@@ -135,7 +135,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task A_put_of_different_content_under_a_live_key_never_takes_effect()
+    public async Task Put_DifferentContentUnderALiveKey_LeavesTheStoredObjectUnchanged()
     {
         // INV-BLOB-001 (specification 05 §5.1) and the general rule it
         // specialises (01 §4). The idempotent-retry case above re-puts
@@ -165,7 +165,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task The_content_factory_is_invoked_and_its_stream_disposed()
+    public async Task Put_AnyContent_InvokesTheFactoryAndDisposesItsStream()
     {
         var store = CreateStore();
         var key = ObjectKey.Parse("journal/writer/0000000000000001");
@@ -189,7 +189,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task The_content_factory_may_be_invoked_more_than_once_without_error()
+    public async Task Put_WhenTheProviderRetries_InvokesTheFactoryAgainWithoutError()
     {
         // The contract half of §2.1: the caller guarantees the factory can
         // produce the content again, and the provider may call it as many
@@ -213,7 +213,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Listing_returns_ordinal_key_order_and_honours_the_prefix()
+    public async Task List_GivenAPrefix_ReturnsMatchingKeysInOrdinalOrder()
     {
         var store = CreateStore();
         var keys = new[] { "blobs/data/zz/2", "blobs/data/aa/1", "blobs/meta/aa/3", "index/delta/0000000000000001/d" };
@@ -233,7 +233,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task A_prefix_ending_mid_component_still_matches_by_string()
+    public async Task List_PrefixEndsMidComponent_StillMatchesByString()
     {
         var store = CreateStore();
         var keys = new[]
@@ -287,7 +287,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task A_resume_token_persisted_across_enumerators_resumes_strictly_after_its_entry()
+    public async Task List_ResumeTokenPersistedAcrossEnumerators_ResumesStrictlyAfterItsEntry()
     {
         var store = CreateStore();
 
@@ -329,7 +329,7 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
-    public async Task Delete_reports_deleted_then_not_found_as_results()
+    public async Task Delete_TheSameKeyTwice_ReportsDeletedThenNotFoundAsResults()
     {
         var store = CreateStore();
         var key = ObjectKey.Parse("tombstones/blob-1");

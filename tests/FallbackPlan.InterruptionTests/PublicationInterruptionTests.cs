@@ -85,7 +85,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_1_intent_published_no_blobs()
+    public async Task Publication_KilledAfterTheIntent_LeavesNothingCollectable()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -100,7 +100,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_4_blobs_durable_unreferenced_and_intent_covered()
+    public async Task Publication_KilledWithBlobsDurableAndUnreferenced_LeavesThemIntentCovered()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -136,7 +136,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_6_deltas_published_no_snapshot()
+    public async Task Publication_KilledAfterTheDeltas_LeavesNoSnapshotAndNoOrphanedIndex()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -156,7 +156,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_7_snapshot_published_intent_live_snapshot_restorable()
+    public async Task Publication_KilledAfterTheSnapshotWithTheIntentLive_LeavesTheSnapshotRestorable()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -176,7 +176,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_8_complete_the_intent_is_retired()
+    public async Task Publication_RunsToCompletion_RetiresItsIntent()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -194,7 +194,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_3_a_partial_spool_uploads_nothing()
+    public async Task Publication_KilledMidSpool_UploadsNothing()
     {
         // The step-3 row's store-side claim: a job that dies before any seal
         // leaves a spool (C1's resumable state) and NOTHING in the store.
@@ -214,7 +214,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_failed_upload_fails_the_job_rather_than_parking_the_producer()
+    public async Task Publication_AnUploadFails_FailsTheJobRatherThanParkingTheProducer()
     {
         // Row 3 kills the upload too early to reach this: the failure has to
         // outlast the queue. Here the store dies on the first blob put and the
@@ -243,7 +243,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Row_4_holds_with_several_uploads_outstanding()
+    public async Task Publication_KilledWithSeveralUploadsOutstanding_LeavesThemIntentCovered()
     {
         const int Outstanding = 4;
 

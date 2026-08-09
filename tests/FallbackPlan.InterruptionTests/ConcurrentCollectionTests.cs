@@ -55,7 +55,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_collector_running_mid_backup_deletes_nothing()
+    public async Task GarbageCollection_RunsWhileABackupIsInFlight_DeletesNothing()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -79,7 +79,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task An_unparseable_intent_protects_everything()
+    public async Task GarbageCollection_AnIntentCannotBeParsed_ProtectsEverythingItMightCover()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -109,7 +109,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_retired_intent_releases_coverage_only_after_the_snapshot_exists()
+    public async Task GarbageCollection_IntentRetired_ReleasesCoverageOnlyOnceTheSnapshotExists()
     {
         var store = CreateStore();
         using var keys = CreateKeys();

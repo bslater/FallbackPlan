@@ -47,7 +47,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Inspect_blob_opens_the_envelope_and_lists_its_records()
+    public async Task InspectBlob_AStoredBlob_OpensTheEnvelopeAndListsItsRecords()
     {
         await ArchiveAsync();
 
@@ -58,7 +58,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Inspect_blob_refuses_a_key_that_is_not_there()
+    public async Task InspectBlob_KeyIsNotInTheStore_RefusesWithAMessage()
     {
         await ArchiveAsync();
 
@@ -69,7 +69,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Inspect_manifest_decodes_a_file_version()
+    public async Task InspectManifest_AFileVersionObject_DecodesAndPrintsIt()
     {
         var archived = await ArchiveAsync();
 
@@ -80,7 +80,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Inspect_manifest_decodes_a_snapshot_and_a_tree()
+    public async Task InspectManifest_ASnapshotAndATreeObject_DecodesAndPrintsBoth()
     {
         var archived = await ArchiveAsync();
 
@@ -109,7 +109,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_file_writes_the_bytes_back_from_a_manifest_id()
+    public async Task RestoreFile_GivenAManifestId_WritesTheOriginalBytes()
     {
         const string content = "restore-file round trip content";
         var archived = await ArchiveAsync(content);
@@ -122,7 +122,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_file_writes_the_bytes_back_from_a_snapshot_id()
+    public async Task RestoreFile_GivenASnapshotId_WritesTheOriginalBytes()
     {
         const string content = "restore-file via snapshot";
         var archived = await ArchiveAsync(content);
@@ -135,7 +135,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_file_requires_something_to_restore()
+    public async Task RestoreFile_NeitherManifestNorSnapshotGiven_RefusesWithAMessage()
     {
         await ArchiveAsync();
 
@@ -148,7 +148,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_file_refuses_a_snapshot_that_is_not_there()
+    public async Task RestoreFile_SnapshotIsNotInTheRepository_RefusesWithAMessage()
     {
         await ArchiveAsync();
 
@@ -160,7 +160,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Verify_checks_one_file_version_end_to_end()
+    public async Task Verify_OneFileVersion_ChecksItEndToEnd()
     {
         var archived = await ArchiveAsync();
 
@@ -183,7 +183,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Verify_refuses_a_level_that_is_not_one_of_the_three()
+    public async Task Verify_LevelIsNotOneOfTheThree_RefusesWithAMessage()
     {
         await ArchiveAsync();
 
@@ -195,7 +195,7 @@ public sealed class InspectionCommandTests : IDisposable
     // ------------------------------------------------------- sub-path forms
 
     [TestMethod]
-    public async Task Ls_lists_a_nested_directory_and_reports_one_that_is_absent()
+    public async Task Ls_ANestedDirectory_ListsItAndReportsAnAbsentOneSeparately()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/top.txt", "top");
@@ -214,7 +214,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_takes_a_path_within_the_snapshot()
+    public async Task RestoreFile_GivenAPathWithinTheSnapshot_RestoresThatFile()
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/top.txt", "top");
@@ -237,7 +237,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Ls_refuses_a_snapshot_that_is_not_there()
+    public async Task Ls_SnapshotIsNotInTheRepository_RefusesWithAMessage()
     {
         // An empty listing must never be reported as success without
         // establishing WHICH emptiness it is. This exited 0 with no output
@@ -253,7 +253,7 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Ls_of_a_real_snapshot_root_still_succeeds()
+    public async Task Ls_TheRootOfARealSnapshot_ListsItsEntries()
     {
         // The other side of the fix: a snapshot that IS in the catalogue
         // lists its root without the new guard firing.

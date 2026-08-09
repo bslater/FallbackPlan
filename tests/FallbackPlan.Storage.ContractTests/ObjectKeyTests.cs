@@ -42,7 +42,7 @@ public sealed class ObjectKeyTests
     }
 
     [TestMethod]
-    public void A_key_longer_than_the_maximum_is_refused()
+    public void TryParse_WhenTheKeyExceedsTheMaximumLength_ShouldReturnFalse()
     {
         var component = new string('a', ObjectKey.MaximumComponentLength);
         var value = string.Join('/', Enumerable.Repeat(component, 5)); // 1279 chars
@@ -51,13 +51,13 @@ public sealed class ObjectKeyTests
     }
 
     [TestMethod]
-    public void A_component_longer_than_the_maximum_is_refused()
+    public void TryParse_WhenAComponentExceedsTheMaximumLength_ShouldReturnFalse()
     {
         Assert.IsFalse(ObjectKey.TryParse(new string('a', ObjectKey.MaximumComponentLength + 1), out _));
     }
 
     [TestMethod]
-    public void Prefixes_match_by_ordinal_string_prefix()
+    public void StartsWith_AnyKeyAndPrefix_MatchesByOrdinalStringPrefix()
     {
         var key = ObjectKey.Parse("blobs/data/abcd/object");
 
@@ -68,10 +68,10 @@ public sealed class ObjectKeyTests
     }
 
     [TestMethod]
-    public void Parse_of_a_rendered_key_returns_an_equal_key() =>
+    public void Parse_ARenderedKey_ReturnsAnEqualKey() =>
         PropertyCheck.Holds(this);
 
-    public static bool Parse_of_a_rendered_key_returns_an_equal_keyProperty(byte[]? componentSeeds, byte componentCount)
+    public static bool Parse_ARenderedKey_ReturnsAnEqualKeyProperty(byte[]? componentSeeds, byte componentCount)
     {
         // Deterministically map arbitrary bytes onto the valid alphabet so the
         // property explores the grammar's full space without rejection bias.

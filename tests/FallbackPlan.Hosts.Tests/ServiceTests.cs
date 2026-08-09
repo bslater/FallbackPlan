@@ -18,7 +18,7 @@ public sealed class ServiceTests : IDisposable
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
 
     [TestMethod]
-    public async Task While_the_service_runs_no_second_writer_can_take_the_role()
+    public async Task Service_WhileItRuns_PreventsASecondWriterTakingTheRole()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_client_commands_the_service_over_the_local_binding()
+    public async Task Service_CommandedByAClient_AnswersOverTheLocalBinding()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -58,7 +58,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_backup_commanded_by_a_client_runs_and_reports_states_beyond_scanning()
+    public async Task Backup_CommandedByAClient_RunsAndReportsStatesBeyondScanning()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", new string('x', 200_000));
@@ -128,7 +128,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Cancelling_a_job_that_is_not_running_says_so_rather_than_pretending()
+    public async Task Cancel_WhenTheJobIsNotRunning_SaysSoRatherThanPretending()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -142,7 +142,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_service_verifies_the_blobs_it_holds()
+    public async Task Verify_CommandedThroughTheContract_ChecksTheBlobsTheServiceHolds()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -164,7 +164,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task An_unknown_verify_level_is_refused_with_the_vocabulary()
+    public async Task Verify_LevelIsUnknown_RefusesListingTheVocabulary()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -179,7 +179,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_healthy_repository_checks_clean()
+    public async Task Check_AnUndamagedRepository_ReportsItClean()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -197,7 +197,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_restore_plan_says_what_it_would_write_before_anything_moves()
+    public async Task RestorePlan_BeforeAnythingMoves_ReportsWhatItWouldWrite()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -219,7 +219,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_restore_commanded_through_the_contract_writes_on_the_service_machine()
+    public async Task Restore_CommandedThroughTheContract_WritesOnTheServiceMachine()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -260,7 +260,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task A_restore_of_a_snapshot_nobody_has_is_not_found_rather_than_empty()
+    public async Task Restore_SnapshotIsUnknown_ReportsNotFoundRatherThanEmpty()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -277,7 +277,7 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task The_service_reports_status_derived_in_one_place()
+    public async Task Status_AskedOfTheService_IsDerivedInOnePlace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");

@@ -53,7 +53,7 @@ public sealed partial class LocalScanTests : IDisposable
     });
 
     [TestMethod]
-    public async Task Traversal_is_depth_first_and_byte_sorted()
+    public async Task Scan_ATreeOfDirectories_EmitsDepthFirstInByteOrder()
     {
         Write("b/inner.txt");
         Write("a-file.txt");
@@ -70,7 +70,7 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Scanning_twice_yields_identical_event_sequences()
+    public async Task Scan_TheSameTreeTwice_EmitsIdenticalEventSequences()
     {
         Write("x/deep/file1.bin", "one");
         Write("x/file2.bin", "two");
@@ -80,7 +80,7 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Excluded_paths_are_pruned_not_failed()
+    public async Task Scan_APathAnExcludeRuleMatches_PrunesItWithoutFailing()
     {
         Write("keep/data.txt");
         Write("skip/cache.tmp");
@@ -96,7 +96,7 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    public async Task File_metadata_captures_times_mode_and_ownership()
+    public async Task Scan_APosixFile_CapturesTimesModeAndOwnership()
     {
         var full = Write("meta.txt", "metadata");
 
@@ -260,7 +260,7 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    public void The_revalidation_stat_sees_a_change()
+    public void Revalidate_WhenTheFileChangedAfterTheScan_ShouldReportTheNewLengthAndTime()
     {
         var full = Write("reval.txt", "before");
         Assert.IsTrue(LocalFileSystemSource.TryStat(full, out var before));
@@ -273,7 +273,7 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    public void Probe_reports_a_filesystem_name_and_limits()
+    public void Probe_ARealFilesystem_ReportsItsNameAndLimits()
     {
         var info = _source.Probe(_root);
 

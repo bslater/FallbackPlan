@@ -23,7 +23,7 @@ public sealed class PeerGrantStoreTests : IDisposable
         new(identity, label, role, terms ?? new PeerTerms(500_000_000_000, "every 1h", 4), 1_722_600_000_000);
 
     [TestMethod]
-    public void A_pinned_grant_survives_a_restart()
+    public void PeerGrant_PinnedThenReopened_SurvivesTheRestart()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -43,7 +43,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void A_peer_whose_key_differs_is_simply_not_found()
+    public void PeerGrant_KeyDiffersFromThePinnedOne_IsNotFound()
     {
         using var paired = PeerKeypair.Generate();
         using var impostor = PeerKeypair.Generate();
@@ -60,7 +60,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void Revoking_removes_the_pairing_and_says_whether_there_was_one()
+    public void Revoke_AnyPeer_RemovesThePairingAndReportsWhetherOneExisted()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -76,7 +76,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void A_label_can_be_changed_and_changes_nothing_else()
+    public void Relabel_APinnedPeer_ChangesTheLabelAndNothingElse()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -95,7 +95,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void A_grant_file_that_cannot_be_read_is_refused_not_emptied()
+    public void PeerGrantStore_GrantFileIsUnreadable_RefusesRatherThanReturningEmpty()
     {
         using var keypair = PeerKeypair.Generate();
         Open().Pin(Grant(keypair.Identity));
@@ -110,7 +110,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void The_store_holds_no_more_grants_than_the_limit()
+    public void PeerGrantStore_MoreGrantsThanTheLimit_RefusesTheExcess()
     {
         var store = Open();
         var keypairs = new List<PeerKeypair>();
@@ -142,7 +142,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void Applying_narrower_terms_says_so()
+    public void ApplyTerms_TermsAreNarrower_ReportsTheNarrowing()
     {
         using var keypair = PeerKeypair.Generate();
 
@@ -159,7 +159,7 @@ public sealed class PeerGrantStoreTests : IDisposable
     }
 
     [TestMethod]
-    public void Applying_terms_to_a_peer_that_is_not_paired_is_refused()
+    public void ApplyTerms_WhenThePeerIsNotPaired_ShouldRefuse()
     {
         using var stranger = PeerKeypair.Generate();
 
@@ -184,7 +184,7 @@ public sealed class PeerGrantStoreTests : IDisposable
 public sealed class PeerTermsTests
 {
     [TestMethod]
-    public void A_source_may_ask_for_less_but_never_for_more()
+    public void DestinationTerms_SourceAsksForLessThanGranted_PermitsItAndRefusesMore()
     {
         var offered = new PeerTerms(1_000, "every 1h", 4);
 
@@ -198,14 +198,14 @@ public sealed class PeerTermsTests
     }
 
     [TestMethod]
-    public void Nothing_is_within_terms_that_permit_nothing()
+    public void DestinationTerms_TermsPermitNothing_AdmitNoRequest()
     {
         Assert.IsTrue(PeerTerms.None.IsWithin(PeerTerms.None));
         Assert.IsFalse(new PeerTerms(1, string.Empty, 0).IsWithin(PeerTerms.None));
     }
 
     [TestMethod]
-    public void Narrowing_is_recognised_on_every_axis_a_source_relies_on()
+    public void DestinationTerms_NarrowedOnAnyAxis_IsRecognisedAsNarrower()
     {
         var before = new PeerTerms(1_000, string.Empty, 4);
 

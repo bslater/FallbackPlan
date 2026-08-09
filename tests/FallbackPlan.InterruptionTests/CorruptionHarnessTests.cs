@@ -41,7 +41,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task An_envelope_flip_fails_the_blob_at_open_and_is_scoped_to_it()
+    public async Task BlobEnvelope_ABitIsFlipped_FailsTheBlobAtOpenAndNoOther()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -58,7 +58,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_record_header_flip_is_a_format_violation_scoped_to_its_record()
+    public async Task RecordHeader_ABitIsFlipped_IsAFormatViolationScopedToThatRecord()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -86,7 +86,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_tag_flip_is_an_authentication_failure_scoped_to_its_record()
+    public async Task RecordTag_ABitIsFlipped_IsAnAuthenticationFailureScopedToThatRecord()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -109,7 +109,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_footer_flip_fails_the_blob_at_open()
+    public async Task RecoveryFooter_ABitIsFlipped_FailsTheBlobAtOpen()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -127,7 +127,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_corrupted_standalone_snapshot_fails_authentication_and_emits_nothing()
+    public async Task StandaloneSnapshot_Corrupted_FailsAuthenticationAndEmitsNothing()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -146,7 +146,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_snapshot_sealed_for_another_repository_is_rejected_on_replay()
+    public async Task StandaloneSnapshot_SealedForAnotherRepository_IsRejectedOnReplay()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -167,7 +167,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task A_missing_blob_refuses_the_restore_with_the_segment_named()
+    public async Task Restore_AReferencedBlobIsMissing_RefusesNamingTheSegment()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -184,7 +184,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task Untouched_snapshots_survive_every_corruption_of_a_second_backup()
+    public async Task Snapshot_ASecondBackupIsCorrupted_LeavesTheEarlierSnapshotRestorable()
     {
         var (baseline, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
