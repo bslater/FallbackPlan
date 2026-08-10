@@ -106,13 +106,18 @@ Readers go the other way: enumerate a stable snapshot set first, then load the i
 | Interrupted after | State | Recovery |
 |-------------------|-------|----------|
 | 1 | Intent published, no blobs | Intent expires after grace; nothing collectable was written |
-| 3 | Partial spool, nothing uploaded | Resume from spool checkpoint or discard — [`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing) |
+| 2 | Scan complete. Single-stream: identical to row 1. Tree path: uploads may already be in flight during the walk, so row 4's state can exist here too | As rows 1 and 4 — the boundary adds no state of its own |
+| 3 | Data blobs sealed and durable, metadata not yet flushed | Intent covers what was uploaded; the *mid-step* state — a partial spool, nothing uploaded — is the spool suite's row: resume from spool checkpoint or discard — [`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing) |
 | 4 | Blobs durable, unreferenced | Intent keeps them reachable; job resumes or blobs expire with the intent |
+| 5 | Identical to row 4 — acknowledgements were checked per put | As row 4 |
 | 6 | Deltas published, no snapshot | Index entries are harmless; blobs remain intent-covered until retirement or expiry |
 | 7 | Snapshot published, intent live | Snapshot is valid and restorable; intent retires on next run or expires |
-| 8 | Complete | — |
+| 8 | Publication complete: snapshot durable, intent retired | The caller sees a failure over committed work; the live catalogue may be unprojected, which costs nothing — it is a cache |
+| 9 | Complete | — |
 
 No interruption at any step can make a previously committed snapshot unreadable (NFR-REL-001), and none can leave a published snapshot referencing a collectable blob.
+
+The boundaries are not the only interruption points: a store can die at *every individual put* inside a step. The put-budget sweep (`StorePutSweepTests`, and its tree twin in `TreeSnapshotInterruptionTests`) kills the publication after each put in turn and holds the same three claims at all of them — nothing durable is collectable, no partial snapshot can exist, and a fresh process completes with no repair. Cancellation is the same matrix by another door: a cancelled publication lands in the row its progress had reached (`CancellationTests`), with in-flight uploads drained and intent-covered.
 
 ## 6. Commit versus replication
 
