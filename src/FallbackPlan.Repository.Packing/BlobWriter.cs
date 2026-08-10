@@ -672,7 +672,8 @@ public sealed class BlobWriter : IAsyncDisposable
             File.Delete(SpoolCheckpoint.PathFor(_spoolPath));
         }
 
-        return new SealedBlob(_spoolPath, _envelope.BlobId, _envelope.BlobClass, CurrentLength, digest, _entries);
+        return new SealedBlob(
+            _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest, _entries);
     }
 
     /// <summary>

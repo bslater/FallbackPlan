@@ -196,10 +196,22 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// (ADR-0022 §Decision 1) with the same manifest bytes — and therefore
     /// the same object identifier — as the in-blob record.
     /// </summary>
+    /// <param name="manifest">The snapshot manifest being published.</param>
+    /// <param name="encodedManifest">The manifest's encoded bytes, signature included.</param>
+    /// <param name="intentSequence">
+    /// The publication's write-intent sequence number, which the standalone
+    /// copy carries hint-style rather than drawing a number of its own
+    /// (ADR-0022 §Decision 7): <c>/snapshots/…</c> is not a
+    /// sequence-addressed key, so an own number could satisfy none of the
+    /// four accounting cases and would be voided by the next run — one junk
+    /// void delta per publication, forever. Key and nonce uniqueness never
+    /// rested on the counter; each object seals under a fresh 32-byte salt.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the write.</param>
     public async ValueTask WriteStandaloneSnapshotAsync(
         SnapshotManifest manifest,
         ReadOnlyMemory<byte> encodedManifest,
-        ulong counter,
+        ulong intentSequence,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(manifest);
@@ -212,7 +224,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
             _metadataClassKey,
             _generation,
             _writerId,
-            counter,
+            intentSequence,
             ObjectType.SnapshotManifest,
             objectId,
             encodedManifest.Span);
@@ -323,6 +335,14 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 !await SealedBlobReadback.MatchesAsync(_store, storeKey, sealedBlob, cancellationToken).ConfigureAwait(false))
             {
                 throw new IOException(Strings.FormatBlobUpload_StoreHeldDifferentBytesUnder(storeKey));
+            }
+
+            // ADR-0022 §Decision 7 case 4, exactly as the data path: durable
+            // and intent-named means accounted, so no later run voids a
+            // number this blob embeds.
+            if (_intentScope is not null)
+            {
+                _counters.MarkAccounted(sealedBlob.BlobCounter);
             }
 
             FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(

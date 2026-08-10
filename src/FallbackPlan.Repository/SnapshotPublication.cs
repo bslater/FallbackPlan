@@ -168,7 +168,11 @@ public sealed partial class PublicationOrchestrator
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
 
-        foreach (var obligation in _sequence.RecoveredObligations)
+        // A previous run's leftovers — crash or cancellation alike — get
+        // their void deltas on this publication, not on a restart
+        // (ADR-0029 §4); the serialised writer lane makes the live pending
+        // set safe to read here.
+        foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
         }
@@ -375,8 +379,11 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteSourceIdentityHintsAsync(
                 walker.SourceIdentities, intentSequence, cancellationToken).ConfigureAwait(false);
 
+            // The standalone copy rides under the intent's sequence,
+            // hint-style (ADR-0022 §Decision 7) — see the single-stream path
+            // for why a number of its own could never be accounted.
             await builder.WriteStandaloneSnapshotAsync(
-                snapshot, encodedSnapshot, _sequence.AllocateNext(), cancellationToken).ConfigureAwait(false);
+                snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).

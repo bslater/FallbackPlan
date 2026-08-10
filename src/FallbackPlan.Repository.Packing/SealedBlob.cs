@@ -17,6 +17,7 @@ public sealed class SealedBlob : IAsyncDisposable
         string spoolPath,
         BlobId blobId,
         BlobClass blobClass,
+        ulong blobCounter,
         long length,
         byte[] digest,
         IReadOnlyList<RecordTableEntry> recordTable)
@@ -24,6 +25,7 @@ public sealed class SealedBlob : IAsyncDisposable
         _spoolPath = spoolPath;
         BlobId = blobId;
         BlobClass = blobClass;
+        BlobCounter = blobCounter;
         Length = length;
         Digest = digest;
         RecordTable = recordTable;
@@ -31,6 +33,13 @@ public sealed class SealedBlob : IAsyncDisposable
 
     /// <summary>The writer-allocated blob identifier.</summary>
     public BlobId BlobId { get; }
+
+    /// <summary>
+    /// The sequence-space counter the identifier embeds (specification
+    /// 02 §4) — what the uploader marks accounted once the blob is durable
+    /// and named by a durable intent (ADR-0022 §Decision 7).
+    /// </summary>
+    public ulong BlobCounter { get; }
 
     /// <summary>The blob's class.</summary>
     public BlobClass BlobClass { get; }

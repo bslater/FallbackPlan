@@ -840,6 +840,16 @@ public sealed class ArchiveSession : IAsyncDisposable
                 throw new IOException(Strings.FormatBlobUpload_StoreHeldDifferentBytesUnder(storeKey));
             }
 
+            // ADR-0022 §Decision 7 case 4 is now satisfied — the blob is
+            // durable and a durable intent names it — so its counter has its
+            // accounting object and owes no void delta to any later run.
+            // Without a scope the case never becomes true, and the counter's
+            // fate stays with the caller who chose to upload uncovered.
+            if (_intentScope is not null)
+            {
+                _counters.MarkAccounted(sealedBlob.BlobCounter);
+            }
+
             EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
             EngineDiagnostics.BlobFillFraction.Record(
                 sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);

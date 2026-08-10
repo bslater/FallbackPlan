@@ -148,6 +148,58 @@ public sealed class VanishingObjectStore(IObjectStore inner) : IObjectStore
 }
 
 /// <summary>
+/// Accepts puts normally until armed, then fails every put of a matching
+/// key with an <see cref="IOException"/> — the store outage that arrives
+/// mid-publication and clears before the next run, which is the shape a
+/// same-process retry needs: the first run loses work to the fault, the
+/// second runs over a healthy store.
+/// </summary>
+public sealed class PutFaultingObjectStore(IObjectStore inner) : IObjectStore
+{
+    private volatile Func<string, bool>? _failing;
+
+    /// <summary>Starts failing puts of keys matching <paramref name="keyFilter"/> (all when null).</summary>
+    public void Arm(Func<string, bool>? keyFilter = null) => _failing = keyFilter ?? (_ => true);
+
+    /// <summary>Stops failing — the outage clears.</summary>
+    public void Heal() => _failing = null;
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => inner.Capabilities;
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+        inner.OpenReadAsync(key, range, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken)
+    {
+        if (_failing is { } failing && failing(key.ToString()))
+        {
+            throw new IOException($"Injected fault: the put of '{key}' failed.");
+        }
+
+        return inner.PutAsync(key, openContent, conditions, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        inner.DeleteAsync(key, conditions, cancellationToken);
+}
+
+/// <summary>
 /// Serves reads normally until armed, then fails every read of a matching
 /// key with an <see cref="IOException"/> — the transient network or disk
 /// fault that arrives mid-restore, after the world was already loaded.

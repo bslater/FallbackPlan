@@ -147,26 +147,29 @@ public sealed class WriterSequence : IBlobCounterAllocator
         _next = state.NextSequence;
         _pending = [.. state.PendingSequences];
         _lastDeltaId = state.LastDeltaId;
-        _recovered = [.. state.PendingSequences];
     }
 
-    private readonly List<ulong> _recovered;
-
     /// <summary>
-    /// Sequence numbers allocated by a previous run and never accounted for —
-    /// each one MUST get a void delta so readers can distinguish "skipped"
-    /// from "missing" (specification 07 §4). An obligation leaves this list
-    /// when it is accounted for: the sequence outlives the job in the
-    /// long-lived service, and an obligation that never left would be
-    /// republished by every publication the process ever makes.
+    /// Sequence numbers allocated and not yet accounted for. Read at
+    /// publication start — where the serialised writer lane guarantees no
+    /// allocation is in flight — these are exactly a previous run's
+    /// leftovers, and each one MUST get a void delta so readers can
+    /// distinguish "skipped" from "missing" (specification 07 §4). Reading
+    /// the live pending set rather than a construction-time snapshot is what
+    /// makes a cancelled run's numbers "discharged by the next publication,
+    /// exactly as a crash's would" (ADR-0029 §4) in the long-lived service,
+    /// whose sequence outlives every job: a snapshot would defer the
+    /// discharge to a restart the service may not have for weeks. An
+    /// obligation leaves this list when it is accounted for, so a void is
+    /// published exactly once.
     /// </summary>
-    public IReadOnlyList<ulong> RecoveredObligations
+    public IReadOnlyList<ulong> OutstandingObligations
     {
         get
         {
             lock (_gate)
             {
-                return _recovered.Where(_pending.Contains).ToList();
+                return [.. _pending];
             }
         }
     }
@@ -215,6 +218,14 @@ public sealed class WriterSequence : IBlobCounterAllocator
             Persist();
         }
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The blob-counter case of ADR-0022 §Decision 7: the durable blob named
+    /// by a durable intent is the accounting object, so the number leaves the
+    /// pending set the moment its upload is acknowledged.
+    /// </remarks>
+    void IBlobCounterAllocator.MarkAccounted(ulong blobCounter) => MarkAccounted(blobCounter);
 
     private void Persist() => _store.Save(new SequenceState(_next, [.. _pending], _lastDeltaId));
 }
