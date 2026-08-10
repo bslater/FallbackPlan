@@ -139,6 +139,16 @@ A console pairs with each service it manages, and pairing is revocable at the se
 
 ---
 
+## Q22 — Sparse restore materialises zeroes
+
+**Owner:** maintainer · **Blocks:** nothing — but FR-ARCH-013's acceptance is currently claimed and not met
+
+FR-ARCH-013 requires a sparse file to restore "without materialising zero payload". The restore path does the opposite: `RestoreEngine` writes explicit zero buffers into its spool for every hole, and the executor copies them to the destination — correct bytes, correct whole-file hash, and a fully allocated file where the source had holes. No sparse-allocation API (`SEEK_HOLE`/`fallocate` punch, `FSCTL_SET_SPARSE`) is called anywhere. The format is not implicated: hole extents are captured faithfully (ADR-0026); only the write-out ignores them.
+
+Two honest resolutions, one to pick: **(a)** implement sparse-aware write-out — platform-specific work on both POSIX and Windows, with a test that asserts allocated size < logical size where the platform can report it; or **(b)** amend FR-ARCH-013's acceptance to say v1 restores holes as written zeroes, and keep sparse write-out as a later enhancement. What is not acceptable is the current state, where the requirement says one thing, the code does another, and the previously cited test could not tell the difference — the August 2026 restore pipeline review records it so it cannot persist silently.
+
+---
+
 ## Closed
 
 | Question | Resolution |

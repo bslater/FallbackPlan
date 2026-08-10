@@ -11,7 +11,8 @@ using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Verify-on-reuse and trust-domain gating (FR-DED-002; specification 09 §5;
+/// Verify-on-reuse and trust-domain gating (FR-DED-001, FR-DED-002,
+/// FR-DED-003, NFR-SEC-007; specification 09 §5;
 /// [ADR-0006](../../../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)).
 ///
 /// Every other end-to-end suite has one writer, and with one writer all three

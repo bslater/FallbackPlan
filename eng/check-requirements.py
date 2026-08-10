@@ -148,7 +148,9 @@ def covering_classes() -> dict[str, set[str]]:
 
         text = path.read_text(encoding="utf-8")
         names = [n for n in CLASS_PATTERN.findall(text) if n.endswith(("Tests", "Properties"))]
-        if not names or not re.search(r"\[(?:Fact|Theory)\b", text):
+        # MSTest since ADR-0032; the xUnit forms stay recognised so a partial
+        # migration in either direction cannot silently blind this check again.
+        if not names or not re.search(r"\[(?:TestMethod|DataTestMethod|Fact|Theory)\b", text):
             continue
 
         disclaimed = {
@@ -186,6 +188,35 @@ def drift(traceability: str) -> list[str]:
             # as a problem would bury the real signal in noise.
             if proving and not (proving & named):
                 reports.append(f"{rid}: proven by {', '.join(sorted(proving))}, credited to none of them")
+
+    return reports
+
+
+def uncredited(traceability: str) -> list[str]:
+    """Requirements whose row cites only classes that never declare them."""
+    covers = covering_classes()
+    reports: list[str] = []
+
+    for line in traceability.splitlines():
+        match = ROW_PATTERN.match(line)
+        if not match:
+            continue
+
+        cells = [cell.strip() for cell in match.group(2).split("|")]
+        cell = cells[2] if len(cells) > 2 else ""
+        named = set(re.findall(r"`([^`]+)`", cell))
+        if not named:
+            continue
+
+        for rid in sorted(traced_ids(match.group(1))):
+            declaring = covers.get(rid, set())
+            if named & declaring:
+                continue
+
+            reports.append(
+                f"{rid}: cited {sorted(named)}, none of which declare it"
+                + (f"; declared by {sorted(declaring)}" if declaring else "")
+            )
 
     return reports
 
@@ -259,6 +290,18 @@ def main() -> int:
         # It is a prompt for a maintainer to look, not a verdict.
         reports = drift(traceability)
         print(f"\ndrift ({len(reports)} requirement(s) proven by a test the matrix does not name):")
+        for report in reports:
+            print(f"  {report}")
+
+    if "--audit" in sys.argv:
+        # The reverse of --drift, and reporting-only for the same reason: a row
+        # whose every cited class is silent about the id may still be right —
+        # the matrix's methodology asks tests to declare the ids they establish,
+        # and a silent citation is a class that never adopted the convention,
+        # not necessarily a wrong citation. It is a prompt to either add the
+        # declaration or fix the cell, decided by reading the test.
+        reports = uncredited(traceability)
+        print(f"\naudit ({len(reports)} requirement(s) whose cited classes never declare them):")
         for report in reports:
             print(f"  {report}")
     print(f"traceability coverage: {len(defined_set & traced_ids(traceability))}/{len(defined_set)}")

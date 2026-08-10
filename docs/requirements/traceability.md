@@ -40,7 +40,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-ARCH-010 | [02 §6.2](../architecture/02-repository-format.md#62-manifests-hold-logical-facts-only) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ManifestCodecTests` | 0 |
 | FR-ARCH-011 | [02 §5.3](../architecture/02-repository-format.md#53-spooling-and-sealing) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `InterruptionTests/BlobSpoolResumeTests`, `Repository.Tests/SpoolCheckpointTests` | 0 |
 | FR-ARCH-012 | [02 §5.2](../architecture/02-repository-format.md#52-layout) | — | `Repository.Tests/ArchiveRoundTripTests`, `Repository.Tests/BlobWriterAndReaderTests` | 0 |
-| FR-ARCH-013 | [02 §3.5](../architecture/02-repository-format.md#35-configuration-envelope) | — | `Repository.Tests/FixedSegmentReaderTests` | 0 |
+| FR-ARCH-013 | [02 §3.5](../architecture/02-repository-format.md#35-configuration-envelope) | — | `Repository.Tests/FixedSegmentReaderTests` (boundary arithmetic), `Repository.Tests/SnapshotPublicationTests` (sparse round trip), `Repository.Tests/ArchiveRoundTripTests` (empty file); the sparse clause "without materialising zero payload" is not met by the restore path — see [Q22](../open-questions.md#q22--sparse-restore-materialises-zeroes) | 0 |
 | FR-ARCH-014 | [02 §3.1](../architecture/02-repository-format.md#31-profiles), [§3.3](../architecture/02-repository-format.md#33-the-freeze-gate) | [0002](../adr/0002-segmentation-strategy.md) | `Repository.Tests/CdcSecondBackupTests`, `Repository.Tests/CdcSegmentReaderTests` | 0 → freeze |
 
 ### Manifests, indexes, catalogue
@@ -60,7 +60,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-MAN-016 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/IndexPlaneTests` | 0 |
 | FR-MAN-017 | [02 §7.2](../architecture/02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `Repository.Tests/IndexPlaneTests` | 0 |
 | FR-MAN-009 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/ForensicRebuildTests` | 0 |
-| FR-MAN-010 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `Repository.Tests/ForensicRebuildTests` | 1 |
+| FR-MAN-010 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `Repository.Tests/ForensicRebuildTests`, `Repository.Tests/RestorePlanTests` | 1 |
 | FR-MAN-011 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | — | `InterruptionTests/CorruptionHarnessTests` | 0 |
 | FR-MAN-012 | [02 §8.3](../architecture/02-repository-format.md#83-rebuild-never-repairs) | — | `Repository.Tests/ForensicRebuildTests` | 1 |
 | FR-MAN-014 | [02 §8.3](../architecture/02-repository-format.md#83-rebuild-never-repairs) | — | `Repository.Tests/ForensicRebuildTests` | 0 |
@@ -155,7 +155,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-SEC-003 | [03 §3](../architecture/03-crypto.md#3-nonce-and-key-construction) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `InterruptionTests/BlobSpoolResumeTests`, `Repository.ConformanceTests/RecordFramingConformanceTests` | 0 |
 | NFR-SEC-005 | [03 §6](../architecture/03-crypto.md#6-authentication-of-repository-state) | [0008](../adr/0008-index-generations-and-checkpoints.md) | `InterruptionTests/CorruptionHarnessTests` | 1 |
 | NFR-SEC-006 | [10 §4](../architecture/10-observability.md#4-diagnostics) | — | `Repository.Tests/LocalStateSeparationTests`, `Repository.Tests/TelemetryPrivacyTests` | 1 |
-| NFR-SEC-007 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(untested; phase 2)* | 2 |
+| NFR-SEC-007 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` — a failed verification is re-written from this device's bytes and reported, in both the repository and device domains; cross-device *replication* scenarios remain phase 2 | 2 |
 | NFR-SEC-008 | [03 §3.1](../architecture/03-crypto.md#31-the-construction) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `Repository.ConformanceTests/KeyHierarchyConformanceTests` | 0 |
 | NFR-SEC-009 | [00 §6.2](../architecture/00-overview.md#62-installation-topologies) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/KeyMaterialConfinementTests`, `ArchitectureTests/DependencyRuleTests` | 2 |
 | NFR-PRIV-001..003 | [10 §4](../architecture/10-observability.md#4-diagnostics), [§5](../architecture/10-observability.md#5-telemetry) | — | `Repository.Tests/TelemetryPrivacyTests` | 1 |
