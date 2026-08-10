@@ -330,13 +330,17 @@ cancellation — and repaired the coverage audit itself (`--drift` recognised
 only xUnit attributes and had been blind since the MSTest move; `--audit` now
 reports rotted citations). What both reviews deliberately left is below.
 
-1. **Cancel a live publication** —
+1. ✅ **Cancel a live publication** — done
+   ([pipeline review Amendment 1](review/2026-08-pipeline-integrity-review.md#amendment-1-2026-08--the-base-hardening-round)):
+   all five of
    [T-2](review/2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
-   five named tests, owed before Phase 2 closes. The **restore** side of
-   cancellation is now done (`RestoreExecution_Cancelled…`, RR-5); the backup
-   side needs cancellation plumbed through the publication orchestrator. Done
-   when all five exist and pass, including the `ServiceCommandHandler`
-   positive path.
+   named tests exist and pass — four in `InterruptionTests/CancellationTests`,
+   the `ServiceCommandHandler` positive path in `Hosts.Tests/ServiceTests`.
+   The suite caught and fixed the exact defect class T-2 predicted: the
+   cancelled seal's unwind threw over the cancellation, so a cancelled job
+   reported failure instead of `Cancelled`. The upload drain after a cancel
+   is pinned as documented behaviour; the rerun's obligation discharge
+   (ADR-0029 §4, in the same process) is held by `SequenceAccountingTests`.
 2. ✅ **A store that tears and forgets** — built and run
    ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)):
    `TestSupport/FaultInjectionStores` delivers torn puts, vanishing
@@ -348,9 +352,13 @@ reports rotted citations). What both reviews deliberately left is below.
    converged on the recovery tool's posture, and the torn-write assertion
    flipped to a restore as promised
    ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)).
-3. **Kills inside steps, and the four boundaries the matrix omits**
-   (`ScanSource`, `SegmentAndSeal`, `VerifyAcknowledgements`, `Complete`).
-   Done when the matrix is row-complete against 04 §5.1.
+3. ✅ **Kills inside steps, and the four boundaries the matrix omits** — done:
+   both `KillPoints()` sources run all nine boundaries, 04 §5.1 was
+   reconciled to match (it had six rows for nine steps), and the in-step
+   kills are the put-budget sweep — `InterruptionTests/StorePutSweepTests`
+   single-stream, its twin in `TreeSnapshotInterruptionTests` for the tree
+   path's first-ever meeting with a fault store, which caught the advisory
+   hint put failing the whole publication (fixed test-first).
 4. ✅ **An interrupted restore** — both slices done: cooperative cancellation
    (RR-5) and the read-fault slice
    (`Repository.Tests/RestoreReadFaultTests`), which also fixed SF-2 —
@@ -362,10 +370,14 @@ reports rotted citations). What both reviews deliberately left is below.
    sequence file is covered (`SequenceRollbackTests`); the rest of the
    family is not. Done when each has a named test or a written reason it
    cannot happen.
-6. **Two real processes** — the writer-role lock and the spool-directory
-   ownership have never been raced across process boundaries; the review
-   documented the ownership rule and left enforcement here. Done when a
-   second process is actually spawned and refused.
+6. ✅ **Two real processes** — done: `Hosts.Tests/ProcessRaceTests` spawns
+   the shipped apphosts and crosses the kernel's file lock — a real CLI
+   contender refused naming the holder's role and pid, a killed Agent
+   holder's role freeing itself with no stale-lock heuristic, and two
+   processes with different state directories committing to one repository
+   concurrently (ADR-0028 §4's boundary, both sides). The spool directory
+   rides the same exclusion — `<state>/spool` sits behind the writer role
+   at every call site.
 7. **Contract-suite atomicity** (phase 3, with the second provider) — the
    portable `Storage.ContractTests` do not require atomic visibility or
    crash durability, so a second provider could pass while offering neither.

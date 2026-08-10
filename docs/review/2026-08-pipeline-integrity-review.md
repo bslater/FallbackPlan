@@ -95,7 +95,7 @@ Sealing deletes the checkpoint sidecar — "a sealed blob is no longer resumable
 
 **Held by** `InterruptionTests/VoidObligationTests.Publication_TwoRunsInOneProcess_DischargeEachCrashObligationOnce`. Before: *"Expected:\<1\>. Actual:\<2\>."*
 
-> **Resolved (2026-08).** An obligation leaves `RecoveredObligations` when it is accounted for — the property now reads through the pending set `MarkAccounted` maintains, under the same lock.
+> **Resolved (2026-08).** An obligation leaves `RecoveredObligations` when it is accounted for — the property now reads through the pending set `MarkAccounted` maintains, under the same lock. Superseded in the base-hardening round ([Amendment 1](#amendment-1-2026-08--the-base-hardening-round)): the property is now `OutstandingObligations`, the live pending set itself, so a cancelled run's numbers are discharged by the next publication in the same process rather than by the next restart.
 
 ### IR-5 — The low-level restore computes the whole-file hash and compares it to nothing
 
@@ -186,7 +186,52 @@ Each of these needs test infrastructure or a maintainer decision this pass does 
 | IR-T1..T3 | — | Test oracles | **Strengthened in place** |
 | Void backfill order · extension expiry · step-5 no-op · decorative `IfNotExists` · spool-directory sharing | Cleared | — | Recorded above; two retrospective items extracted (read-back sampling; ownership enforcement) |
 
-**What this pass did not change:** no ADR needed amending — every defect was implementation against a correct decision — and no specification erratum was warranted: 05, 07 and 08 already said what the code now does. That is worth saying plainly, because it is the opposite of what the last two reviews found, and it means the document set is currently a sound implementation contract.
+**What this pass did not change:** no ADR needed amending — every defect was implementation against a correct decision — and no specification erratum was warranted: 05, 07 and 08 already said what the code now does. That is worth saying plainly, because it is the opposite of what the last two reviews found, and it means the document set is currently a sound implementation contract. *(Amendment 1 later found one exception in the sequence-accounting corner — ADR-0022 §Decision 7 now carries a practice note.)*
+
+---
+
+## Amendment 1 (2026-08) — the base-hardening round
+
+The three items this review and its [restore-side companion](2026-08-restore-pipeline-review.md) left on the pickup list — the T-2 cancellation suite, kill-matrix row completeness with in-step kills, and real two-process races — are closed. Same method throughout: every claimed defect demonstrated by a test that failed for the documented reason before its fix.
+
+### Sequence accounting: three defects in one corner
+
+Verifying how the standalone snapshot's number was meant to be accounted (the caution this round opened with) surfaced a cluster, all against [ADR-0022 §Decision 7](../adr/0022-standalone-metadata-records-and-index-identifiers.md#decision-7--sequence-accounting-across-the-shared-space) and [ADR-0029 §4](../adr/0029-pipeline-and-service-concurrency.md):
+
+- **Blob counters were never marked accounted**, though Decision 7 case 4 defines exactly when they are — the durable blob named by a durable intent. Every completed publication left all its counters pending, so the next process life published void deltas falsely claiming numbers that durable blobs embed were skipped. The uploader now marks the counter accounted when the put is acknowledged under a live intent scope, both blob classes.
+- **The standalone snapshot consumed a number nothing could ever account.** `/snapshots/…` is not a sequence-addressed key, so the number satisfied none of Decision 7's four cases and surfaced as one junk void delta per publication, forever. The snapshot now rides under the write intent's sequence, hint-style — Decision 7's own arithmetic argument for hints, applied verbatim; key and nonce uniqueness never rested on the counter. The ADR carries the practice note.
+- **In-process discharge (supersedes IR-4's fix).** `RecoveredObligations` filtered a construction-time snapshot, so a cancelled or failed run's numbers were discharged only by a restart — against ADR-0029 §4's "discharged by the next publication, exactly as a crash's would". `OutstandingObligations` is now the live pending set, read at publication start where the serialised writer lane guarantees no allocation is in flight.
+
+Held by `InterruptionTests/SequenceAccountingTests`: a completed run leaves nothing pending and a rerun voids nothing; a run that loses a blob to a store fault has its number voided by the same process's next run.
+
+### T-2: the five owed cancellation tests, and the defect they caught
+
+All five exist verbatim-named and pass — four in `InterruptionTests/CancellationTests`, the `ServiceCommandHandler` positive path in `Hosts.Tests/ServiceTests`. The design position held: a cancel lands in the same 04 §5.1 state class as a kill at the same point, nothing durable collectable, every earlier snapshot untouched, and the rerun completes with nothing left pending.
+
+One behaviour is **pinned deliberately**: a cancel drains the buffered and in-flight blob uploads through session disposal, writing to the store after the request. Those writes are intent-covered like every other upload and bounded by the queue; T-2's acceptance is state-class equivalence plus a clean rerun, not an instant stop, and rewiring the worker tokens would trade a bounded drain for a torn upload pipeline.
+
+And T-2's thesis — the running engine's unwind is the path that corrupts — was vindicated precisely: a cancel landing inside `BlobWriter.SealAsync` left the writer marked sealed with the spool open, and `AbandonAsync`'s disposed-guard threw `ObjectDisposedException` **over the propagating cancellation** — so a cancelled job would report a failure instead of `Cancelled`, and `BackupRunner`'s cancellation handling would never run. Abandon and dispose are now tolerant of the interrupted-seal state: release handles, zero keys, leave the spool for the resume walk's authentication to judge, never throw over the exception the caller is propagating. Held deterministically by `BlobWriterAndReaderTests.BlobWriter_TheSealIsCancelledMidWrite_CanStillBeAbandoned`.
+
+### The matrix, row-complete and put-by-put
+
+Both `KillPoints()` sources now run all nine step boundaries; the rows whose durable state equals a neighbour's say so, and running them is what keeps the equivalence true if a step ever grows durable effects. [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) was reconciled to match — it had six rows for nine steps, called step 9's row "8", and described row 3 with an in-step state the boundary does not have.
+
+In-step interruption is the put-budget sweep: `StorePutSweepTests` (eleven distinct puts, single-stream) and its twin in `TreeSnapshotInterruptionTests` (twelve, the scanner-driven path's first meeting with a fault store). The sweep's one casualty, fixed test-first: **a store fault during a source-identity hint put failed the whole publication**, contradicting the hints' own advisory bargain (06 §11). A hint the store will not take now costs a later reader one rename optimisation, never the snapshot. The tree path also gained its steps-in-order observer proof and the step-9 row the enum owns there: killed between retirement and Complete, the store is complete and restorable while the live catalogue never heard of the publication — the projection is a cache catching up by ordinary operation, never a correctness step.
+
+### Two real processes
+
+`Hosts.Tests/ProcessRaceTests` spawns the shipped apphosts and crosses the kernel's file lock — the path no in-process test reaches, because .NET's `FileShare` bookkeeping answers first. A real CLI contender is refused naming the holder's role and pid; a real Agent holder killed without ceremony frees the role by the operating system releasing its handle, stale owner file irrelevant; and two processes with different state directories back up one repository concurrently and both commit — ADR-0028 §4's boundary pinned from both sides. The phase-2 exit-criteria citation that credited the in-process tests with the cross-process claim is corrected.
+
+### Dispositions
+
+| Finding | Where the defect lived | Disposition |
+|---------|------------------------|-------------|
+| Blob counters never accounted | `Repository/ArchiveSession`, `Repository/ManifestBuilder`, `Domain/IBlobCounterAllocator` | **Fixed**: accounted at acknowledged put under a live intent; held by `SequenceAccountingTests` |
+| Snapshot standalone's unaccountable number | Both publication paths, `ManifestBuilder.WriteStandaloneSnapshotAsync` | **Fixed**: rides the intent's sequence, hint-style; ADR-0022 §Decision 7 practice note |
+| Obligations discharged only on restart | `Repository.Index/WriterSequence` | **Fixed**: live `OutstandingObligations`; supersedes IR-4's mechanism |
+| Cancelled seal throws over the cancellation | `Repository.Packing/BlobWriter.AbandonAsync`/`DisposeAsync` | **Fixed**: unwind tolerant of the interrupted-seal state; held by `BlobWriterAndReaderTests` |
+| Hint fault fails the publication | `Repository/ManifestBuilder.WriteSourceIdentityHintsAsync` | **Fixed**: advisory semantics applied to faults; held by `TreeSnapshotInterruptionTests` |
+| Cancel drains in-flight uploads post-request | `Repository/ArchiveSession` | **Pinned as documented behaviour** — intent-covered, queue-bounded; `CancellationTests` |
 
 ---
 

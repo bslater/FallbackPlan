@@ -6,11 +6,12 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.InterruptionTests;
 
 /// <summary>
-/// Backup-side cancellation (ADR-0029 §4; the Duplicati review's T-2): a
-/// cancel is a command whose durable outcome is the same <em>state class</em>
-/// as a kill at the same point — blobs intent-covered, nothing referenced,
-/// nothing collectable, every earlier snapshot untouched — and whose
-/// leftovers the next publication absorbs without repair or operator action.
+/// Backup-side cancellation (ADR-0029 §4; NFR-REL-001; the Duplicati
+/// review's T-2): a cancel is a command whose durable outcome is the same
+/// <em>state class</em> as a kill at the same point — blobs intent-covered,
+/// nothing referenced, nothing collectable, every earlier snapshot untouched
+/// — and whose leftovers the next publication absorbs without repair or
+/// operator action.
 /// </summary>
 /// <remarks>
 /// One behaviour is pinned deliberately rather than fixed: a cancel drains

@@ -276,9 +276,14 @@ guarantee that is not tracked.
 §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested value.
 §4's service-level scheduling — sets serialised, read work in its own lane,
 user-initiated work ahead of scheduled, and cancellation recording
-`JobState.Cancelled`. §5's progress events, with the states beyond `Scanning`
-actually emitted. §6's order of work, all three steps, with results in
-[`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
+`JobState.Cancelled` — with §4's full acceptance now held by tests: the five
+T-2 cancellation tests (`InterruptionTests/CancellationTests`,
+`Hosts.Tests/ServiceTests`), and "discharged by the next publication, exactly
+as a crash's would" held **in the same process** by
+`InterruptionTests/SequenceAccountingTests` after the base-hardening round
+made `WriterSequence` read its live pending set. §5's progress events, with
+the states beyond `Scanning` actually emitted. §6's order of work, all three
+steps, with results in [`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
 
 §2's upload workers: a sealed blob is handed to a bounded worker set and the
 archive loop continues, with the covering intent made durable per blob before

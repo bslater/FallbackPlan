@@ -92,6 +92,8 @@ The design position is defensible — a snapshot object is only written at the e
 | `Publish_CancelledDuringTheSnapshotWrite_PublishesNoSnapshotOrACompleteOne` | The narrow window where a partial fileset is conceivable. |
 | `CancelJob_JobIsRunning_StopsItAndReportsTheCancelledState` | The `ServiceCommandHandler` path end to end, which currently has no positive case at all. |
 
+> **Resolved (2026-08).** All five exist verbatim-named and pass — four in `InterruptionTests/CancellationTests`, the service path in `Hosts.Tests/ServiceTests`. The design position held, with one pinned nuance: a cancel drains the in-flight upload queue through disposal, writing intent-covered blobs after the request, which is state-class-equivalent to a kill and bounded by the queue. And this finding's thesis was vindicated precisely — the suite caught a cancel landing inside `BlobWriter.SealAsync` throwing `ObjectDisposedException` over the cancellation during the unwind, so a cancelled job would have reported a failure instead of `Cancelled`. Fixed test-first; the rerun's obligation discharge is held by `SequenceAccountingTests`. Full record: [pipeline review, Amendment 1](2026-08-pipeline-integrity-review.md#amendment-1-2026-08--the-base-hardening-round).
+
 ---
 
 ### T-3 — Recovering the local database is the disaster path, and it is the one that is slowest and least tested
