@@ -196,7 +196,7 @@ restated here with the test that will prove each:
 
 | Criterion | Proven by |
 |---|---|
-| A second process cannot take the writer role — it refuses naming the holder | `Application.Tests/StateDirectoryLockTests` |
+| A second process cannot take the writer role — it refuses naming the holder | `Hosts.Tests/ProcessRaceTests` — a real spawned CLI process refused across the kernel's file lock, and a killed holder's role freeing itself; `Application.Tests/StateDirectoryLockTests` holds the in-process API surface |
 | A default install listens on no port | `Api.Tests` — the remote-binding assertion |
 | A running job reports states beyond `Scanning` | `Api.Tests` — the progress-event assertion |
 | A service with no front end installed backs up unattended | `Hosts.Tests` |
