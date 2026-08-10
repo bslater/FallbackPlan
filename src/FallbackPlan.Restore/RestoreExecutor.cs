@@ -240,7 +240,17 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
 
         foreach (var item in plan.Items)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // Cooperative stop, not an exception: break so the receipt is still
+            // produced and Aggregate can see fewer items than planned and
+            // report Cancelled (architecture 08 §3's outcome, previously
+            // unreachable because this threw before the receipt was built).
+            // Stopping between items means every item already in the receipt is
+            // whole — a cancelled restore leaves the same class of state a
+            // completed prefix would.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
 
             if (!TryResolve(root, item.Path, out var destination, out var refusal))
             {
@@ -461,8 +471,66 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             return false;
         }
 
+        // GetFullPath is lexical — it normalises `..` and `.` but does not
+        // follow symlinks. A link inside the root pointing out of it (seeded by
+        // an attacker, or restored by an earlier item) would let a later path
+        // traverse it and escape though every component reads as plain. Resolve
+        // the deepest existing ancestor through its links and re-check: a real
+        // path that leaves the root is refused before anything is written.
+        if (EscapesThroughALink(root, resolved))
+        {
+            refusal = "refused: the path traverses a symlink that leaves the restore root";
+            return false;
+        }
+
         destination = resolved;
         return true;
+    }
+
+    private static bool EscapesThroughALink(string root, string resolved)
+    {
+        // Lexical containment already proved `resolved` is under `root`. What is
+        // left is a component *between* the root and the destination that exists
+        // on disk as a symlink leaving the root — the only way a link can be
+        // traversed by this write. The root itself is the executor's own
+        // directory and is not suspect; anything at or above it is out of scope.
+        var realRootFence = RealPath(root) + Path.DirectorySeparatorChar;
+        var rootFence = (root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar);
+
+        var component = Path.GetDirectoryName(resolved);
+        while (!string.IsNullOrEmpty(component)
+            && component.Length >= rootFence.Length
+            && (component + Path.DirectorySeparatorChar).StartsWith(rootFence, StringComparison.Ordinal))
+        {
+            if (Directory.Exists(component) || File.Exists(component))
+            {
+                var real = RealPath(component) + Path.DirectorySeparatorChar;
+                if (!real.StartsWith(realRootFence, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            component = Path.GetDirectoryName(component);
+        }
+
+        return false;
+    }
+
+    private static string RealPath(string path)
+    {
+        // ResolveLinkTarget with returnFinalTarget follows a chain of links to
+        // the real object; a non-link returns null and the path stands.
+        try
+        {
+            var resolved = Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName
+                ?? File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName;
+            return resolved is null ? Path.GetFullPath(path) : Path.GetFullPath(resolved);
+        }
+        catch (IOException)
+        {
+            return Path.GetFullPath(path);
+        }
     }
 
     private static bool IsPlainComponent(string component, out string why)

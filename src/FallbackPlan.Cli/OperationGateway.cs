@@ -12,6 +12,7 @@ using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 using FallbackPlan.Cli.Resources;
@@ -608,94 +609,64 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     {
         ThrowHelper.ThrowIfNull(request);
 
-        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        // Direct mode restores through the same planner and executor the
+        // service uses (ADR-0028 §3: "the same operation performs identically
+        // through either path"). The earlier hand-rolled walk here combined
+        // repository-supplied path text with Path.Combine and wrote in place —
+        // no containment, no quarantine, no receipt, no metadata — so a
+        // manifest naming `../` escaped the output directory. Containment is a
+        // property of the executor (architecture 08 §3), and this is now that
+        // executor.
         var snapshotId = Convert.FromHexString(request.SnapshotId);
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
+        if (plan.Items.Count == 0)
+        {
+            throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
+        }
 
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
         await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-        var engine = new RestoreEngine(reader);
 
-        var restored = 0;
-        var failed = 0;
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan,
+            request.OutputDirectory,
+            new RestoreExecutionOptions
+            {
+                // The user named the output directory, so content lands there
+                // rather than in quarantine — quarantine is the default when a
+                // service restores onto a live machine it did not choose
+                // (architecture 08 §3.1), which is a distinct control from
+                // where a person's explicit `--output` points. Containment,
+                // the receipt and metadata come from the executor regardless.
+                DestinationMode = RestoreDestinationMode.InPlace,
+                // A fresh run identifier per invocation, so two restores of one
+                // snapshot displace into distinct stores (architecture 08 §3.1).
+                RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
+                NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var directories = plan.Items
+            .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+            .Select(item => item.Path)
+            .ToHashSet(StringComparer.Ordinal);
+        var restored = receipt.Items.Count(item => item.Outcome == "restored" && !directories.Contains(item.Path));
+        var failed = receipt.Items.Count(item => item.Outcome == "failed");
+        var skipped = receipt.Items.Count(item => item.Outcome == "skipped");
+
         List<string> lines = [];
-
-        async ValueTask RestoreEntryAsync(CatalogueTreeEntry entry)
+        foreach (var item in receipt.Items.Where(item => item.Outcome is "failed" or "skipped"))
         {
-            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
-            {
-                Directory.CreateDirectory(
-                    Path.Combine(request.OutputDirectory, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
-                foreach (var child in catalogue.ListDirectory(snapshotId, entry.Path))
-                {
-                    await RestoreEntryAsync(child).ConfigureAwait(false);
-                }
-
-                return;
-            }
-
-            var read = await reader.ReadSegmentAsync(entry.ObjectId, cancellationToken).ConfigureAwait(false);
-            if (read.Outcome != RecordReadOutcome.Ok)
-            {
-                lines.Add($"FAILED {entry.Path}: manifest read {read.Outcome}");
-                failed++;
-                return;
-            }
-
-            var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
-            if (manifest.EntryKind != EntryKind.File)
-            {
-                // Symlinks and specials materialise in wave R's planner;
-                // reported, never silently dropped.
-                lines.Add($"skipped {entry.Path}: {manifest.EntryKind} restore lands with the restore planner");
-                return;
-            }
-
-            var destinationPath = Path.Combine(
-                request.OutputDirectory, entry.Path.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-
-            Repository.RestoreResult result;
-            var destination = File.Create(destinationPath);
-            await using (destination.ConfigureAwait(false))
-            {
-                result = await engine.RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!result.Success)
-            {
-                File.Delete(destinationPath);
-                lines.Add($"FAILED {entry.Path}: {result.FailureDetail}");
-                failed++;
-                return;
-            }
-
-            restored++;
-        }
-
-        if (request.Path is { Length: > 0 } wanted)
-        {
-            var entry = catalogue.LookupPath(snapshotId, wanted)
-                ?? throw new CliFailureException(Strings.FormatCliApplication_DoesNotExistSnapshot(wanted, request.SnapshotId));
-            await RestoreEntryAsync(entry).ConfigureAwait(false);
-        }
-        else
-        {
-            var roots = catalogue.ListDirectory(snapshotId, string.Empty);
-            if (roots.Count == 0)
-            {
-                throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
-            }
-
-            foreach (var entry in roots)
-            {
-                await RestoreEntryAsync(entry).ConfigureAwait(false);
-            }
+            lines.Add($"{item.Outcome} {item.Path}: {item.Detail}");
         }
 
         lines.Add(string.Create(CultureInfo.InvariantCulture,
-            $"restored {restored} file(s) to {request.OutputDirectory}; {failed} failure(s)"));
+            $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped"));
 
-        return new OperationReport(failed == 0, lines);
+        return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }
 
     /// <inheritdoc/>
