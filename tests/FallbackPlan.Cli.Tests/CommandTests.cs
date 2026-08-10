@@ -88,6 +88,42 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Restore_OverAnExistingFile_DisplacesItRatherThanOverwriting()
+    {
+        // A behavioural guard that direct-mode restore stays on the contained
+        // executor (RR-1): the old hand-rolled CLI path wrote with File.Create,
+        // overwriting whatever was there and applying no containment. The
+        // executor preserves an existing file by displacing it into a
+        // per-run store. If the reroute is ever undone, this fails — there is
+        // no .fbp-displaced copy when the restore just overwrites.
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/one.txt", "first");
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+
+        var snapshot = await FirstSnapshotIdAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var first = await _cli.RunAsync("restore", snapshot, "--output", destination);
+        Assert.IsTrue(first.ExitCode == 0, first.All);
+        Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
+
+        // A second restore to the same directory finds the file in the way and,
+        // rather than clobbering it, moves it into the executor's displaced
+        // store — a signature the uncontained path did not have.
+        var second = await _cli.RunAsync("restore", snapshot, "--output", destination);
+        Assert.IsTrue(second.ExitCode == 0, second.All);
+
+        var displaced = Directory.Exists(destination)
+            ? Directory.EnumerateFiles(destination, "one.txt", SearchOption.AllDirectories)
+                .Where(path => path.Contains(".fbp-displaced", StringComparison.Ordinal))
+                .ToList()
+            : [];
+
+        Assert.IsTrue(displaced.Count > 0,
+            "restoring over an existing file must displace it — the contained executor's behaviour, not an overwrite");
+    }
+
+    [TestMethod]
     public async Task Check_AnUndamagedRepository_ReportsItHealthy()
     {
         await _cli.InitAsync();

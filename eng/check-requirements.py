@@ -138,6 +138,30 @@ def unresolved_tests(traceability: str) -> list[str]:
     return problems
 
 
+# The test-method attributes this checker recognises. MSTest since ADR-0032;
+# the xUnit forms stay recognised so a partial migration in either direction
+# cannot silently blind the coverage machinery — the exact regression that
+# went unnoticed when the suite moved off xUnit and drift reported zero by
+# construction. `test_detector_is_not_blind` fails the build if this ever
+# stops matching the suite again.
+TEST_ATTRIBUTE_PATTERN = re.compile(r"\[(?:TestMethod|DataTestMethod|Fact|Theory)\b")
+
+
+def recognised_test_files() -> int:
+    """How many test files the coverage machinery can see — 0 means blind."""
+    count = 0
+    for path in TEST_ROOT.glob("*/**/*.cs"):
+        relative = path.relative_to(ROOT).as_posix()
+        if "/bin/" in relative or "/obj/" in relative:
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        names = [n for n in CLASS_PATTERN.findall(text) if n.endswith(("Tests", "Properties"))]
+        if names and TEST_ATTRIBUTE_PATTERN.search(text):
+            count += 1
+    return count
+
+
 def covering_classes() -> dict[str, set[str]]:
     """Requirement id -> the test classes whose file cites it and holds tests."""
     covers: dict[str, set[str]] = collections.defaultdict(set)
@@ -148,9 +172,7 @@ def covering_classes() -> dict[str, set[str]]:
 
         text = path.read_text(encoding="utf-8")
         names = [n for n in CLASS_PATTERN.findall(text) if n.endswith(("Tests", "Properties"))]
-        # MSTest since ADR-0032; the xUnit forms stay recognised so a partial
-        # migration in either direction cannot silently blind this check again.
-        if not names or not re.search(r"\[(?:TestMethod|DataTestMethod|Fact|Theory)\b", text):
+        if not names or not TEST_ATTRIBUTE_PATTERN.search(text):
             continue
 
         disclaimed = {
@@ -233,6 +255,16 @@ def main() -> int:
     duplicates = [i for i, c in collections.Counter(defined).items() if c > 1]
     if duplicates:
         failures.append(f"duplicate requirement IDs: {sorted(duplicates)}")
+
+    # The coverage machinery is only as honest as its ability to see the tests.
+    # If it recognises no test files at all, --drift and --audit report nothing
+    # for the right reason turned into nothing for the wrong one — which is how
+    # the xUnit-only detector went blind after the MSTest move. Fail loudly
+    # rather than pass quietly.
+    if recognised_test_files() == 0:
+        failures.append(
+            "the coverage detector recognises no test files — its attribute "
+            "pattern no longer matches the suite (see TEST_ATTRIBUTE_PATTERN)")
 
     untraced = sorted(defined_set - traced_ids(traceability))
     if untraced:
