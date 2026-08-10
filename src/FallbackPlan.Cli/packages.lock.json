@@ -127,6 +127,14 @@
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
+      "fallbackplan.restore": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )"
+        }
+      },
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
