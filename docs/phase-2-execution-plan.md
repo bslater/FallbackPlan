@@ -323,11 +323,20 @@ identifiers, session disposal, spool hygiene, the restore assembly check —
 each proven by a test that failed first. What it deliberately did not invent
 is the test infrastructure below. Each item says what "done" looks like.
 
+The [restore pipeline review](review/2026-08-restore-pipeline-review.md)
+closed a second round on the read path — the CLI's uncontained restore,
+symlink write-through, the dropped outcome and shared run store, unreachable
+cancellation — and repaired the coverage audit itself (`--drift` recognised
+only xUnit attributes and had been blind since the MSTest move; `--audit` now
+reports rotted citations). What both reviews deliberately left is below.
+
 1. **Cancel a live publication** —
    [T-2](review/2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
-   five named tests, owed before Phase 2 closes and reaffirmed by the review
-   as the top test debt. Done when all five exist and pass, including the
-   `ServiceCommandHandler` positive path.
+   five named tests, owed before Phase 2 closes. The **restore** side of
+   cancellation is now done (`RestoreExecution_Cancelled…`, RR-5); the backup
+   side needs cancellation plumbed through the publication orchestrator. Done
+   when all five exist and pass, including the `ServiceCommandHandler`
+   positive path.
 2. **A store that tears and forgets** — a fault-injecting provider that can
    deliver a torn object, a lost directory entry after an acknowledged put
    (the documented `Storage.Local` power-loss window), and an acknowledgement
@@ -336,9 +345,10 @@ is the test infrastructure below. Each item says what "done" looks like.
 3. **Kills inside steps, and the four boundaries the matrix omits**
    (`ScanSource`, `SegmentAndSeal`, `VerifyAcknowledgements`, `Complete`).
    Done when the matrix is row-complete against 04 §5.1.
-4. **An interrupted restore** — kill mid-restore, inspect the destination:
-   no partial file visible as complete, and the rerun completes. Done when
-   both are asserted.
+4. **An interrupted restore** — the cooperative-cancellation slice is done
+   (RR-5); still owed is the **torn-read** slice: a read-side fault-injecting
+   store, kill mid-restore, inspect the destination — no partial file visible
+   as complete, and the rerun completes. Done when both are asserted.
 5. **The stale-local-state family** — a catalogue behind the store, a
    catalogue ahead of the store, a stale dedup cache. The rolled-back
    sequence file is covered (`SequenceRollbackTests`); the rest of the
@@ -355,6 +365,22 @@ is the test infrastructure below. Each item says what "done" looks like.
 8. **Sample read-back after upload** (with the first remote provider) —
    architecture 04 §5's optional step-5 sampling, worth building when
    acknowledgements are less honest than a local fsync.
+9. **Restore-plan completeness** — the plan omits free space, required
+   privileges, physical-vs-logical size, and archival-tier rehydration
+   (FR-RST-003), and is neither exportable nor resumable (arch 08 §2). Needs
+   filesystem fault injection on the restore target to test. Done when the
+   plan reports each and a plan survives a round trip.
+10. **Windows alternate-data-stream write-back** — ADS are captured and now
+    declared as a degradation on restore (RR-6); actually writing them back is
+    Windows-only work. Done when a Windows restore round-trips a stream and the
+    receipt reports `complete` only when it did.
+11. **Restore breadth** — `ExistingDestinationPolicy.Replace`/`.Fail` (only
+    `Preserve` is tested), a golden receipt fixture pinning the JSON schema,
+    and the NFR-PERF-009 restore GET budget (≤ 1.2 × distinct blobs, using
+    `RangeCountingStore`). Each a self-contained test.
+12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
+    a maintainer decision between implementing sparse write-out and amending
+    FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
 
 ### 3. NFR-PERF-007 on the reference machine
 

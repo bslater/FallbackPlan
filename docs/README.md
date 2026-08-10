@@ -110,6 +110,7 @@ Architecture documents explain *why*; the specification says *what bytes*. Where
 - [Pressure test, August 2026](review/2026-08-fix-pressure-test.md) — the six fixes read back as an implementation contract: 3 critical, 7 high, 5 medium. No fix reversed; two were unsound as written
 - [Duplicati learnings, August 2026](review/2026-08-duplicati-learnings.md) — another engine's fifteen years of field defects read as a test-design input: 14 themes, 22 tests to add, one gap serious enough to fix before Phase 2 closes
 - [Pipeline integrity review, August 2026](review/2026-08-pipeline-integrity-review.md) — the first pass to read the built pipeline rather than its documents: 1 critical, 2 high, 4 medium, every graded finding fixed test-first in the same pass; 5 candidates cleared and recorded; the test infrastructure it did not invent is itemised in the [phase-2 pickup list](phase-2-execution-plan.md#where-to-pick-up)
+- [Restore pipeline review, August 2026](review/2026-08-restore-pipeline-review.md) — the same treatment for the read path: 1 critical (the CLI's uncontained restore), 3 high, 3 medium, all fixed test-first, plus a repair to the coverage audit that had been blind since the MSTest move and a sparse-restore [open question](open-questions.md#q22--sparse-restore-materialises-zeroes)
 - [Original proposal](review/2026-08-original-proposal.md) — preserved verbatim, superseded
 
 ---
