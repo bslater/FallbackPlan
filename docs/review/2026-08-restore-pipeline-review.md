@@ -2,7 +2,7 @@
 
 **Subject:** the restore and verification path as built at `233ed3c` — `Cli/OperationGateway` (direct mode), `Agent/ServiceCommandHandler` (service mode), `Restore/RestoreExecutor` and `RestorePlanner`, `Repository/RestoreEngine` and `RepositoryReader`, `Api/Results` — read against [architecture 08](../architecture/08-restore-and-recovery.md), and the audit tooling in [`eng/check-requirements.py`](../../eng/check-requirements.py) read against the traceability matrix
 **Purpose:** the [pipeline integrity review](2026-08-pipeline-integrity-review.md) read the *backup* path; this reads the *restore* path with the same scepticism, and asks the audit tooling whether the matrix that governs both is still telling the truth
-**Outcome:** 1 critical, 3 high, 3 medium, all fixed test-first; 1 open question filed; and the coverage audit itself was found blind and repaired. The restore executor's containment, quarantine and receipt held; what failed was the second production caller that never used them, the service boundary that dropped the outcome, and a lifecycle the enum promised but the code could not reach.
+**Outcome:** 1 critical, 3 high, 3 medium. Six are fixed test-first; one (RR-6, alternate data streams) is confirmed and deferred with its reason, and one requirement disagreement (RR-7, sparse restore) is an open question. The coverage audit itself was found blind and repaired. The restore executor's containment, quarantine and receipt held; what failed was the second production caller that never used them, the service boundary that dropped the outcome, and a lifecycle the enum promised but the code could not reach.
 
 ---
 
@@ -90,9 +90,9 @@ There are three restore paths and only one was the designed one. `RestoreExecuto
 
 **Under test:** [architecture 08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) — a restore "reports every skipped or degraded attribute" and never reports success while silently dropping one; [ADR-0026 §5](../adr/0026-phase-1-capture-shapes.md).
 
-Alternate data streams are captured (`SnapshotPublication.CaptureAlternateStreamsAsync`) and re-read by the forensic rebuilder, but `RestoreExecutor.ApplyMetadata` restores only mtime and POSIX mode. A Windows restore of a file carrying ADS writes the main stream, drops the streams, and reports `Complete` — the silent-loss-reported-as-success failure the outcome enum exists to prevent. The planner declared degradations for three capabilities (`posix-metadata`, `symlinks`, `special-files`) and not for this one.
+Alternate data streams are captured (`SnapshotPublication.CaptureAlternateStreamsAsync`) and re-read by the forensic rebuilder, but `RestoreExecutor.ApplyMetadata` restores only mtime and POSIX mode. A Windows restore of a file carrying ADS writes the main stream, drops the streams, and reports `Complete` — the silent-loss-reported-as-success failure the outcome enum exists to prevent. The planner declares degradations for three capabilities (`posix-metadata`, `symlinks`, `special-files`) and not for this one.
 
-> **Partly resolved (2026-08); write-back deferred.** The honesty half is fixed and testable on any platform: the planner now declares an `alternate-streams` degradation for any item that carries streams the executor will not write back, so the receipt stops claiming `Complete` when it dropped data. Actually writing ADS back is Windows-platform work with no POSIX equivalent to test against here; it is a named item on the [pickup list](../phase-2-execution-plan.md#where-to-pick-up). The requirement is now *met honestly* (the loss is declared) rather than *met silently* (the loss hidden).
+> **Confirmed; deferred, not fixed in this pass.** Both halves need work this pass did not do, and saying so is the point. The honesty half is not the one-line planner change it first looked like: `RestorePlanner` works only from the catalogue tree projection (`Path`, `EntryKind`, `ObjectId`, length), which does not carry whether an item has streams — declaring the degradation means first surfacing ADS presence into the catalogue projection or the plan item. The write-back half is Windows-only, with no POSIX equivalent to test against here. Both are named on the [pickup list](../phase-2-execution-plan.md#where-to-pick-up) with a definition of done. Until then the requirement is unmet on Windows and the review records it rather than a fix that was not made.
 
 ### RR-7 — The restore materialises sparse holes as written zeroes
 
@@ -133,7 +133,7 @@ Named items with definitions of done on the [pickup list](../phase-2-execution-p
 | RR-3 | High | `Api/Results.RestoreResult`, `Agent/ServiceCommandHandler` | **Fixed**: outcome carried and mapped; held by `ServiceTests` |
 | RR-4 | High | `Agent/ServiceCommandHandler` run id | **Fixed**: per-run id; held by `ServiceTests.Restore_CommandedTwice…` |
 | RR-5 | Medium | `Restore/RestoreExecutor.ExecuteAsync` | **Fixed**: cooperative stop, receipt produced; held by `RestoreExecution_Cancelled…` |
-| RR-6 | Medium | `Restore/RestoreExecutor.ApplyMetadata` + planner | **Honesty fixed, write-back deferred**: degradation declared; Windows write-back on the pickup list |
+| RR-6 | Medium | `Restore/RestoreExecutor.ApplyMetadata` + planner | **Confirmed, deferred**: both the degradation declaration and Windows write-back are on the pickup list; not fixed here |
 | RR-7 | — | `Repository/RestoreEngine` sparse holes | **Open question** [Q22]; citation corrected |
 | RR-T1..T3 | — | Missing oracles | **Added** |
 | audit tooling | — | `eng/check-requirements.py` | **Repaired**: drift recognises MSTest; `--audit` added; in-scope citations fixed |

@@ -370,10 +370,13 @@ reports rotted citations). What both reviews deliberately left is below.
    (FR-RST-003), and is neither exportable nor resumable (arch 08 §2). Needs
    filesystem fault injection on the restore target to test. Done when the
    plan reports each and a plan survives a round trip.
-10. **Windows alternate-data-stream write-back** — ADS are captured and now
-    declared as a degradation on restore (RR-6); actually writing them back is
-    Windows-only work. Done when a Windows restore round-trips a stream and the
-    receipt reports `complete` only when it did.
+10. **Alternate data streams on restore** (RR-6) — two halves, both owed.
+    *Honesty*: surface ADS presence into the catalogue tree projection (which
+    today carries only path, kind, id and length) so `RestorePlanner` can
+    declare an `alternate-streams` degradation and the receipt stops reporting
+    `complete` while dropping streams. *Write-back*: actually restoring the
+    streams, Windows-only. Done when a file carrying ADS is declared degraded
+    on a target that cannot take them, and round-trips on one that can.
 11. **Restore breadth** — `ExistingDestinationPolicy.Replace`/`.Fail` (only
     `Preserve` is tested), a golden receipt fixture pinning the JSON schema,
     and the NFR-PERF-009 restore GET budget (≤ 1.2 × distinct blobs, using
