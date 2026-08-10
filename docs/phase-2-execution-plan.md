@@ -337,18 +337,25 @@ reports rotted citations). What both reviews deliberately left is below.
    side needs cancellation plumbed through the publication orchestrator. Done
    when all five exist and pass, including the `ServiceCommandHandler`
    positive path.
-2. **A store that tears and forgets** — a fault-injecting provider that can
-   deliver a torn object, a lost directory entry after an acknowledged put
-   (the documented `Storage.Local` power-loss window), and an acknowledgement
-   for an object that later vanishes. Done when the interruption suite runs
-   its kill matrix over it and the 04 §5.1 claims still hold.
+2. ✅ **A store that tears and forgets** — built and run
+   ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)):
+   `TestSupport/FaultInjectionStores` delivers torn puts, vanishing
+   acknowledged objects, and read faults; `InterruptionTests/StoreFaultTests`
+   runs the five-point kill matrix over them and the 04 §5.1 claims held.
+   What it surfaced instead is a **decision (SF-1)**: one unopenable orphan
+   blob blocks the plain cold-reader load until something removes it —
+   tolerate-and-scope in `LoadBlobsAsync`, sweep, or accept until GC. The
+   torn-write test pins today's loud refusal and says which assertion flips
+   when the decision lands.
 3. **Kills inside steps, and the four boundaries the matrix omits**
    (`ScanSource`, `SegmentAndSeal`, `VerifyAcknowledgements`, `Complete`).
    Done when the matrix is row-complete against 04 §5.1.
-4. **An interrupted restore** — the cooperative-cancellation slice is done
-   (RR-5); still owed is the **torn-read** slice: a read-side fault-injecting
-   store, kill mid-restore, inspect the destination — no partial file visible
-   as complete, and the rerun completes. Done when both are asserted.
+4. ✅ **An interrupted restore** — both slices done: cooperative cancellation
+   (RR-5) and the read-fault slice
+   (`Repository.Tests/RestoreReadFaultTests`), which also fixed SF-2 —
+   a store fault mid-restore now fails the item in the receipt instead of
+   aborting the run with no receipt at all. Still owed at the *process* level
+   under item 6 (a real kill, not an exception).
 5. **The stale-local-state family** — a catalogue behind the store, a
    catalogue ahead of the store, a stale dedup cache. The rolled-back
    sequence file is covered (`SequenceRollbackTests`); the rest of the
