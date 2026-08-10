@@ -297,11 +297,25 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 objectId,
                 encoded);
 
-            await _store.PutAsync(
-                MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
-                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
-                PutConditions.IfNotExists,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.PutAsync(
+                    MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
+                    _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                    PutConditions.IfNotExists,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // The advisory bargain, applied to faults as well as
+                // refusals: a hint the store would not take costs a later
+                // reader one rename optimisation, never the publication —
+                // whose blobs and deltas are already durable, and whose
+                // snapshot must still follow. Cancellation is not caught:
+                // stopping the job is the caller's command, not a store
+                // fault to shrug off.
+                continue;
+            }
         }
     }
 
