@@ -54,6 +54,7 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly SpoolPinnedConfiguration? _pinned;
     private bool _sealed;
     private bool _abandoned;
+    private bool _spoolClosed;
 
     private BlobWriter(
         BlobEnvelope envelope,
@@ -583,16 +584,35 @@ public sealed class BlobWriter : IAsyncDisposable
     /// spool stays on disk for <see cref="TryResume"/>; a partial spool is
     /// still never uploaded (specification 05 §6.3).
     /// </summary>
+    /// <remarks>
+    /// Never throws for state reasons: the caller is an unwind that may
+    /// already be propagating the exception that interrupted the session,
+    /// and an abandon that threw would replace it — a cancelled job would
+    /// then report a failure instead of its cancellation. A writer whose
+    /// seal was interrupted mid-write arrives here marked sealed with the
+    /// spool still open; what it leaves on disk is judged by the next
+    /// session's resume walk, whose authentication restarts on doubt
+    /// (05 §6.2) — nothing this unwind could decide.
+    /// </remarks>
     public async ValueTask AbandonAsync()
     {
-        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
+        if (_abandoned)
+        {
+            return;
+        }
+
         _abandoned = true;
 
         _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
         _digest.Dispose();
-        _spool.Flush(flushToDisk: true);
-        await _spool.DisposeAsync().ConfigureAwait(false);
+
+        if (!_spoolClosed)
+        {
+            _spoolClosed = true;
+            _spool.Flush(flushToDisk: true);
+            await _spool.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private void WriteCheckpoint()
@@ -663,6 +683,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _spool.Flush(flushToDisk: true);
         await _spool.DisposeAsync().ConfigureAwait(false);
+        _spoolClosed = true;
         _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
 
@@ -693,9 +714,18 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _digest.Dispose();
 
+        // A writer whose seal was interrupted mid-write is marked sealed
+        // with the spool handle still open — closed here, its file left on
+        // disk for the resume walk to judge, exactly as AbandonAsync leaves
+        // it. Only a never-sealed spool is discarded below.
+        if (!_spoolClosed)
+        {
+            _spoolClosed = true;
+            await _spool.DisposeAsync().ConfigureAwait(false);
+        }
+
         if (!_sealed)
         {
-            await _spool.DisposeAsync().ConfigureAwait(false);
             if (File.Exists(_spoolPath))
             {
                 File.Delete(_spoolPath);

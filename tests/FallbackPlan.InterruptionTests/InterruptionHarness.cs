@@ -64,12 +64,13 @@ public abstract class InterruptionHarness : IDisposable
         RepositoryKeySet keys,
         KeyHierarchy hierarchy,
         IPublicationObserver? observer = null,
-        int concurrency = 1) =>
+        int concurrency = 1,
+        string? spoolDirectory = null) =>
         new(
             SmallBlobPolicy with { Concurrency = concurrency },
             Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
+            spoolDirectory ?? SpoolDirectory,
             observer);
 
     protected static byte[] BuildFile(int seed, int regions = 6)
@@ -160,6 +161,48 @@ public abstract class InterruptionHarness : IDisposable
         return Directory.Exists(path)
             ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Count()
             : 0;
+    }
+
+    /// <summary>
+    /// The 08 §8 collector obligations as code: enumerate the journal before
+    /// marking, protect intent-covered blobs, treat the unparseable as live.
+    /// Returns what it WOULD delete — callers assert emptiness.
+    /// </summary>
+    protected static async Task<List<ObjectKey>> SimulateCollectorMarkAsync(
+        LocalFileSystemObjectStore store,
+        KeyHierarchy hierarchy,
+        ulong currentGeneration,
+        ulong nowMs)
+    {
+        using var journalReader = new Repository.Index.Journal.JournalReader(store, Repo, hierarchy);
+        var (records, unparseable, _) = await journalReader.LoadAsync((uint)currentGeneration, CancellationToken.None);
+        var survey = Repository.Index.Journal.IntentSurveyor.Survey(
+            records, unparseable, currentGeneration, nowMs, skewMarginMs: 60_000);
+
+        // Reachability, phase-0 shape: a blob referenced by an index delta or
+        // covered by a live intent is reachable; everything else is a
+        // candidate. The candidates here are computed against intents only —
+        // callers that also delete the index plane do so deliberately.
+        var candidates = new List<ObjectKey>();
+
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            // The collector cannot map a store key back to a blob id (that
+            // is the point of keyed store keys) — coverage is checked by
+            // opening the envelope, exactly as a real collector must.
+            using var read = await store.OpenReadAsync(
+                entry.Key, new ObjectRange(0, BlobEnvelope.Length), CancellationToken.None);
+            var envelopeBytes = new byte[BlobEnvelope.Length];
+            await read.Content!.ReadExactlyAsync(envelopeBytes);
+            var envelope = BlobEnvelope.Parse(envelopeBytes);
+
+            if (!survey.IsCovered(envelope.BlobId))
+            {
+                candidates.Add(entry.Key);
+            }
+        }
+
+        return candidates;
     }
 
     /// <summary>The kill switch: throws after the named step's effects are durable.</summary>

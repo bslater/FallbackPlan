@@ -77,6 +77,48 @@ public sealed class BlobWriterAndReaderTests : IDisposable
     }
 
     [TestMethod]
+    public async Task BlobWriter_TheSealIsCancelledMidWrite_CanStillBeAbandoned()
+    {
+        // A cancel that lands inside SealAsync leaves the writer marked
+        // sealed with the spool still open. The session's unwind abandons
+        // whatever writer it holds; an abandon that throws here would
+        // REPLACE the OperationCanceledException the caller is propagating —
+        // and a cancelled job would then report a failure instead of
+        // Cancelled (ADR-0029 §4).
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        var writer = CreateWriter();
+        var payload = Enumerable.Repeat((byte)7, 500).ToArray();
+        await writer.AppendRecordAsync(
+            ObjectType.SegmentRecord,
+            IdFor(payload, deriver),
+            CompressionProfile.None,
+            (ulong)payload.Length,
+            payload,
+            CancellationToken.None);
+
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await writer.SealAsync(cancellation.Token);
+            Assert.Fail("the seal completed despite the cancelled token.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        await writer.AbandonAsync();
+
+        // The half-sealed spool stays on disk for the next session's resume
+        // walk to judge — authentication restarts on doubt (05 §6.2), which
+        // is the safety, not anything the unwind could decide here.
+        Assert.IsTrue(Directory.EnumerateFiles(SpoolDirectory, "blob-*.spool").Any());
+
+        await writer.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task BlobReader_TheBlobAndKeysAlone_LocatesAndVerifiesEveryRecord()
     {
         // The C2 acceptance criterion, verbatim: no index, no catalogue, no

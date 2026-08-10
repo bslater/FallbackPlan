@@ -13,47 +13,6 @@ namespace FallbackPlan.InterruptionTests;
 [TestClass]
 public sealed class ConcurrentCollectionTests : InterruptionHarness
 {
-    /// <summary>
-    /// The 08 §8 collector obligations as code: enumerate the journal before
-    /// marking, protect intent-covered blobs, treat the unparseable as live.
-    /// Returns what it WOULD delete — the tests assert emptiness.
-    /// </summary>
-    private static async Task<List<ObjectKey>> SimulateCollectorMarkAsync(
-        Storage.Local.LocalFileSystemObjectStore store,
-        Repository.Crypto.KeyHierarchy hierarchy,
-        ulong currentGeneration,
-        ulong nowMs)
-    {
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
-        var (records, unparseable, _) = await journalReader.LoadAsync((uint)currentGeneration, CancellationToken.None);
-        var survey = IntentSurveyor.Survey(records, unparseable, currentGeneration, nowMs, skewMarginMs: 60_000);
-
-        // Reachability, phase-0 shape: a blob referenced by an index delta or
-        // covered by a live intent is reachable; everything else is a
-        // candidate. The candidates here are computed against intents only —
-        // the scenario deletes the index plane's contribution deliberately.
-        var candidates = new List<ObjectKey>();
-
-        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
-        {
-            // The collector cannot map a store key back to a blob id (that
-            // is the point of keyed store keys) — coverage is checked by
-            // opening the envelope, exactly as a real collector must.
-            using var read = await store.OpenReadAsync(
-                entry.Key, new ObjectRange(0, Repository.Packing.BlobEnvelope.Length), CancellationToken.None);
-            var envelopeBytes = new byte[Repository.Packing.BlobEnvelope.Length];
-            await read.Content!.ReadExactlyAsync(envelopeBytes);
-            var envelope = Repository.Packing.BlobEnvelope.Parse(envelopeBytes);
-
-            if (!survey.IsCovered(envelope.BlobId))
-            {
-                candidates.Add(entry.Key);
-            }
-        }
-
-        return candidates;
-    }
-
     [TestMethod]
     public async Task GarbageCollection_RunsWhileABackupIsInFlight_DeletesNothing()
     {

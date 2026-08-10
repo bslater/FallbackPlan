@@ -128,6 +128,84 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task CancelJob_JobIsRunning_StopsItAndReportsTheCancelledState()
+    {
+        await _harness.CreateRepositoryAsync();
+
+        // Enough barely-compressible content that the job is still mid-run
+        // when the cancel lands after Scanning is observed on the stream.
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+
+        // Subscribed before the backup is commanded, for the same reason as
+        // the progress test above: a late subscription misses early states.
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // The T-2 positive path (ADR-0029 §4): cancellation is a command with
+        // an acknowledged outcome, not a signal whose effect nobody reports.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token));
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Cancelled);
+            }
+        });
+
+        // The cancelled state reached the progress stream, and the job never
+        // pretended to complete.
+        lock (seen)
+        {
+            Assert.DoesNotContain(JobState.Complete, seen);
+        }
+
+        // The job journal agrees: Cancelled, with the command named as the
+        // reason — a job that stayed `Publishing` forever was the T-2 finding.
+        Assert.IsInstanceOfType<JobsResult>(await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        var job = jobs.Jobs.Single(descriptor => descriptor.Id == accepted.JobId);
+        Assert.AreEqual(JobState.Cancelled, job.State);
+        Assert.AreEqual("cancelled by request", job.Detail);
+
+        // A second cancel finds no active job to stop, and says so.
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token), out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
+    }
+
+    [TestMethod]
     public async Task Cancel_WhenTheJobIsNotRunning_SaysSoRatherThanPretending()
     {
         await _harness.CreateRepositoryAsync();
@@ -351,6 +429,20 @@ public sealed class ServiceTests : IDisposable
             },
             passphrase,
             _timeout.Token);
+    }
+
+    private static string RandomText(int seed, int length)
+    {
+        // Printable and barely compressible: the point is pipeline work per
+        // byte, so the job is still running when the cancel arrives.
+        var random = new Random(seed);
+        var characters = new char[length];
+        for (var i = 0; i < characters.Length; i++)
+        {
+            characters[i] = (char)('!' + random.Next(94));
+        }
+
+        return new string(characters);
     }
 
     private async Task WaitForAsync(Func<bool> condition)
