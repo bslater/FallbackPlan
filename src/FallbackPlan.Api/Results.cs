@@ -143,7 +143,14 @@ public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<str
 /// <param name="Restored">Files written.</param>
 /// <param name="Failed">Files that could not be written.</param>
 /// <param name="OutputDirectory">Where they were written, on the service's machine.</param>
-public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory) : ServiceResult;
+/// <param name="Outcome">
+/// The receipt outcome — <c>complete</c>, <c>partial</c>, <c>failed</c> or
+/// <c>cancelled</c> (FR-RST-005). Carried explicitly because a caller cannot
+/// reconstruct it from <paramref name="Failed"/>: a restore that skipped a
+/// required item failed nothing yet is not complete, and a remote client told
+/// only <c>Failed = 0</c> would report success for it.
+/// </param>
+public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory, string Outcome) : ServiceResult;
 
 /// <summary>What a verification run found.</summary>
 /// <param name="ObjectsChecked">How many objects were examined.</param>

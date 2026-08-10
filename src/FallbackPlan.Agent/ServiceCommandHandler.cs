@@ -1,5 +1,6 @@
 using Bodu;
 using System.Globalization;
+using System.Security.Cryptography;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
@@ -248,9 +249,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             command.OutputDirectory,
             new RestoreExecutionOptions
             {
-                // The job identifier, so a displaced file can be traced back to
-                // the run that moved it.
-                RunId = Convert.ToHexString(plan.SnapshotId.Span)[..16].ToLowerInvariant(),
+                // A fresh identifier per run, not per snapshot: two restores of
+                // one snapshot must displace into distinct stores, or the second
+                // overwrites the first's displaced copies — the single shared
+                // refuge architecture 08 §3.1 forbids. A snapshot-derived id
+                // made every restore of a snapshot share one.
+                RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
             cancellationToken).ConfigureAwait(false);
@@ -270,7 +274,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             // Where the files actually are, not where the caller pointed.
             // Historical content quarantines by default (FR-RST-006), so the
             // two differ, and a caller told the wrong one cannot find its data.
-            receipt.WrittenTo);
+            receipt.WrittenTo,
+            // The outcome the executor computed — carried whole so a Partial
+            // restore is not reported to a remote client as success (FR-RST-005).
+            receipt.Outcome.ToString().ToLowerInvariant());
     }
 
     /// <summary>Verifies every stored blob at the requested level.</summary>

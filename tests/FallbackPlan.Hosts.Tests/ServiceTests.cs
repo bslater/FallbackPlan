@@ -244,6 +244,11 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(2, restored.Restored);
         Assert.AreEqual(0, restored.Failed);
 
+        // The receipt outcome reaches the caller (FR-RST-005). Carrying it is
+        // what stops a Partial restore — one that failed nothing but skipped a
+        // required item — being read as success from Failed == 0 alone.
+        Assert.AreEqual("complete", restored.Outcome);
+
         // Quarantine by default (FR-RST-006): the content lands under the
         // commanded directory rather than directly in it, and the result says
         // where — a caller told the commanded path could not find its files.
@@ -257,6 +262,36 @@ public sealed class ServiceTests : IDisposable
             "deeper",
             await File.ReadAllTextAsync(
                 Path.Combine(restored.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task Restore_CommandedTwiceForOneSnapshot_UsesADistinctRunDirectoryEachTime()
+    {
+        // Architecture 08 §3.1: each run's displaced and quarantined content is
+        // namespaced by run, so two runs cannot overwrite one another's. The
+        // run identifier was once derived from the snapshot id, which made every
+        // restore of a snapshot share one store — a single shared refuge, worse
+        // than none.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        var destination = Path.Combine(_harness.WorkPath, "twice");
+
+        Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var first);
+        Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var second);
+
+        Assert.AreNotEqual(first.OutputDirectory, second.OutputDirectory,
+            "two restores of one snapshot must land in distinct run directories");
     }
 
     [TestMethod]
