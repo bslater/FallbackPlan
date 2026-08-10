@@ -176,14 +176,20 @@ public sealed class StoreFaultTests : InterruptionHarness
 
         Assert.IsNotNull(tearing.TornKey, "the tear never happened — the test proved nothing");
 
-        // Pinned, not endorsed: the plain cold reader opens every blob under
-        // blobs/ and one torn orphan makes it refuse the lot — loud and never
-        // wrong bytes, which is the error posture, but the plain restore path
-        // stays blocked until something removes the orphan and nothing
-        // collects yet. Whether LoadBlobsAsync should scope an unopenable
-        // blob as a finding instead is the fault round-up's open item; when
-        // that lands, this assertion flips to a restore.
-        await Assert.ThrowsAsync<Exception>(async () => await RestoreSnapshotAsync(store, keys, 0xA1));
+        // Corruption is local (architecture 04 §7; NFR-REL-004): the torn
+        // orphan is skipped with a named finding and every other blob loads,
+        // so the committed snapshot restores through the plain path — the
+        // posture the recovery tool and the verify engine already held, now
+        // converged on by the plain reader (SF-1).
+        using (var reader = new RepositoryReader(Repo, keys, store))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            var skipped = Assert.ContainsSingle(reader.SkippedBlobs);
+            Assert.AreEqual(tearing.TornKey, skipped.Key.ToString());
+            Assert.IsFalse(string.IsNullOrWhiteSpace(skipped.Reason));
+        }
+
+        SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
 
         // The forensic rebuilder is the path built for damaged stores: it
         // must scope the torn blob as a finding and still satisfy a rebuild
