@@ -342,11 +342,12 @@ reports rotted citations). What both reviews deliberately left is below.
    `TestSupport/FaultInjectionStores` delivers torn puts, vanishing
    acknowledged objects, and read faults; `InterruptionTests/StoreFaultTests`
    runs the five-point kill matrix over them and the 04 §5.1 claims held.
-   What it surfaced instead is a **decision (SF-1)**: one unopenable orphan
-   blob blocks the plain cold-reader load until something removes it —
-   tolerate-and-scope in `LoadBlobsAsync`, sweep, or accept until GC. The
-   torn-write test pins today's loud refusal and says which assertion flips
-   when the decision lands.
+   The decision it surfaced (SF-1) is **resolved**: `LoadBlobsAsync`
+   tolerates an unopenable blob and reports it in `SkippedBlobs`, so one
+   torn orphan no longer blocks every plain-path restore — the reader
+   converged on the recovery tool's posture, and the torn-write assertion
+   flipped to a restore as promised
+   ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)).
 3. **Kills inside steps, and the four boundaries the matrix omits**
    (`ScanSource`, `SegmentAndSeal`, `VerifyAcknowledgements`, `Complete`).
    Done when the matrix is row-complete against 04 §5.1.
