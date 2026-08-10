@@ -268,7 +268,24 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                 continue;
             }
 
-            var read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+            RecordReadResult read;
+            try
+            {
+                read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException exception)
+            {
+                // A store fault is contained to the item it hit (architecture
+                // 08 §3): the receipt accounts for it as failed and the run
+                // continues, exactly as an unreadable record does. Letting it
+                // propagate aborted the whole run with no receipt at all.
+                items.Add(new ReceiptItem
+                {
+                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                });
+                continue;
+            }
+
             if (read.Outcome != RecordReadOutcome.Ok)
             {
                 items.Add(new ReceiptItem
@@ -288,10 +305,29 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                 {
                     var spool = destination + ".fbp-restore-tmp";
                     RestoreResult result;
-                    var output = File.Create(spool);
-                    await using (output.ConfigureAwait(false))
+                    try
                     {
-                        result = await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
+                        var output = File.Create(spool);
+                        await using (output.ConfigureAwait(false))
+                        {
+                            result = await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                    catch (IOException exception)
+                    {
+                        // Same containment as the manifest read above: the
+                        // fault fails this item, the spool never becomes the
+                        // destination, and the run carries on.
+                        if (File.Exists(spool))
+                        {
+                            File.Delete(spool);
+                        }
+
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                        });
+                        continue;
                     }
 
                     if (!result.Success)
