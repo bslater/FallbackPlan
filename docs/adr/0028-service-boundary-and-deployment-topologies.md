@@ -431,9 +431,16 @@ one. They run on the job queue's reader lane (ADR-0029 §4), so a read path neve
 takes the writer role and a restore runs alongside a scheduled backup rather
 than behind it.
 
-Not built: the remote binding (§5) — it validates and binds nothing, because
-pairing reuses architecture 09 §3's machinery and that does not exist yet — and
-therefore topologies 3 and 4 of §1.
+Also built now: the remote binding (§5). Once a terminal refusal that bound
+nothing, it now binds a real TLS 1.3 socket on an interface an administrator
+names — off by every default — and admits only a peer it holds a pairing grant
+for, over the pairing and session machinery of architecture 09 §3
+([ADR-0030](0030-peer-identity-and-pairing.md), now carried over the wire). A
+paired console commands the service and receives results but, by default, no file
+content (§6): a restore it commands writes on the service's machine, and the
+console is told the counts and the path. This closes topologies 3 and 4 of §1.
+What a paired console may additionally *do* — stream restored content (Q18),
+carry a per-operator identity (Q19) — stays open by design.
 
 ## Status history
 
@@ -442,3 +449,4 @@ therefore topologies 3 and 4 of §1.
 | 2026-08 | Proposed | Written after the multi-process hazard was found while designing the service split |
 | 2026-08 | Accepted (amended) | Implemented for the local binding; the Linux keystore question decided in the amendment above |
 | 2026-08 | Accepted | Restore, verify and check served over the surface on the reader lane; the CLI routes them and backup to a running service |
+| 2026-08 | Accepted | The remote binding (§5) built on ADR-0030's now-carried transport: a paired console reaches the service, an unpaired one is refused, and a remotely commanded restore writes on the service's machine — closing topologies 3 and 4 |

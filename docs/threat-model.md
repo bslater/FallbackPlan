@@ -152,7 +152,7 @@ OS-authenticated local command surface · key material confined to the service a
 
 | Control | Waiting on |
 |---------|-----------|
-| Paired device identity for remote clients, off by default | The protocol is built; nothing carries it over a socket ([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)) |
+| Paired device identity for remote clients, off by default | Built and carried over a real TLS socket; an unpaired client is refused and a substituted identity is refused rather than prompted ([implementation status](implementation-status.md#0030--the-socket-exists)) |
 | Mutual device authentication | The same — the construction exists and has never spoken to another machine |
 | Content withheld from remote clients unless separately enabled | [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) |
 | Least-privilege repository grants; separate read/append/retention/administrative permissions | Phase 2–3 |

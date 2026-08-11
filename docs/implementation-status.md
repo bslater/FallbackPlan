@@ -54,7 +54,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Scheduling, job state, status, telemetry | **Built** | `FallbackPlan.Agent`, `Application/JobStateStore` · `Hosts.Tests/*` |
 | [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary | **Partly built** | `FallbackPlan.Api`, `Cli/OperationGateway` · [ADR §Implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) |
 | [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency | **Built** | `Repository/ArchiveSession` · [ADR §Implementation status](adr/0029-pipeline-and-service-concurrency.md#implementation-status-2026-08) |
-| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol` · [notes](#0030--everything-above-the-socket-nothing-at-it) |
+| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol` · [notes](#0030--the-socket-exists) |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
 
@@ -124,19 +124,19 @@ The **decision** that half of it depended on is now made rather than pending: wh
 
 ### 0028 — the local binding, not the remote one
 
-Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, keystore unlock, per-job progress, and a CLI that asks a running service and falls back to direct mode. The remote binding validates and binds nothing, because it waits on 0030's transport.
+Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, keystore unlock, per-job progress, and a CLI that asks a running service and falls back to direct mode. The remote binding — once a terminal refusal that bound nothing — now binds a real socket once an administrator names an interface; see [0030](#0030--the-socket-exists) for the transport it waited on.
 
 The [restore pipeline review](review/2026-08-restore-pipeline-review.md) closed the gap that "falls back to direct mode" had hidden: the direct-mode restore was a second, uncontained implementation of the read path, and it now routes through the same `RestorePlanner`/`RestoreExecutor` the service uses — so ADR-0028 §3's "the same operation performs identically through either path" is enforced rather than asserted. The service also now carries the restore outcome across the contract and namespaces each run's displaced store.
 
-### 0030 — everything above the socket, nothing at it
+### 0030 — the socket exists
 
 Built, in `FallbackPlan.Protocol`: peer identity and fingerprints; the pairing ceremony's key agreement, transcript, short authentication string and confirmation signatures, **and the four messages that carry them**; the grant store, its pinning and revocation, and the destination's terms; frame encoding and refusal; session hello, accept and refuse; version selection and feature negotiation; and — after [Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls) — the channel-bound authentication that replaced RFC 7250, with a test that runs the man-in-the-middle it defeats.
 
-The pairing messages were missing until an audit went looking: 01 §2.2 defined four of them with full key tables and `PeerFrame` carried only their type codes, so the ceremony could be computed and not sent. A test now drives a whole ceremony through encoded frames, touching nothing but what came off the wire, so the two cannot drift apart again.
+And now **the transport that carries it.** `PeerTlsConnection` opens TLS 1.3 over TCP with the ephemeral certificate — a container for a per-connection key that authenticates nobody — and `PeerSessionDriver` drives the four-state machine over that real duplex stream: both authentication messages sent without waiting, each decoded frame admitted only in a state that permits it, every body length bounded before allocation, and every protocol violation answered with a stated refusal before the socket closes. A device's key persists in `<state>/peer.key` (`PeerKeypairStore`), so its identity survives a restart. `PairingCeremony` runs the ceremony over that stream, holds a confirmation that arrives before the local human has approved, and pins the grant only on mutual approval. The whole session and pairing layer is exercised over loopback TCP in `FallbackPlan.Protocol.Tests` — including the man-in-the-middle relay reproduced through two real TLS connections — and the ceremony is performed by two real operating-system processes in `FallbackPlan.Hosts.Tests`.
 
-Not built: **the transport that carries any of it.** Nothing opens a TCP or QUIC connection, negotiates TLS, presents the ephemeral certificate, or drives the state machine over a real socket. Nor is there a user-facing pairing flow — no command shows a short authentication string to a human, and the ceremony has never been performed by two people.
+The service side binds it. `RemoteServiceListener` (in `FallbackPlan.Agent`) accepts on an interface named by an explicit administrative act — `fallbackplan-agent run --remote-interface <addr> --remote-port <n>`, off by every default — admits only a peer it has a grant for, and then runs the ADR-0028 command contract over the opened session through the same dispatch the local binding uses (`ServiceConnectionPump`). `RemoteServiceClient` (in `FallbackPlan.Cli`) is the paired console's other end. The two exit criteria this was blocked on now hold end to end in `FallbackPlan.Hosts.Tests`: an unpaired console is refused as `not_paired` while the local binding still answers, and a restore commanded from a paired console **writes on the service's machine** — the console is told the counts and the path, never sent the files.
 
-That is the honest shape of it: the protocol is implemented and has never spoken to another machine. Everything above has unit tests that construct both sides in one process, which proves the constructions agree with each other and proves nothing about a network.
+What is left is above this layer, not at it: peer replication itself (the object exchange, verification and quotas — [specifications 03–05](../specifications/peer-protocol/README.md#documents), still unwritten), and the console features gated on the two open questions of ADR-0028 — streaming restored content to the operator (Q18) and per-operator identity on a shared console (Q19). Those gate what a paired console may *do*, not who it is, so the identity and session layers proceed without them.
 
 ---
 
@@ -146,7 +146,7 @@ That is the honest shape of it: the protocol is implemented and has never spoken
 |-------|-------|
 | [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
-| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Service boundary built on the local binding; peer protocol built to the session layer and not yet carried over a socket |
+| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Service boundary built on both bindings; peer protocol carried over a real socket to the session layer; peer replication (specs 03–05) not yet built |
 | 3 — Cloud object stores | Not started |
 | 4 — Retention, GC, compaction | Not started — see [0009](#0009--the-intents-are-written-nothing-collects-yet) |
 | 5 — CrashPlan import | Not started, gated on legal review |

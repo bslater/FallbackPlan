@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** the service boundary is built on the local binding; the remote binding is blocked on pairing · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and peer replication (specs 03–05) is what remains of Phase 2 · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -27,12 +27,14 @@ then does the concurrency work ADR-0029 sequenced: measure, remove serial cost,
 client with direct mode, per-job progress, cancellation, keystore unlock on all
 three platforms, and the full ADR-0029 §6 sequence.
 
-**Not in scope, and named rather than implied.** The remote TLS binding, device
-pairing, the multi-instance console, and the desktop and web front ends.
-Topologies 3 and 4 of ADR-0028 §1 are designed and not built; the remote binding
-exists as a seam that is off by default and refuses to enable, because pairing
-reuses machinery [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)
-defines for peers and that does not exist yet.
+**Originally out of scope, since delivered.** The remote TLS binding and device
+pairing were named here as out of scope for this plan's first waves, blocked on
+machinery [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)
+defines for peers. That machinery now exists, and a later round built the binding
+on top of it: topologies 3 and 4 of ADR-0028 §1 are built, and the two exit
+criteria they own are met (see [§1 below](#1-the-remote-binding--built) and the
+exit-criteria table). Still genuinely out of scope: the multi-instance console
+and the desktop and web front ends.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access) gate the
 console and stay open.
@@ -72,7 +74,7 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 |---|------|----------|-----------|
 | B1 | ✅ `FallbackPlan.Api` — commands, results, events, client and service interfaces, status roll-up | FR-SVC-001, NFR-OPS-006 | The project references Domain and nothing else, so "UIs depend on the contract, never the engine" is mechanically enforceable |
 | B2 | ✅ The local binding — Unix domain socket or named pipe, authenticated by the operating system | FR-SVC-003, [T-16](threat-model.md) | No password, no token file, no port; the caller is identified by peer credentials |
-| B3 | ✅ The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port, and enabling the remote binding without pairing is refused with a stated reason |
+| B3 | ✅ The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port; the seam was later carried to a real socket that admits only a pinned peer (see [§1](#1-the-remote-binding--built)) |
 | B4 | ✅ Contract-version negotiation | FR-SVC-007 | Incompatible versions refuse **naming both**, per service rather than wholesale |
 
 ### Wave C — The service
@@ -203,12 +205,11 @@ restated here with the test that will prove each:
 | Client and service at incompatible versions refuse with both versions named | `Api.Tests` — the negotiation assertion |
 | Restored bytes identical regardless of concurrency setting | `InterruptionTests/ConcurrentUploadTests` at 1, 2 and 4 — the whole setting now, not the upload workers alone, because ADR-0029 §1's staged pipeline carries it into segmentation, hashing and compression |
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
+| An unpaired remote client is refused, and a substituted identity refused rather than prompted | `Hosts.Tests/RemoteBindingTests` — an unpaired console dialling a real socket is refused `not_paired` while the local binding still answers; `Protocol.Tests/PeerWireTests` proves `identity_changed` over the wire and the man-in-the-middle relay caught by channel binding |
+| A restore commanded remotely writes on the service's machine, no plaintext crossing | `Hosts.Tests/RemoteBindingTests` — a paired `RemoteServiceClient` commands a restore; the files land under the service-side path and the console receives counts, outcome and a path string, never content |
 
 ### What is not met, said plainly
 
-- **An unpaired remote client refused**, and **a restore commanded remotely
-  writing on the service's machine.** Both need the remote binding, which needs
-  pairing.
 - **NFR-PERF-007's ≥400 MB/s on the reference machine.** Every number on the
   benchmarks page is container measurement. It compares configurations and
   versions against each other honestly and says nothing about the requirement,
@@ -273,35 +274,29 @@ and say so by name. A service can only run a configured set, so an ad-hoc backup
 root is refused with what to do instead rather than quietly run against state the
 service owns.
 
-### 1. The remote binding
+### 1. The remote binding — built
 
-Topologies 3 and 4, and the two exit criteria they own.
+Topologies 3 and 4, and the two exit criteria they own, are now met over a real
+socket. Both criteria above cite the tests that prove them.
 
-**No longer blocked on a design.** Pairing reuses
+Pairing reuses
 [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
-machinery, and that is now settled by
-[ADR-0030](adr/0030-peer-identity-and-pairing.md) and specified in
+machinery, settled by [ADR-0030](adr/0030-peer-identity-and-pairing.md) and
+specified in
 [`specifications/peer-protocol/`](../specifications/peer-protocol/README.md)
 documents 01 and 02 — a peer keypair unrelated to the repository, a short
 authentication string both humans confirm, and a pinned identity whose change is
-a hard failure. Those two documents were written first precisely because the
-console is blocked on them.
-
-**Nor on the protocol itself any more.** `FallbackPlan.Protocol` implements
-everything both documents define: identity and fingerprints, the pairing key
-agreement and its transcript, the grant store, the destination's terms, framing,
-version and feature negotiation, and the channel-bound authentication that
-replaced RFC 7250 when it proved unreachable on the platform
-([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)).
-
-**What is left is the socket, and it is the whole of what is left.** Nothing
-opens a TCP or QUIC connection, negotiates TLS, presents the ephemeral
-certificate, or drives the session state machine over a network; no command
-shows a pairing string to a human, so the ceremony has never been performed by
-two people. Every test constructs both sides in one process, which proves the
-constructions agree with each other and proves nothing about a wire. That is the
-next piece of work, and it is now plumbing rather than design
-([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)).
+a hard failure. `FallbackPlan.Protocol` implements both documents in full, and
+now carries them over the wire: `PeerTlsConnection` opens TLS 1.3 over TCP with
+the per-connection ephemeral certificate, `PeerSessionDriver` drives the
+four-state machine over the live stream, `PeerKeypairStore` persists the device
+key, and `PairingCeremony` runs the ceremony with a human's approval on each
+side. `RemoteServiceListener` (Agent) binds the interface an administrator names
+and admits only a pinned peer; `RemoteServiceClient` (Cli) is the console's end.
+The man-in-the-middle relay that channel binding defeats is reproduced through
+two real TLS connections, and the ceremony is performed by two real
+operating-system processes
+([implementation status](implementation-status.md#0030--the-socket-exists)).
 
 What remains blocked is narrower still.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and

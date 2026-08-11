@@ -1,6 +1,6 @@
 # ADR-0030 — Peer identity and pairing: a transport keypair the repository knows nothing about
 
-**Status:** Accepted (amended 2026-08) · Partly implemented — see [implementation status](../implementation-status.md#0030--everything-above-the-socket-nothing-at-it)
+**Status:** Accepted (amended 2026-08) · Partly implemented — see [implementation status](../implementation-status.md#0030--the-socket-exists)
 **Date:** 2026-08
 **Requirements:** FR-REP-001, FR-REP-004, NFR-SEC-001, NFR-SEC-004, NFR-COMP-006, NFR-REL-007
 **Related:** [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [architecture 09 §3](../architecture/09-replication-and-peers.md#3-pairing), [specification: peer protocol](../../specifications/peer-protocol/README.md)
@@ -116,4 +116,4 @@ Specified in [peer-protocol 02 §1–§3](../../specifications/peer-protocol/02-
 |------|--------|------|
 | 2026-08 | Proposed | Written with the peer-protocol specification's pairing and session documents; nothing implemented yet |
 | 2026-08 | Amended | Amendment 1: RFC 7250 found unreachable on the reference platform; authentication moved from TLS into the protocol, guarantee preserved |
-| 2026-08 | Accepted | The decision stands after Amendment 1 rebuilt its mechanism: a transport keypair the repository knows nothing about, proven by a channel-bound signature in the protocol rather than by TLS. Everything above the socket is built and tested, including a man-in-the-middle test the construction defeats. Acceptance is of the decision; the transport that would carry it is phase-2 work and the [implementation status](../implementation-status.md#0030--everything-above-the-socket-nothing-at-it) says so. |
+| 2026-08 | Accepted | The decision stands after Amendment 1 rebuilt its mechanism: a transport keypair the repository knows nothing about, proven by a channel-bound signature in the protocol rather than by TLS. It is now built and carried over a real TLS socket, including a man-in-the-middle test the construction defeats and a pairing ceremony performed by two real processes; a paired console reaches the service and an unpaired one is refused. The [implementation status](../implementation-status.md#0030--the-socket-exists) says what remains — peer replication itself (specs 03–05). |
