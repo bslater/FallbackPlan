@@ -46,7 +46,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             // hand-off from being scheduled.
             return command switch
             {
-                PlanRestoreCommand plan => PlanRestore(plan),
+                PlanRestoreCommand plan => await PlanRestoreAsync(plan, cancellationToken).ConfigureAwait(false),
                 RunRestoreCommand restore => await OnReaderLaneAsync(
                     $"restore {restore.SnapshotId}",
                     token => RunRestoreAsync(restore, token),
@@ -181,8 +181,8 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         }
     }
 
-    /// <summary>Plans a restore without performing it — a catalogue walk, so it answers inline.</summary>
-    private ServiceResult PlanRestore(PlanRestoreCommand command)
+    /// <summary>Plans a restore without performing it — a catalogue walk plus one store probe per located blob.</summary>
+    private async ValueTask<ServiceResult> PlanRestoreAsync(PlanRestoreCommand command, CancellationToken cancellationToken)
     {
         if (!TryParseSnapshotId(command.SnapshotId, out var snapshotId, out var invalid))
         {
@@ -202,16 +202,68 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         }
 
         // What a plan is for: the objects it needs and cannot find, reported
-        // before any byte moves rather than discovered part-way through.
-        var missing = plan.Items
-            .Where(item => item.Kind != EntryKind.DirectoryPlaceholder && !catalogue.HasLocation(item.ObjectId))
-            .Select(item => item.Path)
-            .ToList();
+        // before any byte moves rather than discovered part-way through. The
+        // catalogue alone cannot answer this — it is a cache, and a cache
+        // ahead of the store says "nothing missing" about the very objects
+        // the store has lost — so each located blob is probed against the
+        // store, one memoized metadata call per distinct blob. What the
+        // probe cannot see is a lost blob holding only the items' SEGMENTS
+        // (the plan carries manifests, not their references); naming those
+        // too is FR-RST-003's completeness work.
+        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(runtime.Repository.Keys.KeyIdKey);
+        var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
+        var missing = new List<string>();
+
+        foreach (var item in plan.Items)
+        {
+            if (item.Kind == EntryKind.DirectoryPlaceholder)
+            {
+                continue;
+            }
+
+            if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
+            {
+                missing.Add(item.Path);
+                continue;
+            }
+
+            if (!blobPresent.TryGetValue(location.BlobId, out var present))
+            {
+                var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
+                present =
+                    await BlobExistsAsync(BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
+                    || await BlobExistsAsync(BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
+                blobPresent[location.BlobId] = present;
+            }
+
+            if (!present)
+            {
+                missing.Add(item.Path);
+            }
+        }
 
         return new RestorePlanResult(
             plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
             (long)plan.SpaceEstimateBytes,
             missing);
+    }
+
+    private async ValueTask<bool> BlobExistsAsync(
+        BlobClass blobClass, Domain.Identifiers.StoreBlobKey blobKey, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var metadata = await runtime.Store.GetMetadataAsync(
+                Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey), cancellationToken).ConfigureAwait(false);
+            return metadata.Found && metadata.Metadata!.Length > 0;
+        }
+        catch (IOException)
+        {
+            // A store that cannot answer is reported as missing: the plan's
+            // job is to warn before bytes move, and "unreachable" warrants
+            // the warning as much as "absent".
+            return false;
+        }
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>

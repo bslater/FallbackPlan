@@ -297,6 +297,42 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestorePlan_TheCatalogueIsAheadOfTheStore_ReportsTheObjectsAsMissing()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        // The store loses the metadata blobs the plan's objects live in — a
+        // provider rollback, another participant's compaction — and nothing
+        // tells the catalogue, whose rows still locate every one of them.
+        foreach (var blob in Directory.EnumerateFiles(
+            Path.Combine(_harness.RepositoryPath, "blobs", "meta"), "*", SearchOption.AllDirectories))
+        {
+            File.Delete(blob);
+        }
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+
+        // The plan's whole purpose (its own comment says so): the objects it
+        // needs and cannot find, before any byte moves. Asking the catalogue
+        // whether the catalogue knows a location answers a different
+        // question — a catalogue ahead of the store says "nothing missing"
+        // and the failure reappears mid-restore, mislabelled. The plan must
+        // ask the store.
+        Assert.IsNotEmpty(plan.MissingObjects);
+        Assert.Contains("notes.txt", plan.MissingObjects);
+    }
+
+    [TestMethod]
     public async Task Restore_CommandedThroughTheContract_WritesOnTheServiceMachine()
     {
         await _harness.CreateRepositoryAsync();

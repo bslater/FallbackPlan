@@ -66,6 +66,18 @@ internal sealed class DedupTrustGate(
             return false;
         }
 
+        // Before any trust question: does the blob the row points at still
+        // exist? The catalogue is a cache and its row can outlive the store's
+        // object, and a reuse granted on the row's word alone commits a
+        // manifest whose reference dangles — unrestorable, and undetected
+        // until restore time. A memoized metadata probe per distinct blob is
+        // what "trusts its own bytes for free" can afford while still being
+        // about bytes rather than about a cache row.
+        if (!await reader.IsBlobPresentAsync(objectId, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
         // This device's own record. No domain requires a device to verify
         // bytes it wrote itself, and this branch is the whole of "a fresh
         // single-device repository performs no verification reads".

@@ -72,7 +72,66 @@ internal sealed class TargetedRecordReader(
     private readonly ObjectIdDeriver _objectIdDeriver = new(keys.ContentIdKey);
     private readonly StoreBlobKeyDeriver _storeKeyDeriver = new(keys.KeyIdKey);
     private readonly ConcurrentDictionary<ObjectKey, BlobReader?> _blobs = new();
+    private readonly ConcurrentDictionary<BlobId, bool> _blobPresent = new();
     private volatile bool _disposed;
+
+    /// <summary>
+    /// Whether the blob the catalogue locates for <paramref name="objectId"/>
+    /// is actually present in the store — the stale-catalogue guard the
+    /// reuse gate runs before trusting any location row. The catalogue is a
+    /// cache and never authoritative (02 §8): a row can outlive its object
+    /// across a GC race, a provider rollback, or another participant's
+    /// compaction, and a reuse granted on that row's word alone publishes a
+    /// manifest whose references dangle. One metadata call per distinct blob
+    /// per publication, memoized — deliberately not a read, so the
+    /// FR-DED-002 posture (a single-device repository performs zero
+    /// verification reads) is untouched.
+    /// </summary>
+    /// <remarks>
+    /// The blob's class is not recorded on the location row, so the probe
+    /// asks under the data prefix first — segment reuse is the overwhelming
+    /// caller — and the metadata prefix second. A store fault during the
+    /// probe reads as absent: refusing a reuse the store might have honoured
+    /// costs a rewrite, granting one it cannot costs a snapshot.
+    /// </remarks>
+    public async ValueTask<bool> IsBlobPresentAsync(ObjectId objectId, CancellationToken cancellationToken)
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        if (catalogue.Read(c => c.ResolveLocation(objectId)) is not { } location)
+        {
+            return false;
+        }
+
+        if (_blobPresent.TryGetValue(location.BlobId, out var known))
+        {
+            return known;
+        }
+
+        var blobKey = location.StoreBlobKey ?? _storeKeyDeriver.Derive(location.BlobId);
+        var present =
+            await ProbeAsync(BlobStoreKeys.ForBlob(BlobClass.Data, blobKey), cancellationToken).ConfigureAwait(false)
+            || await ProbeAsync(BlobStoreKeys.ForBlob(BlobClass.Metadata, blobKey), cancellationToken).ConfigureAwait(false);
+
+        _blobPresent[location.BlobId] = present;
+        return present;
+    }
+
+    private async ValueTask<bool> ProbeAsync(ObjectKey storeKey, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var metadata = await store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+            return metadata.Found && metadata.Metadata!.Length > 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// The file-version manifest <paramref name="objectId"/> names, or
