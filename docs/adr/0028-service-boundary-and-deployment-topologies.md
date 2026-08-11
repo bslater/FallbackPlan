@@ -438,7 +438,11 @@ for, over the pairing and session machinery of architecture 09 §3
 ([ADR-0030](0030-peer-identity-and-pairing.md), now carried over the wire). A
 paired console commands the service and receives results but, by default, no file
 content (§6): a restore it commands writes on the service's machine, and the
-console is told the counts and the path. This closes topologies 3 and 4 of §1.
+console is told the counts and the path. The shipped CLI drives this over
+`--connect <host:port> --fingerprint <fp> --state <dir>`: `backup`, `verify`,
+`check`, `restore`, `snapshots`, `ls` and `status` route to the remote service,
+the pinned service named by fingerprint because a grant holds a key and never an
+address. This closes topologies 3 and 4 of §1.
 What a paired console may additionally *do* — stream restored content (Q18),
 carry a per-operator identity (Q19) — stays open by design.
 

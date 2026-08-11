@@ -292,8 +292,12 @@ the per-connection ephemeral certificate, `PeerSessionDriver` drives the
 four-state machine over the live stream, `PeerKeypairStore` persists the device
 key, and `PairingCeremony` runs the ceremony with a human's approval on each
 side. `RemoteServiceListener` (Agent) binds the interface an administrator names
-and admits only a pinned peer; `RemoteServiceClient` (Cli) is the console's end.
-The man-in-the-middle relay that channel binding defeats is reproduced through
+and admits only a pinned peer; `RemoteServiceClient` (Cli) is the console's end,
+and the shipped CLI drives it — `fallbackplan <verb> --connect <host:port>
+--fingerprint <fp> --state <dir>` routes `backup`, `verify`, `check`, `restore`,
+`snapshots`, `ls` and `status` to a remote paired service, the service named by
+fingerprint because a grant holds a key and never an address. The
+man-in-the-middle relay that channel binding defeats is reproduced through
 two real TLS connections, and the ceremony is performed by two real
 operating-system processes
 ([implementation status](implementation-status.md#0030--the-socket-exists)).
