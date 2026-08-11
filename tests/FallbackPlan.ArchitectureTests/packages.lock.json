@@ -180,6 +180,11 @@
           "MSTest.Analyzers": "3.11.0"
         }
       },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
+      },
       "fallbackplan.agent": {
         "type": "Project",
         "dependencies": {
@@ -193,7 +198,8 @@
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Restore": "[1.0.0, )",
-          "FallbackPlan.Storage.Local": "[1.0.0, )"
+          "FallbackPlan.Storage.Local": "[1.0.0, )",
+          "System.ServiceProcess.ServiceController": "[10.0.10, )"
         }
       },
       "fallbackplan.api": {
@@ -486,6 +492,15 @@
         "requested": "[10.0.10, )",
         "resolved": "10.0.10",
         "contentHash": "V8XZBZsORS+NMhM5hc7doU0wKgDe0lJaaUkZGlAgpbYqN5Pd11I3pxwoRQgEyUVbDri/+qm7YCp49gCTYcbqJQ=="
+      },
+      "System.ServiceProcess.ServiceController": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "9tI/EtlMimwJn9EEtbqFrVqGCD98VfVdnW6UekC7/YHO5Ky/LMUfXibBv9+AV8g9u7uim20oHgiOqzaeEWAhqg==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "10.0.10"
+        }
       },
       "ZstdSharp.Port": {
         "type": "CentralTransitive",
