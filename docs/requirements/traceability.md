@@ -102,9 +102,9 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
-| FR-REP-001 | [09 §1](../architecture/09-replication-and-peers.md#1-what-replication-moves) | [0011](../adr/0011-commit-versus-replication-semantics.md) | — *(untested; phase 2)* | 2 |
+| FR-REP-001 | [09 §1](../architecture/09-replication-and-peers.md#1-what-replication-moves) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Hosts.Tests/PeerReplicationTests` — a source's objects replicate to a paired destination and the recovery tool restores from the replica; `Protocol.Tests/ReplicationMessageTests` · per-snapshot-and-destination state is slice-2 | 2 |
 | FR-REP-002 | [05 §4](../architecture/05-storage-providers.md#4-providers) | [0012](../adr/0012-storage-provider-contract.md) | `Repository.Tests/RepositoryDescriptorCodecTests`, `Repository.Tests/RepositoryLifecycleTests` | 3 |
-| FR-REP-003 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | — *(untested; phase 2)* | 2 |
+| FR-REP-003 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | `Hosts.Tests/PeerReplicationTests` — a re-run commits nothing already held, and each object commits whole (create-if-absent) so none is ever visible partial · within-object resume is slice-2 | 2 |
 | FR-REP-004 | [09 §2.1](../architecture/09-replication-and-peers.md#21-version-skew) | [0014](../adr/0014-format-versioning-and-stability.md) | — *(untested; phase 2)* | 2 |
 | FR-VER-001..005 | [09 §5](../architecture/09-replication-and-peers.md#5-destination-verification) | — | — *(untested; phase 2)* | 2 |
 

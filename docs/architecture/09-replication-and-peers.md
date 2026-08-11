@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; peer replication (specs 03–05) not yet built — see [implementation status](../implementation-status.md).
+**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); destination verification (§5) and quotas (§6) not yet built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -21,6 +21,8 @@ Exchange sequence:
 7. verification receipts.
 
 Steps 3–6 are ordered so the cheapest discovery happens first: a filter exchange establishes most of what is missing without enumerating anything.
+
+**Built so far (peer-protocol 03, first slice).** The exchange runs for the widest scope — the source offers a whole repository, the destination declares the object keys it holds as an explicit inventory, and the source streams the rest, each object committed whole under a create-if-absent write so a re-run resumes with no checkpoint. Three decisions this section left open were settled there rather than in the architecture, because they are encoding and placement, not behaviour: the destination keeps each source's replica in a store it names locally by repository id (a storage path never crosses the wire, §3); an object commits atomically, so resumption is a property of the exchange rather than a negotiated position; and step 3's compact object-set filter is an *optional negotiated feature* layered over the explicit inventory, so a v1 implementation is complete without it. Snapshot scoping (steps 2, 4, 5) and the filter are the next slice; verification (§5) and quotas (§6) follow.
 
 ## 2. Transport
 
