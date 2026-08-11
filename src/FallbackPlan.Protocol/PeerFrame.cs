@@ -33,6 +33,24 @@ public enum PeerMessageType : ushort
 
     /// <summary>The channel-bound signature (02 §3.1).</summary>
     SessionAuthProof = 9,
+
+    /// <summary>A source's offer to replicate a repository (03 §3.1).</summary>
+    ReplicationOffer = 256,
+
+    /// <summary>A destination's inventory of what it already holds (03 §3.2).</summary>
+    ReplicationInventory = 257,
+
+    /// <summary>The start of one object's bytes (03 §3.3).</summary>
+    ReplicationObject = 258,
+
+    /// <summary>A slice of the current object's bytes (03 §3.3).</summary>
+    ReplicationChunk = 259,
+
+    /// <summary>The source has sent every object in scope (03 §3.4).</summary>
+    ReplicationComplete = 260,
+
+    /// <summary>The destination confirms what it received and committed (03 §3.4).</summary>
+    ReplicationAck = 261,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

@@ -46,6 +46,8 @@ The repository format's limits bound stored objects. These bound *messages*, and
 | Maximum feature identifiers per hello | 256 |
 | Maximum label length (human-chosen, UTF-8) | 256 bytes |
 | Maximum grants per peer | 1 024 |
+| Maximum object keys per replication inventory page | 4 096 |
+| Maximum replication chunk (bytes of one object per frame) | 1 MiB |
 
 A frame exceeding its limit is refused and the session closed. Unlike a stored object exceeding a limit, it is **not** a damage finding: the wire is an untrusted channel and an oversized frame is an ordinary hostile input rather than evidence of a broken writer. → [`threat-model.md` T-7](../../docs/threat-model.md#t-7-malicious-or-malformed-protocol-input)
 

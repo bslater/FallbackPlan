@@ -1,0 +1,433 @@
+using Bodu;
+using System.Formats.Cbor;
+using System.Text;
+
+namespace FallbackPlan.Protocol;
+
+/// <summary>
+/// A source's offer to replicate a repository to a destination
+/// (specification peer-protocol 03 §3.1).
+/// </summary>
+/// <param name="RepositoryId">The repository the offered objects belong to (16 bytes).</param>
+/// <param name="FormatCapability">The repository format the source's objects are in.</param>
+/// <param name="Scope">What the source offers — <c>all</c> in this revision (03 §4).</param>
+public sealed record ReplicationOffer(
+    ReadOnlyMemory<byte> RepositoryId, uint FormatCapability, string Scope) : IPeerMessage
+{
+    /// <summary>The repository identity's length in bytes.</summary>
+    public const int RepositoryIdLength = 16;
+
+    /// <summary>The most bytes a scope token may occupy (00 §2.3).</summary>
+    public const int MaximumScopeBytes = 64;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationOffer;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 3;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(RepositoryId.Span);
+        writer.WriteInt32(2);
+        writer.WriteUInt32(FormatCapability);
+        writer.WriteInt32(3);
+        writer.WriteTextString(Scope);
+    }
+
+    /// <summary>Reads an offer from a body positioned after the message type.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The offer.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 03 §3.1 or a 00 §2.3 limit.</exception>
+    public static ReplicationOffer Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        byte[]? repositoryId = null;
+        uint capability = 0;
+        string? scope = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    repositoryId = reader.ReadByteString();
+                    break;
+                case 2:
+                    capability = reader.ReadUInt32();
+                    break;
+                case 3:
+                    scope = reader.ReadTextString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (repositoryId is null || repositoryId.Length != RepositoryIdLength
+            || scope is null || Encoding.UTF8.GetByteCount(scope) > MaximumScopeBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An offer is not the shape 03 §3.1 defines.");
+        }
+
+        return new ReplicationOffer(repositoryId, capability, scope);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationOffer? other) =>
+        other is not null
+        && FormatCapability == other.FormatCapability
+        && string.Equals(Scope, other.Scope, StringComparison.Ordinal)
+        && RepositoryId.Span.SequenceEqual(other.RepositoryId.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() =>
+        HashCode.Combine(FormatCapability, Scope, RepositoryId.Length);
+}
+
+/// <summary>
+/// A destination's inventory of the objects it already holds in scope, one page
+/// (specification peer-protocol 03 §3.2).
+/// </summary>
+/// <param name="Keys">The object keys the destination holds, this page.</param>
+/// <param name="More">Whether another page follows.</param>
+public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More) : IPeerMessage
+{
+    /// <summary>The most object keys one inventory page may carry (00 §2.3).</summary>
+    public const int MaximumKeys = 4096;
+
+    /// <summary>The most bytes an object key may occupy.</summary>
+    public const int MaximumKeyBytes = 1024;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationInventory;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Keys.Count > MaximumKeys)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"An inventory page of {Keys.Count} keys exceeds the limit of {MaximumKeys}.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteStartArray(Keys.Count);
+        foreach (var objectKey in Keys)
+        {
+            writer.WriteTextString(objectKey);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteInt32(2);
+        writer.WriteBoolean(More);
+    }
+
+    /// <summary>Reads an inventory page.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The page.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 03 §3.2 or a 00 §2.3 limit.</exception>
+    public static ReplicationInventory Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        IReadOnlyList<string>? keys = null;
+        var more = false;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    keys = ReadKeys(reader);
+                    break;
+                case 2:
+                    more = reader.ReadBoolean();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (keys is null)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An inventory page carried no key array.");
+        }
+
+        return new ReplicationInventory(keys, more);
+    }
+
+    private static List<string> ReadKeys(CborReader reader)
+    {
+        var length = reader.ReadStartArray();
+        if (length is null || length > MaximumKeys)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"An inventory page declared more than the {MaximumKeys} keys this protocol permits.");
+        }
+
+        var keys = new List<string>(length.Value);
+        for (var i = 0; i < length; i++)
+        {
+            var objectKey = reader.ReadTextString();
+            if (objectKey.Length == 0 || Encoding.UTF8.GetByteCount(objectKey) > MaximumKeyBytes)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "An inventory key is empty or over the length limit.");
+            }
+
+            keys.Add(objectKey);
+        }
+
+        reader.ReadEndArray();
+        return keys;
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationInventory? other) =>
+        other is not null && More == other.More && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(More);
+        foreach (var objectKey in Keys)
+        {
+            hash.Add(objectKey, StringComparer.Ordinal);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// The start of one object's bytes (specification peer-protocol 03 §3.3).
+/// </summary>
+/// <param name="Key">The object's store key.</param>
+/// <param name="Length">The object's total length in bytes.</param>
+public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationObject;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteTextString(Key);
+        writer.WriteInt32(2);
+        writer.WriteUInt64(Length);
+    }
+
+    /// <summary>Reads an object header.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The header.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 03 §3.3.</exception>
+    public static ReplicationObject Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        string? objectKey = null;
+        ulong length = 0;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    objectKey = reader.ReadTextString();
+                    break;
+                case 2:
+                    length = reader.ReadUInt64();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (objectKey is null || objectKey.Length == 0
+            || Encoding.UTF8.GetByteCount(objectKey) > ReplicationInventory.MaximumKeyBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An object header names no key, or one over the length limit.");
+        }
+
+        return new ReplicationObject(objectKey, length);
+    }
+}
+
+/// <summary>
+/// A slice of the current object's bytes (specification peer-protocol 03 §3.3).
+/// </summary>
+/// <param name="Offset">The offset of these bytes within the current object.</param>
+/// <param name="Bytes">The bytes.</param>
+public sealed record ReplicationChunk(ulong Offset, ReadOnlyMemory<byte> Bytes) : IPeerMessage
+{
+    /// <summary>The most bytes of an object one chunk may carry (00 §2.3).</summary>
+    public const int MaximumBytes = 1024 * 1024;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationChunk;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Bytes.Length > MaximumBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A chunk of {Bytes.Length} bytes exceeds the limit of {MaximumBytes}.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteUInt64(Offset);
+        writer.WriteInt32(2);
+        writer.WriteByteString(Bytes.Span);
+    }
+
+    /// <summary>Reads a chunk.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The chunk.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 03 §3.3 or the chunk limit.</exception>
+    public static ReplicationChunk Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        ulong offset = 0;
+        byte[]? bytes = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    offset = reader.ReadUInt64();
+                    break;
+                case 2:
+                    bytes = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (bytes is null || bytes.Length > MaximumBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A chunk carried no bytes, or more than the limit.");
+        }
+
+        return new ReplicationChunk(offset, bytes);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationChunk? other) =>
+        other is not null && Offset == other.Offset && Bytes.Span.SequenceEqual(other.Bytes.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Offset, Bytes.Length);
+}
+
+/// <summary>
+/// The source has sent every object in scope (specification peer-protocol 03 §3.4).
+/// </summary>
+/// <param name="Count">The number of objects the source sent this scope.</param>
+public sealed record ReplicationComplete(ulong Count) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationComplete;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteUInt64(Count);
+    }
+
+    /// <summary>Reads a completion.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The completion.</returns>
+    public static ReplicationComplete Read(CborReader reader) => new(ReadCount(reader));
+
+    internal static ulong ReadCount(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        ulong count = 0;
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            if (key == 1)
+            {
+                count = reader.ReadUInt64();
+            }
+            else
+            {
+                reader.SkipValue();
+            }
+        });
+
+        return count;
+    }
+}
+
+/// <summary>
+/// The destination confirms what it received and committed
+/// (specification peer-protocol 03 §3.4).
+/// </summary>
+/// <param name="Count">The number of objects the destination received and committed.</param>
+public sealed record ReplicationAck(ulong Count) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationAck;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteUInt64(Count);
+    }
+
+    /// <summary>Reads an acknowledgement.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The acknowledgement.</returns>
+    public static ReplicationAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
+}

@@ -200,7 +200,8 @@ frame = u32(payload_length) ‖ payload
 | 8 | `SessionAuth` | §3.1 |
 | 9 | `SessionAuthProof` | §3.1 |
 | 10–255 | Reserved for this specification | — |
-| 256+ | Reserved for [03–05](README.md#documents) | — |
+| 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
+| 262+ | Reserved for [04–05](README.md#documents) | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 
@@ -249,4 +250,4 @@ The ephemeral TLS certificate key of §1 is not an exception. It authenticates n
 
 ---
 
-**Previous:** [01 — Identity and pairing](01-identity-and-pairing.md) · **Next:** Replication — [not written](README.md#documents)
+**Previous:** [01 — Identity and pairing](01-identity-and-pairing.md) · **Next:** [03 — Replication](03-replication.md)
