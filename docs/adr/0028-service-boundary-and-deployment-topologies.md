@@ -446,6 +446,13 @@ address. This closes topologies 3 and 4 of §1.
 What a paired console may additionally *do* — stream restored content (Q18),
 carry a per-operator identity (Q19) — stays open by design.
 
+This ADR stops at the service boundary and says nothing about how the operating
+system launches and supervises the process. That is now decided in
+[ADR-0033](0033-hosting-under-an-os-service-manager.md): the agent shuts down
+cleanly on the stop signal a service manager sends, bridges the Windows SCM, and
+generates the systemd/launchd/`sc.exe` registration — built on this ADR's §9
+keystore unlock, which is what lets the boot-started service self-unlock.
+
 ## Status history
 
 | Date | Status | Note |
@@ -454,3 +461,4 @@ carry a per-operator identity (Q19) — stays open by design.
 | 2026-08 | Accepted (amended) | Implemented for the local binding; the Linux keystore question decided in the amendment above |
 | 2026-08 | Accepted | Restore, verify and check served over the surface on the reader lane; the CLI routes them and backup to a running service |
 | 2026-08 | Accepted | The remote binding (§5) built on ADR-0030's now-carried transport: a paired console reaches the service, an unpaired one is refused, and a remotely commanded restore writes on the service's machine — closing topologies 3 and 4 |
+| 2026-08 | Accepted | How the OS hosts the process decided in [ADR-0033](0033-hosting-under-an-os-service-manager.md): clean shutdown on a manager's stop, the Windows SCM bridge, and generated systemd/launchd/`sc.exe` registration |

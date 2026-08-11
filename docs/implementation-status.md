@@ -57,6 +57,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol` · [notes](#0030--the-socket-exists) |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
+| [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager | **Partly built** | `Agent/ServiceProcessHost.cs`, `Agent/WindowsServiceHost.cs`, `Agent/ServiceUnit.cs` · [notes](#0033--the-os-can-own-the-process) |
 
 ---
 
@@ -137,6 +138,12 @@ And now **the transport that carries it.** `PeerTlsConnection` opens TLS 1.3 ove
 The service side binds it. `RemoteServiceListener` (in `FallbackPlan.Agent`) accepts on an interface named by an explicit administrative act — `fallbackplan-agent run --remote-interface <addr> --remote-port <n>`, off by every default — admits only a peer it has a grant for, and then runs the ADR-0028 command contract over the opened session through the same dispatch the local binding uses (`ServiceConnectionPump`). `RemoteServiceClient` (in `FallbackPlan.Cli`) is the paired console's other end, and the shipped CLI now drives it: `fallbackplan <verb> --connect <host:port> --fingerprint <fp> --state <dir>` routes `backup`, `verify`, `check`, `restore`, `snapshots`, `ls` and `status` to a remote paired service, naming the pinned service by fingerprint because a grant records a key, never an address. The two exit criteria this was blocked on now hold end to end in `FallbackPlan.Hosts.Tests`, through both the client directly and the CLI surface: an unpaired console is refused as `not_paired` while the local binding still answers, and a restore commanded from a paired console **writes on the service's machine** — the console is told the counts and the path, never sent the files.
 
 What is left is above this layer, not at it: peer replication itself (the object exchange, verification and quotas — [specifications 03–05](../specifications/peer-protocol/README.md#documents), still unwritten), and the console features gated on the two open questions of ADR-0028 — streaming restored content to the operator (Q18) and per-operator identity on a shared console (Q19). Those gate what a paired console may *do*, not who it is, so the identity and session layers proceed without them.
+
+### 0033 — the OS can own the process
+
+Built, in `FallbackPlan.Agent`: the agent now behaves as a service the operating system starts and stops. `ServiceProcessHost` routes Ctrl+C and the `SIGTERM` that systemd and launchd send onto the one cancellation token the run loop and listeners already unwind cleanly — so a manager's stop is a clean shutdown (exit 0, writer lock freed) rather than the default terminate, proven by a test that spawns the shipped apphost and signals it. `WindowsServiceHost` bridges the Windows Service Control Manager through `ServiceBase` without adopting the Generic Host (ADR-0033). `ServiceUnit` and the `install` verb generate the registration an operator applies — a systemd unit, a launchd plist, or the Windows `sc.exe` commands, printed and never performed — from the same `--repo`/`--state` surface the agent runs with, so the unit cannot drift from the CLI.
+
+Not built, and honestly so: the Windows SCM and launchd *lifecycles* cannot run on this Linux CI, so their live Start/Stop is verified manually while their testable parts — the generation, and the Windows adapter's cancel path — are unit-tested. Self-contained publishing and signed installers remain a Phase 4 concern; the generated artifacts reference whatever executable path is deployed.
 
 ---
 

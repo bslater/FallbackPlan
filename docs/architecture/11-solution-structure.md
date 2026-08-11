@@ -111,8 +111,14 @@ Together they took the codebase from 64.7% to 85.0%, most of the gain
 landing in the engine rather than the shells, because the hosts are where
 the engine is integrated.
 
-What stays in `Main` is what genuinely belongs to the process: the Ctrl+C
-handler the Agent installs, and nothing else.
+What stays in `Main` is a single line. Even the process lifetime moved out:
+the Agent's `Main` calls `ServiceProcessHost`, which installs the Ctrl+C and
+`SIGTERM` handlers and, under the Windows Service Control Manager, hands off to
+`WindowsServiceHost` — the hosting layer that lets the operating system own the
+process (`ServiceProcessHost`, `WindowsServiceHost`, `ServiceUnit`;
+[ADR-0033](../adr/0033-hosting-under-an-os-service-manager.md)). It is a process
+concern that is nonetheless worth a test, so it follows the same
+callable-type-with-a-thin-entry-point rule as the hosts above it.
 
 Coverage from a single OS is a partial answer by construction: the scanner's
 Linux, Darwin and Windows interop can only run on its own platform, so a
