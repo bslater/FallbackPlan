@@ -172,6 +172,64 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
             + "targeted loading or coalescing has landed and this characterization must become a compliance test.");
     }
 
+    [TestMethod]
+    public async Task RestoreReceipt_ADeterministicRun_MatchesTheGoldenFixtureByteForByte()
+    {
+        // The receipt is the operator's durable record of what a restore did,
+        // and its JSON is a schema other tooling will parse — so the WHOLE
+        // document is pinned, not two properties of it. Every field is
+        // deterministic here except written_to (an absolute temp path), which
+        // is redacted through the record before serializing. A change that
+        // breaks this fixture is a receipt schema change and must bump
+        // CurrentSchemaVersion with it.
+        var content = Deterministic(50_000, 5);
+        var (plan, target, store, keys) = await PublishOneFileAsync("golden", content, 0xE4);
+        using var _ = keys;
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "golden-out"),
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "golden-run",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        var actual = (receipt with { WrittenTo = "REDACTED" }).ToJson().ReplaceLineEndings("\n");
+
+        Assert.AreEqual(GoldenReceipt.ReplaceLineEndings("\n"), actual, $"the receipt JSON changed:\n{actual}");
+    }
+
+    private const string GoldenReceipt = """
+        {
+          "schema_version": 3,
+          "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
+          "started_at": 1722700000000,
+          "completed_at": 1722700000000,
+          "items": [
+            {
+              "path": "data",
+              "outcome": "restored",
+              "bytes": 0,
+              "detail": null
+            },
+            {
+              "path": "data/file.bin",
+              "outcome": "restored",
+              "bytes": 50000,
+              "detail": null
+            }
+          ],
+          "displaced": [],
+          "written_to": "REDACTED",
+          "outcome": "Complete"
+        }
+        """;
+
     private async Task<(RestorePlan Plan, RestoreTargetProfile Target, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys)>
         PublishOneFileAsync(string name, byte[] content, byte seed)
     {

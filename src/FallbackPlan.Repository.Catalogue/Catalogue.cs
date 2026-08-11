@@ -34,7 +34,8 @@ public sealed record CatalogueTreeEntry(
     ulong? LogicalLength,
     ulong? ModifiedAt,
     ulong? IdentityDevice,
-    ulong? IdentityFileId);
+    ulong? IdentityFileId,
+    bool HasAlternateStreams = false);
 
 /// <summary>
 /// What the reuse decision needs to know about an object the index already
@@ -274,14 +275,15 @@ public sealed class Catalogue : IDisposable
         int segmentCount,
         ulong? modifiedAt = null,
         ulong? identityDevice = null,
-        ulong? identityFileId = null)
+        ulong? identityFileId = null,
+        bool hasAlternateStreams = false)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO file_versions
                 (object_id, name, entry_kind, logical_length, whole_file_hash, parent_version, segment_count,
-                 modified_at, identity_device, identity_file_id)
-            VALUES ($id, $name, $kind, $length, $hash, $parent, $segments, $modified, $device, $fileid);
+                 modified_at, identity_device, identity_file_id, has_alternate_streams)
+            VALUES ($id, $name, $kind, $length, $hash, $parent, $segments, $modified, $device, $fileid, $streams);
             """;
         command.Parameters.AddWithValue("$id", objectId.ToArray());
         command.Parameters.AddWithValue("$name", name.ToArray());
@@ -293,6 +295,7 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$modified", modifiedAt is { } m ? (long)m : DBNull.Value);
         command.Parameters.AddWithValue("$device", identityDevice is { } d ? unchecked((long)d) : DBNull.Value);
         command.Parameters.AddWithValue("$fileid", identityFileId is { } f ? unchecked((long)f) : DBNull.Value);
+        command.Parameters.AddWithValue("$streams", hasAlternateStreams ? 1 : 0);
         command.ExecuteNonQuery();
     }
 
@@ -443,7 +446,7 @@ public sealed class Catalogue : IDisposable
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams
             FROM file_versions f
             JOIN tree_entries t ON t.object_id = f.object_id AND t.snapshot_id = $snapshot
             WHERE f.identity_device = $device AND f.identity_file_id = $fileId
@@ -467,7 +470,7 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = caseInsensitive
             ? """
-              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams
               FROM tree_entries t
               LEFT JOIN file_versions f ON f.object_id = t.object_id
               WHERE t.snapshot_id = $snapshot AND t.path_casefold = $casefold
@@ -475,7 +478,7 @@ public sealed class Catalogue : IDisposable
               LIMIT 1;
               """
             : """
-              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams
               FROM tree_entries t
               LEFT JOIN file_versions f ON f.object_id = t.object_id
               WHERE t.snapshot_id = $snapshot AND t.path = $path;
@@ -503,7 +506,7 @@ public sealed class Catalogue : IDisposable
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams
             FROM tree_entries t
             LEFT JOIN file_versions f ON f.object_id = t.object_id
             WHERE t.snapshot_id = $snapshot AND t.parent = $parent
@@ -529,7 +532,8 @@ public sealed class Catalogue : IDisposable
         reader.IsDBNull(3) ? null : (ulong)reader.GetInt64(3),
         reader.IsDBNull(4) ? null : (ulong)reader.GetInt64(4),
         reader.IsDBNull(5) ? null : unchecked((ulong)reader.GetInt64(5)),
-        reader.IsDBNull(6) ? null : unchecked((ulong)reader.GetInt64(6)));
+        reader.IsDBNull(6) ? null : unchecked((ulong)reader.GetInt64(6)),
+        !reader.IsDBNull(7) && reader.GetInt64(7) > 0);
 
     /// <summary>Records a content-to-object dedup mapping — catalogue-domain only, never durable in the repository (02 §2).</summary>
     public void RecordSegmentDedup(ContentId contentId, ObjectId objectId)

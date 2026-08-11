@@ -321,7 +321,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             .ToHashSet(StringComparer.Ordinal);
 
         return new RestoreResult(
-            receipt.Items.Count(item => item.Outcome == "restored" && !directories.Contains(item.Path)),
+            // A degraded file's content was written and verified, so it counts
+            // among the files written; the Outcome below carries the shortfall
+            // (Partial), exactly as it carries a skipped symlink's.
+            receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
             receipt.Items.Count(item => item.Outcome == "failed"),
             // Where the files actually are, not where the caller pointed.
             // Historical content quarantines by default (FR-RST-006), so the

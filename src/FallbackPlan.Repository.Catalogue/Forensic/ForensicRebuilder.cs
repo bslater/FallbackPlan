@@ -359,7 +359,8 @@ public sealed class ForensicRebuilder : IDisposable
                 manifest.WholeFileHash.Span,
                 manifest.ParentVersion,
                 manifest.SegmentReferences.Count,
-                manifest.Metadata.ModifiedAt);
+                manifest.Metadata.ModifiedAt,
+                hasAlternateStreams: manifest.Metadata.AlternateStreams.Count > 0);
 
             foreach (var reference in manifest.SegmentReferences)
             {

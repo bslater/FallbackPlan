@@ -653,18 +653,23 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
             .Select(item => item.Path)
             .ToHashSet(StringComparer.Ordinal);
-        var restored = receipt.Items.Count(item => item.Outcome == "restored" && !directories.Contains(item.Path));
+        // A degraded file's content was written and verified — it counts as
+        // written — but the shortfall is named on its own line and in the
+        // summary, because the file on disk is not the file that was captured.
+        var restored = receipt.Items.Count(
+            item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path));
         var failed = receipt.Items.Count(item => item.Outcome == "failed");
         var skipped = receipt.Items.Count(item => item.Outcome == "skipped");
+        var degraded = receipt.Items.Count(item => item.Outcome == "degraded");
 
         List<string> lines = [];
-        foreach (var item in receipt.Items.Where(item => item.Outcome is "failed" or "skipped"))
+        foreach (var item in receipt.Items.Where(item => item.Outcome is "failed" or "skipped" or "degraded"))
         {
             lines.Add($"{item.Outcome} {item.Path}: {item.Detail}");
         }
 
         lines.Add(string.Create(CultureInfo.InvariantCulture,
-            $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped"));
+            $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped, {degraded} degraded"));
 
         return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }

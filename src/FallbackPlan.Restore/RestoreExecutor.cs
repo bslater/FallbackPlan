@@ -104,9 +104,12 @@ public sealed record RestoreReceipt
     /// The boolean is not carried alongside it: a reader that understood the
     /// old field would have read <c>true</c> for a partial restore, which is
     /// the defect, so leaving it present would preserve the lie for exactly
-    /// the readers most likely to trust it.
+    /// the readers most likely to trust it. Version 3 added the
+    /// <c>degraded</c> item outcome (RR-6): a file whose alternate data
+    /// streams were captured and not written back is not <c>restored</c>,
+    /// and a run containing one is not <c>Complete</c>.
     /// </remarks>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -382,6 +385,23 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                     // default metadata — recoverable — never the reverse.
                     ApplyMetadata(destination, manifest.Metadata);
 
+                    // The main stream restored and verified; alternate data
+                    // streams the manifest carries did not (RR-6's honesty
+                    // half — write-back is not implemented on any target).
+                    // "degraded", not "restored": the file on disk is not the
+                    // file that was captured, and the receipt says so per
+                    // item, exactly where the shortfall is.
+                    if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
+                    {
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length,
+                            Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
+                                + "and not written back on this target (declared in the plan)",
+                        });
+                        break;
+                    }
+
                     items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length });
                     break;
                 }
@@ -435,11 +455,13 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
     /// <param name="planned">How many items the plan held.</param>
     /// <returns>The aggregate.</returns>
     /// <remarks>
-    /// A skipped item makes the restore <see cref="RestoreOutcome.Partial"/>.
-    /// The plan declaring in advance that a symlink cannot be materialised on
-    /// this target is a reason the shortfall is expected — it is not a reason
-    /// to report that nothing is missing. What the operator needs to know is
-    /// that the tree they restored is not the tree that was captured.
+    /// A skipped or degraded item makes the restore
+    /// <see cref="RestoreOutcome.Partial"/>. The plan declaring in advance
+    /// that a symlink cannot be materialised on this target — or that a
+    /// file's alternate streams cannot be written back — is a reason the
+    /// shortfall is expected; it is not a reason to report that nothing is
+    /// missing. What the operator needs to know is that the tree they
+    /// restored is not the tree that was captured.
     /// </remarks>
     private static RestoreOutcome Aggregate(List<ReceiptItem> items, int planned)
     {
@@ -453,7 +475,7 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             return RestoreOutcome.Cancelled;
         }
 
-        return items.Any(item => item.Outcome == "skipped")
+        return items.Any(item => item.Outcome is "skipped" or "degraded")
             ? RestoreOutcome.Partial
             : RestoreOutcome.Complete;
     }

@@ -116,6 +116,90 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task RestorePlan_AFileCarryingAlternateStreams_DeclaresTheDegradation()
+    {
+        // RR-6's honesty half: the format captures alternate data streams
+        // end to end, and no target can write them back yet — so a plan
+        // over a tree that carries them must SAY so, exactly as it says so
+        // for symlinks and POSIX metadata, instead of the receipt later
+        // reporting complete while the streams are dropped.
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile("data/streams.bin", Deterministic(4_096, 3));
+        carrier.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+        source.AddFile("data/plain.bin", Deterministic(4_096, 5), fileId: 9_002);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("ads-plan.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
+
+        var plan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), string.Empty,
+            RestoreTargetProfile.ForLocalPlatform());
+
+        var degradation = Assert.ContainsSingle(
+            plan.Degradations.Where(candidate => candidate.Capability == "alternate-streams"));
+        Assert.Contains("main stream", degradation.Detail, StringComparison.Ordinal);
+
+        // A tree with no stream-carrying file declares nothing — the
+        // degradation is presence-gated like the symlink one, not blanket.
+        var plainPlan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), "data/plain.bin",
+            RestoreTargetProfile.ForLocalPlatform());
+        Assert.DoesNotContain(candidate => candidate.Capability == "alternate-streams", plainPlan.Degradations);
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_AFileCarryingAlternateStreams_ReportsTheDegradedOutcomeNotComplete()
+    {
+        // The receipt half of RR-6's honesty: a restore that wrote the main
+        // stream and dropped the alternate ones did NOT completely restore
+        // that file, and `complete` was a lie the receipt told for as long
+        // as nothing consumed the plan's declaration.
+        var content = Deterministic(50_000, 9);
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile("data/streams.bin", content);
+        carrier.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("ads-receipt.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xA8, 16).ToArray(), string.Empty, target);
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var output = Path.Combine(SpoolDirectory, "ads-out");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "ads-run",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        // The main stream restored byte-identical — the shortfall is honest,
+        // not destructive.
+        SequenceAssert.AreEqual(content, File.ReadAllBytes(Path.Combine(output, "data", "streams.bin")));
+
+        // And the receipt says what actually happened: the item degraded,
+        // the run is Partial, and nothing reads as complete while streams
+        // were dropped (FR-RST-005's spirit, applied to metadata).
+        var item = Assert.ContainsSingle(receipt.Items.Where(candidate => candidate.Path == "data/streams.bin"));
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.IsNotNull(item.Detail);
+        Assert.Contains("alternate", item.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(RestoreOutcome.Partial, receipt.Outcome);
+    }
+
+    [TestMethod]
     public async Task RestoreExecution_AnExistingFileIsInTheWay_DisplacesItAndAppliesMetadataAfterContent()
     {
         var content = Deterministic(50_000, 5);

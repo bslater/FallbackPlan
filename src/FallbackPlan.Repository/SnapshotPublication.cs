@@ -109,7 +109,8 @@ public sealed record PublishedFileVersion(
     ulong? IdentityDevice = null,
     ulong? IdentityFileId = null,
     bool Reused = false,
-    FileVersionManifest? Inherited = null);
+    FileVersionManifest? Inherited = null,
+    bool HasAlternateStreams = false);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -493,7 +494,8 @@ public sealed partial class PublicationOrchestrator
                 archive?.SegmentReferences.Count ?? inherited?.SegmentReferences.Count ?? 0,
                 file.ModifiedAt,
                 file.IdentityDevice,
-                file.IdentityFileId);
+                file.IdentityFileId,
+                file.HasAlternateStreams);
 
             if (archive is not null)
             {
@@ -632,7 +634,8 @@ public sealed partial class PublicationOrchestrator
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
-                    prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true));
+                    prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
+                    HasAlternateStreams: prior.HasAlternateStreams));
                 return;
             }
 
@@ -684,7 +687,8 @@ public sealed partial class PublicationOrchestrator
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
-                    entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId));
+                    entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
+                    HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0));
                 RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
@@ -762,7 +766,8 @@ public sealed partial class PublicationOrchestrator
             _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, EntryKind.File));
             _files.Add(new PublishedFileVersion(
                 entry.RelativePath, entry.NameBytes, objectId, EntryKind.File, Archive: null,
-                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: renamed));
+                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: renamed,
+                HasAlternateStreams: renamed.Metadata.AlternateStreams.Count > 0));
             RecordSourceIdentity(entry, objectId);
         }
 
