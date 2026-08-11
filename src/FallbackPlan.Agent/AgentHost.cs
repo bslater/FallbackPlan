@@ -48,6 +48,9 @@ public static class AgentHost
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent unlock --repo <path> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
+                  fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]
+                  fallbackplan-agent pairings --state <dir>
+                  fallbackplan-agent unpair --state <dir> --fingerprint <fp>
 
                 Backup sets and their schedules come from <state>/config.json.
                 Missed runs coalesce to one catch-up run per set (ADR-0027 §1).
@@ -83,10 +86,30 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair"))
         {
-            error.WriteLine("error: usage is `run`, `unlock`, or `lock` — no other verb exists.");
+            error.WriteLine("error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, or `unpair` — no other verb exists.");
             return 1;
+        }
+
+        // The pairing verbs need the state directory and no repository — a
+        // device's peer identity and its grants live beside the state, not
+        // inside the repository (ADR-0030 §1).
+        if (args[0] is "pair" or "pairings" or "unpair")
+        {
+            if (stateDirectory is null)
+            {
+                error.WriteLine($"error: usage is `{args[0]} --state <dir>`.");
+                return 1;
+            }
+
+            return args[0] switch
+            {
+                "pairings" => ListPairings(stateDirectory, output),
+                "unpair" => Unpair(stateDirectory, Get("--fingerprint"), output, error),
+                _ => await PairAsync(stateDirectory, Get("--remote-interface"), Get("--remote-port"), Get("--label"),
+                    output, error, cancellationToken).ConfigureAwait(false),
+            };
         }
 
         if (stateDirectory is null || (args[0] != "lock" && repoPath is null))
@@ -346,5 +369,125 @@ public static class AgentHost
             error.WriteLine("error: the passphrase does not open this repository.");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Runs one pairing ceremony as the responding side (ADR-0030 §2): accept a
+    /// single connection, show the operator the string and the peer, and pin on
+    /// approval. Reads y/n from <see cref="Console.In"/>.
+    /// </summary>
+    private static async Task<int> PairAsync(
+        string stateDirectory,
+        string? remoteInterface,
+        string? remotePort,
+        string? label,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (remoteInterface is null || remotePort is null
+            || !int.TryParse(remotePort, CultureInfo.InvariantCulture, out var port)
+            || !IPAddress.TryParse(remoteInterface, out var address))
+        {
+            error.WriteLine("error: usage is `pair --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]`.");
+            return 1;
+        }
+
+        using var keypair = PeerKeypairStore.Open(stateDirectory);
+        var grants = PeerGrantStore.Open(stateDirectory);
+
+        using var socket = new System.Net.Sockets.Socket(
+            address.AddressFamily, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        socket.Bind(new IPEndPoint(address, port));
+        socket.Listen(backlog: 1);
+
+        output.WriteLine($"this device is peer {keypair.Identity.Fingerprint}");
+
+        // The bound endpoint, not the requested one: a port of 0 asks the
+        // operating system to assign one, and the operator (or a test) needs
+        // to be told which.
+        output.WriteLine($"waiting for a pairing connection on {socket.LocalEndPoint} …");
+        output.Flush();
+
+        var accepted = await socket.AcceptAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await PeerTlsConnection.AcceptAsync(
+            accepted, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+
+        var result = await PairingCeremony.AcceptAsync(
+            connection.Stream, keypair, grants, label ?? Environment.MachineName, PeerRole.StoresForUs, PeerTerms.None,
+            (prospect, _) => ValueTask.FromResult(Approve(prospect, output)),
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false);
+
+        if (result.Approved)
+        {
+            output.WriteLine($"paired with {result.Grant!.Label} ({result.Grant.Identity.Fingerprint}).");
+            return 0;
+        }
+
+        output.WriteLine($"pairing did not complete: {result.Refusal?.Text ?? "the peer went away"}.");
+        return 1;
+    }
+
+    private static bool Approve(PairingProspect prospect, TextWriter output)
+    {
+        output.WriteLine($"pairing with {prospect.PeerLabel} (peer {prospect.PeerIdentity.Fingerprint})");
+        output.WriteLine($"compare this string on both devices: {prospect.ShortAuthenticationString}");
+        output.Write("do the strings match, and do you approve? [y/N] ");
+        output.Flush();
+
+        var answer = Console.In.ReadLine();
+        return answer is not null && answer.Trim().StartsWith('y');
+    }
+
+    private static int ListPairings(string stateDirectory, TextWriter output)
+    {
+        var grants = PeerGrantStore.Open(stateDirectory);
+        if (grants.Grants.Count == 0)
+        {
+            output.WriteLine("no pairings.");
+            return 0;
+        }
+
+        foreach (var grant in grants.Grants.OrderBy(grant => grant.Label, StringComparer.Ordinal))
+        {
+            output.WriteLine($"{grant.Identity.Fingerprint}  {grant.Role,-11}  {grant.Label}");
+        }
+
+        return 0;
+    }
+
+    private static int Unpair(string stateDirectory, string? fingerprint, TextWriter output, TextWriter error)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            error.WriteLine("error: usage is `unpair --state <dir> --fingerprint <fp>`.");
+            return 1;
+        }
+
+        var grants = PeerGrantStore.Open(stateDirectory);
+
+        // Resolve the fingerprint to exactly one grant. A fingerprint is a
+        // display handle, never the identity — so an ambiguous prefix is
+        // refused rather than guessed, and revocation always acts on the full
+        // key (ADR-0030 §1).
+        var matches = grants.Grants
+            .Where(grant => grant.Identity.Fingerprint.StartsWith(fingerprint, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            error.WriteLine($"error: no pairing matches '{fingerprint}'.");
+            return 1;
+        }
+
+        if (matches.Count > 1)
+        {
+            error.WriteLine($"error: '{fingerprint}' matches {matches.Count} pairings; give more of the fingerprint.");
+            return 1;
+        }
+
+        grants.Revoke(matches[0].Identity);
+        output.WriteLine($"revoked the pairing with {matches[0].Label} ({matches[0].Identity.Fingerprint}).");
+        return 0;
     }
 }

@@ -14,6 +14,7 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
@@ -166,6 +167,20 @@ public static class CliApplication
         }
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
+
+        static bool TryParseEndpoint(string target, out string host, out int port)
+        {
+            host = string.Empty;
+            port = 0;
+            var colon = target.LastIndexOf(':');
+            if (colon <= 0 || colon == target.Length - 1)
+            {
+                return false;
+            }
+
+            host = target[..colon];
+            return int.TryParse(target[(colon + 1)..], CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
+        }
 
         static ObjectId ParseObjectId(string hex)
         {
@@ -882,6 +897,76 @@ public static class CliApplication
                 output.WriteLine($"kit (text)     {outputPath}.txt");
                 output.WriteLine("the kit is ONE factor — store it apart from the passphrase (FR-KIT-004).");
                 return 0;
+            }));
+        }
+
+        // ---------------------------------------------------------------- pair
+
+        {
+            // Not a session verb: pairing needs no repository or passphrase,
+            // only the console's own state directory to hold its identity and
+            // the grant it is about to pin (ADR-0030 §1).
+            var connectArgument = new Argument<string>("host:port")
+            {
+                Description = "The service's remote binding, as host:port.",
+            };
+            var stateArgOption = new Option<string>("--state")
+            {
+                Description = "The console's state directory (its peer identity and pairings).",
+                Required = true,
+            };
+            var labelOption = new Option<string?>("--label")
+            {
+                Description = "A human label for this service, for display only.",
+            };
+
+            var command = new Command("pair", "Pair this console with a service's remote binding (ADR-0030).");
+            command.Arguments.Add(connectArgument);
+            command.Options.Add(stateArgOption);
+            command.Options.Add(labelOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var target = parse.GetValue(connectArgument)!;
+                if (!TryParseEndpoint(target, out var host, out var port))
+                {
+                    throw new CliFailureException($"'{target}' is not host:port.");
+                }
+
+                var state = parse.GetValue(stateArgOption)!;
+                var label = parse.GetValue(labelOption);
+
+                using var keypair = PeerKeypairStore.Open(state);
+                var grants = PeerGrantStore.Open(state);
+
+                output.WriteLine($"this console is peer {keypair.Identity.Fingerprint}");
+                output.WriteLine($"dialling {host}:{port} …");
+
+                await using var connection = await PeerTlsConnection.DialAsync(
+                    host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+
+                var result = await PairingCeremony.OfferAsync(
+                    connection.Stream, keypair, grants, label ?? Environment.MachineName, PeerRole.StoresForUs,
+                    (prospect, _) =>
+                    {
+                        output.WriteLine($"pairing with {prospect.PeerLabel} (peer {prospect.PeerIdentity.Fingerprint})");
+                        output.WriteLine($"compare this string on both devices: {prospect.ShortAuthenticationString}");
+                        output.Write("do the strings match, and do you approve? [y/N] ");
+                        output.Flush();
+                        var answer = Console.In.ReadLine();
+                        return ValueTask.FromResult(answer is not null && answer.Trim().StartsWith('y'));
+                    },
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false);
+
+                if (result.Approved)
+                {
+                    output.WriteLine($"paired with {result.Grant!.Label} ({result.Grant.Identity.Fingerprint}).");
+                    return 0;
+                }
+
+                output.WriteLine($"pairing did not complete: {result.Refusal?.Text ?? "the peer went away"}.");
+                return 1;
             }));
         }
 
