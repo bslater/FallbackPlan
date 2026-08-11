@@ -1,6 +1,6 @@
 # FallbackPlan peer protocol — specification
 
-**Protocol version:** 1 (draft) · **Status:** incomplete — pairing and session only; see [Documents](#documents) · **Implemented:** 01 and 02 in full, over a real TLS socket, in `FallbackPlan.Protocol`
+**Protocol version:** 1 (draft) · **Status:** incomplete — verification and quotas unwritten; see [Documents](#documents) · **Implemented:** 01, 02, and 03's base object exchange, over a real TLS socket
 
 ---
 
@@ -34,7 +34,7 @@ This set is **incomplete, and the table says which parts**. A missing document i
 | — | [Conventions](00-conventions.md) | What is inherited from the repository format, and what differs | Written |
 | 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony, pinning, grants and terms | Written; implemented |
 | 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written; implemented |
-| 03 | Replication | The object exchange: filters, missing-object discovery, ranged transfer, resumption | **Not written** |
+| 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
 | 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |
 | 05 | Quotas | Exhaustion, disk-full, and their distinct reporting | **Not written** |
 
@@ -42,7 +42,9 @@ Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, 
 
 Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)'s remote binding was blocked on: a console pairs and opens a session by the same rules a peer does, and carries a different payload over it. They were written first for that reason, and that binding now exists — a paired console reaches the service over the wire, an unpaired one is refused.
 
-Documents 03–05 have their behaviour fixed in architecture already — [09 §1](../../docs/architecture/09-replication-and-peers.md#1-what-replication-moves) gives the exchange sequence, [09 §5](../../docs/architecture/09-replication-and-peers.md#5-destination-verification) gives the challenge construction and the reasoning behind it, [09 §6](../../docs/architecture/09-replication-and-peers.md#6-quotas-and-exhaustion) gives the exhaustion semantics — so what is missing is the wire encoding, not the design.
+Document 03 is now written, and its base object exchange is implemented: a source pushes a repository's objects to a paired destination over an Open session, the destination stores the ciphertext it cannot read, and the transfer is resumable because each object commits whole or not at all. `FallbackPlan.Hosts.Tests` proves it end to end over loopback — a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica. What 03 defers to a later slice is the optimization, not the mechanism: a compact object-set filter (an optional negotiated feature) in place of the explicit inventory, and snapshot-scoped replication in place of the whole-repository scope.
+
+Documents 04–05 have their behaviour fixed in architecture already — [09 §5](../../docs/architecture/09-replication-and-peers.md#5-destination-verification) gives the challenge construction and the reasoning behind it, [09 §6](../../docs/architecture/09-replication-and-peers.md#6-quotas-and-exhaustion) gives the exhaustion semantics — so what is missing is the wire encoding, not the design.
 
 ## Requirement language
 
