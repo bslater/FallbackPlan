@@ -51,6 +51,9 @@ public static class AgentHost
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp>
+                  fallbackplan-agent install --repo <path> --state <dir> [--user <account>]
+                                            [--name <svc>] [--target systemd|launchd|windows]
+                                            [--remote-interface <ip> --remote-port <n>]
 
                 Backup sets and their schedules come from <state>/config.json.
                 Missed runs coalesce to one catch-up run per set (ADR-0027 §1).
@@ -65,6 +68,12 @@ public static class AgentHost
                 and listens on a local socket or named pipe there. It listens on no
                 network port: the remote binding is off until explicitly enabled
                 (ADR-0028 §5).
+
+                `install` prints the definition that registers this agent with the
+                operating system's service manager — a systemd unit, a launchd job,
+                or the Windows `sc.exe` commands (default: this platform). It only
+                prints it; nothing is changed. Store the passphrase with `unlock`
+                first, as the account the service will run as (ADR-0033).
                 """);
             return 0;
         }
@@ -86,9 +95,10 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install"))
         {
-            error.WriteLine("error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, or `unpair` — no other verb exists.");
+            error.WriteLine(
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, or `install` — no other verb exists.");
             return 1;
         }
 
@@ -116,6 +126,15 @@ public static class AgentHost
         {
             error.WriteLine("error: usage is `run --repo <path> --state <dir>`.");
             return 1;
+        }
+
+        // `install` opens neither the repository nor the keystore: it only prints
+        // the definition that would register this agent as a service (ADR-0033).
+        if (args[0] == "install")
+        {
+            return Install(
+                repoPath!, stateDirectory, Get("--user"), Get("--name"), Get("--target"),
+                Get("--remote-interface"), Get("--remote-port"), output, error);
         }
 
         string? FromEnvironment()
@@ -490,4 +509,92 @@ public static class AgentHost
         output.WriteLine($"revoked the pairing with {matches[0].Label} ({matches[0].Identity.Fingerprint}).");
         return 0;
     }
+
+    /// <summary>
+    /// Prints the service-manager definition that would register this agent
+    /// (ADR-0033) — the systemd unit, launchd job, or Windows <c>sc.exe</c>
+    /// commands. The definition goes to standard output so it can be redirected
+    /// to a file; the guidance for applying it, and the reminder to pre-seed the
+    /// passphrase, go to standard error. Nothing on the system is changed.
+    /// </summary>
+    private static int Install(
+        string repoPath,
+        string stateDirectory,
+        string? account,
+        string? name,
+        string? target,
+        string? remoteInterface,
+        string? remotePort,
+        TextWriter output,
+        TextWriter error)
+    {
+        var resolved = target ?? DefaultTarget();
+        if (resolved is not ("systemd" or "launchd" or "windows"))
+        {
+            error.WriteLine($"error: unknown --target '{target}'; use systemd, launchd, or windows.");
+            return 1;
+        }
+
+        var executablePath = Environment.ProcessPath;
+        if (executablePath is null)
+        {
+            error.WriteLine("error: could not determine this executable's path to write into the service definition.");
+            return 1;
+        }
+
+        // Absolutise the paths only when generating for this same platform — a
+        // service needs absolute paths and the operator may have given relative
+        // ones. Generating a foreign target's definition (a Windows unit from a
+        // Linux box, say) must pass the paths through untouched, since this
+        // platform's path rules would mangle the other's; there the operator
+        // supplies absolute target paths.
+        var forThisPlatform = resolved == DefaultTarget();
+        var repositoryPath = forThisPlatform ? Path.GetFullPath(repoPath) : repoPath;
+        var statePath = forThisPlatform ? Path.GetFullPath(stateDirectory) : stateDirectory;
+
+        var options = new ServiceUnitOptions(
+            executablePath,
+            repositoryPath,
+            statePath,
+            account,
+            name ?? "FallbackPlan",
+            name ?? "com.fallbackplan.agent",
+            remoteInterface,
+            remotePort);
+
+        var (artifact, apply) = resolved switch
+        {
+            "systemd" => (ServiceUnit.Systemd(options),
+                $"write it to /etc/systemd/system/{options.ServiceName}.service, then "
+                + $"`sudo systemctl daemon-reload && sudo systemctl enable --now {options.ServiceName}`."),
+            "launchd" => (ServiceUnit.Launchd(options),
+                $"write it to /Library/LaunchDaemons/{options.LaunchdLabel}.plist (owned by root), then "
+                + $"`sudo launchctl load /Library/LaunchDaemons/{options.LaunchdLabel}.plist`."),
+            _ => (ServiceUnit.Windows(options),
+                "run the commands above from an elevated prompt."),
+        };
+
+        error.WriteLine(
+            $"# The {resolved} definition to register FallbackPlan as a service. This only prints it; "
+            + "nothing on this machine is changed. Review it, then apply it.");
+        output.Write(artifact);
+        if (!artifact.EndsWith('\n'))
+        {
+            output.WriteLine();
+        }
+
+        error.WriteLine($"# To apply: {apply}");
+        error.WriteLine(
+            "# First, store the passphrase once as the SAME account the service runs as, so it self-unlocks "
+            + "at boot with nobody present (ADR-0028 §9):");
+        error.WriteLine(
+            $"#   \"{executablePath}\" unlock --repo \"{options.RepositoryPath}\" "
+            + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR>");
+        return 0;
+    }
+
+    private static string DefaultTarget() =>
+        OperatingSystem.IsWindows() ? "windows"
+        : OperatingSystem.IsMacOS() ? "launchd"
+        : "systemd";
 }
