@@ -155,7 +155,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, address);
+                    return new ServiceGateway(client, LocalMode(address), client);
                 }
             }
 
@@ -216,7 +216,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, address);
+                    return new ServiceGateway(client, LocalMode(address), client);
                 }
             }
 
@@ -228,10 +228,55 @@ public static class OperationGateway
             throw;
         }
     }
+
+    /// <summary>
+    /// Opens the gateway a command needs against a <em>remote</em> paired service
+    /// (ADR-0028 §5): dial the endpoint, authenticate as the pinned peer, and
+    /// carry the command contract over the opened session.
+    /// </summary>
+    /// <param name="host">The service's host.</param>
+    /// <param name="port">The service's remote-binding port.</param>
+    /// <param name="stateDirectory">The console's state directory (its peer identity and pairings).</param>
+    /// <param name="fingerprint">The fingerprint of the pinned service to expect.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <returns>The gateway; dispose to close the session and release the device key.</returns>
+    /// <remarks>
+    /// There is no direct-mode fallback here, deliberately: a remote console does
+    /// not hold the repository, so if the paired service cannot be reached the
+    /// only honest answer is to say so — see <see cref="RemotePeer.ConnectAsync"/>,
+    /// which turns a refusal into a stated failure.
+    /// </remarks>
+    public static async ValueTask<IOperationGateway> OpenForRemoteAsync(
+        string host,
+        int port,
+        string stateDirectory,
+        string fingerprint,
+        CancellationToken cancellationToken)
+    {
+        var connection = await RemotePeer.ConnectAsync(
+            host, port, stateDirectory, fingerprint, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+
+        return new ServiceGateway(connection.Client, RemoteMode(host, port), connection);
+    }
+
+    private static string LocalMode(string stateDirectory) =>
+        $"mode: service — the service holding the writer role for '{stateDirectory}' will run this.";
+
+    private static string RemoteMode(string host, int port) =>
+        $"mode: service (remote) — the paired service at {host}:{port} will run this.";
 }
 
 /// <summary>The gateway that sends work to a running service.</summary>
-internal sealed class ServiceGateway(LocalServiceClient client, string stateDirectory) : IOperationGateway
+/// <remarks>
+/// The same gateway serves both bindings. Over the local binding
+/// <paramref name="client"/> is a <see cref="LocalServiceClient"/>; over the
+/// remote binding it is a <see cref="RemoteServiceClient"/> — the body only ever
+/// speaks the <see cref="IFallbackPlanClient"/> contract, so nothing here knows
+/// or cares which. <paramref name="owned"/> is what closing the gateway
+/// disposes: on the local binding that is the client itself; on the remote
+/// binding it is the connection holder that also releases the device key.
+/// </remarks>
+internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IAsyncDisposable owned) : IOperationGateway
 {
     /// <summary>How often to ask the service whether the job has finished.</summary>
     /// <remarks>
@@ -243,8 +288,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     /// <inheritdoc/>
-    public string Mode =>
-        $"mode: service — the service holding the writer role for '{stateDirectory}' will run this.";
+    public string Mode => mode;
 
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RunBackupAsync(BackupRequest request, CancellationToken cancellationToken)
@@ -334,7 +378,7 @@ internal sealed class ServiceGateway(LocalServiceClient client, string stateDire
     }
 
     /// <inheritdoc/>
-    public ValueTask DisposeAsync() => client.DisposeAsync();
+    public ValueTask DisposeAsync() => owned.DisposeAsync();
 
     /// <summary>Sends one command and insists on the result type it should answer with.</summary>
     private async ValueTask<T> SendAsync<T>(ServiceCommand command, string what, CancellationToken cancellationToken)
