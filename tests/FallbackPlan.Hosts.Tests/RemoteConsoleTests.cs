@@ -60,7 +60,7 @@ public sealed class RemoteConsoleTests : IDisposable
             if (pairConsole)
             {
                 serviceGrants.Pin(new PeerGrant(
-                    consoleKeypair.Identity, "console", PeerRole.StoresHere, PeerTerms.None, PairedAt));
+                    consoleKeypair.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, PairedAt));
             }
         }
 

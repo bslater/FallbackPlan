@@ -94,7 +94,7 @@ public sealed class RemoteBindingTests : IDisposable
 
         // Both sides pin the other — the state a completed pairing leaves.
         serviceGrants.Pin(new PeerGrant(
-            _console.Identity, "console", PeerRole.StoresHere, PeerTerms.None, 1_722_600_000_000));
+            _console.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
         var consoleGrants = PeerGrantStore.Open(Path.Combine(_harness.WorkPath, "console"));
         consoleGrants.Pin(new PeerGrant(
             serviceKeypair.Identity, "service", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
@@ -127,7 +127,7 @@ public sealed class RemoteBindingTests : IDisposable
         using var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
         var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
         serviceGrants.Pin(new PeerGrant(
-            _console.Identity, "console", PeerRole.StoresHere, PeerTerms.None, 1_722_600_000_000));
+            _console.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
 
         var consoleState = Path.Combine(_harness.WorkPath, "console");
         var consoleGrants = PeerGrantStore.Open(consoleState);
