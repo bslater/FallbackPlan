@@ -115,6 +115,62 @@ public sealed class RemoteBindingTests : IDisposable
         Assert.AreEqual(PeerSessionNegotiation.CurrentVersion, session.Version);
     }
 
+    [TestMethod]
+    public async Task RemoteRestore_CommandedByAPairedConsole_WritesOnTheServiceMachine()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello from the service");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        using var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
+        serviceGrants.Pin(new PeerGrant(
+            _console.Identity, "console", PeerRole.StoresHere, PeerTerms.None, 1_722_600_000_000));
+
+        var consoleState = Path.Combine(_harness.WorkPath, "console");
+        var consoleGrants = PeerGrantStore.Open(consoleState);
+        consoleGrants.Pin(new PeerGrant(
+            serviceKeypair.Identity, "service", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+
+        await using var remote = RemoteServiceListener.Start(
+            serviceKeypair, serviceGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test");
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.On(remote.Endpoint.ToString()));
+        remote.Bind(handler);
+        await using var local = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        await using var console = await Cli.RemoteServiceClient.ConnectAsync(
+            remote.Endpoint.Address.ToString(), remote.Endpoint.Port,
+            _console, consoleGrants, serviceKeypair.Identity, "console", _timeout.Token);
+
+        // The remote console gets the same answer a local caller would (ADR-0028
+        // §6: commands and results cross the remote binding freely).
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await console.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        // A restore commanded from the console writes on the SERVICE's machine
+        // (ADR-0028 §6): the destination is a path here, the console is told
+        // what happened and where — never sent the files. This is the second
+        // exit criterion, over a real socket.
+        var destination = Path.Combine(_harness.WorkPath, "service-side-restore");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await console.ExecuteAsync(new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token),
+            out var restored);
+
+        Assert.AreEqual(1, restored.Restored);
+        Assert.AreEqual(0, restored.Failed);
+        Assert.AreEqual("complete", restored.Outcome);
+
+        // The files are on this (the service's) disk, under the reported path —
+        // the console received counts and a path string, not content.
+        Assert.StartsWith(destination, restored.OutputDirectory, StringComparison.Ordinal);
+        Assert.AreEqual(
+            "hello from the service",
+            await File.ReadAllTextAsync(Path.Combine(restored.OutputDirectory, "notes.txt"), _timeout.Token));
+    }
+
     private async Task ThrowIfSessionOpensAsync(
         PeerTlsConnection connection, PeerGrantStore consoleGrants, PeerIdentity serviceIdentity)
     {
