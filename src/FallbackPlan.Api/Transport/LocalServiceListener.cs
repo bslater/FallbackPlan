@@ -185,77 +185,13 @@ public sealed class LocalServiceListener : IAsyncDisposable
     {
         await using var owned = stream.ConfigureAwait(false);
 
-        try
-        {
-            if (await FrameCodec.ReadAsync(stream, _stopping.Token).ConfigureAwait(false) is not HelloFrame hello)
-            {
-                return;
-            }
-
-            if (!ContractVersion.TryParse(hello.ContractVersion, out var clientVersion)
-                || !ContractVersion.Current.IsCompatibleWith(clientVersion))
-            {
-                // Name both versions rather than dropping the connection: an
-                // unexplained disconnect is the failure this rule exists for.
-                await FrameCodec.WriteAsync(
-                    stream,
-                    new HelloAcknowledgementFrame(
-                        ContractVersion.Current.ToString(),
-                        false,
-                        ContractVersion.DescribeMismatch(clientVersion, ContractVersion.Current)),
-                    _stopping.Token).ConfigureAwait(false);
-                return;
-            }
-
-            await FrameCodec.WriteAsync(
-                stream,
-                new HelloAcknowledgementFrame(ContractVersion.Current.ToString(), true, null),
-                _stopping.Token).ConfigureAwait(false);
-
-            _log?.Invoke($"accepted {hello.ClientName} from {peer}");
-            await PumpAsync(stream).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException)
-        {
-            // A client that disconnects, or sends nonsense, ends its own
-            // connection and nothing else. Bounded parsing is what makes that
-            // true rather than hopeful (T-7).
-            _log?.Invoke($"connection from {peer} ended: {exception.Message}");
-        }
-    }
-
-    private async Task PumpAsync(Stream stream)
-    {
-        while (!_stopping.IsCancellationRequested)
-        {
-            var frame = await FrameCodec.ReadAsync(stream, _stopping.Token).ConfigureAwait(false);
-            switch (frame)
-            {
-                case null:
-                    return;
-
-                case RequestFrame request:
-                    var result = await _service.ExecuteAsync(request.Command, _stopping.Token).ConfigureAwait(false);
-                    await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), _stopping.Token)
-                        .ConfigureAwait(false);
-                    break;
-
-                case WatchFrame:
-                    await StreamProgressAsync(stream).ConfigureAwait(false);
-                    return;
-
-                default:
-                    return;
-            }
-        }
-    }
-
-    private async Task StreamProgressAsync(Stream stream)
-    {
-        await foreach (var progress in _service.WatchAsync(_stopping.Token).ConfigureAwait(false))
-        {
-            await FrameCodec.WriteAsync(stream, new ProgressFrame(progress), _stopping.Token).ConfigureAwait(false);
-        }
+        // The local binding's authentication is the operating system's: the
+        // socket's mode and the pipe's owner-only flag already decided who may
+        // connect, and PeerCredentials is identification for the log, not a
+        // gate. Everything past this point is the same command contract the
+        // remote binding runs once its peer session has opened.
+        await ServiceConnectionPump.RunAsync(stream, _service, peer.ToString(), _log, _stopping.Token)
+            .ConfigureAwait(false);
     }
 
     private static void TryDelete(string path)

@@ -189,18 +189,31 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
-    public void RemoteBinding_NotEnabledOrUnpaired_RefusesToListen()
+    public void RemoteBinding_Options_AreValidatedForShapeAndNothingMore()
     {
+        // A default install: disabled, and honoured (a port is opened nowhere).
         Assert.IsTrue(RemoteBindingOptions.Disabled.TryValidate(out var noReason));
         Assert.IsNull(noReason);
 
+        // Enabled without an interface is refused — "which interface is this
+        // on?" must be answerable from configuration (FR-SVC-003).
         var unnamed = new RemoteBindingOptions { Enabled = true, Port = 8443 };
         Assert.IsFalse(unnamed.TryValidate(out var unnamedReason));
         Assert.Contains("name the interface", unnamedReason!, StringComparison.Ordinal);
 
+        // A bad port is refused.
+        var badPort = new RemoteBindingOptions { Enabled = true, Interface = "0.0.0.0", Port = 0 };
+        Assert.IsFalse(badPort.TryValidate(out var portReason));
+        Assert.Contains("port", portReason!, StringComparison.Ordinal);
+
+        // Well-formed is now honoured: the pairing that stands behind the
+        // binding is a separate act, no longer a reason to refuse the options.
+        // The listener admits only a pinned peer (ADR-0030) — proven over the
+        // wire in Protocol.Tests/PeerWireTests and end to end in
+        // Hosts.Tests/RemoteBindingTests.
         var wellFormed = new RemoteBindingOptions { Enabled = true, Interface = "0.0.0.0", Port = 8443 };
-        Assert.IsFalse(wellFormed.TryValidate(out var pairingReason));
-        Assert.Contains("paired device identity", pairingReason!, StringComparison.Ordinal);
+        Assert.IsTrue(wellFormed.TryValidate(out var okReason));
+        Assert.IsNull(okReason);
     }
 
     public void Dispose()

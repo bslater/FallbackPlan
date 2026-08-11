@@ -174,6 +174,7 @@
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Keystore": "[1.0.0, )",
+          "FallbackPlan.Protocol": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
@@ -203,6 +204,7 @@
           "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
+          "FallbackPlan.Protocol": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
@@ -242,6 +244,16 @@
         "type": "Project",
         "dependencies": {
           "Bodu.Core": "[0.2.0, )"
+        }
+      },
+      "fallbackplan.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )"
         }
       },
       "fallbackplan.recovery": {

@@ -599,9 +599,14 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>
 /// <param name="Enabled">Whether the remote binding is listening.</param>
-/// <param name="Reason">Why it is not, when it is not.</param>
+/// <param name="Reason">Where it is listening when on, or why not when off.</param>
 public sealed record RemoteBindingState(bool Enabled, string? Reason)
 {
     /// <summary>The state of a default install: no port, nothing listening.</summary>
     public static RemoteBindingState Off { get; } = new(false, null);
+
+    /// <summary>The state of a service whose remote binding is listening at <paramref name="endpoint"/>.</summary>
+    /// <param name="endpoint">The interface and port the binding is on.</param>
+    /// <returns>The enabled state, naming where it listens.</returns>
+    public static RemoteBindingState On(string endpoint) => new(true, endpoint);
 }

@@ -1,8 +1,10 @@
 using Bodu;
 using System.Globalization;
+using System.Net;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Keystore;
+using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 
@@ -43,6 +45,7 @@ public static class AgentHost
                 usage:
                   fallbackplan-agent run    --repo <path> --state <dir> [--passphrase-env <VAR>]
                                             [--once] [--poll-seconds <n>]   (default 60)
+                                            [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent unlock --repo <path> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
 
@@ -182,6 +185,37 @@ public static class AgentHost
             }
         }
 
+        // The remote binding is off unless the operator names an interface to
+        // bind (FR-SVC-003) — an explicit administrative act, never inferred.
+        RemoteBindingOptions remoteBinding;
+        if (Get("--remote-interface") is { } remoteInterface)
+        {
+            if (Get("--remote-port") is not { } portText
+                || !int.TryParse(portText, CultureInfo.InvariantCulture, out var remotePort))
+            {
+                error.WriteLine("error: --remote-interface requires --remote-port <n>.");
+                return 1;
+            }
+
+            remoteBinding = new RemoteBindingOptions { Enabled = true, Interface = remoteInterface, Port = remotePort };
+        }
+        else
+        {
+            remoteBinding = RemoteBindingOptions.Disabled;
+        }
+
+        if (!remoteBinding.TryValidate(out var bindingReason))
+        {
+            error.WriteLine($"error: {bindingReason}");
+            return 1;
+        }
+
+        if (remoteBinding is { Enabled: true } && !IPAddress.TryParse(remoteBinding.Interface, out _))
+        {
+            error.WriteLine($"error: --remote-interface '{remoteBinding.Interface}' is not an IP address to bind.");
+            return 1;
+        }
+
         var once = args.Contains("--once");
         int pollSeconds;
         if (Get("--poll-seconds") is { } poll)
@@ -210,15 +244,50 @@ public static class AgentHost
             await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
                 .ConfigureAwait(false);
 
-            // The command surface comes up before the first pass, so a client
-            // that starts alongside the service is not told "nothing is
-            // listening" while a ten-hour backup runs.
-            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            await using var listener = LocalServiceListener.Start(handler, stateDirectory);
-            if (!once)
+            // The remote binding, when enabled, is opened before the command
+            // surface so its state can be reported through DescribeService. Its
+            // device keypair lives beside the grants it authenticates; both
+            // come up here and nowhere earlier, so a default install touches
+            // neither.
+            RemoteServiceListener? remoteListener = null;
+            PeerKeypair? peerKeypair = null;
+            var bindingState = RemoteBindingState.Off;
+
+            try
             {
-                output.WriteLine($"{DateTimeOffset.Now:u}  listening on {listener.Address}");
-            }
+                if (remoteBinding.Enabled)
+                {
+                    peerKeypair = PeerKeypairStore.Open(stateDirectory);
+                    var grants = PeerGrantStore.Open(stateDirectory);
+                    var endpoint = new IPEndPoint(IPAddress.Parse(remoteBinding.Interface!), remoteBinding.Port);
+                    remoteListener = RemoteServiceListener.Start(
+                        peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
+                        log: line => output.WriteLine($"{DateTimeOffset.Now:u}  {line}"));
+                    bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
+                }
+
+                // The command surface comes up before the first pass, so a client
+                // that starts alongside the service is not told "nothing is
+                // listening" while a ten-hour backup runs. The binding state was
+                // seeded from the remote listener's bound endpoint above.
+                var handler = new ServiceCommandHandler(runtime, bindingState);
+
+                // The remote socket bound before the handler existed so its
+                // endpoint could seed the binding state; it begins serving now
+                // that the handler exists.
+                remoteListener?.Bind(handler);
+
+                await using var localListener = LocalServiceListener.Start(handler, stateDirectory);
+                if (!once)
+                {
+                    output.WriteLine($"{DateTimeOffset.Now:u}  listening on {localListener.Address}");
+                    if (remoteListener is not null)
+                    {
+                        output.WriteLine(
+                            $"{DateTimeOffset.Now:u}  remote binding on {remoteListener.Endpoint}"
+                            + $" (peer {peerKeypair!.Identity.Fingerprint})");
+                    }
+                }
 
             var failed = 0;
             while (!cancellationToken.IsCancellationRequested)
@@ -242,6 +311,16 @@ public static class AgentHost
             }
 
             return failed == 0 ? 0 : 2;
+            }
+            finally
+            {
+                if (remoteListener is not null)
+                {
+                    await remoteListener.DisposeAsync().ConfigureAwait(false);
+                }
+
+                peerKeypair?.Dispose();
+            }
         }
         catch (OperationCanceledException)
         {
