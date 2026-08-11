@@ -116,6 +116,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, PeerKeypair_PeerPrivateKeyBytesGot, arg0, arg1);
 
     /// <summary>
+    /// The device peer key at '{0}' could not be read. It is not rebuildable — restore the file or accept that every pairing this device holds is lost and re-pair deliberately.
+    /// </summary>
+    private static string PeerKeypairStore_DeviceKeyCouldNotRead => Get(nameof(PeerKeypairStore_DeviceKeyCouldNotRead));
+
+    /// <summary>
+    /// The device peer key at '{0}' could not be read. It is not rebuildable — restore the file or accept that every pairing this device holds is lost and re-pair deliberately.
+    /// </summary>
+    internal static string FormatPeerKeypairStore_DeviceKeyCouldNotRead(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, PeerKeypairStore_DeviceKeyCouldNotRead, arg0);
+
+    /// <summary>
     /// A binding nonce is {0} bytes; got {1}.
     /// </summary>
     private static string SessionBinding_BindingNonceBytesGot => Get(nameof(SessionBinding_BindingNonceBytesGot));

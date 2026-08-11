@@ -82,6 +82,9 @@
   <data name="PeerKeypair_PeerPrivateKeyBytesGot" xml:space="preserve">
     <value>A peer private key is {0} bytes; got {1}.</value>
   </data>
+  <data name="PeerKeypairStore_DeviceKeyCouldNotRead" xml:space="preserve">
+    <value>The device peer key at '{0}' could not be read. It is not rebuildable — restore the file or accept that every pairing this device holds is lost and re-pair deliberately.</value>
+  </data>
   <data name="SessionBinding_BindingNonceBytesGot" xml:space="preserve">
     <value>A binding nonce is {0} bytes; got {1}.</value>
   </data>
