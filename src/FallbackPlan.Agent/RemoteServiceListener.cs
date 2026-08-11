@@ -30,6 +30,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly Socket _socket;
     private readonly string _agentVersion;
     private readonly Action<string>? _log;
+    private readonly string? _replicasRoot;
+    private readonly string? _spoolRoot;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
@@ -42,13 +44,22 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         PeerGrantStore grants,
         Socket socket,
         string agentVersion,
-        Action<string>? log)
+        Action<string>? log,
+        string? replicationStateDirectory)
     {
         _keypair = keypair;
         _grants = grants;
         _socket = socket;
         _agentVersion = agentVersion;
         _log = log;
+        if (replicationStateDirectory is not null)
+        {
+            // A peer that stores objects here writes them into a replica store
+            // per source repository, chosen locally and never on the wire
+            // (peer-protocol 03 §8).
+            _replicasRoot = Path.Combine(replicationStateDirectory, "replicas");
+            _spoolRoot = Path.Combine(replicationStateDirectory, "spool", "replication");
+        }
     }
 
     /// <summary>The endpoint this listener is bound to, interface and port.</summary>
@@ -71,12 +82,18 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// endpoint is known. So the socket binds first, its endpoint seeds the
     /// service's binding state, and the service is handed back here.
     /// </remarks>
+    /// <param name="replicationStateDirectory">
+    /// Where a peer that stores objects here keeps its replicas and receive
+    /// spool (03 §8). When null, an inbound peer whose grant permits storing
+    /// here is refused, because the service has nowhere to put what it offers.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
         IPEndPoint endpoint,
         string agentVersion,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        string? replicationStateDirectory = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -87,7 +104,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         {
             socket.Bind(endpoint);
             socket.Listen(backlog: 16);
-            return new RemoteServiceListener(keypair, grants, socket, agentVersion, log);
+            return new RemoteServiceListener(keypair, grants, socket, agentVersion, log, replicationStateDirectory);
         }
         catch
         {
@@ -192,11 +209,34 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             var peer = DescribePeer(session.Peer.Identity);
             _log?.Invoke($"remote peer authenticated: {peer}");
 
-            // From here it is the same command contract the local binding runs;
-            // the open TLS stream carries it (ADR-0030; peer-protocol 02 §9
-            // withholds key material and plaintext, the payload is control).
+            // The grant's role decides which payload the open stream carries
+            // (peer-protocol 03 §1). A peer entitled to store objects here speaks
+            // the replication payload; anything else — a console — speaks the
+            // ADR-0028 command contract, exactly as the local binding does.
+            if (session.Peer.Role is PeerRole.StoresHere or PeerRole.Both)
+            {
+                if (_replicasRoot is null)
+                {
+                    _log?.Invoke($"replication offered by {peer} but this service holds no replicas; closing");
+                    return;
+                }
+
+                var outcome = await ReplicationResponder.ServeAsync(
+                    _replicasRoot, _spoolRoot!, session.Stream, _stopping.Token).ConfigureAwait(false);
+                _log?.Invoke($"replicated {outcome.Committed} object(s) for repository {outcome.RepositoryId} from {peer}");
+                return;
+            }
+
+            // The open TLS stream carries the command contract (ADR-0030;
+            // peer-protocol 02 §9 withholds key material and plaintext).
             await ServiceConnectionPump.RunAsync(session.Stream, _service!, peer, _log, _stopping.Token)
                 .ConfigureAwait(false);
+        }
+        catch (PeerProtocolException refusal)
+        {
+            // A replication exchange that violated the protocol was refused on
+            // the wire by the responder; it ends this connection and no other.
+            _log?.Invoke($"remote connection refused: {refusal.Reason} — {refusal.Message}");
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {

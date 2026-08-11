@@ -3,10 +3,14 @@ using System.Globalization;
 using System.Net;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Keystore;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
+using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -54,6 +58,7 @@ public static class AgentHost
                   fallbackplan-agent install --repo <path> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
+                  fallbackplan-agent replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>
 
                 Backup sets and their schedules come from <state>/config.json.
                 Missed runs coalesce to one catch-up run per set (ADR-0027 §1).
@@ -74,6 +79,11 @@ public static class AgentHost
                 or the Windows `sc.exe` commands (default: this platform). It only
                 prints it; nothing is changed. Store the passphrase with `unlock`
                 first, as the account the service will run as (ADR-0033).
+
+                `replicate` pushes this repository's objects to a destination this
+                console paired with (peer-protocol 03), naming it by fingerprint.
+                It forwards encrypted objects and takes no passphrase; the
+                destination stores what it cannot read.
                 """);
             return 0;
         }
@@ -95,10 +105,10 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, or `install` — no other verb exists.");
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, or `replicate` — no other verb exists.");
             return 1;
         }
 
@@ -135,6 +145,16 @@ public static class AgentHost
             return Install(
                 repoPath!, stateDirectory, Get("--user"), Get("--name"), Get("--target"),
                 Get("--remote-interface"), Get("--remote-port"), output, error);
+        }
+
+        // `replicate` pushes the repository's objects to a paired destination
+        // (peer-protocol 03). It reads raw objects and needs no passphrase —
+        // replication forwards ciphertext.
+        if (args[0] == "replicate")
+        {
+            return await ReplicateAsync(
+                repoPath!, stateDirectory, Get("--to"), Get("--fingerprint"), output, error, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         string? FromEnvironment()
@@ -304,7 +324,8 @@ public static class AgentHost
                     var endpoint = new IPEndPoint(IPAddress.Parse(remoteBinding.Interface!), remoteBinding.Port);
                     remoteListener = RemoteServiceListener.Start(
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
-                        log: line => output.WriteLine($"{DateTimeOffset.Now:u}  {line}"));
+                        log: line => output.WriteLine($"{DateTimeOffset.Now:u}  {line}"),
+                        replicationStateDirectory: stateDirectory);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
 
@@ -597,4 +618,112 @@ public static class AgentHost
         OperatingSystem.IsWindows() ? "windows"
         : OperatingSystem.IsMacOS() ? "launchd"
         : "systemd";
+
+    /// <summary>
+    /// Pushes the repository's objects to a paired destination over the peer
+    /// protocol (peer-protocol 03). The source reads raw objects and never
+    /// decrypts one, so no passphrase is taken; the destination stores what it
+    /// cannot read.
+    /// </summary>
+    private static async Task<int> ReplicateAsync(
+        string repoPath,
+        string stateDirectory,
+        string? to,
+        string? fingerprint,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(to) || !TryParseEndpoint(to, out var host, out var port))
+        {
+            error.WriteLine(
+                "error: usage is `replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>`.");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            error.WriteLine("error: --fingerprint names the destination this console paired with.");
+            return 1;
+        }
+
+        var grants = PeerGrantStore.Open(stateDirectory);
+        var grant = grants.Grants.FirstOrDefault(
+            candidate => string.Equals(candidate.Identity.Fingerprint, fingerprint, StringComparison.Ordinal));
+        if (grant is null)
+        {
+            error.WriteLine($"error: no pairing matches fingerprint '{fingerprint}'.");
+            return 1;
+        }
+
+        var store = new LocalFileSystemObjectStore(repoPath);
+        RepositoryId repositoryId;
+        try
+        {
+            repositoryId = await ReadRepositoryIdAsync(store, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ClientStateException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+
+        using var keypair = PeerKeypairStore.Open(stateDirectory);
+        output.WriteLine($"replicating {repositoryId} to {host}:{port} ({grant.Label}) …");
+
+        try
+        {
+            await using var connection = await PeerTlsConnection.DialAsync(
+                host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            var session = await PeerSessionDriver.DialAsync(
+                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            var committed = await ReplicationInitiator.PushAllAsync(
+                store, repositoryId.ToArray(), session.Stream, cancellationToken).ConfigureAwait(false);
+
+            ReplicationStateStore.Open(stateDirectory).Record(
+                fingerprint, "all", committed, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            output.WriteLine($"replicated: the destination committed {committed} newly sent object(s).");
+            return 0;
+        }
+        catch (PeerProtocolException refusal)
+        {
+            error.WriteLine($"error: the destination refused replication: {refusal.Reason} — {refusal.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<RepositoryId> ReadRepositoryIdAsync(
+        LocalFileSystemObjectStore store, CancellationToken cancellationToken)
+    {
+        using var read = await store.OpenReadAsync(
+            RepositoryLifecycle.DescriptorKey, range: null, cancellationToken).ConfigureAwait(false);
+        if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+        {
+            throw new ClientStateException("no repository descriptor at --repo; is it a repository?");
+        }
+
+        using var buffer = new MemoryStream();
+        await read.Content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+        return RepositoryDescriptorCodec.Parse(buffer.ToArray()) is DescriptorParseResult.Ok ok
+            ? ok.Descriptor.RepositoryId
+            : throw new ClientStateException("the repository descriptor at --repo did not parse.");
+    }
+
+    private static bool TryParseEndpoint(string target, out string host, out int port)
+    {
+        host = string.Empty;
+        port = 0;
+        var colon = target.LastIndexOf(':');
+        if (colon <= 0 || colon == target.Length - 1)
+        {
+            return false;
+        }
+
+        host = target[..colon];
+        return int.TryParse(target[(colon + 1)..], CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
+    }
 }
