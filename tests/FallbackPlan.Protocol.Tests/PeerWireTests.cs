@@ -317,19 +317,42 @@ public sealed class PeerWireTests : IDisposable
                 connection, _console, consoleStore, consoleExpects, "console/test", null, Cancellation);
         });
 
-        // Await both; if either refuses, surface that exception rather than a
-        // masking "connection reset" from the other side.
+        // Wait for BOTH sides to settle before deciding what to surface. A
+        // handshake refusal is raised on exactly one side; the other side merely
+        // sees its peer drop the connection, which is an ordinary IOException and
+        // not the guarantee under test. Which side refuses depends on the
+        // scenario — the dialler on identity_changed, the accepter on not_paired
+        // — so awaiting a fixed side first would surface the victim's IOException
+        // in one of the two cases. Surface the protocol refusal in preference.
+        var serviceOutcome = await CaptureAsync(serviceSide);
+        var consoleOutcome = await CaptureAsync(consoleSide);
+
+        if (serviceOutcome.Error is null && consoleOutcome.Error is null)
+        {
+            return (serviceOutcome.Result!, consoleOutcome.Result!);
+        }
+
+        var refusal = serviceOutcome.Error as PeerProtocolException
+            ?? consoleOutcome.Error as PeerProtocolException;
+        if (refusal is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(refusal);
+        }
+
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(
+            serviceOutcome.Error ?? consoleOutcome.Error!);
+        throw new InvalidOperationException("unreachable");
+    }
+
+    private static async Task<(PeerSession? Result, Exception? Error)> CaptureAsync(Task<PeerSession> task)
+    {
         try
         {
-            var service = await serviceSide;
-            var console = await consoleSide;
-            return (service, console);
+            return (await task, null);
         }
-        catch
+        catch (Exception exception)
         {
-            await IgnoreFaultAsync(serviceSide);
-            await IgnoreFaultAsync(consoleSide);
-            throw;
+            return (null, exception);
         }
     }
 
