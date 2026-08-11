@@ -48,7 +48,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
 | FR-MAN-001 | [02 §6](../architecture/02-repository-format.md#6-manifests) | — | `Repository.Tests/CatalogueRebuildTests` | 0 |
-| FR-MAN-002 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueTests` | 0 |
+| FR-MAN-002 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueTests`, `Repository.Tests/StaleCatalogueTests` *(the cache read adversarially: ahead of the store must not dangle, behind is cost only)* | 0 |
 | FR-MAN-003 | [02 §6.1](../architecture/02-repository-format.md#61-immutable-metadata-objects) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ManifestCodecTests`, `Repository.Tests/ManifestRoundTripTests` | 0 |
 | FR-MAN-004 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.Tests/SnapshotPublicationTests` | 1 |
 | FR-MAN-005 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/CatalogueTests` | 1 |
@@ -70,7 +70,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
 | FR-DED-001 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` | 2 |
-| FR-DED-002 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` | 0 |
+| FR-DED-002 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests`, `Repository.Tests/StaleCatalogueTests` *(the zero-read posture survives the existence probe; a stale row is refused instead of dangling)* | 0 |
 | FR-DED-003 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md), [0026 §9](../adr/0026-phase-1-capture-shapes.md) — outcome durability explicitly deferred: v1 re-verifies after a catalogue rebuild | `Repository.Tests/DedupTrustDomainTests` | 2 |
 | FR-DED-004 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(unmet; the unverified domain is selectable and behaves as specified — `Repository.Tests/DedupTrustDomainTests` holds that — but no acknowledgement gate exists, so nothing stops it being enabled silently. The gate belongs where the domain is chosen, which is the client, not the engine)* | 2 |
 
@@ -140,7 +140,8 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-PERF-001..003 | [02 §3.4](../architecture/02-repository-format.md#34-capture-algorithm) | — | `Domain.Tests/CapturePolicyValidationTests`, `Filesystem.Tests/LocalScanTests`, `InterruptionTests/ConcurrentUploadTests` | 0 |
 | NFR-PERF-004, 010, 011 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueRebuildTests`, `Repository.Tests/CatalogueTests` | 0 |
 | NFR-PERF-005 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | — | `Repository.Tests/IncrementalBackupTests` *(metadata records and total store growth both bounded against the first snapshot)* | 1 |
-| NFR-PERF-006, 008, 009 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | — *(untested; phase 3)* | 3 |
+| NFR-PERF-006, 008 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | — *(untested; phase 3)* | 2 |
+| NFR-PERF-009 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | — *(measured and **unmet**: `Repository.Tests/RestoreBreadthTests` characterizes the read path's actual GETs, which exceed the budget by design until targeted blob loading and range coalescing land — pickup item 13)* | 1 |
 | NFR-PERF-007 | [02 §3](../architecture/02-repository-format.md#3-segmentation) | [0002](../adr/0002-segmentation-strategy.md), [0029](../adr/0029-pipeline-and-service-concurrency.md) | — *(unmet; measured by `PerformanceTests/ThroughputBenchmarks`, but every figure is container measurement and the ≥400 MB/s is stated against a reference machine none of it has run on)* | 1 |
 | NFR-PERF-012, 015 | [02 §8.2](../architecture/02-repository-format.md#82-forensic-rebuild) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ForensicRebuildTests`, `Repository.Tests/RestorePlanTests` | 0 |
 | NFR-PERF-014 | [02 §7.1](../architecture/02-repository-format.md#71-structure) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/IndexSizeTests` *(marginal cost ~68 B/object; the fixed 65 536-shard hash table dominates below ~200 000 objects)* | 0 |

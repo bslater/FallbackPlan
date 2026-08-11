@@ -101,6 +101,16 @@ second**, and that ordering is what makes the default affordable:
   FR-DED-002's "a fresh single-device repository performs no verification
   reads", and it is measured rather than asserted — the second backup of an
   unchanged single-writer tree issues **zero** store reads.
+
+  > **Note (2026-08, stale-state round).** "With no read" is not "with no
+  > check". Before any trust question, the gate probes that the blob the
+  > location row points at still *exists* — one memoized `GetMetadata` per
+  > distinct blob per publication, never a read. The catalogue is a cache,
+  > and a row that outlived its object (a GC race, a provider rollback,
+  > another participant's compaction) would otherwise let a publication
+  > commit a manifest whose references dangle — the exact failure this
+  > decision exists to catch at write time. Held by `StaleCatalogueTests`;
+  > the zero-verification-read measurement above is unchanged.
 - **`device`** refuses another writer's object outright and stores its own
   copy. Duplicate storage across a user's devices is what this domain sells.
 - **`repository`** (the default) fetches, decrypts, and confirms the content

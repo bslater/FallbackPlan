@@ -365,11 +365,16 @@ reports rotted citations). What both reviews deliberately left is below.
    a store fault mid-restore now fails the item in the receipt instead of
    aborting the run with no receipt at all. Still owed at the *process* level
    under item 6 (a real kill, not an exception).
-5. **The stale-local-state family** — a catalogue behind the store, a
-   catalogue ahead of the store, a stale dedup cache. The rolled-back
-   sequence file is covered (`SequenceRollbackTests`); the rest of the
-   family is not. Done when each has a named test or a written reason it
-   cannot happen.
+5. ✅ **The stale-local-state family** — done
+   ([pipeline review Amendment 2](review/2026-08-pipeline-integrity-review.md#amendment-2-2026-08--the-stale-state-round)):
+   each member has its named test or its written reason. Ahead-of-the-store
+   was the real defect — own-writer reuse trusted the location row with no
+   store I/O and could publish dangling references; the trust gate now runs
+   a memoized existence probe, and `PlanRestore` probes located blobs
+   instead of asking the catalogue about itself. Behind-the-store is pinned
+   as cost-only, the unchanged short-circuit as contained (confirming it
+   would undo NFR-PERF-003), and the dead `segment_dedup` table as inert —
+   all in `Repository.Tests/StaleCatalogueTests`.
 6. ✅ **Two real processes** — done: `Hosts.Tests/ProcessRaceTests` spawns
    the shipped apphosts and crosses the kernel's file lock — a real CLI
    contender refused naming the holder's role and pid, a killed Agent
@@ -390,20 +395,33 @@ reports rotted citations). What both reviews deliberately left is below.
    (FR-RST-003), and is neither exportable nor resumable (arch 08 §2). Needs
    filesystem fault injection on the restore target to test. Done when the
    plan reports each and a plan survives a round trip.
-10. **Alternate data streams on restore** (RR-6) — two halves, both owed.
-    *Honesty*: surface ADS presence into the catalogue tree projection (which
-    today carries only path, kind, id and length) so `RestorePlanner` can
-    declare an `alternate-streams` degradation and the receipt stops reporting
-    `complete` while dropping streams. *Write-back*: actually restoring the
-    streams, Windows-only. Done when a file carrying ADS is declared degraded
-    on a target that cannot take them, and round-trips on one that can.
-11. **Restore breadth** — `ExistingDestinationPolicy.Replace`/`.Fail` (only
-    `Preserve` is tested), a golden receipt fixture pinning the JSON schema,
-    and the NFR-PERF-009 restore GET budget (≤ 1.2 × distinct blobs, using
-    `RangeCountingStore`). Each a self-contained test.
+10. **Alternate data streams on restore** (RR-6) — the *honesty* half is
+    ✅ done: catalogue schema v5 carries `has_alternate_streams` through the
+    live projection and both rebuilders, `RestorePlanner` declares the
+    `alternate-streams` degradation, and the receipt (schema v3) reports the
+    item `degraded` with the run `Partial`
+    ([restore review, RR-6 resolution note](review/2026-08-restore-pipeline-review.md#rr-6--alternate-data-streams-are-captured-and-never-restored)).
+    The *write-back* half stays owed: actually restoring the streams,
+    Windows-only — done when a file carrying ADS round-trips on a target
+    that can take them, at which point `SupportsAlternateStreams` stops
+    being unconditionally false.
+11. ✅ **Restore breadth** — done (`Repository.Tests/RestoreBreadthTests`):
+    `Replace` and `Fail` pinned, the receipt JSON pinned byte-for-byte by a
+    golden fixture (schema v3), and NFR-PERF-009 measured honestly — which
+    produced item 13 below rather than a pass.
 12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
     a maintainer decision between implementing sparse write-out and amending
     FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
+13. **The restore GET budget** (NFR-PERF-009) — architecturally unmet: the
+    read path opens every blob in the repository at load (three range reads
+    each, proportional to repository size) and issues one uncoalesced range
+    read per manifest and per segment.
+    `RestoreBreadthTests.Restore_GetRequests_AreCharacterisedAgainstTheDistinctBlobBudget`
+    pins the exact current counts so the shortfall cannot be mistaken for
+    met. Done when the reader learns catalogue-directed blob loading and
+    range coalescing and the characterization becomes the compliance test —
+    real read-path engine work, sensibly co-scheduled with the first remote
+    provider, where a GET has a price.
 
 ### 3. NFR-PERF-007 on the reference machine
 

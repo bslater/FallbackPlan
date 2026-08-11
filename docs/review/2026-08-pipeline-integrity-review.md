@@ -235,4 +235,41 @@ In-step interruption is the put-budget sweep: `StorePutSweepTests` (eleven disti
 
 ---
 
+## Amendment 2 (2026-08) — the stale-state round
+
+The final proof-debt round: the stale-local-state family this review's own gap list named (IR-T3's "wider family"), plus restore breadth and RR-6's honesty half on the restore side. Same method; findings and dispositions below, tests in `StaleCatalogueTests`, `RestoreBreadthTests`, and the `RestorePlanTests` additions.
+
+### A catalogue ahead of the store could publish dangling references
+
+The sharp member of the family, found where the round's plan predicted: **own-writer dedup reuse was confirmed against nothing** — `DedupTrustGate` returned true for this writer's own rows with zero store I/O, on both the segment path and the manifest path, under the trust attribution the single-device default always takes. A location row that outlived its object (a GC race, a provider rollback, another participant's compaction) let a publication commit a manifest whose references dangle: committed cleanly, unrestorable forever, undetected until restore — the exact inverse of ADR-0006's write-time-detection purpose. The gate now runs a **memoized existence probe** — one `GetMetadata` per distinct blob per publication, deliberately not a read, so FR-DED-002's zero-verification-read acceptance still holds and every `DedupTrustDomainTests` pin is untouched. ADR-0006 carries the note. The alternative — accepting the risk because "a conforming store never loses objects behind a live intent or reference" — was rejected: the probe's cost is a metadata call per blob, and the failure it prevents is a silently unrestorable snapshot.
+
+Companion decisions, each with its written reason:
+
+- **The unchanged-file short-circuit stays unconfirmed, pinned as contained.** It re-emits the prior version with zero I/O — that is NFR-PERF-003's whole point — so confirming it would re-read every unchanged file. A stale row there surfaces as one file's clean restore failure, which is `verify`'s business to find earlier; `StaleCatalogueTests` pins the containment. The rename path already self-confirms (it must read the prior manifest to rewrite it) and degrades safely.
+- **`PlanRestore.MissingObjects` asked the catalogue about itself** (`!catalogue.HasLocation` — a cache vouching for a cache) — fixed: the plan probes each located blob against the store, memoized per blob. What the plan still cannot see is a lost blob holding only the items' *segments* — the plan carries manifests, not their references — which is FR-RST-003 completeness territory and said so in the code.
+- **A location row without a blob row stays a live candidate by design**: that is a rebuilt catalogue's ordinary state (store keys are derived, not looked up, for exactly this reason), and the existence probe is what defends it — not a join change that would refuse all reuse on every second device.
+- **Behind-the-store is cost only**, and **`segment_dedup` is dead on the publication path** — both now pinned so neither can silently change class.
+
+### Restore breadth, and the GET budget measured honestly
+
+`ExistingDestinationPolicy.Replace` and `.Fail` had never been set by any test; both are pinned (`RestoreBreadthTests`), and the full receipt JSON is pinned byte-for-byte by a golden fixture. **NFR-PERF-009 (restore GETs ≤ 1.2 × distinct blobs) is architecturally unmet**: the read path opens every blob in the repository at load — three range reads each, proportional to repository size — then issues one uncoalesced range read per manifest and per segment. The characterization test pins the exact current counts so the budget cannot be mistaken for met and the eventual fix (catalogue-directed blob loading plus range coalescing — real read-path engine work, now a named pickup item) has a test waiting to become its compliance gate.
+
+### RR-6's honesty half
+
+Resolved on the restore review (its Amendment note carries the record): catalogue schema v5 carries `has_alternate_streams` through all three projection paths, the planner declares `alternate-streams`, and the receipt (schema v3) reports the item `degraded` with the aggregate `Partial` — the deferral had understated the receipt half, since nothing consumed `plan.Degradations` at all. Write-back remains owed, and the target capability stays `false` everywhere until it lands.
+
+### Dispositions
+
+| Finding | Where the defect lived | Disposition |
+|---------|------------------------|-------------|
+| Own-writer reuse unconfirmed against the store | `Repository/DedupTrustGate`, `Repository/TargetedRecordReader` | **Fixed**: memoized existence probe; held by `StaleCatalogueTests` |
+| Plan-time MissingObjects never asked the store | `Agent/ServiceCommandHandler.PlanRestoreAsync` | **Fixed**: per-blob store probe; held by `ServiceTests` |
+| Unchanged short-circuit over a lost blob | `Repository/SnapshotPublication` | **Pinned as contained** — one clean per-file restore failure; confirming would undo NFR-PERF-003 |
+| Catalogue behind the store | — | **Pinned as cost-only**; `StaleCatalogueTests` |
+| `segment_dedup` dead table | `Repository.Catalogue` | **Pinned as inert**, so it cannot silently become load-bearing |
+| NFR-PERF-009 restore GET budget | `Repository/RepositoryReader`, `Repository.Packing/BlobReader` | **Characterized as unmet**; engine work named on the pickup list |
+| RR-6 honesty half | catalogue projection → planner → receipt | **Fixed** (schema v5 / receipt v3); write-back still owed |
+
+---
+
 **See also:** [implementation status](../implementation-status.md) · [phase-2 plan — where to pick up](../phase-2-execution-plan.md#where-to-pick-up) · the prior passes: [architecture review](2026-08-architecture-review.md), [pressure test](2026-08-fix-pressure-test.md), [Duplicati learnings](2026-08-duplicati-learnings.md)

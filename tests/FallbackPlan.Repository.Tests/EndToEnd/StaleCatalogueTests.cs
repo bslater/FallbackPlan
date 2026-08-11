@@ -13,12 +13,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// The stale-local-state family (architecture 02 §8's "the catalogue is a
-/// cache", read adversarially): a catalogue BEHIND the store must only ever
-/// cost a rewrite, and a catalogue AHEAD of the store — claiming objects the
-/// store has lost — must never let a publication commit a reference nothing
-/// can restore. The rolled-back sequence file is SequenceRollbackTests'
-/// territory; this suite is the rest of the family the pipeline review left
-/// open.
+/// cache", read adversarially; FR-MAN-002, FR-DED-002): a catalogue BEHIND
+/// the store must only ever cost a rewrite, and a catalogue AHEAD of the
+/// store — claiming objects the store has lost — must never let a
+/// publication commit a reference nothing can restore. The rolled-back
+/// sequence file is SequenceRollbackTests' territory; this suite is the
+/// rest of the family the pipeline review left open.
 /// </summary>
 [TestClass]
 public sealed class StaleCatalogueTests : ArchiveTestHarness
