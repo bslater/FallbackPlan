@@ -21,6 +21,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
+[JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -89,6 +90,15 @@ public sealed record CheckCommand(string Level) : ServiceCommand;
 /// </summary>
 /// <param name="Apply">False reports only; true tombstones and sweeps.</param>
 public sealed record RetentionCommand(bool Apply) : ServiceCommand;
+
+/// <summary>
+/// Converges destinations now, outside the schedule (ADR-0034 §3,
+/// FR-DEST-002): one sync per matching <c>(set, destination)</c> pair,
+/// answered when they have run so the result reflects the refreshed ledger.
+/// </summary>
+/// <param name="BackupSetName">The set to sync; null syncs every configured set.</param>
+/// <param name="DestinationName">The destination to sync; null syncs each set's every destination.</param>
+public sealed record SyncCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

@@ -59,7 +59,9 @@ public static class AgentHost
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
-                  fallbackplan-agent replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>
+                  fallbackplan-agent sync   --archives <root> --state <dir> [--passphrase-env <VAR>]
+                                            [--set <name>] [--destination <name>]
+                  fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
 
                 Backup sets, their destinations and their schedules come from
@@ -85,11 +87,11 @@ public static class AgentHost
                 prints it; nothing is changed. Store the passphrase with `unlock`
                 first, as the account the service will run as (ADR-0033).
 
-                `replicate` pushes one archive's objects to a destination this
-                console paired with (peer-protocol 03), naming the archive by
-                path (a set's staging archive is <root>/<set id>) and the
-                destination by fingerprint. It forwards encrypted objects and
-                takes no passphrase; the destination stores what it cannot read.
+                `sync` converges declared destinations now, outside the schedule
+                (ADR-0034 §3): one pass per matching (set, destination) pair,
+                reported from the sync ledger. `retention` runs one pass per set
+                — the report either way, tombstones, sweep and staging trim only
+                with --apply (FR-GC-005).
                 """);
             return 0;
         }
@@ -112,10 +114,22 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate" or "notices" or "retention"))
+        // The verb `replicate` used to push one archive by path. Removed, not
+        // shimmed (pre-1.0): destinations are declared in the configuration
+        // and the service syncs them itself (ADR-0034 §3).
+        if (args[0] == "replicate")
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `replicate`, `notices`, or `retention` — no other verb exists.");
+                "error: `replicate` was removed — declare the destination in config.json and the service "
+                + "syncs it on every backup (ADR-0034 §3). Use `sync [--set <name>] [--destination <name>]` "
+                + "to converge one now.");
+            return 1;
+        }
+
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention"))
+        {
+            error.WriteLine(
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -153,24 +167,6 @@ public static class AgentHost
                 _ => await PairAsync(stateDirectory, Get("--remote-interface"), Get("--remote-port"), Get("--label"),
                     Get("--role"), Get("--quota"), output, error, cancellationToken).ConfigureAwait(false),
             };
-        }
-
-        // `replicate` pushes one archive's objects to a paired destination
-        // (peer-protocol 03). It reads raw objects and needs no passphrase —
-        // replication forwards ciphertext. It is the one verb that still takes
-        // an archive by path: any repository replicates, staging or otherwise.
-        if (args[0] == "replicate")
-        {
-            if (stateDirectory is null || repoPath is null)
-            {
-                error.WriteLine(
-                    "error: usage is `replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>`.");
-                return 1;
-            }
-
-            return await ReplicateAsync(
-                repoPath, stateDirectory, Get("--to"), Get("--fingerprint"), output, error, cancellationToken)
-                .ConfigureAwait(false);
         }
 
         if (repoPath is not null && archivesRoot is null)
@@ -310,6 +306,41 @@ public static class AgentHost
             switch (result)
             {
                 case Api.RetentionResult report:
+                    foreach (var line in report.Lines)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return 0;
+
+                case Api.ServiceError failure:
+                    error.WriteLine($"error: {failure.Message}");
+                    return 2;
+
+                default:
+                    error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
+                    return 2;
+            }
+        }
+
+        // `sync [--set] [--destination]` converges declared destinations now,
+        // through the same command surface a console uses (FR-DEST-002,
+        // ADR-0034 §3) — the fan-out runs on the transfer lane and the answer
+        // is read from the refreshed sync ledger.
+        if (args[0] == "sync")
+        {
+            using var syncPassphrase = Passphrase.Create(passphraseValue);
+            await using var syncRuntime = await ServiceRuntime.StartAsync(
+                new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                syncPassphrase, cancellationToken).ConfigureAwait(false);
+
+            var handler = new ServiceCommandHandler(syncRuntime, RemoteBindingState.Off);
+            var result = await handler.ExecuteAsync(
+                new Api.SyncCommand(Get("--set"), Get("--destination")), cancellationToken).ConfigureAwait(false);
+
+            switch (result)
+            {
+                case Api.SyncResult report:
                     foreach (var line in report.Lines)
                     {
                         output.WriteLine(line);
@@ -859,100 +890,6 @@ public static class AgentHost
         OperatingSystem.IsWindows() ? "windows"
         : OperatingSystem.IsMacOS() ? "launchd"
         : "systemd";
-
-    /// <summary>
-    /// Pushes the repository's objects to a paired destination over the peer
-    /// protocol (peer-protocol 03). The source reads raw objects and never
-    /// decrypts one, so no passphrase is taken; the destination stores what it
-    /// cannot read.
-    /// </summary>
-    private static async Task<int> ReplicateAsync(
-        string repoPath,
-        string stateDirectory,
-        string? to,
-        string? fingerprint,
-        TextWriter output,
-        TextWriter error,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(to) || !TryParseEndpoint(to, out var host, out var port))
-        {
-            error.WriteLine(
-                "error: usage is `replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>`.");
-            return 1;
-        }
-
-        if (string.IsNullOrWhiteSpace(fingerprint))
-        {
-            error.WriteLine("error: --fingerprint names the destination this console paired with.");
-            return 1;
-        }
-
-        var grants = PeerGrantStore.Open(stateDirectory);
-        var grant = grants.Grants.FirstOrDefault(
-            candidate => string.Equals(candidate.Identity.Fingerprint, fingerprint, StringComparison.Ordinal));
-        if (grant is null)
-        {
-            error.WriteLine($"error: no pairing matches fingerprint '{fingerprint}'.");
-            return 1;
-        }
-
-        var store = new LocalFileSystemObjectStore(repoPath);
-        RepositoryId repositoryId;
-        try
-        {
-            repositoryId = await ReadRepositoryIdAsync(store, cancellationToken).ConfigureAwait(false);
-        }
-        catch (ClientStateException exception)
-        {
-            error.WriteLine($"error: {exception.Message}");
-            return 1;
-        }
-
-        using var keypair = PeerKeypairStore.Open(stateDirectory);
-        output.WriteLine($"replicating {repositoryId} to {host}:{port} ({grant.Label}) …");
-
-        try
-        {
-            await using var connection = await PeerTlsConnection.DialAsync(
-                host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
-            var session = await PeerSessionDriver.DialAsync(
-                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
-                .ConfigureAwait(false);
-
-            var committed = await ReplicationInitiator.PushAllAsync(
-                store, repositoryId.ToArray(), session.Stream, cancellationToken).ConfigureAwait(false);
-
-            ReplicationStateStore.Open(stateDirectory).Record(
-                fingerprint, "all", committed, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-
-            output.WriteLine($"replicated: the destination committed {committed} newly sent object(s).");
-            return 0;
-        }
-        catch (PeerProtocolException refusal)
-        {
-            error.WriteLine($"error: the destination refused replication: {refusal.Reason} — {refusal.Message}");
-            return 1;
-        }
-    }
-
-    private static async Task<RepositoryId> ReadRepositoryIdAsync(
-        LocalFileSystemObjectStore store, CancellationToken cancellationToken)
-    {
-        using var read = await store.OpenReadAsync(
-            RepositoryLifecycle.DescriptorKey, range: null, cancellationToken).ConfigureAwait(false);
-        if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
-        {
-            throw new ClientStateException("no repository descriptor at --repo; is it a repository?");
-        }
-
-        using var buffer = new MemoryStream();
-        await read.Content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-        return RepositoryDescriptorCodec.Parse(buffer.ToArray()) is DescriptorParseResult.Ok ok
-            ? ok.Descriptor.RepositoryId
-            : throw new ClientStateException("the repository descriptor at --repo did not parse.");
-    }
 
     private static bool TryParseEndpoint(string target, out string host, out int port)
     {

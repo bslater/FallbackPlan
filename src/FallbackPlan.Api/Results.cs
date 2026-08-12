@@ -49,6 +49,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
 [JsonDerivedType(typeof(RetentionResult), "retention")]
+[JsonDerivedType(typeof(SyncResult), "sync")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -168,6 +169,10 @@ public sealed record CheckResult(IReadOnlyList<string> Findings) : ServiceResult
 /// <summary>A retention pass's report, per set in configuration order (FR-GC-005).</summary>
 /// <param name="Lines">The report — what is protected and why, what is held for a laggard, what went.</param>
 public sealed record RetentionResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>An on-demand sync's report, one line per (set, destination) pair (FR-DEST-002/004).</summary>
+/// <param name="Lines">Where each pair stands after its sync ran — read from the refreshed ledger.</param>
+public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
 
 /// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
 /// <param name="Name">The destination's declared name.</param>

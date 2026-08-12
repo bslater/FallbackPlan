@@ -92,6 +92,17 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the restore.</param>
     /// <returns>What it wrote.</returns>
     ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Converges destinations now, outside the schedule (FR-DEST-002). Only a
+    /// service can serve this — the fan-out needs its scheduler, ledger and
+    /// staging archives — so direct mode refuses with directions.
+    /// </summary>
+    /// <param name="setName">The set to sync, or null for every configured set.</param>
+    /// <param name="destinationName">The destination to sync, or null for each set's every destination.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>Where each pair stands, from the refreshed ledger.</returns>
+    ValueTask<OperationReport> SyncAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -375,6 +386,16 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
                 string.Create(CultureInfo.InvariantCulture,
                     $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
             ]);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> SyncAsync(
+        string? setName, string? destinationName, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<SyncResult>(
+            new SyncCommand(setName, destinationName), "a sync", cancellationToken).ConfigureAwait(false);
+
+        return new OperationReport(true, result.Lines);
     }
 
     /// <inheritdoc/>
@@ -717,6 +738,14 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
 
         return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> SyncAsync(
+        string? setName, string? destinationName, CancellationToken cancellationToken) =>
+        // Fan-out belongs to the service: its scheduler owns the transfer
+        // lane, its ledger records the outcome, and its runtime holds every
+        // set's staging archive. A direct-mode copy would race all three.
+        throw new CliFailureException(Strings.DirectGateway_SyncNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()

@@ -996,6 +996,31 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // ----------------------------------------------------------------- sync
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Sync only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Sync only this declared destination; each set's every destination otherwise.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "sync",
+                "Converge declared destinations now, outside the schedule (ADR-0034 §3) — one pass per (set, destination) pair, answered from the sync ledger."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.SyncAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------- config-export
 
         {

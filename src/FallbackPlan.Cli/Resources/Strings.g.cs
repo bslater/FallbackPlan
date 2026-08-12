@@ -213,6 +213,11 @@ internal static class Strings
     internal static string DirectGateway_PassRootDirectorySetName => Get(nameof(DirectGateway_PassRootDirectorySetName));
 
     /// <summary>
+    /// Syncing destinations is the service's job — its scheduler, ledger and staging archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
+    /// </summary>
+    internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));
+
+    /// <summary>
     /// The service answered a backup with {0}.
     /// </summary>
     private static string ServiceGateway_ServiceAnsweredBackupWith => Get(nameof(ServiceGateway_ServiceAnsweredBackupWith));

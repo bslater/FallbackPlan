@@ -155,8 +155,8 @@ public static class FanOut
 
     /// <summary>
     /// Pushes the set's archive to a paired peer over the replication
-    /// exchange (peer-protocol 03) — the same wire the manual `replicate`
-    /// verb drives, now driven by the hub (ADR-0034 §3). The endpoint comes
+    /// exchange (peer-protocol 03), driven by the hub (ADR-0034 §3) — the
+    /// `sync` verb rides this same path on demand. The endpoint comes
     /// from the configuration and the key from the grant: the address book
     /// and the trust decision live in different places on purpose
     /// (FR-DEST-006, ADR-0030).

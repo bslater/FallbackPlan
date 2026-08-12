@@ -30,7 +30,7 @@ public sealed class PeerReplicationTests : IDisposable
     private const ulong PairedAt = 1_722_600_000_000;
 
     [TestMethod]
-    public async Task Replicate_ToAPairedDestination_MirrorsEveryObjectAndRecoversFromTheReplica()
+    public async Task Sync_ToAPeerDestination_MirrorsEveryObjectAndRecoversFromTheReplica()
     {
         await _source.CreateRepositoryAsync();
         _source.WriteSourceFile("notes.txt", "hello from the source");
@@ -41,12 +41,14 @@ public sealed class PeerReplicationTests : IDisposable
         // the kit carries the wrapped keys (architecture 08 §5).
         var kit = await _source.ExportKitAsync();
 
+        // The backup ran before any destination was declared, so nothing has
+        // fanned out yet — the on-demand sync is what closes the gap.
         var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
 
-        var replicate = await RunAgentAsync(
-            "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory,
-            "--to", DestinationAddress, "--fingerprint", destinationFingerprint);
-        Assert.AreEqual(0, replicate.ExitCode, replicate.Error);
+        var sync = await RunSyncAsync();
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
+        Assert.Contains("docs -> friend: in sync", sync.Output, StringComparison.Ordinal);
 
         // The replica holds every object the source did, byte for byte.
         var replicaPath = Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Single();
@@ -82,30 +84,27 @@ public sealed class PeerReplicationTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Replicate_RunTwice_SendsNothingTheSecondTime()
+    public async Task Sync_RunTwice_SendsNothingTheSecondTime()
     {
         await _source.CreateRepositoryAsync();
         _source.WriteSourceFile("notes.txt", "hello");
         await _source.BackUpAsync();
 
         var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
 
-        var first = await RunAgentAsync(
-            "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory,
-            "--to", DestinationAddress, "--fingerprint", destinationFingerprint);
+        var first = await RunSyncAsync();
         Assert.AreEqual(0, first.ExitCode, first.Error);
 
-        // The destination already holds everything, so the second run commits 0
+        // The destination already holds everything, so the second run copies 0
         // — the idempotent re-run that makes resumption need no checkpoint (03 §5).
-        var second = await RunAgentAsync(
-            "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory,
-            "--to", DestinationAddress, "--fingerprint", destinationFingerprint);
+        var second = await RunSyncAsync();
         Assert.AreEqual(0, second.ExitCode, second.Error);
-        Assert.Contains("0 newly sent object(s)", second.Output, StringComparison.Ordinal);
+        Assert.Contains("in sync (0 object(s) copied)", second.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Replicate_ToAPeerPinnedAsAConsole_IsRefused()
+    public async Task Sync_ToAPeerPinnedAsAConsole_RecordsTheRefusalInTheLedger()
     {
         await _source.CreateRepositoryAsync();
         _source.WriteSourceFile("notes.txt", "hello");
@@ -113,42 +112,68 @@ public sealed class PeerReplicationTests : IDisposable
 
         // The destination pins the source as a console (stores-for-us), so it
         // runs the command pump, not the replication responder — the source's
-        // replication offer is not answered as replication.
+        // replication offer is not answered as replication. The sync verb
+        // itself completes; the pair's failure is the ledger's to carry
+        // (FR-DEST-004).
         var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresForUs);
+        WritePeerConfiguration(destinationFingerprint);
 
-        var replicate = await RunAgentAsync(
+        var sync = await RunSyncAsync();
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
+
+        var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreNotEqual(FallbackPlan.Application.DestinationSyncState.InSync, record.State);
+    }
+
+    [TestMethod]
+    public async Task Sync_AnUnknownSet_IsRefusedByName()
+    {
+        await _source.CreateRepositoryAsync();
+        _source.WriteSourceFile("notes.txt", "hello");
+        await _source.BackUpAsync();
+
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var result = await RunSyncAsync("--set", "nope");
+        Assert.AreEqual(2, result.ExitCode);
+        Assert.Contains("nope", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sync_AnUnknownDestination_IsRefusedByName()
+    {
+        await _source.CreateRepositoryAsync();
+        _source.WriteSourceFile("notes.txt", "hello");
+        await _source.BackUpAsync();
+
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var result = await RunSyncAsync("--destination", "nowhere");
+        Assert.AreEqual(2, result.ExitCode);
+        Assert.Contains("nowhere", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Replicate_WasRemoved_TheErrorPointsAtSync()
+    {
+        var result = await RunAgentAsync(
             "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory,
-            "--to", DestinationAddress, "--fingerprint", destinationFingerprint);
-
-        Assert.AreEqual(1, replicate.ExitCode);
-    }
-
-    [TestMethod]
-    public async Task Replicate_WithoutADestination_IsRefused()
-    {
-        var result = await RunAgentAsync(
-            "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory, "--fingerprint", "abcdef");
+            "--to", "127.0.0.1:9", "--fingerprint", "abcdef");
 
         Assert.AreEqual(1, result.ExitCode);
-        Assert.Contains("host:port", result.Error, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task Replicate_WithoutAFingerprint_IsRefused()
-    {
-        var result = await RunAgentAsync(
-            "replicate", "--repo", _source.RepositoryPath, "--state", _source.StateDirectory, "--to", "127.0.0.1:9");
-
-        Assert.AreEqual(1, result.ExitCode);
-        Assert.Contains("--fingerprint", result.Error, StringComparison.Ordinal);
+        Assert.Contains("sync", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
     public async Task FanOut_APeerDestination_ConvergesWithoutACommand()
     {
-        // No `replicate` verb anywhere in this test: the set declares a peer
+        // No sync command anywhere in this test: the set declares a peer
         // destination and the scheduler pass fans out to it (ADR-0034 §3,
-        // FR-DEST-002) — the hub doing automatically what the verb did by hand.
+        // FR-DEST-002) — the hub doing on schedule what `sync` does on demand.
         _source.WriteSourceFile("notes.txt", "fan me out");
         var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
 
@@ -303,6 +328,43 @@ public sealed class PeerReplicationTests : IDisposable
 
     private IPEndPoint? _endpoint;
     private string DestinationAddress => $"{_endpoint!.Address}:{_endpoint.Port}";
+
+    /// <summary>Declares the running destination as the docs set's one peer destination.</summary>
+    private void WritePeerConfiguration(string destinationFingerprint) =>
+        new FallbackPlan.Application.ClientConfiguration
+        {
+            SchemaVersion = FallbackPlan.Application.ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new FallbackPlan.Application.DestinationConfiguration
+                {
+                    Id = new string('1', 32),
+                    Name = "friend",
+                    Kind = FallbackPlan.Application.DestinationKind.Peer,
+                    Fingerprint = destinationFingerprint,
+                    Endpoint = DestinationAddress,
+                },
+            ],
+            BackupSets =
+            [
+                new FallbackPlan.Application.BackupSetConfiguration
+                {
+                    Id = _source.DocsSetId,
+                    Name = "docs",
+                    Root = _source.SourceRoot,
+                    Schedule = "every 4h",
+                    Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
+                },
+            ],
+        }.Save(Path.Combine(_source.StateDirectory, "config.json"));
+
+    /// <summary>Runs the agent `sync` verb against the harness's archives and state.</summary>
+    private Task<(int ExitCode, string Output, string Error)> RunSyncAsync(params string[] extra) =>
+        RunAgentAsync(
+        [
+            "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, .. extra,
+        ]);
 
     /// <summary>
     /// Stands up the destination: its own peer identity, a grant for the source

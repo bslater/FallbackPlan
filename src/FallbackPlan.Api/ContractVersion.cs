@@ -26,7 +26,7 @@ namespace FallbackPlan.Api;
 public readonly record struct ContractVersion(int Major, int Minor)
 {
     /// <summary>The version this build speaks.</summary>
-    public static ContractVersion Current { get; } = new(1, 1);
+    public static ContractVersion Current { get; } = new(1, 2);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

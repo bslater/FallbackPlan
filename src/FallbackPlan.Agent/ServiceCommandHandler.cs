@@ -252,6 +252,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         ListJobsCommand list => ListJobs(list),
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
+        SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
@@ -778,6 +779,107 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
         return new JobAcceptedResult(Scheduler.LatestJobFor(runtime, set.Id) ?? string.Empty);
     }
+
+    /// <summary>
+    /// Converges destinations on demand (FR-DEST-002, ADR-0034 §3): one
+    /// transfer-lane sync per matching pair, awaited here so the answer
+    /// reflects the refreshed ledger. Deliberately NOT on the writer lane —
+    /// fan-out reads staging and runs on the transfer lane; a pair whose
+    /// sync is already queued or running is reported, not doubled.
+    /// </summary>
+    private async ValueTask<ServiceResult> SyncAsync(SyncCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+
+        IReadOnlyList<BackupSetConfiguration> sets;
+        if (command.BackupSetName is null)
+        {
+            sets = configuration.BackupSets;
+        }
+        else if (configuration.FindSet(command.BackupSetName) is { } found)
+        {
+            sets = [found];
+        }
+        else
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.BackupSetName}' is configured.");
+        }
+
+        if (command.DestinationName is not null && configuration.FindDestination(command.DestinationName) is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+        }
+
+        var now = DateTimeOffset.Now;
+        var pairs = new List<(BackupSetConfiguration Set, string Destination, Task? Wait)>();
+        foreach (var set in sets)
+        {
+            foreach (var reference in set.Destinations)
+            {
+                if (command.DestinationName is not null
+                    && !string.Equals(reference.Ref, command.DestinationName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                pairs.Add((set, reference.Ref, FanOut.Enqueue(runtime, set, reference.Ref, now, userInitiated: true)));
+            }
+        }
+
+        if (pairs.Count == 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                command.DestinationName is null
+                    ? "No backup set declares a destination."
+                    : $"No matching set declares destination '{command.DestinationName}'.");
+        }
+
+        foreach (var (_, _, wait) in pairs)
+        {
+            if (wait is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // A sync that faulted unexpectedly still gets its row read
+                // below; the ledger is the report's single source of truth.
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var (set, destination, wait) in pairs)
+        {
+            if (wait is null)
+            {
+                lines.Add($"{set.Name} -> {destination}: already syncing");
+                continue;
+            }
+
+            lines.Add($"{set.Name} -> {destination}: {DescribeSync(runtime.DestinationSync.Find(set.Id, destination))}");
+        }
+
+        return new SyncResult(lines);
+    }
+
+    private static string DescribeSync(DestinationSyncRecord? record) => record?.State switch
+    {
+        null => "nothing to sync yet — no snapshot has been captured",
+        DestinationSyncState.InSync => $"in sync ({record.Objects} object(s) copied)",
+        DestinationSyncState.Behind => "behind",
+        DestinationSyncState.Unavailable => $"unavailable — {record.LastError}",
+        DestinationSyncState.Failed => $"failed — {record.LastError}",
+        DestinationSyncState.NotSupported => $"not supported — {record.LastError}",
+        _ => record.State.ToString(),
+    };
 
     private ServiceResult CancelJob(CancelJobCommand command) =>
         runtime.Queue.Cancel(command.JobId)
