@@ -36,6 +36,27 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
+    public void RetentionOfferAndAck_RoundTrip()
+    {
+        // The commander's drop-list and the spoke's answer (peer-protocol 06
+        // §4): pinned before either side speaks it in production.
+        var offer = new RetentionOffer(
+            new byte[16], ["snapshots/x/y/z", "blobs/data/aaaa/one"], More: true);
+        Assert.AreEqual(offer, RoundTrip(offer, RetentionOffer.Read));
+
+        var ack = new RetentionAck(7);
+        Assert.AreEqual(ack, RoundTrip(ack, RetentionAck.Read));
+    }
+
+    [TestMethod]
+    public void RetentionOffer_RepositoryIdOfTheWrongWidth_IsRefused()
+    {
+        var wrong = new RetentionOffer(new byte[15], ["snapshots/x"], More: false);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(wrong));
+    }
+
+    [TestMethod]
     public void ObjectHeaderAndChunk_RoundTrip()
     {
         var header = new ReplicationObject("blobs/data/aaaa/one", 4096);

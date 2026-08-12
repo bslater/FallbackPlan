@@ -200,7 +200,8 @@ public sealed class PeerAuthenticator
         // move objects, which is exactly what the state machine forbids.
         PeerMessageType.ReplicationOffer or PeerMessageType.ReplicationInventory
             or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
-            or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck =>
+            or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
+            or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck =>
             state == PeerSessionState.Open,
 
         _ => false,

@@ -24,6 +24,34 @@ internal static class ReplicationInitiator
     public static async Task<long> PushAllAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream, CancellationToken cancellationToken)
     {
+        var outcome = await PushAndConvergeAsync(source, repositoryId, stream, keeps: null, cancellationToken)
+            .ConfigureAwait(false);
+        return outcome.Committed;
+    }
+
+    /// <summary>What one push-and-converge session moved and removed.</summary>
+    /// <param name="Committed">Objects the spoke acknowledged committing.</param>
+    /// <param name="Deleted">Objects the spoke acknowledged deleting under the retention instruction.</param>
+    public sealed record PushOutcome(long Committed, long Deleted);
+
+    /// <summary>
+    /// Pushes the objects the destination lacks and the policy keeps, then —
+    /// when a keep filter is given — instructs the spoke to drop what its
+    /// policy no longer keeps (peer-protocol 06). The drop-list is computed
+    /// from the spoke's own inventory, so an instruction can only name keys
+    /// the spoke itself declared, and it is ordered snapshots-first so an
+    /// interruption leaves the replica lagging-but-valid.
+    /// </summary>
+    /// <param name="source">The staging archive's store.</param>
+    /// <param name="repositoryId">The repository the objects belong to (16 bytes).</param>
+    /// <param name="stream">The open session stream.</param>
+    /// <param name="keeps">The destination's keep filter, or null to push whole and instruct nothing.</param>
+    /// <param name="cancellationToken">Cancels the exchange.</param>
+    /// <returns>What moved and what went.</returns>
+    public static async Task<PushOutcome> PushAndConvergeAsync(
+        IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
+        Func<string, bool>? keeps, CancellationToken cancellationToken)
+    {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
 
@@ -39,7 +67,9 @@ internal static class ReplicationInitiator
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (held.Contains(entry.Key.Value))
+                if (held.Contains(entry.Key.Value)
+                    || IsStagingOnly(entry.Key.Value)
+                    || (keeps is not null && !keeps(entry.Key.Value)))
                 {
                     continue;
                 }
@@ -53,7 +83,36 @@ internal static class ReplicationInitiator
 
             var ack = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, cancellationToken).ConfigureAwait(false);
-            return (long)ack.Count;
+
+            if (keeps is null)
+            {
+                return new PushOutcome((long)ack.Count, 0);
+            }
+
+            // The drop half (06 §2): inventory minus keep-closure, snapshots
+            // before anything they reference.
+            var drops = held
+                .Where(key => !keeps(key) || IsStagingOnly(key))
+                .OrderBy(DropRank)
+                .ThenBy(key => key, StringComparer.Ordinal)
+                .ToList();
+            if (drops.Count == 0)
+            {
+                return new PushOutcome((long)ack.Count, 0);
+            }
+
+            for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
+            {
+                var page = drops.Skip(offset).Take(RetentionOffer.MaximumKeys).ToList();
+                await PeerFrame.WriteAsync(
+                    stream,
+                    new RetentionOffer(repositoryId, page, More: offset + RetentionOffer.MaximumKeys < drops.Count),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var retentionAck = await ReplicationWire.ReadAsync(
+                stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
+            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted);
         }
         catch (PeerProtocolException exception)
         {
@@ -65,6 +124,20 @@ internal static class ReplicationInitiator
             throw;
         }
     }
+
+    /// <summary>Lifecycle objects never replicate: destinations are converged, never collected.</summary>
+    private static bool IsStagingOnly(string key) =>
+        key.StartsWith("tombstones/", StringComparison.Ordinal)
+        || key.StartsWith("leases/", StringComparison.Ordinal);
+
+    /// <summary>Reverse dependency order for deletion: snapshots first, blobs last.</summary>
+    private static int DropRank(string key) =>
+        key.StartsWith("snapshots/", StringComparison.Ordinal) ? 0
+        : key.StartsWith("index/checkpoint/", StringComparison.Ordinal) ? 2
+        : key.StartsWith("index/delta/", StringComparison.Ordinal) ? 3
+        : key.StartsWith("journal/", StringComparison.Ordinal) ? 4
+        : key.StartsWith("blobs/", StringComparison.Ordinal) ? 5
+        : 1;
 
     private static async Task<HashSet<string>> ReadInventoryAsync(Stream stream, CancellationToken cancellationToken)
     {

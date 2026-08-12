@@ -18,7 +18,9 @@ internal static class ReplicationResponder
     /// <param name="RepositoryId">The repository whose objects were received, hex.</param>
     /// <param name="Committed">How many objects were committed.</param>
     /// <param name="Termination">Present when the peer announced the peering's end instead of replicating (01 §3).</param>
-    public sealed record Outcome(string RepositoryId, long Committed, PeeringTermination? Termination = null);
+    /// <param name="RetentionDeleted">Objects deleted under a retention instruction this session (06).</param>
+    public sealed record Outcome(
+        string RepositoryId, long Committed, PeeringTermination? Termination = null, long RetentionDeleted = 0);
 
     /// <summary>Serves one replication session from a source.</summary>
     /// <param name="replicasRoot">The directory under which per-repository replica stores live.</param>
@@ -26,11 +28,13 @@ internal static class ReplicationResponder
     /// <param name="stream">The open session stream.</param>
     /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
     /// <param name="owners">The replica attribution store (05 §2).</param>
+    /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <returns>What was received.</returns>
     public static async Task<Outcome> ServeAsync(
         string replicasRoot, string spoolRoot, Stream stream,
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
+        bool retentionNegotiated,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(replicasRoot);
@@ -116,7 +120,12 @@ internal static class ReplicationResponder
 
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
                 .ConfigureAwait(false);
-            return new Outcome(repositoryIdHex, committed);
+
+            var retentionDeleted = await ServeRetentionAsync(
+                replica, offer.RepositoryId, peer, retentionNegotiated, stream, cancellationToken)
+                .ConfigureAwait(false);
+
+            return new Outcome(repositoryIdHex, committed, RetentionDeleted: retentionDeleted);
         }
         catch (PeerProtocolException exception)
         {
@@ -127,6 +136,118 @@ internal static class ReplicationResponder
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Serves an optional retention instruction after the object exchange
+    /// (peer-protocol 06): the commander computed, this side deletes exactly
+    /// what it is told — bounded below by the granted retention floor, which
+    /// is the one safeguard that holds when the hub is compromised. The
+    /// floor check needs no decryption: snapshot objects are counted by
+    /// prefix, so a spoke that cannot read a single manifest can still
+    /// refuse to breach it.
+    /// </summary>
+    private static async Task<long> ServeRetentionAsync(
+        LocalFileSystemObjectStore replica,
+        ReadOnlyMemory<byte> offeredRepositoryId,
+        Protocol.PeerGrant peer,
+        bool retentionNegotiated,
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        // The session may simply end here — the instruction is optional.
+        var first = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+        if (first is null)
+        {
+            return 0;
+        }
+
+        if (first.Value.Type != PeerMessageType.RetentionOffer)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A {first.Value.Type} is not permitted after the replication acknowledgement.");
+        }
+
+        if (!retentionNegotiated)
+        {
+            // Sending a gated message outside the negotiated intersection is
+            // a violation, not a capability probe (02 §6).
+            throw new PeerProtocolException(
+                PeerRefusalReason.FeatureUnsupported,
+                "A retention instruction arrived without the retention-instruction feature in effect.");
+        }
+
+        // Every page is read before anything is deleted: the floor check is
+        // over the whole instruction, or a piecewise pass could breach it in
+        // total (06 §4.1).
+        var drops = new List<string>();
+        var page = RetentionOffer.Read(first.Value.Body);
+        while (true)
+        {
+            if (!page.RepositoryId.Span.SequenceEqual(offeredRepositoryId.Span))
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    "A retention page names a repository other than the one this session replicated.");
+            }
+
+            foreach (var key in page.Keys)
+            {
+                if (key is "repository-format"
+                    || key.StartsWith("keys/", StringComparison.Ordinal)
+                    || key.StartsWith("tombstones/", StringComparison.Ordinal)
+                    || key.StartsWith("leases/", StringComparison.Ordinal))
+                {
+                    throw new PeerProtocolException(
+                        PeerRefusalReason.TermsRefused,
+                        $"A retention instruction may not name '{key}' — identity and lifecycle keys are never deletable by instruction (06 §3).");
+                }
+
+                drops.Add(key);
+            }
+
+            if (!page.More)
+            {
+                break;
+            }
+
+            page = await ReplicationWire.ReadAsync(
+                stream, PeerMessageType.RetentionOffer, RetentionOffer.Read, cancellationToken).ConfigureAwait(false);
+        }
+
+        // The floor (06 §3, FR-GC-010): counted on ciphertext, refused whole.
+        var heldSnapshots = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in replica.ListAsync(
+            ObjectPrefix.Parse("snapshots/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+        {
+            heldSnapshots.Add(entry.Key.Value);
+        }
+
+        var droppedSnapshots = drops.Count(key => heldSnapshots.Contains(key));
+        var remaining = heldSnapshots.Count - droppedSnapshots;
+        if (remaining < peer.Terms.RetentionFloorGenerations)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.TermsRefused,
+                $"The instruction would leave {remaining} snapshot(s); this grant's retention floor is "
+                + $"{peer.Terms.RetentionFloorGenerations} (06 §3).");
+        }
+
+        var deleted = 0L;
+        foreach (var key in drops)
+        {
+            var outcome = await replica.DeleteAsync(
+                Storage.Abstractions.ObjectKey.Parse(key), DeleteConditions.None, cancellationToken)
+                .ConfigureAwait(false);
+            if (outcome.Outcome == DeleteOutcome.Deleted)
+            {
+                deleted++;
+            }
+        }
+
+        await PeerFrame.WriteAsync(stream, new RetentionAck((ulong)deleted), cancellationToken).ConfigureAwait(false);
+        return deleted;
     }
 
     private static async Task SendInventoryAsync(

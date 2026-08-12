@@ -31,8 +31,12 @@ public static class PeerSessionNegotiation
     /// <summary>A peer that offers this understands <see cref="PeeringTermination"/> (01 §3).</summary>
     public const string TerminationNoticeFeature = "termination-notice";
 
+    /// <summary>A peer that offers this accepts <see cref="RetentionOffer"/> within its floor (06).</summary>
+    public const string RetentionInstructionFeature = "retention-instruction";
+
     /// <summary>The features this build offers (02 §4).</summary>
-    public static IReadOnlyList<string> SupportedFeatures { get; } = [TerminationNoticeFeature];
+    public static IReadOnlyList<string> SupportedFeatures { get; } =
+        [RetentionInstructionFeature, TerminationNoticeFeature];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>

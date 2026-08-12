@@ -64,4 +64,4 @@ Enforcement authority never moves: the destination enforces from its own grant, 
 
 ---
 
-**Previous:** [03 — Replication](03-replication.md) · **Next:** [README](README.md)
+**Previous:** [03 — Replication](03-replication.md) · **Next:** [06 — Retention instructions](06-retention.md)

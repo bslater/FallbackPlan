@@ -54,6 +54,12 @@ public enum PeerMessageType : ushort
 
     /// <summary>The destination confirms what it received and committed (03 §3.4).</summary>
     ReplicationAck = 261,
+
+    /// <summary>A commander's instruction naming the keys a replica drops (06 §4.1; feature-gated as "retention-instruction").</summary>
+    RetentionOffer = 262,
+
+    /// <summary>The spoke confirms what it deleted (06 §4.2).</summary>
+    RetentionAck = 263,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

@@ -216,11 +216,27 @@ public static class FanOut
             // there" (FR-GC-009).
             var syncedSequence = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
-            var committed = await ReplicationInitiator.PushAllAsync(
-                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, cancellationToken)
+
+            // A peer under a retention policy converges like a local path
+            // does (FR-GC-010): the hub computes the keep filter, pushes only
+            // what it keeps, and instructs the spoke to drop the rest — when
+            // the spoke offers the feature, and never past its floor. A pass
+            // whose staging graph will not walk cleanly pushes whole.
+            var effective = set.Destinations
+                .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
+                ?.Retention ?? set.Retention;
+            var keeps = Retention.DestinationConvergence.HasRules(effective)
+                    && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature)
+                ? await Retention.DestinationConvergence.ComputeKeepsAsync(
+                    archive.Store, archive.Repository, effective!,
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
+                : null;
+
+            var outcome = await ReplicationInitiator.PushAndConvergeAsync(
+                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
                 .ConfigureAwait(false);
 
-            ledger.RecordSuccess(set.Id, destination.Name, committed, nowMs, syncedSequence);
+            ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         }
         catch (Protocol.PeerProtocolException refusal)
             when (refusal.Reason == Protocol.PeerRefusalReason.StorageExhausted)
@@ -252,13 +268,12 @@ public static class FanOut
 
             if (refusal.Reason == Protocol.PeerRefusalReason.TermsRefused)
             {
-                // The lender's policy is exhausted. Local protection
-                // continues; the human decides whether to ask for more, keep
-                // less, or add a destination (05 §5).
+                // The lender's terms said no — a quota exhausted (05 §5) or a
+                // retention floor defended (06 §3). Local protection
+                // continues; the human decides what changes.
                 runtime.Notices.Raise(
-                    $"quota-exceeded:{destination.Fingerprint}",
-                    $"Peer '{destination.Name}' refused this set: {refusal.Message} "
-                    + "Ask for a larger quota, tighten retention, or add another destination.",
+                    $"terms-refused:{destination.Fingerprint}",
+                    $"Peer '{destination.Name}' refused this set: {refusal.Message}",
                     nowMs);
             }
         }

@@ -431,3 +431,159 @@ public sealed record ReplicationAck(ulong Count) : IPeerMessage
     /// <returns>The acknowledgement.</returns>
     public static ReplicationAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
 }
+
+/// <summary>
+/// A commander's instruction naming the store keys a replica drops
+/// (specification peer-protocol 06 §4.1), one page. Feature-gated as
+/// <c>retention-instruction</c>: the hub computes — only it can read
+/// manifests — and the spoke deletes exactly what it is told, bounded below
+/// by its own granted floor.
+/// </summary>
+/// <param name="RepositoryId">The repository the instruction applies to (16 bytes).</param>
+/// <param name="Keys">The store keys to delete, this page.</param>
+/// <param name="More">Whether another page follows.</param>
+public sealed record RetentionOffer(
+    ReadOnlyMemory<byte> RepositoryId, IReadOnlyList<string> Keys, bool More) : IPeerMessage
+{
+    /// <summary>The most keys one page may carry (06 §4.1).</summary>
+    public const int MaximumKeys = 4096;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.RetentionOffer;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 3;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (RepositoryId.Length != ReplicationOffer.RepositoryIdLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A retention offer's repository identifier is 16 bytes.");
+        }
+
+        if (Keys.Count > MaximumKeys)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A retention page of {Keys.Count} keys exceeds the limit of {MaximumKeys}.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(RepositoryId.Span);
+        writer.WriteInt32(2);
+        writer.WriteStartArray(Keys.Count);
+        foreach (var objectKey in Keys)
+        {
+            writer.WriteTextString(objectKey);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteInt32(3);
+        writer.WriteBoolean(More);
+    }
+
+    /// <summary>Reads one instruction page.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The page.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 06 §4.1 or a 00 §2.3 limit.</exception>
+    public static RetentionOffer Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        byte[]? repositoryId = null;
+        IReadOnlyList<string>? keys = null;
+        var more = false;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    repositoryId = reader.ReadByteString();
+                    break;
+                case 2:
+                    keys = ReadDropKeys(reader);
+                    break;
+                case 3:
+                    more = reader.ReadBoolean();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (repositoryId is null || repositoryId.Length != ReplicationOffer.RepositoryIdLength || keys is null)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A retention page omits its repository identifier or key array.");
+        }
+
+        return new RetentionOffer(repositoryId, keys, more);
+    }
+
+    private static List<string> ReadDropKeys(CborReader reader)
+    {
+        var length = reader.ReadStartArray();
+        if (length is null || length > MaximumKeys)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A retention page declared more than the {MaximumKeys} keys this protocol permits.");
+        }
+
+        var keys = new List<string>(length.Value);
+        for (var i = 0; i < length; i++)
+        {
+            var objectKey = reader.ReadTextString();
+            if (objectKey.Length == 0 || Encoding.UTF8.GetByteCount(objectKey) > ReplicationInventory.MaximumKeyBytes)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "A retention key is empty or over the length limit.");
+            }
+
+            keys.Add(objectKey);
+        }
+
+        reader.ReadEndArray();
+        return keys;
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(RetentionOffer? other) =>
+        other is not null && More == other.More
+        && RepositoryId.Span.SequenceEqual(other.RepositoryId.Span)
+        && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Keys.Count, More);
+}
+
+/// <summary>The spoke confirms what it deleted (specification peer-protocol 06 §4.2).</summary>
+/// <param name="Deleted">Objects actually removed — a key not held counts nothing.</param>
+public sealed record RetentionAck(ulong Deleted) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.RetentionAck;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteUInt64(Deleted);
+    }
+
+    /// <summary>Reads an acknowledgement.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The acknowledgement.</returns>
+    public static RetentionAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
+}

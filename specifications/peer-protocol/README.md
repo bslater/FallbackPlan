@@ -1,6 +1,6 @@
 # FallbackPlan peer protocol — specification
 
-**Protocol version:** 1 (draft) · **Status:** incomplete — verification unwritten; see [Documents](#documents) · **Implemented:** 01, 02, 03's base object exchange, and 05's quota enforcement, over a real TLS socket
+**Protocol version:** 1 (draft) · **Status:** incomplete — verification unwritten; see [Documents](#documents) · **Implemented:** 01, 02, 03's base object exchange, 05's quota enforcement and 06's retention instructions, over a real TLS socket
 
 ---
 
@@ -37,6 +37,7 @@ This set is **incomplete, and the table says which parts**. A missing document i
 | 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
 | 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |
 | 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
+| 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
 
 Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, in `FallbackPlan.Protocol`: the keypair and its durable device key, the pairing ceremony (key agreement, transcript, short authentication string, confirmation signature and the four messages that carry them), grants (01 §3) and terms (01 §4), and the whole session layer of 02 — the four-state machine, channel-bound authentication, framing with its pre-allocation bounds, version selection and feature negotiation, and the coarse refusal codes. `FallbackPlan.Protocol.Tests` exercises all of it over loopback TCP, including the man-in-the-middle relay that channel binding defeats; `FallbackPlan.Hosts.Tests` performs the pairing ceremony between two real operating-system processes.
 
