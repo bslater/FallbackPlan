@@ -136,6 +136,33 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Sync_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Fan-out is the service's job — its scheduler, ledger and staging
+        // archives do the work — so direct mode refuses rather than
+        // improvising a copy the ledger would never learn about.
+        var sync = await _cli.RunAsync("sync");
+
+        Assert.AreEqual(1, sync.ExitCode);
+        Assert.Contains("fallbackplan-agent sync", sync.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Retention_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Retention needs the hub's configuration, sync ledger and writer
+        // role; a console commands it, the hub runs it.
+        var retention = await _cli.RunAsync("retention");
+
+        Assert.AreEqual(1, retention.ExitCode);
+        Assert.Contains("fallbackplan-agent retention", retention.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task RebuildIndex_AfterTheCatalogueIsDeleted_RestoresItFromTheRepository()
     {
         await _cli.InitAsync();

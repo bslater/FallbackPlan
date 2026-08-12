@@ -103,6 +103,17 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>Where each pair stands, from the refreshed ledger.</returns>
     ValueTask<OperationReport> SyncAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs a retention pass per configured set (architecture 07). Only a
+    /// service can serve this — retention needs the whole configuration, the
+    /// sync ledger and the writer role — so direct mode refuses with
+    /// directions.
+    /// </summary>
+    /// <param name="apply">False reports only; true tombstones, sweeps and trims (FR-GC-005).</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The report, per set in configuration order.</returns>
+    ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -394,6 +405,15 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     {
         var result = await SendAsync<SyncResult>(
             new SyncCommand(setName, destinationName), "a sync", cancellationToken).ConfigureAwait(false);
+
+        return new OperationReport(true, result.Lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<RetentionResult>(
+            new RetentionCommand(apply), "a retention pass", cancellationToken).ConfigureAwait(false);
 
         return new OperationReport(true, result.Lines);
     }
@@ -746,6 +766,13 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // lane, its ledger records the outcome, and its runtime holds every
         // set's staging archive. A direct-mode copy would race all three.
         throw new CliFailureException(Strings.DirectGateway_SyncNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken) =>
+        // Retention belongs to the hub for the same reason: the gate reads
+        // the sync ledger, the plan reads every set's configuration, and the
+        // pass runs on the writer lane a console cannot hold.
+        throw new CliFailureException(Strings.DirectGateway_RetentionNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()

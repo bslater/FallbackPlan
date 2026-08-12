@@ -115,6 +115,9 @@
   <data name="DirectGateway_PassRootDirectorySetName" xml:space="preserve">
     <value>Pass a root directory or --set &lt;name&gt;.</value>
   </data>
+  <data name="DirectGateway_RetentionNeedsTheService" xml:space="preserve">
+    <value>Retention runs on the hub — the pass needs the service's configuration, sync ledger and writer role. Connect to it with --connect, or run `fallbackplan-agent retention [--apply]` there.</value>
+  </data>
   <data name="DirectGateway_SyncNeedsTheService" xml:space="preserve">
     <value>Syncing destinations is the service's job — its scheduler, ledger and staging archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.</value>
   </data>

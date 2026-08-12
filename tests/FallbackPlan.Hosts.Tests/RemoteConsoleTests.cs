@@ -149,6 +149,35 @@ public sealed class RemoteConsoleTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RetentionAndSync_OverConnect_ReturnTheServicesReports()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        var (endpoint, fingerprint, consoleState, stop) = await StartServiceAsync();
+        await using var _ = stop;
+        var address = $"{endpoint.Address}:{endpoint.Port}";
+
+        // `sync` converges the declared destination from the console's chair —
+        // the hub does the work, the console reads the refreshed ledger.
+        var synced = await RunCliAsync(
+            "sync", "--connect", address, "--state", consoleState, "--fingerprint", fingerprint);
+        Assert.AreEqual(0, synced.ExitCode, synced.Error);
+        Assert.Contains("docs -> vault: in sync", synced.Output, StringComparison.Ordinal);
+
+        // `retention` without --apply is the mandatory report (FR-GC-005):
+        // per-set lines including what the trim would do, and nothing deleted.
+        var retention = await RunCliAsync(
+            "retention", "--connect", address, "--state", consoleState, "--fingerprint", fingerprint);
+        Assert.AreEqual(0, retention.ExitCode, retention.Error);
+        Assert.Contains("docs: ", retention.Output, StringComparison.Ordinal);
+        Assert.Contains("trimmable:", retention.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Connect_ToAServiceThatNeverPairedThisConsole_IsRefusedCleanly()
     {
         await _harness.CreateRepositoryAsync();

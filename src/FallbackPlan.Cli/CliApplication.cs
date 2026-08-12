@@ -1021,6 +1021,25 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // ------------------------------------------------------------ retention
+
+        {
+            var applyOption = new Option<bool>("--apply")
+            {
+                Description = "Tombstone, sweep and trim — the destructive half. Without it the pass reports only (FR-GC-005).",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "retention",
+                "Run a retention pass per configured set (architecture 07): the report always, deletion only with --apply."));
+            command.Options.Add(applyOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.RetentionAsync(parse.GetValue(applyOption), token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------- config-export
 
         {

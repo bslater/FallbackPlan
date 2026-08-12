@@ -213,6 +213,11 @@ internal static class Strings
     internal static string DirectGateway_PassRootDirectorySetName => Get(nameof(DirectGateway_PassRootDirectorySetName));
 
     /// <summary>
+    /// Retention runs on the hub — the pass needs the service's configuration, sync ledger and writer role. Connect to it with --connect, or run `fallbackplan-agent retention [--apply]` there.
+    /// </summary>
+    internal static string DirectGateway_RetentionNeedsTheService => Get(nameof(DirectGateway_RetentionNeedsTheService));
+
+    /// <summary>
     /// Syncing destinations is the service's job — its scheduler, ledger and staging archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
     /// </summary>
     internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));
