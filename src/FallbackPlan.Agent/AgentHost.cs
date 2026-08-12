@@ -47,21 +47,24 @@ public static class AgentHost
                 FallbackPlan service — scheduled backups, and the command surface clients talk to
 
                 usage:
-                  fallbackplan-agent run    --repo <path> --state <dir> [--passphrase-env <VAR>]
+                  fallbackplan-agent run    --archives <root> --state <dir> [--passphrase-env <VAR>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
-                  fallbackplan-agent unlock --repo <path> --state <dir> --passphrase-env <VAR>
+                  fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp>
-                  fallbackplan-agent install --repo <path> --state <dir> [--user <account>]
+                  fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>
 
-                Backup sets and their schedules come from <state>/config.json.
-                Missed runs coalesce to one catch-up run per set (ADR-0027 §1).
+                Backup sets, their destinations and their schedules come from
+                <state>/config.json. Each set's staging archive lives under
+                --archives as <root>/<set id>, created on the set's first backup
+                (ADR-0034). Missed runs coalesce to one catch-up run per set
+                (ADR-0027 §1).
 
                 `unlock` stores the passphrase in this account's platform keystore so
                 scheduled backups run with nobody present; `run` then needs no
@@ -80,10 +83,11 @@ public static class AgentHost
                 prints it; nothing is changed. Store the passphrase with `unlock`
                 first, as the account the service will run as (ADR-0033).
 
-                `replicate` pushes this repository's objects to a destination this
-                console paired with (peer-protocol 03), naming it by fingerprint.
-                It forwards encrypted objects and takes no passphrase; the
-                destination stores what it cannot read.
+                `replicate` pushes one archive's objects to a destination this
+                console paired with (peer-protocol 03), naming the archive by
+                path (a set's staging archive is <root>/<set id>) and the
+                destination by fingerprint. It forwards encrypted objects and
+                takes no passphrase; the destination stores what it cannot read.
                 """);
             return 0;
         }
@@ -101,6 +105,7 @@ public static class AgentHost
             return null;
         }
 
+        var archivesRoot = Get("--archives");
         var repoPath = Get("--repo");
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
@@ -132,9 +137,40 @@ public static class AgentHost
             };
         }
 
-        if (stateDirectory is null || (args[0] != "lock" && repoPath is null))
+        // `replicate` pushes one archive's objects to a paired destination
+        // (peer-protocol 03). It reads raw objects and needs no passphrase —
+        // replication forwards ciphertext. It is the one verb that still takes
+        // an archive by path: any repository replicates, staging or otherwise.
+        if (args[0] == "replicate")
         {
-            error.WriteLine("error: usage is `run --repo <path> --state <dir>`.");
+            if (stateDirectory is null || repoPath is null)
+            {
+                error.WriteLine(
+                    "error: usage is `replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>`.");
+                return 1;
+            }
+
+            return await ReplicateAsync(
+                repoPath, stateDirectory, Get("--to"), Get("--fingerprint"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (repoPath is not null && archivesRoot is null)
+        {
+            // The old single-repository flag, refused with directions rather
+            // than reinterpreted: --archives names a root that holds one
+            // staging archive per set (ADR-0034), which is not what a --repo
+            // caller was pointing at.
+            error.WriteLine(
+                "error: `--repo` became `--archives <root>` — the service holds one staging archive per "
+                + "backup set under that root (ADR-0034). An existing single archive can be adopted by "
+                + "moving it to <root>/<set id>.");
+            return 1;
+        }
+
+        if (stateDirectory is null || (args[0] is not "lock" && archivesRoot is null))
+        {
+            error.WriteLine("error: usage is `run --archives <root> --state <dir>`.");
             return 1;
         }
 
@@ -143,18 +179,8 @@ public static class AgentHost
         if (args[0] == "install")
         {
             return Install(
-                repoPath!, stateDirectory, Get("--user"), Get("--name"), Get("--target"),
+                archivesRoot!, stateDirectory, Get("--user"), Get("--name"), Get("--target"),
                 Get("--remote-interface"), Get("--remote-port"), output, error);
-        }
-
-        // `replicate` pushes the repository's objects to a paired destination
-        // (peer-protocol 03). It reads raw objects and needs no passphrase —
-        // replication forwards ciphertext.
-        if (args[0] == "replicate")
-        {
-            return await ReplicateAsync(
-                repoPath!, stateDirectory, Get("--to"), Get("--fingerprint"), output, error, cancellationToken)
-                .ConfigureAwait(false);
         }
 
         string? FromEnvironment()
@@ -295,7 +321,7 @@ public static class AgentHost
 
         var options = new ServiceOptions
         {
-            RepositoryPath = repoPath!,
+            ArchivesRoot = archivesRoot!,
             StateDirectory = stateDirectory,
             PollSeconds = pollSeconds,
         };
@@ -539,7 +565,7 @@ public static class AgentHost
     /// passphrase, go to standard error. Nothing on the system is changed.
     /// </summary>
     private static int Install(
-        string repoPath,
+        string archivesRoot,
         string stateDirectory,
         string? account,
         string? name,
@@ -570,12 +596,12 @@ public static class AgentHost
         // platform's path rules would mangle the other's; there the operator
         // supplies absolute target paths.
         var forThisPlatform = resolved == DefaultTarget();
-        var repositoryPath = forThisPlatform ? Path.GetFullPath(repoPath) : repoPath;
+        var archivesPath = forThisPlatform ? Path.GetFullPath(archivesRoot) : archivesRoot;
         var statePath = forThisPlatform ? Path.GetFullPath(stateDirectory) : stateDirectory;
 
         var options = new ServiceUnitOptions(
             executablePath,
-            repositoryPath,
+            archivesPath,
             statePath,
             account,
             name ?? "FallbackPlan",
@@ -609,7 +635,7 @@ public static class AgentHost
             "# First, store the passphrase once as the SAME account the service runs as, so it self-unlocks "
             + "at boot with nobody present (ADR-0028 §9):");
         error.WriteLine(
-            $"#   \"{executablePath}\" unlock --repo \"{options.RepositoryPath}\" "
+            $"#   \"{executablePath}\" unlock --archives \"{options.ArchivesRoot}\" "
             + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR>");
         return 0;
     }

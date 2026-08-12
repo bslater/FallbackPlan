@@ -16,7 +16,7 @@ public sealed class AgentInstallVerbTests
     {
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "install", "--repo", "/srv/repo", "--state", "/var/lib/fallbackplan", "--target", "systemd");
+            "install", "--archives", "/srv/archives", "--state", "/var/lib/fallbackplan", "--target", "systemd");
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
         Assert.Contains("[Service]", result.Output, StringComparison.Ordinal);
@@ -32,7 +32,7 @@ public sealed class AgentInstallVerbTests
     {
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "install", "--repo", "/srv/repo", "--state", "/var/lib/fallbackplan");
+            "install", "--archives", "/srv/archives", "--state", "/var/lib/fallbackplan");
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
         if (OperatingSystem.IsLinux())
@@ -54,7 +54,7 @@ public sealed class AgentInstallVerbTests
     {
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "install", "--repo", "/srv/repo", "--state", "/s", "--target", "plan9");
+            "install", "--archives", "/srv/archives", "--state", "/s", "--target", "plan9");
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("unknown --target", result.Error, StringComparison.Ordinal);

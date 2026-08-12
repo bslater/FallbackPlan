@@ -58,6 +58,14 @@ public sealed class Passphrase : IDisposable
     public ReadOnlySpan<byte> Utf8 => _utf8;
 
     /// <summary>
+    /// A copy with its own buffer and its own lifetime, for a holder that
+    /// outlives the caller's — the service keeps one so it can open and
+    /// create per-set archives lazily (ADR-0028 §9, ADR-0034).
+    /// </summary>
+    /// <returns>An independent passphrase the caller owns and must dispose.</returns>
+    public Passphrase Clone() => new((byte[])_utf8.Clone());
+
+    /// <summary>
     /// Deliberately redacted: a passphrase must never reach a log, crash dump,
     /// or durable object (specification 03 §8).
     /// </summary>

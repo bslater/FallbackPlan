@@ -528,7 +528,7 @@ public static class CliApplication
             };
             var catalogueOption = new Option<string?>("--catalogue")
             {
-                Description = "Catalogue database path. Defaults to the state directory's catalogue.db.",
+                Description = "Catalogue database path. Defaults to the state directory's per-archive catalogue.",
             };
             var command = WithSession(new Command("rebuild-index", "Rebuild the local catalogue from the store."));
             command.Options.Add(forensicOption);

@@ -15,26 +15,26 @@ namespace FallbackPlan.Agent;
 public static class AgentPass
 {
     /// <summary>Runs one pass over the configuration in <paramref name="stateDirectory"/>.</summary>
-    /// <param name="repositoryPath">The repository to write to.</param>
-    /// <param name="passphrase">Unlocks the repository.</param>
+    /// <param name="archivesRoot">The root holding one staging archive per set (ADR-0034).</param>
+    /// <param name="passphrase">Unlocks and creates the archives.</param>
     /// <param name="stateDirectory">The state directory whose writer role the pass takes.</param>
     /// <param name="now">The clock, passed in so schedule arithmetic stays pure.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <returns>What happened to each configured set.</returns>
     public static async ValueTask<AgentPassResult> RunAsync(
-        string repositoryPath,
+        string archivesRoot,
         Passphrase passphrase,
         string stateDirectory,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryPath);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(archivesRoot);
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         var options = new ServiceOptions
         {
-            RepositoryPath = repositoryPath,
+            ArchivesRoot = archivesRoot,
             StateDirectory = stateDirectory,
         };
 

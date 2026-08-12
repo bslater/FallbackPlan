@@ -69,7 +69,7 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         foreach (var argument in new[]
         {
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable,
             "--poll-seconds", "3600",

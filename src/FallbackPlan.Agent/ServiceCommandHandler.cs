@@ -59,7 +59,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     $"check {check.Level}",
                     token => CheckAsync(check, token),
                     cancellationToken).ConfigureAwait(false),
-                _ => Dispatch(command),
+                _ => await DispatchAsync(command, cancellationToken).ConfigureAwait(false),
             };
         }
         catch (ClientStateException exception)
@@ -131,20 +131,20 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
         runtime.Progress.WatchAsync(cancellationToken);
 
-    private ServiceResult Dispatch(ServiceCommand command) => command switch
+    private async ValueTask<ServiceResult> DispatchAsync(ServiceCommand command, CancellationToken cancellationToken) => command switch
     {
         ListBackupSetsCommand => ListBackupSets(),
         UpsertBackupSetCommand upsert => UpsertBackupSet(upsert),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
-        ListSnapshotsCommand => ListSnapshots(),
-        ListDirectoryCommand list => ListDirectory(list),
-        GetStatusCommand => GetStatus(),
+        ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
+        ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
+        GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
 
-        // The read paths are handled before Dispatch, on the reader lane.
+        // The read paths are handled before this dispatch, on the reader lane.
         _ => new ServiceError(ServiceErrorReason.InvalidArgument, $"Unknown command '{command.GetType().Name}'."),
     };
 
@@ -181,6 +181,25 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         }
     }
 
+    /// <summary>
+    /// The archive holding a snapshot, found by asking each existing set
+    /// archive's catalogue. Null when no archive knows it.
+    /// </summary>
+    private async ValueTask<ArchiveHandle?> FindArchiveBySnapshotAsync(
+        byte[] snapshotId, CancellationToken cancellationToken)
+    {
+        foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            using var catalogue = archive.OpenReadCatalogue();
+            if (catalogue.EnumerateSnapshots().Any(row => row.SnapshotId.Span.SequenceEqual(snapshotId)))
+            {
+                return archive;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Plans a restore without performing it — a catalogue walk plus one store probe per located blob.</summary>
     private async ValueTask<ServiceResult> PlanRestoreAsync(PlanRestoreCommand command, CancellationToken cancellationToken)
     {
@@ -189,7 +208,14 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             return invalid!;
         }
 
-        using var catalogue = runtime.OpenReadCatalogue();
+        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
+        if (archive is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+        }
+
+        using var catalogue = archive.OpenReadCatalogue();
         var plan = RestorePlanner.Plan(
             catalogue, snapshotId, command.Path ?? string.Empty, RestoreTargetProfile.ForLocalPlatform());
 
@@ -210,7 +236,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // probe cannot see is a lost blob holding only the items' SEGMENTS
         // (the plan carries manifests, not their references); naming those
         // too is FR-RST-003's completeness work.
-        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(runtime.Repository.Keys.KeyIdKey);
+        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
         var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
         var missing = new List<string>();
 
@@ -231,8 +257,8 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             {
                 var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
                 present =
-                    await BlobExistsAsync(BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
-                    || await BlobExistsAsync(BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
+                    await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
+                    || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
                 blobPresent[location.BlobId] = present;
             }
 
@@ -248,12 +274,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             missing);
     }
 
-    private async ValueTask<bool> BlobExistsAsync(
-        BlobClass blobClass, Domain.Identifiers.StoreBlobKey blobKey, CancellationToken cancellationToken)
+    private static async ValueTask<bool> BlobExistsAsync(
+        ArchiveHandle archive, BlobClass blobClass, Domain.Identifiers.StoreBlobKey blobKey, CancellationToken cancellationToken)
     {
         try
         {
-            var metadata = await runtime.Store.GetMetadataAsync(
+            var metadata = await archive.Store.GetMetadataAsync(
                 Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey), cancellationToken).ConfigureAwait(false);
             return metadata.Found && metadata.Metadata!.Length > 0;
         }
@@ -281,7 +307,14 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
         var target = RestoreTargetProfile.ForLocalPlatform();
 
-        using var catalogue = runtime.OpenReadCatalogue();
+        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
+        if (archive is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+        }
+
+        using var catalogue = archive.OpenReadCatalogue();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, command.Path ?? string.Empty, target);
         if (plan.Items.Count == 0)
         {
@@ -290,7 +323,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
         }
 
-        using var reader = new RepositoryReader(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store);
+        using var reader = new RepositoryReader(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
         await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
         // The output directory is a path on the machine running the service:
@@ -335,7 +368,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             receipt.Outcome.ToString().ToLowerInvariant());
     }
 
-    /// <summary>Verifies every stored blob at the requested level.</summary>
+    /// <summary>Verifies every stored blob of every set's archive at the requested level.</summary>
     private async ValueTask<ServiceResult> VerifyAsync(VerifyCommand command, CancellationToken cancellationToken)
     {
         if (!TryParseLevel(command.Level, out var level, out var canonical, out var invalid))
@@ -343,27 +376,30 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             return invalid!;
         }
 
-        using var verifier = new VerifyEngine(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store);
         var examined = 0L;
         var failures = 0L;
 
-        await foreach (var entry in runtime.Store
-            .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
+        foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
-            examined++;
-            var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
-                .ConfigureAwait(false);
-            if (!result.Ok)
+            using var verifier = new VerifyEngine(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
+            await foreach (var entry in archive.Store
+                .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
+                .ConfigureAwait(false))
             {
-                failures++;
+                examined++;
+                var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!result.Ok)
+                {
+                    failures++;
+                }
             }
         }
 
         return new VerificationResult(examined, failures, canonical);
     }
 
-    /// <summary>Repository health: the blob sweep, the journal survey, and the catalogue's damage findings.</summary>
+    /// <summary>Health across every set's archive: the blob sweep, the journal survey, and the catalogue's damage findings.</summary>
     private async ValueTask<ServiceResult> CheckAsync(CheckCommand command, CancellationToken cancellationToken)
     {
         if (!TryParseLevel(command.Level, out var level, out _, out var invalid))
@@ -374,45 +410,50 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // Findings only. A count of what was healthy is not a finding, and the
         // contract says this list is "the findings, in the order they matter" —
         // so an empty list is the answer "nothing is wrong", not "nothing ran".
+        // Findings name their set, because "which archive" is the first
+        // question a finding raises when there are several.
         var findings = new List<string>();
 
-        using (var verifier = new VerifyEngine(runtime.Repository.RepositoryId, runtime.Repository.Keys, runtime.Store))
+        foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
-            await foreach (var entry in runtime.Store
-                .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
-                .ConfigureAwait(false))
+            using (var verifier = new VerifyEngine(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store))
             {
-                var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
-                    .ConfigureAwait(false);
-                if (!result.Ok)
+                await foreach (var entry in archive.Store
+                    .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
+                    .ConfigureAwait(false))
                 {
-                    findings.Add($"blob {entry.Key.Value}: {result.Detail}");
+                    var result = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!result.Ok)
+                    {
+                        findings.Add($"{set.Name}: blob {entry.Key.Value}: {result.Detail}");
+                    }
                 }
             }
-        }
 
-        using (var journalReader = new JournalReader(
-            runtime.Store, runtime.Repository.RepositoryId, runtime.Repository.Hierarchy))
-        {
-            var generation = runtime.Repository.CurrentDataGeneration.Value >= runtime.Repository.CurrentMetadataGeneration.Value
-                ? runtime.Repository.CurrentDataGeneration.Value
-                : runtime.Repository.CurrentMetadataGeneration.Value;
-
-            var (_, unparseable, journalFindings) = await journalReader
-                .LoadAsync(generation, cancellationToken).ConfigureAwait(false);
-
-            if (unparseable > 0)
+            using (var journalReader = new JournalReader(
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Hierarchy))
             {
-                findings.Add(string.Create(
-                    CultureInfo.InvariantCulture, $"journal: {unparseable} unparseable record(s)"));
+                var generation = archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
+                    ? archive.Repository.CurrentDataGeneration.Value
+                    : archive.Repository.CurrentMetadataGeneration.Value;
+
+                var (_, unparseable, journalFindings) = await journalReader
+                    .LoadAsync(generation, cancellationToken).ConfigureAwait(false);
+
+                if (unparseable > 0)
+                {
+                    findings.Add(string.Create(
+                        CultureInfo.InvariantCulture, $"{set.Name}: journal: {unparseable} unparseable record(s)"));
+                }
+
+                findings.AddRange(journalFindings.Select(finding => $"{set.Name}: journal {finding.Kind}: {finding.Detail}"));
             }
 
-            findings.AddRange(journalFindings.Select(finding => $"journal {finding.Kind}: {finding.Detail}"));
-        }
-
-        using (var catalogue = runtime.OpenReadCatalogue())
-        {
-            findings.AddRange(catalogue.Findings().Select(finding => $"catalogue {finding.Kind}: {finding.Detail}"));
+            using (var catalogue = archive.OpenReadCatalogue())
+            {
+                findings.AddRange(catalogue.Findings().Select(finding => $"{set.Name}: catalogue {finding.Kind}: {finding.Detail}"));
+            }
         }
 
         return new CheckResult(findings);
@@ -514,19 +555,24 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail))]);
     }
 
-    private SnapshotsResult ListSnapshots()
+    private async ValueTask<ServiceResult> ListSnapshotsAsync(CancellationToken cancellationToken)
     {
-        using var catalogue = runtime.OpenReadCatalogue();
-        return new SnapshotsResult(
-            [.. catalogue.EnumerateSnapshots().Select(row => new SnapshotDescriptor(
+        var snapshots = new List<SnapshotDescriptor>();
+        foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            using var catalogue = archive.OpenReadCatalogue();
+            snapshots.AddRange(catalogue.EnumerateSnapshots().Select(row => new SnapshotDescriptor(
                 Convert.ToHexString(row.SnapshotId.Span).ToLowerInvariant(),
                 Convert.ToHexString(row.BackupSetId.Span).ToLowerInvariant(),
                 row.CapturedAt,
                 row.CaptureStatus,
-                0))]);
+                0)));
+        }
+
+        return new SnapshotsResult(snapshots);
     }
 
-    private ServiceResult ListDirectory(ListDirectoryCommand command)
+    private async ValueTask<ServiceResult> ListDirectoryAsync(ListDirectoryCommand command, CancellationToken cancellationToken)
     {
         byte[] snapshotId;
         try
@@ -539,14 +585,13 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 ServiceErrorReason.InvalidArgument, $"'{command.SnapshotId}' is not a hex snapshot identifier.");
         }
 
-        using var catalogue = runtime.OpenReadCatalogue();
-        var known = catalogue.EnumerateSnapshots()
-            .Any(row => row.SnapshotId.Span.SequenceEqual(snapshotId));
-        if (!known)
+        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
+        if (archive is null)
         {
             return new ServiceError(ServiceErrorReason.NotFound, $"No snapshot '{command.SnapshotId}' exists.");
         }
 
+        using var catalogue = archive.OpenReadCatalogue();
         var path = command.Path ?? string.Empty;
         var entries = catalogue.ListDirectory(snapshotId, path);
         return new DirectoryResult(
@@ -557,25 +602,35 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 (long)(entry.LogicalLength ?? 0)))]);
     }
 
-    private StatusResult GetStatus()
+    private async ValueTask<ServiceResult> GetStatusAsync(CancellationToken cancellationToken)
     {
-        using var catalogue = runtime.OpenReadCatalogue();
         var configuration = runtime.Configuration;
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var snapshots = catalogue.EnumerateSnapshots().ToList();
-        var findings = catalogue.Findings().Count;
         var sets = new List<BackupSetStatusDescriptor>();
 
         foreach (var set in configuration.BackupSets)
         {
-            var setId = Convert.FromHexString(set.Id);
-            var latest = snapshots.LastOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
+            // Each set answers from its own archive (ADR-0034). A set never
+            // backed up has no archive: no snapshot, no findings — Unprotected
+            // by honest absence rather than by error.
+            Repository.Catalogue.CatalogueSnapshot? latest = null;
+            var findings = 0;
+            if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is { } archive)
+            {
+                using var catalogue = archive.OpenReadCatalogue();
+                var setId = Convert.FromHexString(set.Id);
+                latest = catalogue.EnumerateSnapshots()
+                    .LastOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
+                findings = catalogue.Findings().Count;
+            }
 
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
                 LatestCaptureStatus = latest?.CaptureStatus,
-                DestinationReachable = Directory.Exists(runtime.Options.RepositoryPath),
+                // Still the single-destination placeholder: the per-destination
+                // matrix is the fan-out slice's work (ADR-0027 amendment).
+                DestinationReachable = runtime.ArchiveExists(set.Id),
                 SameFailureDomain = true,
                 DamageFindings = findings,
                 RequiredObjectsMissing = false,

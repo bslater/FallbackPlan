@@ -20,7 +20,9 @@ public sealed class AgentPassTests : IDisposable
 
     private const string PassphraseText = "agent-pass-tests-passphrase!!";
 
-    private string RepoPath => Path.Combine(_root, "repo");
+    private string ArchivesRoot => Path.Combine(_root, "archives");
+
+    private string RepoPath => Path.Combine(ArchivesRoot, new string('a', 32));
 
     private string StateDirectory => Path.Combine(_root, "state");
 
@@ -74,7 +76,7 @@ public sealed class AgentPassTests : IDisposable
     private async Task<AgentPassResult> RunPassAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        return await AgentPass.RunAsync(RepoPath, passphrase, StateDirectory, now, CancellationToken.None);
+        return await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
     }
 
     [TestMethod]
@@ -115,7 +117,8 @@ public sealed class AgentPassTests : IDisposable
         using var passphrase = Passphrase.Create(PassphraseText);
         using var repository = await RepositoryLifecycle.OpenAsync(
             new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
-        using var catalogue = CatalogueDb.Open(Path.Combine(StateDirectory, "catalogue.db"), repository.RepositoryId);
+        using var catalogue = CatalogueDb.Open(
+            Path.Combine(StateDirectory, $"catalogue-{repository.RepositoryId}.db"), repository.RepositoryId);
         Assert.AreEqual(2, catalogue.EnumerateSnapshots().Count);
     }
 
@@ -127,6 +130,59 @@ public sealed class AgentPassTests : IDisposable
         var result = await RunPassAsync(DateTimeOffset.UtcNow);
         Assert.AreEqual("manual-only", Assert.ContainsSingle(result.Sets).Outcome);
         Assert.IsEmpty(JobStateStore.Open(StateDirectory).Jobs);
+    }
+
+    [TestMethod]
+    public async Task AgentPass_TwoSets_GetTwoIndependentStagingArchives()
+    {
+        // No CreateRepositoryAsync: staging archives are the service's own to
+        // create, one per set on first backup (ADR-0034 §1, FR-DEST-002).
+        var secondSource = Path.Combine(_root, "source-2");
+        Directory.CreateDirectory(secondSource);
+        File.WriteAllText(Path.Combine(secondSource, "p.txt"), "second set");
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Vault],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = new string('a', 32), Name = "docs", Root = SourceRoot,
+                    Schedule = "every 4h", Destinations = [VaultRef],
+                },
+                new BackupSetConfiguration
+                {
+                    Id = new string('f', 32), Name = "pics", Root = secondSource,
+                    Schedule = "every 4h", Destinations = [VaultRef],
+                },
+            ],
+        }.Save(Path.Combine(StateDirectory, "config.json"));
+
+        var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+        Assert.AreEqual(2, result.Ran);
+
+        // Two archives on disk, each a complete repository with its own
+        // identity — and therefore its own writer sequence and catalogue,
+        // named by that identity.
+        using var passphrase = Passphrase.Create(PassphraseText);
+        var identities = new List<string>();
+        foreach (var setId in new[] { new string('a', 32), new string('f', 32) })
+        {
+            using var repository = await RepositoryLifecycle.OpenAsync(
+                new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, setId)), passphrase, CancellationToken.None);
+            var identity = repository.RepositoryId.ToString();
+            identities.Add(identity);
+
+            Assert.IsTrue(File.Exists(Path.Combine(StateDirectory, $"sequence-{identity}.txt")));
+            using var catalogue = CatalogueDb.Open(
+                Path.Combine(StateDirectory, $"catalogue-{identity}.db"), repository.RepositoryId);
+            var snapshot = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
+            Assert.IsTrue(snapshot.BackupSetId.Span.SequenceEqual(Convert.FromHexString(setId)));
+        }
+
+        Assert.AreNotEqual(identities[0], identities[1]);
     }
 
     [TestMethod]

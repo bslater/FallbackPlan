@@ -4,7 +4,7 @@ namespace FallbackPlan.Agent;
 
 /// <summary>What a generated service definition needs to name (ADR-0033).</summary>
 /// <param name="ExecutablePath">The absolute path of the agent executable to run.</param>
-/// <param name="RepositoryPath">The repository the service backs up to (<c>--repo</c>).</param>
+/// <param name="ArchivesRoot">The root holding one staging archive per backup set (<c>--archives</c>, ADR-0034).</param>
 /// <param name="StateDirectory">The state directory it holds the writer role for (<c>--state</c>).</param>
 /// <param name="Account">
 /// The account the service runs as, or null for the platform default. The keystore
@@ -17,7 +17,7 @@ namespace FallbackPlan.Agent;
 /// <param name="RemotePort">The remote-binding port, or null for off.</param>
 public sealed record ServiceUnitOptions(
     string ExecutablePath,
-    string RepositoryPath,
+    string ArchivesRoot,
     string StateDirectory,
     string? Account,
     string ServiceName,
@@ -41,8 +41,8 @@ public static class ServiceUnit
     private static IEnumerable<string> RunArguments(ServiceUnitOptions options)
     {
         yield return "run";
-        yield return "--repo";
-        yield return options.RepositoryPath;
+        yield return "--archives";
+        yield return options.ArchivesRoot;
         yield return "--state";
         yield return options.StateDirectory;
 

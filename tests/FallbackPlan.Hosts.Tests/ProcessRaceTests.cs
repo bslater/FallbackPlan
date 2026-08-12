@@ -104,7 +104,7 @@ public sealed class ProcessRaceTests : IDisposable
         var holder = Start(
             ApphostPath("FallbackPlan.Agent"),
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable);
 

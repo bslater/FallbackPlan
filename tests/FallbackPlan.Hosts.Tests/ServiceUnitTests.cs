@@ -6,7 +6,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// The service-manager definitions the <c>install</c> verb generates (ADR-0033).
 /// Pure text with no platform calls, so each target is checked on any host — the
 /// point being that what an operator would apply names the right executable, the
-/// right <c>--repo</c>/<c>--state</c>, a restart policy, and the account the
+/// right <c>--archives</c>/<c>--state</c>, a restart policy, and the account the
 /// keystore unlock is scoped to.
 /// </summary>
 [TestClass]
@@ -32,7 +32,7 @@ public sealed class ServiceUnitTests
         Assert.Contains("Type=simple", unit, StringComparison.Ordinal);
         Assert.Contains("ExecStart=", unit, StringComparison.Ordinal);
         Assert.Contains("/opt/fallbackplan/fallbackplan-agent", unit, StringComparison.Ordinal);
-        Assert.Contains("--repo", unit, StringComparison.Ordinal);
+        Assert.Contains("--archives", unit, StringComparison.Ordinal);
         Assert.Contains("/srv/repo", unit, StringComparison.Ordinal);
         Assert.Contains("--state", unit, StringComparison.Ordinal);
         Assert.Contains("/var/lib/fallbackplan", unit, StringComparison.Ordinal);
@@ -68,7 +68,7 @@ public sealed class ServiceUnitTests
         Assert.Contains("<key>Label</key>", plist, StringComparison.Ordinal);
         Assert.Contains("<string>com.fallbackplan.agent</string>", plist, StringComparison.Ordinal);
         Assert.Contains("<key>ProgramArguments</key>", plist, StringComparison.Ordinal);
-        Assert.Contains("<string>--repo</string>", plist, StringComparison.Ordinal);
+        Assert.Contains("<string>--archives</string>", plist, StringComparison.Ordinal);
         Assert.Contains("<string>/srv/repo</string>", plist, StringComparison.Ordinal);
         Assert.Contains("<key>RunAtLoad</key>", plist, StringComparison.Ordinal);
         Assert.Contains("<key>KeepAlive</key>", plist, StringComparison.Ordinal);

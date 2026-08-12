@@ -174,7 +174,7 @@ public sealed class RemoteConsoleTests : IDisposable
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
-                RepositoryPath = _harness.RepositoryPath,
+                ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
             passphrase,

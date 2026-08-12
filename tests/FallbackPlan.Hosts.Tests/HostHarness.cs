@@ -29,8 +29,18 @@ public sealed class HostHarness : IDisposable
         Environment.SetEnvironmentVariable(PassphraseVariable, "hosts-tests-passphrase!!");
     }
 
-    /// <summary>The repository store root.</summary>
-    public string RepositoryPath => Path.Combine(_scratch, "repo");
+    /// <summary>The "docs" set's 32-hex identity, matching <see cref="WriteConfiguration"/>.</summary>
+    public string DocsSetId { get; } = new string('a', 32);
+
+    /// <summary>The root holding one staging archive per set (ADR-0034).</summary>
+    public string ArchivesRoot => Path.Combine(_scratch, "archives");
+
+    /// <summary>
+    /// The "docs" set's staging archive — the path CLI direct-mode verbs and
+    /// recovery assertions aim at, and the archive the service opens for the
+    /// one configured set.
+    /// </summary>
+    public string RepositoryPath => Path.Combine(ArchivesRoot, DocsSetId);
 
     /// <summary>The client-local state directory (config, jobs, catalogue, spool).</summary>
     public string StateDirectory => Path.Combine(_scratch, "state");
