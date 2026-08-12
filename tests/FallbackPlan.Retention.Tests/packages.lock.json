@@ -157,6 +157,36 @@
           "MSTest.Analyzers": "3.11.0"
         }
       },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
+      },
+      "fallbackplan.agent": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Api": "[1.0.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Filesystem.Local": "[1.0.0, )",
+          "FallbackPlan.Keystore": "[1.0.0, )",
+          "FallbackPlan.Protocol": "[1.0.0, )",
+          "FallbackPlan.Replication": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
+          "FallbackPlan.Restore": "[1.0.0, )",
+          "FallbackPlan.Storage.Local": "[1.0.0, )",
+          "System.ServiceProcess.ServiceController": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.api": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
@@ -179,10 +209,40 @@
           "FallbackPlan.Repository.Format": "[1.0.0, )"
         }
       },
+      "fallbackplan.filesystem.local": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )"
+        }
+      },
       "fallbackplan.import.abstractions": {
         "type": "Project",
         "dependencies": {
           "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.keystore": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )"
+        }
+      },
+      "fallbackplan.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.replication": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
         }
       },
       "fallbackplan.repository": {
@@ -254,6 +314,14 @@
         "dependencies": {
           "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.restore": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )"
         }
       },
       "fallbackplan.retention": {
@@ -394,6 +462,15 @@
         "requested": "[10.0.10, )",
         "resolved": "10.0.10",
         "contentHash": "V8XZBZsORS+NMhM5hc7doU0wKgDe0lJaaUkZGlAgpbYqN5Pd11I3pxwoRQgEyUVbDri/+qm7YCp49gCTYcbqJQ=="
+      },
+      "System.ServiceProcess.ServiceController": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "9tI/EtlMimwJn9EEtbqFrVqGCD98VfVdnW6UekC7/YHO5Ky/LMUfXibBv9+AV8g9u7uim20oHgiOqzaeEWAhqg==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "10.0.10"
+        }
       },
       "ZstdSharp.Port": {
         "type": "CentralTransitive",

@@ -43,6 +43,14 @@ public static class StagingSweep
     /// <param name="writerId">This device's writer identity.</param>
     /// <param name="plan">The pass's plan — must carry no veto.</param>
     /// <param name="survey">The survey the plan was built from, for snapshot identities.</param>
+    /// <param name="currentPublicationSequence">
+    /// The writer's highest journal sequence in the store now. A per-set
+    /// staging archive is single-writer (ADR-0034), so this is the one
+    /// per-publication monotonic every participant sees — the grace counts
+    /// in it: the delete becomes eligible only after the writer has
+    /// visibly published past the decision (spec 11 §3.1's posture,
+    /// realised in the sequence space until multi-writer archives exist).
+    /// </param>
     /// <param name="nowUnixMilliseconds">Informational stamp only (11 §3.1).</param>
     /// <param name="cancellationToken">Cancels the writes.</param>
     /// <returns>Tombstones written (or already present).</returns>
@@ -52,6 +60,7 @@ public static class StagingSweep
         WriterId writerId,
         CollectionPlan plan,
         SnapshotSurvey survey,
+        ulong currentPublicationSequence,
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken)
     {
@@ -67,8 +76,7 @@ public static class StagingSweep
             throw new InvalidOperationException("A vetoed collection plan authorises no tombstones.");
         }
 
-        var generation = CurrentGeneration(repository);
-        var eligible = generation + 1;
+        var eligible = currentPublicationSequence + 1;
         var written = 0;
 
         foreach (var blob in plan.DeletableBlobs)
@@ -76,7 +84,7 @@ public static class StagingSweep
             var tombstone = new Tombstone(
                 Tombstone.BlobTypeCode, blob.BlobId.ToArray(), TombstoneReason.Unreferenced,
                 writerId.ToArray(), nowUnixMilliseconds, eligible);
-            written += await WriteAsync(store, repository, writerId, generation, tombstone, cancellationToken)
+            written += await WriteAsync(store, repository, writerId, tombstone, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -86,7 +94,7 @@ public static class StagingSweep
             var tombstone = new Tombstone(
                 (byte)ObjectType.SnapshotManifest, snapshot.ManifestObjectId.ToArray(),
                 TombstoneReason.Unreferenced, writerId.ToArray(), nowUnixMilliseconds, eligible);
-            written += await WriteAsync(store, repository, writerId, generation, tombstone, cancellationToken)
+            written += await WriteAsync(store, repository, writerId, tombstone, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -103,6 +111,7 @@ public static class StagingSweep
     /// <param name="repository">The opened archive.</param>
     /// <param name="freshPlan">A plan recomputed now — the revalidation world.</param>
     /// <param name="freshSurvey">The survey that fresh plan was built from.</param>
+    /// <param name="currentPublicationSequence">The writer's highest journal sequence now — the grace clock.</param>
     /// <param name="cancellationToken">Cancels the sweep.</param>
     /// <returns>What was deleted, deferred, cleared and found.</returns>
     public static async ValueTask<SweepOutcome> SweepAsync(
@@ -110,6 +119,7 @@ public static class StagingSweep
         OpenedRepository repository,
         CollectionPlan freshPlan,
         SnapshotSurvey freshSurvey,
+        ulong currentPublicationSequence,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
@@ -117,7 +127,6 @@ public static class StagingSweep
         ThrowHelper.ThrowIfNull(freshPlan);
         ThrowHelper.ThrowIfNull(freshSurvey);
 
-        var generation = CurrentGeneration(repository);
         var deriver = new StoreBlobKeyDeriver(repository.Hierarchy.DeriveKeyIdKey());
 
         var condemnedBlobs = freshPlan.DeletableBlobs.Select(blob => blob.BlobId).ToHashSet();
@@ -140,7 +149,7 @@ public static class StagingSweep
                 continue;
             }
 
-            if (generation < tombstone.Value.EligibleGeneration)
+            if (currentPublicationSequence < tombstone.Value.EligibleGeneration)
             {
                 notYet++;
                 continue;
@@ -163,7 +172,7 @@ public static class StagingSweep
                     // The object is gone; the tombstone outlives it one
                     // generation so a reader can tell a completed collection
                     // from a missing object (11 §3.2).
-                    if (generation >= tombstone.Value.EligibleGeneration + 1)
+                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1)
                     {
                         await store.DeleteAsync(entry.Key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
                         cleared++;
@@ -192,7 +201,7 @@ public static class StagingSweep
                 var objectId = ObjectId.FromBytes(tombstone.Value.ObjectId.Span);
                 if (!snapshotsByObjectId.TryGetValue(objectId, out var snapshot))
                 {
-                    if (generation >= tombstone.Value.EligibleGeneration + 1)
+                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1)
                     {
                         await store.DeleteAsync(entry.Key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
                         cleared++;
@@ -226,18 +235,20 @@ public static class StagingSweep
         return metadata.Metadata is not null;
     }
 
-    private static ulong CurrentGeneration(OpenedRepository repository) =>
+    private static ulong SealingGeneration(OpenedRepository repository) =>
         Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
     private static async ValueTask<int> WriteAsync(
         IObjectStore store,
         OpenedRepository repository,
         WriterId writerId,
-        ulong generation,
         Tombstone tombstone,
         CancellationToken cancellationToken)
     {
-        var keyGeneration = new KeyGeneration((uint)generation);
+        // The SEALING generation stays the key generation — that is what
+        // derives the metadata and signing keys. Only the grace arithmetic
+        // lives in the writer's sequence space.
+        var keyGeneration = new KeyGeneration((uint)SealingGeneration(repository));
         byte[] encoded;
         using (var signer = RepositorySigner.Create(repository.Hierarchy, keyGeneration))
         {

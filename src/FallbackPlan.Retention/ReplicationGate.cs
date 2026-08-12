@@ -22,7 +22,7 @@ public sealed record GateResult(IReadOnlyList<SnapshotFact> Expirable, IReadOnly
 /// <summary>
 /// Retention must not outrun replication (FR-GC-009, ADR-0011 Amendment 2):
 /// a snapshot leaves staging only when every configured destination of its
-/// set holds it. The comparison is generation against synced generation —
+/// set holds it. The comparison is publication sequence against synced sequence —
 /// a destination whose last successful sync began at or after a snapshot's
 /// publication holds it by construction, and no clock is consulted
 /// (ADR-0009's posture). Holding extra snapshots costs disk; expiring them
@@ -60,7 +60,7 @@ public static class ReplicationGate
         foreach (var snapshot in expire)
         {
             var awaiting = destinations
-                .Where(name => (records[name]?.SyncedGeneration ?? 0) < snapshot.PublicationGeneration)
+                .Where(name => (records[name]?.SyncedSequence ?? 0) < snapshot.PublicationSequence)
                 .ToList();
 
             if (awaiting.Count == 0)

@@ -14,7 +14,7 @@ public sealed class ReplicationGateTests
     private const ulong Now = 1_700_000_000_000;
     private const ulong Day = 24 * 3_600_000UL;
 
-    private static readonly SnapshotFact Old = new(new string('a', 64), Now - 40 * Day, PublicationGeneration: 5);
+    private static readonly SnapshotFact Old = new(new string('a', 64), Now - 40 * Day, PublicationSequence: 5);
 
     [TestMethod]
     public void Apply_EveryDestinationSyncedPastTheSnapshot_ExpiresIt()
@@ -76,6 +76,6 @@ public sealed class ReplicationGateTests
         State = DestinationSyncState.InSync,
         LastAttemptAt = lastSuccessAt ?? Now,
         LastSuccessAt = lastSuccessAt ?? Now,
-        SyncedGeneration = generation,
+        SyncedSequence = generation,
     };
 }

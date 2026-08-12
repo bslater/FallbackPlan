@@ -6,13 +6,14 @@ namespace FallbackPlan.Retention;
 /// <summary>One snapshot as retention sees it.</summary>
 /// <param name="SnapshotId">The snapshot's hex identity.</param>
 /// <param name="CapturedAtUnixMilliseconds">When it was captured — what the policy rules evaluate.</param>
-/// <param name="PublicationGeneration">
-/// The repository generation it published at — what the replication gate
-/// compares to each destination's synced generation, never a clock
-/// (FR-GC-009).
+/// <param name="PublicationSequence">
+/// The writer's journal sequence it published under — the standalone
+/// record's counter, the one per-publication monotonic a single-writer
+/// staging archive has. The replication gate compares it to each
+/// destination's synced sequence, never a clock (FR-GC-009).
 /// </param>
 public sealed record SnapshotFact(
-    string SnapshotId, ulong CapturedAtUnixMilliseconds, ulong PublicationGeneration = 0);
+    string SnapshotId, ulong CapturedAtUnixMilliseconds, ulong PublicationSequence = 0);
 
 /// <summary>A kept snapshot and every rule that keeps it — the dry-run report's vocabulary (FR-GC-005).</summary>
 /// <param name="Snapshot">The snapshot.</param>

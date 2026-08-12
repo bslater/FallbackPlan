@@ -59,13 +59,14 @@ public sealed record DestinationSyncRecord
     public string? LastError { get; init; }
 
     /// <summary>
-    /// The staging archive's publication generation when the last successful
-    /// sync <b>began</b> — everything published at or before it is at the
-    /// destination. The replication gate compares snapshot generations to
-    /// this, never to the clock (FR-GC-009, ADR-0009 Amendment 4).
+    /// The staging archive's highest publication sequence when the last
+    /// successful sync <b>began</b> — everything published at or before it
+    /// is at the destination. The replication gate compares snapshot
+    /// publication sequences to this, never a clock (FR-GC-009, ADR-0009
+    /// Amendment 4).
     /// </summary>
-    [JsonPropertyName("synced_generation")]
-    public ulong SyncedGeneration { get; init; }
+    [JsonPropertyName("synced_sequence")]
+    public ulong SyncedSequence { get; init; }
 }
 
 /// <summary>
@@ -148,13 +149,13 @@ public sealed class DestinationSyncStore
     /// <param name="destination">The destination's declared name.</param>
     /// <param name="objects">Objects copied by this sync.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
-    /// <param name="syncedGeneration">
-    /// The staging archive's publication generation when the sync began — the
-    /// replication gate's input (FR-GC-009). A snapshot published after the
-    /// sync started may or may not have crossed, so the claim stops here.
+    /// <param name="syncedSequence">
+    /// The staging archive's highest publication sequence when the sync began
+    /// — the replication gate's input (FR-GC-009). A snapshot published after
+    /// the sync started may or may not have crossed, so the claim stops here.
     /// </param>
     public DestinationSyncRecord RecordSuccess(
-        string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedGeneration = 0)
+        string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedSequence = 0)
     {
         var previous = Find(setId, destination);
         return Upsert(new DestinationSyncRecord
@@ -167,7 +168,7 @@ public sealed class DestinationSyncStore
             Objects = objects,
             ConsecutiveFailures = 0,
             // A later sync never un-holds what an earlier one delivered.
-            SyncedGeneration = Math.Max(syncedGeneration, previous?.SyncedGeneration ?? 0),
+            SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
         });
     }
 
@@ -188,7 +189,7 @@ public sealed class DestinationSyncStore
             Objects = previous?.Objects ?? 0,
             ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
             LastError = error,
-            SyncedGeneration = previous?.SyncedGeneration ?? 0,
+            SyncedSequence = previous?.SyncedSequence ?? 0,
         });
     }
 

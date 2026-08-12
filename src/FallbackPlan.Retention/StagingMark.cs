@@ -73,6 +73,7 @@ public static class StagingMark
             try
             {
                 var record = StandaloneRecordFraming.Parse(bytes);
+                var publicationSequence = record.Counter;
                 var metadataKey = repository.Hierarchy.DeriveMetadataKey(record.KeyGeneration);
                 try
                 {
@@ -87,7 +88,7 @@ public static class StagingMark
                         new SnapshotFact(
                             Convert.ToHexStringLower(decoded.Manifest.SnapshotId.Span),
                             decoded.Manifest.CaptureCompletedAt,
-                            decoded.Manifest.PublicationGeneration),
+                            publicationSequence),
                         decoded.Manifest,
                         entry.Key,
                         deriver.Derive(

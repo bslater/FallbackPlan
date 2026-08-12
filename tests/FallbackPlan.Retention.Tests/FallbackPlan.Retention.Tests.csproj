@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\FallbackPlan.Agent\FallbackPlan.Agent.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Retention\FallbackPlan.Retention.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <ProjectReference Include="..\FallbackPlan.TestSupport\FallbackPlan.TestSupport.csproj" />
