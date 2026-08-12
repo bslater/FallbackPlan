@@ -27,7 +27,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Discovery/
 │   ├── FallbackPlan.Replication/             ✓ store-to-store copier — the fan-out primitive (ADR-0034)
 │   ├── FallbackPlan.Restore/                 ✓ restore planner and executor
-│   ├── FallbackPlan.Retention/               next: retention planner, mark and sweep (ADR-0034)
+│   ├── FallbackPlan.Retention/               retention planner + replication gate; mark and sweep next (ADR-0034)
 │   ├── FallbackPlan.Verification/
 │   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
 │   ├── FallbackPlan.Storage.{Local ✓,Peer,AzureBlob,S3}/

@@ -11,6 +11,7 @@
     <Project Path="src/FallbackPlan.Keystore/FallbackPlan.Keystore.csproj" />
     <Project Path="src/FallbackPlan.Protocol/FallbackPlan.Protocol.csproj" />
     <Project Path="src/FallbackPlan.Replication/FallbackPlan.Replication.csproj" />
+    <Project Path="src/FallbackPlan.Retention/FallbackPlan.Retention.csproj" />
     <Project Path="src/FallbackPlan.Recovery/FallbackPlan.Recovery.csproj">
       <Build Solution="Debug|*" Project="false" />
     </Project>
@@ -38,6 +39,7 @@
     <Project Path="tests/FallbackPlan.InterruptionTests/FallbackPlan.InterruptionTests.csproj" />
     <Project Path="tests/FallbackPlan.PerformanceTests/FallbackPlan.PerformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Protocol.Tests/FallbackPlan.Protocol.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Retention.Tests/FallbackPlan.Retention.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.ConformanceTests/FallbackPlan.Repository.ConformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.FuzzTests/FallbackPlan.Repository.FuzzTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.Tests/FallbackPlan.Repository.Tests.csproj" />

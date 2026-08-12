@@ -90,11 +90,19 @@ public sealed record RetentionConfiguration
     [JsonPropertyName("min_generations")]
     public int? MinGenerations { get; init; }
 
+    /// <summary>
+    /// How many days retention may be deferred while a destination has not
+    /// received an expiring snapshot, before the gap is raised as a warning
+    /// (FR-GC-009, ADR-0011 Amendment 2). Default 30.
+    /// </summary>
+    [JsonPropertyName("deferral_days")]
+    public int? DeferralDays { get; init; }
+
     /// <summary>Whether every declared value is positive; a zero rule is a typo, not a policy.</summary>
     [JsonIgnore]
     public bool IsValid =>
         KeepDaily is null or > 0 && KeepWeekly is null or > 0 &&
-        KeepMonthly is null or > 0 && MinGenerations is null or > 0;
+        KeepMonthly is null or > 0 && MinGenerations is null or > 0 && DeferralDays is null or > 0;
 }
 
 /// <summary>

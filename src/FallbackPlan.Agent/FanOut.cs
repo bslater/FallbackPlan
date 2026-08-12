@@ -211,11 +211,15 @@ public static class FanOut
                     nowMs);
             }
 
+            // Read before the push begins, same as the local-path copy: the
+            // gate's claim is "everything at or before this generation is
+            // there" (FR-GC-009).
+            var syncedGeneration = StagingGeneration(archive);
             var committed = await ReplicationInitiator.PushAllAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, cancellationToken)
                 .ConfigureAwait(false);
 
-            ledger.RecordSuccess(set.Id, destination.Name, committed, nowMs);
+            ledger.RecordSuccess(set.Id, destination.Name, committed, nowMs, syncedGeneration);
         }
         catch (Protocol.PeerProtocolException refusal)
             when (refusal.Reason == Protocol.PeerRefusalReason.StorageExhausted)
@@ -267,6 +271,12 @@ public static class FanOut
         }
     }
 
+    /// <summary>The staging archive's current publication generation — the gate's currency (FR-GC-009).</summary>
+    private static ulong StagingGeneration(ArchiveHandle archive) =>
+        Math.Max(
+            archive.Repository.CurrentDataGeneration.Value,
+            archive.Repository.CurrentMetadataGeneration.Value);
+
     private static async ValueTask CopyToLocalPathAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken)
@@ -290,10 +300,16 @@ public static class FanOut
             var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
             Directory.CreateDirectory(replicaRoot);
 
+            // The generation is read BEFORE the copy starts: a success then
+            // proves the destination holds everything published at or before
+            // it, which is what the replication gate compares snapshots to
+            // (FR-GC-009). A snapshot publishing mid-copy may or may not have
+            // crossed, so the claim stops at the pre-copy generation.
+            var syncedGeneration = StagingGeneration(archive);
             var outcome = await StoreToStoreCopier.CopyAsync(
                 archive.Store, new LocalFileSystemObjectStore(replicaRoot), cancellationToken).ConfigureAwait(false);
 
-            ledger.RecordSuccess(set.Id, destination.Name, outcome.Copied, nowMs);
+            ledger.RecordSuccess(set.Id, destination.Name, outcome.Copied, nowMs, syncedGeneration);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

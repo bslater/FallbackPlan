@@ -57,6 +57,15 @@ public sealed record DestinationSyncRecord
     /// <summary>What the last failure said, for `status` to repeat verbatim.</summary>
     [JsonPropertyName("last_error")]
     public string? LastError { get; init; }
+
+    /// <summary>
+    /// The staging archive's publication generation when the last successful
+    /// sync <b>began</b> — everything published at or before it is at the
+    /// destination. The replication gate compares snapshot generations to
+    /// this, never to the clock (FR-GC-009, ADR-0009 Amendment 4).
+    /// </summary>
+    [JsonPropertyName("synced_generation")]
+    public ulong SyncedGeneration { get; init; }
 }
 
 /// <summary>
@@ -135,8 +144,20 @@ public sealed class DestinationSyncStore
     }
 
     /// <summary>Records a successful sync: the pair is in sync as of now.</summary>
-    public DestinationSyncRecord RecordSuccess(string setId, string destination, long objects, ulong nowUnixMilliseconds) =>
-        Upsert(new DestinationSyncRecord
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="objects">Objects copied by this sync.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="syncedGeneration">
+    /// The staging archive's publication generation when the sync began — the
+    /// replication gate's input (FR-GC-009). A snapshot published after the
+    /// sync started may or may not have crossed, so the claim stops here.
+    /// </param>
+    public DestinationSyncRecord RecordSuccess(
+        string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedGeneration = 0)
+    {
+        var previous = Find(setId, destination);
+        return Upsert(new DestinationSyncRecord
         {
             SetId = setId,
             Destination = destination,
@@ -145,7 +166,10 @@ public sealed class DestinationSyncStore
             LastSuccessAt = nowUnixMilliseconds,
             Objects = objects,
             ConsecutiveFailures = 0,
+            // A later sync never un-holds what an earlier one delivered.
+            SyncedGeneration = Math.Max(syncedGeneration, previous?.SyncedGeneration ?? 0),
         });
+    }
 
     /// <summary>Records a failed or refused attempt, keeping the last success and counting toward back-off.</summary>
     public DestinationSyncRecord RecordFailure(
@@ -164,6 +188,7 @@ public sealed class DestinationSyncStore
             Objects = previous?.Objects ?? 0,
             ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
             LastError = error,
+            SyncedGeneration = previous?.SyncedGeneration ?? 0,
         });
     }
 
