@@ -44,29 +44,20 @@ public sealed record ServiceOptions
 public sealed class ServiceRuntime : IAsyncDisposable
 {
     private readonly StateDirectoryLock _writerRole;
-    private readonly LocalFileSystemObjectStore _store;
-    private readonly OpenedRepository _repository;
-    private readonly CatalogueDb _catalogue;
-    private readonly WriterSequence _sequence;
+    private readonly ArchiveHandle _archive;
 
     private ServiceRuntime(
         ServiceOptions options,
         StateDirectoryLock writerRole,
-        LocalFileSystemObjectStore store,
-        OpenedRepository repository,
-        CatalogueDb catalogue,
+        ArchiveHandle archive,
         LocalState state,
-        JobStateStore jobs,
-        WriterSequence sequence)
+        JobStateStore jobs)
     {
         Options = options;
         _writerRole = writerRole;
-        _store = store;
-        _repository = repository;
-        _catalogue = catalogue;
+        _archive = archive;
         State = state;
         Jobs = jobs;
-        _sequence = sequence;
         Progress = new ProgressHub();
         Queue = new JobScheduler();
     }
@@ -86,23 +77,26 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>What is running and what is waiting.</summary>
     public JobScheduler Queue { get; }
 
+    /// <summary>The archive the service writes, with everything held open for it.</summary>
+    public ArchiveHandle Archive => _archive;
+
     /// <summary>The opened repository.</summary>
-    public OpenedRepository Repository => _repository;
+    public OpenedRepository Repository => _archive.Repository;
 
     /// <summary>The object store.</summary>
-    public LocalFileSystemObjectStore Store => _store;
+    public LocalFileSystemObjectStore Store => _archive.Store;
 
     /// <summary>The writer-side catalogue. Read paths open their own.</summary>
-    public CatalogueDb Catalogue => _catalogue;
+    public CatalogueDb Catalogue => _archive.Catalogue;
 
     /// <summary>The one sequence allocator for this device's writer role.</summary>
-    public WriterSequence Sequence => _sequence;
+    public WriterSequence Sequence => _archive.Sequence;
 
     /// <summary>This device's writer identity.</summary>
     public WriterId Writer => WriterId.FromBytes(State.WriterId);
 
     /// <summary>Where blobs are spooled before upload.</summary>
-    public string SpoolDirectory => Path.Combine(Options.StateDirectory, "spool");
+    public string SpoolDirectory => _archive.SpoolDirectory;
 
     /// <summary>Where the client configuration lives.</summary>
     public string ConfigurationPath => Path.Combine(Options.StateDirectory, "config.json");
@@ -132,20 +126,37 @@ public sealed class ServiceRuntime : IAsyncDisposable
             var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken)
                 .ConfigureAwait(false);
 
+            ArchiveHandle archive;
             try
             {
-                var catalogue = CatalogueDb.Open(
-                    Path.Combine(options.StateDirectory, "catalogue.db"), repository.RepositoryId);
-                var state = LocalState.LoadOrCreate(options.StateDirectory);
-                var jobs = JobStateStore.Open(options.StateDirectory);
-                var sequence = new WriterSequence(
-                    new FileSequenceStateStore(Path.Combine(options.StateDirectory, "sequence.txt")));
-
-                return new ServiceRuntime(options, writerRole, store, repository, catalogue, state, jobs, sequence);
+                var cataloguePath = Path.Combine(options.StateDirectory, "catalogue.db");
+                archive = new ArchiveHandle
+                {
+                    Store = store,
+                    Repository = repository,
+                    Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId),
+                    Sequence = new WriterSequence(
+                        new FileSequenceStateStore(Path.Combine(options.StateDirectory, "sequence.txt"))),
+                    SpoolDirectory = Path.Combine(options.StateDirectory, "spool"),
+                    CataloguePath = cataloguePath,
+                };
             }
             catch
             {
                 repository.Dispose();
+                throw;
+            }
+
+            try
+            {
+                var state = LocalState.LoadOrCreate(options.StateDirectory);
+                var jobs = JobStateStore.Open(options.StateDirectory);
+
+                return new ServiceRuntime(options, writerRole, archive, state, jobs);
+            }
+            catch
+            {
+                archive.Dispose();
                 throw;
             }
         }
@@ -166,8 +177,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// the writer, so a read path gets its own connection rather than
     /// contending for the writer's.
     /// </remarks>
-    public CatalogueDb OpenReadCatalogue() =>
-        CatalogueDb.Open(Path.Combine(Options.StateDirectory, "catalogue.db"), _repository.RepositoryId);
+    public CatalogueDb OpenReadCatalogue() => _archive.OpenReadCatalogue();
 
     /// <summary>Stops the service and releases the writer role.</summary>
     /// <returns>A task that completes when everything is closed.</returns>
@@ -175,8 +185,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     {
         await Queue.DisposeAsync().ConfigureAwait(false);
         Progress.Complete();
-        _catalogue.Dispose();
-        _repository.Dispose();
+        _archive.Dispose();
         _writerRole.Dispose();
     }
 }
