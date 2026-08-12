@@ -110,6 +110,16 @@ public sealed class HostHarness : IDisposable
     public void WriteConfiguration(string schedule) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+        Destinations =
+        [
+            new DestinationConfiguration
+            {
+                Id = new string('d', 32),
+                Name = "vault",
+                Kind = DestinationKind.LocalPath,
+                Path = Path.Combine(StateDirectory, "vault"),
+            },
+        ],
         BackupSets =
         [
             new BackupSetConfiguration
@@ -118,6 +128,7 @@ public sealed class HostHarness : IDisposable
                 Name = "docs",
                 Root = SourceRoot,
                 Schedule = schedule,
+                Destinations = [new SetDestinationReference { Ref = "vault" }],
             },
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));

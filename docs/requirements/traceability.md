@@ -102,7 +102,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
-| FR-DEST-001..008 | [09 §4](../architecture/09-replication-and-peers.md#4-durability-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | — *(untested; hub-and-spoke arc)* | 2–4 |
+| FR-DEST-001..008 | [09 §4](../architecture/09-replication-and-peers.md#4-durability-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | `Application.Tests/ClientConfigurationTests` — the declaration half: named destinations with local optional (001), reserved kinds accepted (005), addresses in configuration only (006) · fan-out behaviour (002–004, 007–008) ahead in the arc | 2–4 |
 
 ### Replication and verification
 
@@ -128,7 +128,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-GC-008 | [07 §5](../architecture/07-retention-and-gc.md#5-destructive-change-safeguards) | — | — *(untested; phase 4)* | 4 |
 | FR-QUOTA-001..002 | [09 §6](../architecture/09-replication-and-peers.md#6-quotas-and-exhaustion) | [0012](../adr/0012-storage-provider-contract.md) | — *(untested; phase 2)* | 2 |
 | FR-GC-009 | [07 §2.1](../architecture/07-retention-and-gc.md#21-retention-must-not-outrun-replication) | [0011](../adr/0011-commit-versus-replication-semantics.md) | — *(untested; phase 4)* | 4 |
-| FR-GC-010 | [07 §2](../architecture/07-retention-and-gc.md#2-retention-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | — *(untested; hub-and-spoke arc)* | 4 |
+| FR-GC-010 | [07 §2](../architecture/07-retention-and-gc.md#2-retention-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | `Application.Tests/ClientConfigurationTests` — the declaration half only: per-set policy and per-destination overrides round-trip and validate; planning and floor enforcement *(untested; hub-and-spoke arc)* | 4 |
 
 ### Governance and import
 

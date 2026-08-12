@@ -68,13 +68,15 @@ public sealed record AcknowledgedResult : ServiceResult;
 /// <param name="Schedule">Its schedule expression, or null for manual-only.</param>
 /// <param name="IncludeRules">Include rules, in rules-v1 dialect.</param>
 /// <param name="ExcludeRules">Exclude rules, in rules-v1 dialect.</param>
+/// <param name="Destinations">The declared destination names the set replicates to (FR-DEST-001).</param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
     string Root,
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
-    IReadOnlyList<string> ExcludeRules);
+    IReadOnlyList<string> ExcludeRules,
+    IReadOnlyList<string> Destinations);
 
 /// <summary>The configured backup sets.</summary>
 /// <param name="Sets">The sets.</param>

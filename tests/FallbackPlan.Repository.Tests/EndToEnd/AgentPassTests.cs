@@ -44,9 +44,20 @@ public sealed class AgentPassTests : IDisposable
             createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
     }
 
+    private DestinationConfiguration Vault => new()
+    {
+        Id = new string('d', 32),
+        Name = "vault",
+        Kind = DestinationKind.LocalPath,
+        Path = Path.Combine(StateDirectory, "vault"),
+    };
+
+    private static SetDestinationReference VaultRef => new() { Ref = "vault" };
+
     private void WriteConfiguration(string schedule) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+        Destinations = [Vault],
         BackupSets =
         [
             new BackupSetConfiguration
@@ -55,6 +66,7 @@ public sealed class AgentPassTests : IDisposable
                 Name = "docs",
                 Root = SourceRoot,
                 Schedule = schedule,
+                Destinations = [VaultRef],
             },
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
@@ -125,17 +137,20 @@ public sealed class AgentPassTests : IDisposable
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Vault],
             BackupSets =
             [
                 new BackupSetConfiguration
                 {
                     Id = new string('b', 32), Name = "gone",
                     Root = Path.Combine(_root, "unmounted"), Schedule = "every 1h",
+                    Destinations = [VaultRef],
                 },
                 new BackupSetConfiguration
                 {
                     Id = new string('c', 32), Name = "typo",
                     Root = SourceRoot, Schedule = "hourly",
+                    Destinations = [VaultRef],
                 },
             ],
         }.Save(Path.Combine(StateDirectory, "config.json"));

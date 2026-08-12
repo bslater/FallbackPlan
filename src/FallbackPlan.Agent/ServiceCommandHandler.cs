@@ -421,11 +421,18 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(
             [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
-                set.Id, set.Name, set.Root, set.Schedule, set.IncludeRules, set.ExcludeRules))]);
+                set.Id, set.Name, set.Root, set.Schedule, set.IncludeRules, set.ExcludeRules,
+                [.. set.Destinations.Select(reference => reference.Ref)]))]);
 
     private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
     {
         var configuration = runtime.Configuration;
+
+        // The command names destinations; a retention override stays a
+        // configuration-file concern until a client needs to write one.
+        // An upsert keeps any override the set already carried per name.
+        var existing = configuration.BackupSets
+            .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
         var replacement = new BackupSetConfiguration
         {
             Id = command.Set.Id,
@@ -434,6 +441,11 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             Schedule = command.Set.Schedule,
             IncludeRules = command.Set.IncludeRules,
             ExcludeRules = command.Set.ExcludeRules,
+            Retention = existing?.Retention,
+            Destinations = [.. command.Set.Destinations.Select(name =>
+                existing?.Destinations.FirstOrDefault(reference =>
+                    string.Equals(reference.Ref, name, StringComparison.Ordinal))
+                ?? new SetDestinationReference { Ref = name })],
         };
 
         var sets = configuration.BackupSets
@@ -443,13 +455,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
         try
         {
-            // Save validates: an invalid set is refused here rather than
-            // discovered by the scheduler at two in the morning.
-            new ClientConfiguration
-            {
-                SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
-                BackupSets = sets,
-            }.Save(runtime.ConfigurationPath);
+            // Save validates: an invalid set — including one referencing no
+            // declared destination (FR-DEST-001) — is refused here rather
+            // than discovered by the scheduler at two in the morning.
+            (configuration with { BackupSets = sets }).Save(runtime.ConfigurationPath);
         }
         catch (ClientStateException exception)
         {
