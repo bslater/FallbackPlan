@@ -168,6 +168,18 @@ public static class StoreToStoreCopier
             held.Add(entry.Key.Value);
         }
 
+        // The source's own listing bounds what the drop half may condemn: a
+        // key the destination holds that staging no longer lists — a trimmed
+        // data blob — may be the only copy left, and a filter computed from
+        // staging cannot vouch for it either way. Unknown is kept (ADR-0034
+        // §6's trim rests on this).
+        var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            sourceKeys.Add(entry.Key.Value);
+        }
+
         var copied = 0L;
         var alreadyHeld = 0L;
         var matched = new HashSet<string>(StringComparer.Ordinal);
@@ -223,7 +235,9 @@ public static class StoreToStoreCopier
             {
                 // Identity and keys never go, whatever the filter says — a
                 // replica without its descriptor is not a repository at all.
-                if (!InPhase(key, phase) || keeps(key)
+                // And nothing goes that the source does not list: a key only
+                // the destination holds may be a trimmed object's last copy.
+                if (!InPhase(key, phase) || keeps(key) || !sourceKeys.Contains(key)
                     || key is "repository-format" || key.StartsWith("keys/", StringComparison.Ordinal))
                 {
                     continue;

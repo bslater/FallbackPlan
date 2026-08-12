@@ -128,6 +128,51 @@ public sealed class DestinationConvergenceTests : IDisposable
         Assert.AreEqual(0, again.Deleted);
     }
 
+    [TestMethod]
+    public async Task Converge_AKeyOnlyTheDestinationHolds_SurvivesBecauseStagingCannotVouchForIt()
+    {
+        // After a staging trim the replica holds data blobs staging no longer
+        // lists — possibly the only copies anywhere. A keep filter computed
+        // from staging answers "drop" for a key it has never heard of, so the
+        // drop half must condemn only keys the source itself lists
+        // (ADR-0034 §6).
+        var source = new LocalFileSystemObjectStore(Path.Combine(_root, "converge-source"));
+        var destination = new LocalFileSystemObjectStore(Path.Combine(_root, "converge-destination"));
+
+        await PlantAsync(source, "repository-format");
+        await PlantAsync(source, "blobs/data/aa/kept");
+        await PlantAsync(source, "blobs/data/bb/dropped");
+        await PlantAsync(destination, "repository-format");
+        await PlantAsync(destination, "blobs/data/aa/kept");
+        await PlantAsync(destination, "blobs/data/bb/dropped");
+        await PlantAsync(destination, "blobs/data/cc/trimmed");
+
+        // The filter keeps one blob; both other keys answer "drop" — the
+        // source listing is the only thing standing between the trimmed key
+        // and deletion.
+        static bool Keeps(string key) =>
+            !key.StartsWith("blobs/", StringComparison.Ordinal) || key is "blobs/data/aa/kept";
+
+        var outcome = await StoreToStoreCopier.ConvergeAsync(source, destination, Keeps, CancellationToken.None);
+
+        // Exactly the source-listed dropped key went; the trimmed one stays.
+        Assert.AreEqual(1, outcome.Deleted);
+        var held = await ListAsync(destination, "blobs/");
+        CollectionAssert.Contains(held, "blobs/data/aa/kept");
+        CollectionAssert.Contains(held, "blobs/data/cc/trimmed");
+        CollectionAssert.DoesNotContain(held, "blobs/data/bb/dropped");
+    }
+
+    private static async Task PlantAsync(LocalFileSystemObjectStore store, string key)
+    {
+        var put = await store.PutAsync(
+            ObjectKey.Parse(key),
+            _ => ValueTask.FromResult<Stream>(new MemoryStream("planted"u8.ToArray())),
+            PutConditions.None,
+            CancellationToken.None);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+    }
+
     private static async Task AssertWalksCleanAsync(LocalFileSystemObjectStore replica, int expectedSnapshots)
     {
         using var passphrase = Passphrase.Create(PassphraseText);

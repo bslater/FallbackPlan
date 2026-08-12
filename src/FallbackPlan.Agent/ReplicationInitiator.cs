@@ -64,9 +64,12 @@ internal static class ReplicationInitiator
             var held = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
 
             var sent = 0L;
+            var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
+                sourceKeys.Add(entry.Key.Value);
+
                 if (held.Contains(entry.Key.Value)
                     || IsStagingOnly(entry.Key.Value)
                     || (keeps is not null && !keeps(entry.Key.Value)))
@@ -90,9 +93,13 @@ internal static class ReplicationInitiator
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
-            // before anything they reference.
+            // before anything they reference — and only keys STAGING STILL
+            // LISTS. A key the spoke holds that staging no longer does is a
+            // trimmed object whose only remaining home may be that spoke;
+            // a filter computed from staging cannot vouch for it, and the
+            // unknown is kept (ADR-0034 §6).
             var drops = held
-                .Where(key => !keeps(key) || IsStagingOnly(key))
+                .Where(key => sourceKeys.Contains(key) && (!keeps(key) || IsStagingOnly(key)))
                 .OrderBy(DropRank)
                 .ThenBy(key => key, StringComparer.Ordinal)
                 .ToList();

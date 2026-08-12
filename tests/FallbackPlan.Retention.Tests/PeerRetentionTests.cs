@@ -107,6 +107,42 @@ public sealed class PeerRetentionTests : IDisposable
             NoticeStore.Open(StateDirectory).Unacknowledged);
     }
 
+    [TestMethod]
+    public async Task FanOut_AKeyOnlyTheSpokeHolds_SurvivesTheRetentionInstruction()
+    {
+        // After a staging trim, a data blob's only remaining copy may sit at
+        // the spoke. The drop-list is inventory minus keep-set, and the
+        // keep-set is computed from staging — which has never heard of the
+        // trimmed key. Only keys staging still lists may be condemned
+        // (ADR-0034 §6), so the planted key must ride out the instruction.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        var planted = ObjectKey.Parse("blobs/data/zz/trimmed-from-staging");
+        var put = await replica.PutAsync(
+            planted,
+            _ => ValueTask.FromResult<Stream>(new MemoryStream("planted"u8.ToArray())),
+            PutConditions.None,
+            CancellationToken.None);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+
+        // Two more passes, each pushing and instructing under the narrow
+        // policy; the spoke declares the planted key in every inventory.
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
+        await BackUpAsync(start.AddHours(10));
+
+        Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        var metadata = await replica.GetMetadataAsync(planted, CancellationToken.None);
+        Assert.IsNotNull(metadata.Metadata, "the key only the spoke holds was condemned by a staging-computed drop-list");
+    }
+
     private void WriteConfiguration(string fingerprint) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
