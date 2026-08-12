@@ -133,11 +133,27 @@ again per destination copy. Accepted deliberately: ADR-0006 already frames dedup
 scope as a trust-domain choice rather than a maximum, the overlap case is the
 exception in household use, and what it buys — every destination copy a complete
 archive, blast radius of one set, per-destination quota that is simply the bytes
-of the archives assigned there — is the architecture. **Staging doubles
-same-disk storage** until the trim that FR-GC-009's gate enables lands: a set
-whose only destination is a folder on the same volume holds its data twice
-meanwhile. **N archives mean N key derivations** on a many-set hub, bounded by
-opening archives lazily.
+of the archives assigned there — is the architecture. **Staging pays same-disk storage only for the current
+generation** now that the trim FR-GC-009's gate enables is built: a retention
+pass under `--apply` deletes HISTORIC data blobs from staging once every
+destination entitled to them verifiably holds them — a reachable local-path
+replica probed key by key, a peer trusted through its sync-ledger claim, the
+same trust the replication gate rests on. The newest snapshot's closure stays
+deliberately: the dedup trust gate probes staging before every reuse, so
+trimming the current generation would make the next backup re-store every
+unchanged file and fan the duplicates out again — and the convergence rule
+that protects trimmed objects (a key staging no longer lists is never
+condemned, because it may be the only copy left) would let those superseded
+copies accumulate at destinations without bound. Keeping the current closure
+cached makes trim converge pass over pass: what leaves staging is history, and
+history does not come back. Two residual costs, accepted and stated: restoring
+a trimmed snapshot **from staging** is impossible and the restore plan says so
+(`MissingObjects` names the files whose data lives only at destinations — the
+destination replica is the restore path, which is the architecture); and a
+**destination added after a trim** converges from subset staging, so it misses
+the trimmed history until destination-aware verification (peer-protocol 04)
+can seed it from a complete replica. **N archives mean N key derivations** on
+a many-set hub, bounded by opening archives lazily.
 
 ## Consequences
 
