@@ -1074,11 +1074,17 @@ public static class CliApplication
             {
                 Description = "A human label for this service, for display only.",
             };
+            var roleOption = new Option<string?>("--role")
+            {
+                Description = "The role this console records for the service: stores-here, stores-for-us (default), "
+                    + "or both. Declared on the wire and approved by both humans (ADR-0030 Amendment 2).",
+            };
 
             var command = new Command("pair", "Pair this console with a service's remote binding (ADR-0030).");
             command.Arguments.Add(connectArgument);
             command.Options.Add(stateArgOption);
             command.Options.Add(labelOption);
+            command.Options.Add(roleOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -1091,6 +1097,11 @@ public static class CliApplication
 
                 var state = parse.GetValue(stateArgOption)!;
                 var label = parse.GetValue(labelOption);
+                if (!PeerRoles.TryParse(parse.GetValue(roleOption), out var role))
+                {
+                    throw new CliFailureException(
+                        $"--role '{parse.GetValue(roleOption)}' is not stores-here, stores-for-us, or both.");
+                }
 
                 using var keypair = PeerKeypairStore.Open(state);
                 var grants = PeerGrantStore.Open(state);
@@ -1102,10 +1113,11 @@ public static class CliApplication
                     host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
 
                 var result = await PairingCeremony.OfferAsync(
-                    connection.Stream, keypair, grants, label ?? Environment.MachineName, PeerRole.StoresForUs,
+                    connection.Stream, keypair, grants, label ?? Environment.MachineName, role,
                     (prospect, _) =>
                     {
                         output.WriteLine($"pairing with {prospect.PeerLabel} (peer {prospect.PeerIdentity.Fingerprint})");
+                        output.WriteLine($"they will record this console as: {prospect.TheirRoleForUs}");
                         output.WriteLine($"compare this string on both devices: {prospect.ShortAuthenticationString}");
                         output.Write("do the strings match, and do you approve? [y/N] ");
                         output.Flush();

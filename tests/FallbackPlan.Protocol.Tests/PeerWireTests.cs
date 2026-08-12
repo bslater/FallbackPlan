@@ -194,6 +194,8 @@ public sealed class PeerWireTests : IDisposable
 
         string? serviceSaw = null;
         string? consoleSaw = null;
+        PeerRole? serviceShownRole = null;
+        PeerRole? consoleShownRole = null;
 
         var serviceSide = Task.Run(async () =>
         {
@@ -201,7 +203,12 @@ public sealed class PeerWireTests : IDisposable
                 await AcceptRawAsync(listener), Now, Cancellation);
             return await PairingCeremony.AcceptAsync(
                 connection.Stream, _service, serviceStore, "service", PeerRole.StoresForUs, PeerTerms.None,
-                (prospect, _) => { serviceSaw = prospect.ShortAuthenticationString; return ValueTask.FromResult(true); },
+                (prospect, _) =>
+                {
+                    serviceSaw = prospect.ShortAuthenticationString;
+                    serviceShownRole = prospect.TheirRoleForUs;
+                    return ValueTask.FromResult(true);
+                },
                 1_722_600_000_000, Cancellation);
         });
 
@@ -211,7 +218,12 @@ public sealed class PeerWireTests : IDisposable
                 endpoint.Address.ToString(), endpoint.Port, Now, Cancellation);
             return await PairingCeremony.OfferAsync(
                 connection.Stream, _console, consoleStore, "console", PeerRole.StoresHere,
-                (prospect, _) => { consoleSaw = prospect.ShortAuthenticationString; return ValueTask.FromResult(true); },
+                (prospect, _) =>
+                {
+                    consoleSaw = prospect.ShortAuthenticationString;
+                    consoleShownRole = prospect.TheirRoleForUs;
+                    return ValueTask.FromResult(true);
+                },
                 1_722_600_000_000, Cancellation);
         });
 
@@ -226,6 +238,15 @@ public sealed class PeerWireTests : IDisposable
         Assert.Contains(' ', serviceSaw!); // two groups of three
         Assert.AreEqual(_console.Identity, serviceStore.Find(_console.Identity)?.Identity);
         Assert.AreEqual(_service.Identity, consoleStore.Find(_service.Identity)?.Identity);
+
+        // The declared storage roles crossed the wire and reached each human:
+        // the service was told the console will record it stores-here, and the
+        // console was told the service will record it stores-for-us — the same
+        // roles each side then pinned (ADR-0030 Amendment 2).
+        Assert.AreEqual(PeerRole.StoresHere, serviceShownRole);
+        Assert.AreEqual(PeerRole.StoresForUs, consoleShownRole);
+        Assert.AreEqual(PeerRole.StoresForUs, serviceStore.Find(_console.Identity)?.Role);
+        Assert.AreEqual(PeerRole.StoresHere, consoleStore.Find(_service.Identity)?.Role);
     }
 
     [TestMethod]

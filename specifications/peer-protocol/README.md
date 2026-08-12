@@ -32,7 +32,7 @@ This set is **incomplete, and the table says which parts**. A missing document i
 | # | Document | Covers | Status |
 |---|----------|--------|--------|
 | — | [Conventions](00-conventions.md) | What is inherited from the repository format, and what differs | Written |
-| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony, pinning, grants and terms | Written; implemented |
+| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony with negotiated storage roles, pinning, grants and terms | Written; implemented |
 | 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written; implemented |
 | 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
 | 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |

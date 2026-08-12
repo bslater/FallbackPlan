@@ -19,6 +19,27 @@ public enum PeerRole : byte
     Both = 3,
 }
 
+/// <summary>The role vocabulary as verbs spell it, shared by every front end.</summary>
+public static class PeerRoles
+{
+    /// <summary>Parses the verb vocabulary; null takes the console default, <see cref="PeerRole.StoresForUs"/>.</summary>
+    /// <param name="text">What the operator typed, or null.</param>
+    /// <param name="role">The parsed role.</param>
+    /// <returns><see langword="false"/> when the text is not in the vocabulary.</returns>
+    public static bool TryParse(string? text, out PeerRole role)
+    {
+        (var known, role) = text switch
+        {
+            null or "stores-for-us" => (true, PeerRole.StoresForUs),
+            "stores-here" => (true, PeerRole.StoresHere),
+            "both" => (true, PeerRole.Both),
+            _ => (false, default(PeerRole)),
+        };
+
+        return known;
+    }
+}
+
 /// <summary>
 /// One pinned pairing (specification peer-protocol 01 §3).
 /// </summary>

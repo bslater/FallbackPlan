@@ -52,7 +52,8 @@ public static class AgentHost
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
-                  fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]
+                  fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
+                                            [--label <name>] [--role stores-here|stores-for-us|both]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp>
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
@@ -133,7 +134,7 @@ public static class AgentHost
                 "pairings" => ListPairings(stateDirectory, output),
                 "unpair" => Unpair(stateDirectory, Get("--fingerprint"), output, error),
                 _ => await PairAsync(stateDirectory, Get("--remote-interface"), Get("--remote-port"), Get("--label"),
-                    output, error, cancellationToken).ConfigureAwait(false),
+                    Get("--role"), output, error, cancellationToken).ConfigureAwait(false),
             };
         }
 
@@ -447,6 +448,7 @@ public static class AgentHost
         string? remoteInterface,
         string? remotePort,
         string? label,
+        string? roleText,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
@@ -455,7 +457,20 @@ public static class AgentHost
             || !int.TryParse(remotePort, CultureInfo.InvariantCulture, out var port)
             || !IPAddress.TryParse(remoteInterface, out var address))
         {
-            error.WriteLine("error: usage is `pair --state <dir> --remote-interface <ip> --remote-port <n> [--label <name>]`.");
+            error.WriteLine(
+                "error: usage is `pair --state <dir> --remote-interface <ip> --remote-port <n>"
+                + " [--label <name>] [--role stores-here|stores-for-us|both]`.");
+            return 1;
+        }
+
+        // The role this device records for the dialler — what the dialler may
+        // do here (01 §3). stores-for-us is the console pairing; a spoke
+        // accepting a hub that will store here says stores-here. The declared
+        // role rides the ceremony's transcript, so both humans approve it
+        // (ADR-0030 Amendment 2).
+        if (!PeerRoles.TryParse(roleText, out var role))
+        {
+            error.WriteLine($"error: --role '{roleText}' is not stores-here, stores-for-us, or both.");
             return 1;
         }
 
@@ -480,7 +495,7 @@ public static class AgentHost
             accepted, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
 
         var result = await PairingCeremony.AcceptAsync(
-            connection.Stream, keypair, grants, label ?? Environment.MachineName, PeerRole.StoresForUs, PeerTerms.None,
+            connection.Stream, keypair, grants, label ?? Environment.MachineName, role, PeerTerms.None,
             (prospect, _) => ValueTask.FromResult(Approve(prospect, output)),
             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false);
 
@@ -497,6 +512,7 @@ public static class AgentHost
     private static bool Approve(PairingProspect prospect, TextWriter output)
     {
         output.WriteLine($"pairing with {prospect.PeerLabel} (peer {prospect.PeerIdentity.Fingerprint})");
+        output.WriteLine($"they will record this device as: {DescribeRole(prospect.TheirRoleForUs)}");
         output.WriteLine($"compare this string on both devices: {prospect.ShortAuthenticationString}");
         output.Write("do the strings match, and do you approve? [y/N] ");
         output.Flush();
@@ -504,6 +520,13 @@ public static class AgentHost
         var answer = Console.In.ReadLine();
         return answer is not null && answer.Trim().StartsWith('y');
     }
+
+    private static string DescribeRole(PeerRole role) => role switch
+    {
+        PeerRole.StoresHere => "stores-here (this device may store objects there)",
+        PeerRole.StoresForUs => "stores-for-us (this device is a client or a source they store for)",
+        _ => "both",
+    };
 
     private static int ListPairings(string stateDirectory, TextWriter output)
     {

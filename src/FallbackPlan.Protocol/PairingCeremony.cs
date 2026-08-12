@@ -12,7 +12,9 @@ namespace FallbackPlan.Protocol;
 /// </param>
 /// <param name="PeerIdentity">The peer's long-lived identity — pinned on approval, verified always against the full key.</param>
 /// <param name="PeerLabel">The human-chosen label the peer offered, for display only.</param>
-public sealed record PairingProspect(string ShortAuthenticationString, PeerIdentity PeerIdentity, string PeerLabel);
+/// <param name="TheirRoleForUs">The role the peer declared it will record for this device — part of what the human approves, and inside the signed transcript (ADR-0030 Amendment 2).</param>
+public sealed record PairingProspect(
+    string ShortAuthenticationString, PeerIdentity PeerIdentity, string PeerLabel, PeerRole TheirRoleForUs);
 
 /// <summary>The result of a pairing attempt.</summary>
 /// <param name="Grant">The pinned grant when both sides approved; otherwise null.</param>
@@ -85,7 +87,7 @@ public static class PairingCeremony
         using var exchange = PairingExchange.Start();
         var contribution = new PairingContribution(keypair.Identity, exchange.PublicKey, exchange.Nonce);
         await PeerFrame.WriteAsync(
-            stream, new PairOffer(contribution, label, PeerSessionNegotiation.CurrentVersion), cancellationToken)
+            stream, new PairOffer(contribution, label, PeerSessionNegotiation.CurrentVersion, role), cancellationToken)
             .ConfigureAwait(false);
 
         var accept = await ReadAsync(stream, PeerMessageType.PairAccept, PairAccept.Read, cancellationToken)
@@ -96,11 +98,13 @@ public static class PairingCeremony
         }
 
         var responder = accept.Contribution;
-        var transcript = PairingTranscript.Build(contribution, responder, accept.SelectedVersion);
+        var transcript = PairingTranscript.Build(
+            contribution, responder, accept.SelectedVersion, offererPins: role, responderPins: accept.RoleForOfferer);
 
         return await CompleteAsync(
             stream, keypair, grants, exchange, responder, weAreOfferer: true, transcript,
-            accept.Label, accept.Terms ?? PeerTerms.None, role, approve, nowUnixMilliseconds, cancellationToken)
+            accept.Label, accept.Terms ?? PeerTerms.None, role, accept.RoleForOfferer,
+            approve, nowUnixMilliseconds, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -152,15 +156,17 @@ public static class PairingCeremony
         using var exchange = PairingExchange.Start();
         var contribution = new PairingContribution(keypair.Identity, exchange.PublicKey, exchange.Nonce);
         await PeerFrame.WriteAsync(
-            stream, new PairAccept(contribution, label, (ushort)version, terms), cancellationToken)
+            stream, new PairAccept(contribution, label, (ushort)version, terms, role), cancellationToken)
             .ConfigureAwait(false);
 
         var offerer = offer.Contribution;
-        var transcript = PairingTranscript.Build(offerer, contribution, (ushort)version);
+        var transcript = PairingTranscript.Build(
+            offerer, contribution, (ushort)version, offererPins: offer.RoleForResponder, responderPins: role);
 
         return await CompleteAsync(
             stream, keypair, grants, exchange, offerer, weAreOfferer: false, transcript,
-            offer.Label, terms ?? PeerTerms.None, role, approve, nowUnixMilliseconds, cancellationToken)
+            offer.Label, terms ?? PeerTerms.None, role, offer.RoleForResponder,
+            approve, nowUnixMilliseconds, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -175,6 +181,7 @@ public static class PairingCeremony
         string peerLabel,
         PeerTerms terms,
         PeerRole role,
+        PeerRole theirRoleForUs,
         Func<PairingProspect, CancellationToken, ValueTask<bool>> approve,
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken)
@@ -192,7 +199,7 @@ public static class PairingCeremony
             // or pinned until this returns true — which is what makes a peer's
             // early confirmation something that is held, never something that
             // approves on the human's behalf.
-            var prospect = new PairingProspect(Group(sas), peer.Identity, peerLabel);
+            var prospect = new PairingProspect(Group(sas), peer.Identity, peerLabel, theirRoleForUs);
             if (!await approve(prospect, cancellationToken).ConfigureAwait(false))
             {
                 var refusal = new PairRefuse(PeerRefusalReason.PairingDeclined, "The operator declined the pairing.");

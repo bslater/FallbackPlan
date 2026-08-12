@@ -54,8 +54,21 @@ public static class PairingTranscript
     /// <param name="offerer">The side that initiated.</param>
     /// <param name="responder">The side that accepted.</param>
     /// <param name="protocolVersion">The version selected in the accept.</param>
+    /// <param name="offererPins">The role the offerer declared it will record for the responder (01 §2.2 key 7).</param>
+    /// <param name="responderPins">The role the responder declared it will record for the offerer.</param>
     /// <returns>The transcript bytes.</returns>
-    public static byte[] Build(PairingContribution offerer, PairingContribution responder, ushort protocolVersion)
+    /// <remarks>
+    /// The two declared roles are inside the transcript so that what each
+    /// side records is part of what both humans approve and both keys sign —
+    /// the grants cannot silently disagree about which of them lends the disk
+    /// (ADR-0030 Amendment 2).
+    /// </remarks>
+    public static byte[] Build(
+        PairingContribution offerer,
+        PairingContribution responder,
+        ushort protocolVersion,
+        PeerRole offererPins,
+        PeerRole responderPins)
     {
         ThrowHelper.ThrowIfNull(offerer);
         ThrowHelper.ThrowIfNull(responder);
@@ -65,7 +78,8 @@ public static class PairingTranscript
 
         // Order is fixed by role, not by who spoke first on the wire, so both
         // sides build identical bytes without having to agree on anything else.
-        var transcript = new byte[(PeerIdentity.KeyLength * 2) + (ExchangeKeyLength * 2) + (NonceLength * 2) + sizeof(ushort)];
+        var transcript = new byte[
+            (PeerIdentity.KeyLength * 2) + (ExchangeKeyLength * 2) + (NonceLength * 2) + sizeof(ushort) + 2];
         var at = 0;
 
         offerer.Identity.PublicKey.CopyTo(transcript.AsSpan(at));
@@ -84,6 +98,10 @@ public static class PairingTranscript
         at += NonceLength;
 
         BinaryPrimitives.WriteUInt16BigEndian(transcript.AsSpan(at), protocolVersion);
+        at += sizeof(ushort);
+
+        transcript[at] = (byte)offererPins;
+        transcript[at + 1] = (byte)responderPins;
         return transcript;
     }
 

@@ -31,7 +31,9 @@ Pairing runs over a channel neither side trusts yet, and is authenticated by the
 
 ### 2.1 Roles
 
-The side that initiates is the **offerer**; the side that accepts is the **responder**. The roles decide message order only. Neither role confers authority, and the *destination* sets terms (§4) regardless of which side initiated.
+The side that initiates is the **offerer**; the side that accepts is the **responder**. These wire roles decide message order only. Neither confers authority, and the *destination* sets terms (§4) regardless of which side initiated.
+
+Distinct from the wire roles are the **storage roles** each side will record in its grant (§3): who stores for whom. Each side declares, inside the ceremony, the role it will record for the other (key 7 below), both declarations enter the transcript (§2.3), and both humans therefore approve them with everything else — the two grants cannot silently disagree about which of them lends the disk ([ADR-0030 Amendment 2](../../docs/adr/0030-peer-identity-and-pairing.md#amendment-2-2026-08--the-pairing-lifecycle-completes-roles-on-the-wire-endings-announced-terms-enforced)). A message that omits key 7 MUST be refused as malformed: it comes from a build predating this rule, and pairing with it would record a role only one side saw.
 
 ### 2.2 Messages
 
@@ -46,6 +48,7 @@ Each message is a CBOR map carried in one frame ([02 §7](02-session.md#7-framin
 | 3 | `bytes[32]` | Offerer nonce, fresh from a CSPRNG |
 | 4 | `text` | Offerer label, for display (≤ 256 bytes) |
 | 5 | `u16` | Highest protocol version the offerer speaks |
+| 7 | `u8` | Storage role the offerer will record for the responder (§3 vocabulary: 1, 2 or 3) |
 
 **`PairAccept`** (responder → offerer)
 
@@ -57,6 +60,7 @@ Each message is a CBOR map carried in one frame ([02 §7](02-session.md#7-framin
 | 4 | `text` | Responder label |
 | 5 | `u16` | Protocol version selected, ≤ the offerer's |
 | 6 | `map` | Terms, per §4 — present when the responder is the destination |
+| 7 | `u8` | Storage role the responder will record for the offerer (§3 vocabulary) |
 
 **`PairConfirm`** (either → other, after that side's human approves)
 
@@ -80,6 +84,7 @@ transcript = offerer_identity   ‖ responder_identity
            ‖ offerer_ephemeral  ‖ responder_ephemeral
            ‖ offerer_nonce      ‖ responder_nonce
            ‖ u16(protocol_version)
+           ‖ u8(offerer_declared_role) ‖ u8(responder_declared_role)
 
 sas_key = HKDF-SHA-256(
               salt    = offerer_nonce ‖ responder_nonce,
@@ -93,7 +98,7 @@ The 30 bits are rendered as **six lowercase base32 characters** ([00 §6](../rep
 
 Earlier drafts — and [ADR-0028](../../docs/adr/0028-service-boundary-and-deployment-topologies.md), which predates this document — described this as "short authentication words". A word rendering is **deferred**, and deliberately: words are easier for two people to read aloud, but a word list only helps if both implementations use the *same* list, which means this specification would have to carry 1 024 words normatively. That is a large thing to mandate for a display convenience, and getting it wrong — near-homophones, shared prefixes — makes comparison worse rather than better. Base32 is already required of every implementer for identifiers, so it costs nothing to obtain and is unambiguous under case folding.
 
-Both long-lived identities and both nonces are inside the derivation, so two concurrent sessions relayed by an attacker produce different strings on each side. **The comparison is what defeats the relay**; the ceremony exists to make a human actually perform it.
+Both long-lived identities and both nonces are inside the derivation, so two concurrent sessions relayed by an attacker produce different strings on each side. **The comparison is what defeats the relay**; the ceremony exists to make a human actually perform it. The declared storage roles are inside it for the same reason: an intermediary that altered who-stores-for-whom would alter the string the humans compare.
 
 ### 2.4 Approval and pinning
 

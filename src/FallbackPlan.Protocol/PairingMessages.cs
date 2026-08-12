@@ -17,8 +17,9 @@ namespace FallbackPlan.Protocol;
 /// <param name="Contribution">The offerer's identity, ephemeral share and nonce.</param>
 /// <param name="Label">Human-chosen, for display only, carrying no authority.</param>
 /// <param name="HighestVersion">The highest protocol version the offerer speaks.</param>
+/// <param name="RoleForResponder">The role the offerer will record for the responder (01 §2.2 key 7) — declared on the wire so both grants are approved together (ADR-0030 Amendment 2).</param>
 public sealed record PairOffer(
-    PairingContribution Contribution, string Label, ushort HighestVersion) : IPeerMessage
+    PairingContribution Contribution, string Label, ushort HighestVersion, PeerRole RoleForResponder) : IPeerMessage
 {
     /// <summary>The most bytes a human-chosen label may occupy (00 §2.3).</summary>
     public const int MaximumLabelBytes = 256;
@@ -30,7 +31,7 @@ public sealed record PairOffer(
     public PeerMessageType Type => PeerMessageType.PairOffer;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 5;
+    public int BodyEntryCount => 6;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -42,6 +43,8 @@ public sealed record PairOffer(
         writer.WriteTextString(PairingCbor.CheckedLabel(Label));
         writer.WriteInt32(5);
         writer.WriteUInt32(HighestVersion);
+        writer.WriteInt32(7);
+        writer.WriteUInt32((byte)RoleForResponder);
     }
 
     /// <summary>Reads an offer from a body positioned after the message type.</summary>
@@ -53,7 +56,7 @@ public sealed record PairOffer(
         ThrowHelper.ThrowIfNull(reader);
 
         var fields = PairingCbor.ReadFields(reader, hasTerms: false);
-        return new PairOffer(fields.Contribution(), fields.Label, fields.Version);
+        return new PairOffer(fields.Contribution(), fields.Label, fields.Version, fields.CheckedRole());
     }
 
     /// <summary>Whether two offers say the same thing.</summary>
@@ -63,11 +66,12 @@ public sealed record PairOffer(
         other is not null
         && PairingCbor.SameContribution(Contribution, other.Contribution)
         && string.Equals(Label, other.Label, StringComparison.Ordinal)
-        && HighestVersion == other.HighestVersion;
+        && HighestVersion == other.HighestVersion
+        && RoleForResponder == other.RoleForResponder;
 
     /// <inheritdoc/>
     public override int GetHashCode() =>
-        HashCode.Combine(Contribution.Identity, Label, HighestVersion);
+        HashCode.Combine(Contribution.Identity, Label, HighestVersion, RoleForResponder);
 }
 
 /// <summary>
@@ -77,17 +81,19 @@ public sealed record PairOffer(
 /// <param name="Label">Human-chosen, for display only.</param>
 /// <param name="SelectedVersion">The version chosen, never above the offerer's.</param>
 /// <param name="Terms">Present when the responder is the destination (01 §4).</param>
+/// <param name="RoleForOfferer">The role the responder will record for the offerer (01 §2.2 key 7).</param>
 public sealed record PairAccept(
     PairingContribution Contribution,
     string Label,
     ushort SelectedVersion,
-    PeerTerms? Terms) : IPeerMessage
+    PeerTerms? Terms,
+    PeerRole RoleForOfferer) : IPeerMessage
 {
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.PairAccept;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => Terms is null ? 5 : 6;
+    public int BodyEntryCount => Terms is null ? 6 : 7;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -105,6 +111,9 @@ public sealed record PairAccept(
             writer.WriteInt32(6);
             PairingCbor.WriteTerms(writer, Terms);
         }
+
+        writer.WriteInt32(7);
+        writer.WriteUInt32((byte)RoleForOfferer);
     }
 
     /// <summary>Reads an acceptance from a body positioned after the message type.</summary>
@@ -116,7 +125,7 @@ public sealed record PairAccept(
         ThrowHelper.ThrowIfNull(reader);
 
         var fields = PairingCbor.ReadFields(reader, hasTerms: true);
-        return new PairAccept(fields.Contribution(), fields.Label, fields.Version, fields.Terms);
+        return new PairAccept(fields.Contribution(), fields.Label, fields.Version, fields.Terms, fields.CheckedRole());
     }
 
     /// <summary>Whether two acceptances say the same thing.</summary>
@@ -323,8 +332,18 @@ internal static class PairingCbor
         byte[]? Nonce,
         string Label,
         ushort Version,
-        PeerTerms? Terms)
+        PeerTerms? Terms,
+        byte Role)
     {
+        /// <summary>The declared role, refused when absent or out of vocabulary.</summary>
+        /// <returns>The role.</returns>
+        /// <exception cref="PeerProtocolException">The message carries no valid role — a build predating the negotiated role must pair again (ADR-0030 Amendment 2).</exception>
+        public PeerRole CheckedRole() => Role is >= 1 and <= 3
+            ? (PeerRole)Role
+            : throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "The pairing message declares no storage role — the peer runs a build from before roles were negotiated; update it and pair again.");
+
         /// <summary>Builds the contribution, checking every length first.</summary>
         /// <returns>The contribution.</returns>
         /// <exception cref="PeerProtocolException">A field is missing or the wrong length.</exception>
@@ -352,6 +371,7 @@ internal static class PairingCbor
         var label = string.Empty;
         ushort version = 0;
         PeerTerms? terms = null;
+        byte role = 0;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -381,13 +401,16 @@ internal static class PairingCbor
                 case 6 when hasTerms:
                     terms = ReadTerms(reader);
                     break;
+                case 7:
+                    role = (byte)PeerCbor.ReadUInt16(reader);
+                    break;
                 default:
                     reader.SkipValue();
                     break;
             }
         });
 
-        return new Fields(identity, ephemeral, nonce, label, version, terms);
+        return new Fields(identity, ephemeral, nonce, label, version, terms, role);
     }
 
     private static PeerTerms ReadTerms(CborReader reader)
