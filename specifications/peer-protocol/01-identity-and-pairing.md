@@ -168,6 +168,8 @@ Terms are set by the **destination** — the side that will store objects — an
 | 2 | `text` | Schedule window, in the [ADR-0027](../../docs/adr/0027-services-scheduling-status-telemetry.md) expression language, or empty for "any time" |
 | 3 | `u32` | Retention floor, generations the destination will keep regardless of source policy |
 
+A quota of 0 declares **no byte ceiling**, not "store nothing" ([05 §1](05-quotas.md#1-what-the-quota-bounds)) — the unconfigured household default must not be a refusal of everything.
+
 A source MUST NOT request terms more generous than those offered. A source MAY operate under narrower ones of its own choosing.
 
 When a destination changes its terms, it sends the new ones at the next session's hello. The source continues under them. Where the new terms are **narrower** than those the source is relying on, the source MUST report the affected backup set as `degraded` for that destination rather than silently failing to replicate — an unexplained stall is the failure mode [architecture 09 §2](../../docs/architecture/09-replication-and-peers.md#2-transport) calls out for fairness and it applies here too.

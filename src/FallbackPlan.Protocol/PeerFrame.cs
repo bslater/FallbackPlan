@@ -91,6 +91,9 @@ public enum PeerRefusalReason : ushort
 
     /// <summary>The peer did not prove possession of the identity it presented (02 §3.3).</summary>
     AuthenticationFailed = 11,
+
+    /// <summary>The destination cannot store — disk trouble, not policy (05 §4).</summary>
+    StorageExhausted = 12,
 }
 
 /// <summary>

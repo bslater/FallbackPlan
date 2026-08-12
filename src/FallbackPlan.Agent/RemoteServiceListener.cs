@@ -33,6 +33,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly string? _replicasRoot;
     private readonly string? _spoolRoot;
     private readonly string? _stateDirectory;
+    private readonly FallbackPlan.Application.ReplicaOwnerStore? _owners;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
@@ -61,6 +62,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             // (peer-protocol 03 §8).
             _replicasRoot = Path.Combine(replicationStateDirectory, "replicas");
             _spoolRoot = Path.Combine(replicationStateDirectory, "spool", "replication");
+            _owners = FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
         }
     }
 
@@ -199,8 +201,14 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 // dialler as a pinned peer before a command can cross. An
                 // unpaired or substituted client is refused here and never
                 // reaches the service.
+                // The hello carries this side's current terms for the peer it
+                // authenticated as — the destination announcing what its own
+                // grant will enforce (peer-protocol 05 §6). A console grant
+                // stores nothing here, so it is offered none.
                 session = await PeerSessionDriver.AcceptAsync(
-                    connection, _keypair, _grants, _agentVersion, terms: null, _stopping.Token).ConfigureAwait(false);
+                    connection, _keypair, _grants, _agentVersion, terms: null,
+                    termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
+                    _stopping.Token).ConfigureAwait(false);
             }
             catch (PeerProtocolException refusal)
             {
@@ -224,7 +232,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 }
 
                 var outcome = await ReplicationResponder.ServeAsync(
-                    _replicasRoot, _spoolRoot!, session.Stream, _stopping.Token).ConfigureAwait(false);
+                    _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!, _stopping.Token)
+                    .ConfigureAwait(false);
 
                 if (outcome.Termination is { } termination)
                 {

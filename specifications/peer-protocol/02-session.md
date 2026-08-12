@@ -208,7 +208,7 @@ frame = u32(payload_length) ‖ payload
 | 10 | `PeeringTermination` | [01 §3.1](01-identity-and-pairing.md#31-ending-a-peering) |
 | 11–255 | Reserved for this specification | — |
 | 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
-| 262+ | Reserved for [04–05](README.md#documents) | — |
+| 262+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 
@@ -242,6 +242,7 @@ A side that cannot continue sends `SessionRefuse` (or `PairRefuse` during pairin
 | 9 | `busy` | The peer cannot serve a session now; retry later |
 | 10 | `pairing_declined` | A human declined ([01 §2.4](01-identity-and-pairing.md#24-approval-and-pinning)) |
 | 11 | `authentication_failed` | The peer did not prove possession of the identity it presented (§3.3) |
+| 12 | `storage_exhausted` | The destination cannot store — disk trouble, not policy ([05 §4](05-quotas.md#4-disk-trouble-is-not-policy)) |
 
 The code is what a client branches on; the text is what a human reads. A conforming implementation MUST NOT parse the text.
 

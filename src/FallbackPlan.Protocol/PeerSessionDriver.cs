@@ -10,12 +10,14 @@ namespace FallbackPlan.Protocol;
 /// </summary>
 public sealed class PeerSession
 {
-    internal PeerSession(Stream stream, PeerGrant peer, ushort version, IReadOnlyList<string> features)
+    internal PeerSession(
+        Stream stream, PeerGrant peer, ushort version, IReadOnlyList<string> features, PeerTerms? theirTerms)
     {
         Stream = stream;
         Peer = peer;
         Version = version;
         Features = features;
+        TheirTerms = theirTerms;
     }
 
     /// <summary>The open duplex stream. What flows over it now is the payload, not the handshake.</summary>
@@ -33,6 +35,14 @@ public sealed class PeerSession
     /// <summary>Whether a negotiated feature is in effect for this session.</summary>
     /// <param name="feature">The feature name (02 §4).</param>
     public bool Supports(string feature) => Features.Contains(feature, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The terms the peer's hello carried — its current terms for this side
+    /// when it is the destination (05 §6), or null when it offered none. A
+    /// source adopts these as the ones in force; the destination enforces from
+    /// its own grant either way.
+    /// </summary>
+    public PeerTerms? TheirTerms { get; }
 }
 
 /// <summary>
@@ -65,6 +75,11 @@ public static class PeerSessionDriver
     /// <param name="grants">The pinned pairings this device holds.</param>
     /// <param name="agentVersion">Informational build string for the hello.</param>
     /// <param name="terms">Terms to offer when this side is the destination (01 §4).</param>
+    /// <param name="termsForPeer">
+    /// Resolves the terms to offer once the dialler is authenticated — the
+    /// per-peer form 05 §6 asks of a destination, whose terms live in the
+    /// grant and differ per peer. Takes precedence over <paramref name="terms"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the handshake.</param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused; a refusal was sent before closing.</exception>
@@ -74,8 +89,9 @@ public static class PeerSessionDriver
         PeerGrantStore grants,
         string agentVersion,
         PeerTerms? terms = null,
+        Func<PeerGrant, PeerTerms?>? termsForPeer = null,
         CancellationToken cancellationToken = default) =>
-        RunAsync(connection, keypair, grants, expected: null, agentVersion, terms, cancellationToken);
+        RunAsync(connection, keypair, grants, expected: null, agentVersion, terms, termsForPeer, cancellationToken);
 
     /// <summary>Dials a known peer: authenticate the one expected, then open.</summary>
     /// <param name="connection">The TLS connection, its bindings already known.</param>
@@ -97,7 +113,7 @@ public static class PeerSessionDriver
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(expected);
-        return RunAsync(connection, keypair, grants, expected, agentVersion, terms, cancellationToken);
+        return RunAsync(connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, cancellationToken);
     }
 
     private static async ValueTask<PeerSession> RunAsync(
@@ -107,6 +123,7 @@ public static class PeerSessionDriver
         PeerIdentity? expected,
         string agentVersion,
         PeerTerms? terms,
+        Func<PeerGrant, PeerTerms?>? termsForPeer,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(connection);
@@ -139,7 +156,11 @@ public static class PeerSessionDriver
             // send a hello without waiting and compute the same answer from the
             // pair, so no acceptance need cross the wire (see
             // PeerSessionNegotiation). Only then does the session Open.
-            var ourHello = PeerSessionNegotiation.Hello(agentVersion, terms);
+            // The per-peer resolver runs only now, after Verify: terms live in
+            // the grant and differ per peer, and only an authenticated peer
+            // has one (05 §6).
+            var ourHello = PeerSessionNegotiation.Hello(
+                agentVersion, termsForPeer is not null ? termsForPeer(peer) : terms);
             await PeerFrame.WriteAsync(stream, ourHello, cancellationToken).ConfigureAwait(false);
 
             var theirHello = await ReadAsync<SessionHello>(
@@ -148,7 +169,7 @@ public static class PeerSessionDriver
             var accept = PeerSessionNegotiation.Negotiate(ourHello, theirHello);
 
             authenticator.Open();
-            return new PeerSession(stream, peer, accept.Version, accept.Features);
+            return new PeerSession(stream, peer, accept.Version, accept.Features, theirHello.Terms);
         }
         catch (PeerProtocolException exception)
         {

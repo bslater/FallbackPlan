@@ -197,11 +197,34 @@ public static class FanOut
                 connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
                 .ConfigureAwait(false);
 
+            // The destination's hello carries its current terms; they are
+            // adopted as the ones in force, and a narrowing is told to the
+            // human before the first refusal arrives rather than after
+            // (peer-protocol 05 §6).
+            if (session.TheirTerms is { } offered && grants.ApplyTerms(grant.Identity, offered))
+            {
+                runtime.Notices.Raise(
+                    $"terms-narrowed:{destination.Fingerprint}",
+                    $"Peer '{destination.Name}' narrowed its terms — it now lends "
+                    + $"{(offered.QuotaBytes > 0 ? $"{offered.QuotaBytes} bytes" : "unbounded space")}. "
+                    + "Replication continues under the new terms; review retention if they no longer fit.",
+                    nowMs);
+            }
+
             var committed = await ReplicationInitiator.PushAllAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, cancellationToken)
                 .ConfigureAwait(false);
 
             ledger.RecordSuccess(set.Id, destination.Name, committed, nowMs);
+        }
+        catch (Protocol.PeerProtocolException refusal)
+            when (refusal.Reason == Protocol.PeerRefusalReason.StorageExhausted)
+        {
+            // The lender's storage is faulty or full — a fault its side
+            // fixes, retried under back-off until it does (05 §4/§5).
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Unavailable,
+                $"the peer cannot store right now: {refusal.Message}", nowMs);
         }
         catch (Protocol.PeerProtocolException refusal)
         {
@@ -219,6 +242,18 @@ public static class FanOut
                     $"peering-terminated:{destination.Fingerprint}",
                     $"Peer '{destination.Name}' ended the peering — this set no longer replicates there. "
                     + "Remove or replace the destination in the configuration.",
+                    nowMs);
+            }
+
+            if (refusal.Reason == Protocol.PeerRefusalReason.TermsRefused)
+            {
+                // The lender's policy is exhausted. Local protection
+                // continues; the human decides whether to ask for more, keep
+                // less, or add a destination (05 §5).
+                runtime.Notices.Raise(
+                    $"quota-exceeded:{destination.Fingerprint}",
+                    $"Peer '{destination.Name}' refused this set: {refusal.Message} "
+                    + "Ask for a larger quota, tighten retention, or add another destination.",
                     nowMs);
             }
         }

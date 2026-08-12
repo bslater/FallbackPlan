@@ -24,14 +24,20 @@ internal static class ReplicationResponder
     /// <param name="replicasRoot">The directory under which per-repository replica stores live.</param>
     /// <param name="spoolRoot">A scratch directory for objects being received.</param>
     /// <param name="stream">The open session stream.</param>
+    /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
+    /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <returns>What was received.</returns>
     public static async Task<Outcome> ServeAsync(
-        string replicasRoot, string spoolRoot, Stream stream, CancellationToken cancellationToken)
+        string replicasRoot, string spoolRoot, Stream stream,
+        Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(replicasRoot);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolRoot);
         ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(peer);
+        ThrowHelper.ThrowIfNull(owners);
 
         try
         {
@@ -70,13 +76,43 @@ internal static class ReplicationResponder
             }
 
             var repositoryIdHex = Convert.ToHexStringLower(offer.RepositoryId.Span);
+
+            // The attribution is what makes the quota's denominator — "the
+            // total this peer stores here" — computable across sessions
+            // (05 §2). A repository another peer owns here is refused rather
+            // than counted against the wrong household's ledger.
+            if (!owners.TryAttribute(repositoryIdHex, peer.Identity.Fingerprint))
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.TermsRefused,
+                    $"Repository {repositoryIdHex} is already stored here for another peer.");
+            }
+
             var replicaPath = Path.Combine(replicasRoot, repositoryIdHex);
-            Directory.CreateDirectory(replicaPath);
-            Directory.CreateDirectory(spoolRoot);
+            try
+            {
+                Directory.CreateDirectory(replicaPath);
+                Directory.CreateDirectory(spoolRoot);
+            }
+            catch (Exception storage) when (storage is IOException or UnauthorizedAccessException)
+            {
+                throw CannotStore(storage);
+            }
+
             var replica = new LocalFileSystemObjectStore(replicaPath);
 
+            // Quota 0 declares no ceiling (05 §1); anything above it bounds
+            // the peer's committed bytes across every repository it owns
+            // here, so usage is summed before the first object crosses.
+            var quota = peer.Terms.QuotaBytes;
+            var usage = quota > 0
+                ? await UsageAsync(replicasRoot, owners.OwnedBy(peer.Identity.Fingerprint), cancellationToken)
+                    .ConfigureAwait(false)
+                : 0UL;
+
             await SendInventoryAsync(replica, stream, cancellationToken).ConfigureAwait(false);
-            var committed = await ReceiveAsync(replica, spoolRoot, stream, cancellationToken).ConfigureAwait(false);
+            var committed = await ReceiveAsync(replica, spoolRoot, stream, quota, usage, cancellationToken)
+                .ConfigureAwait(false);
 
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
                 .ConfigureAwait(false);
@@ -115,7 +151,8 @@ internal static class ReplicationResponder
     }
 
     private static async Task<long> ReceiveAsync(
-        LocalFileSystemObjectStore replica, string spoolRoot, Stream stream, CancellationToken cancellationToken)
+        LocalFileSystemObjectStore replica, string spoolRoot, Stream stream,
+        ulong quota, ulong usage, CancellationToken cancellationToken)
     {
         var committed = 0L;
         Incoming? current = null;
@@ -144,13 +181,34 @@ internal static class ReplicationResponder
                         }
 
                         var header = ReplicationObject.Read(body);
-                        current = new Incoming(spoolRoot, header.Key, header.Length);
-                        if (current.Complete)
+
+                        // The quota check runs here, where the length is
+                        // declared and nothing is yet spooled — the clean
+                        // stop at the object boundary (05 §3). Everything
+                        // committed so far stays committed.
+                        if (quota > 0 && usage + header.Length > quota)
                         {
-                            await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
-                            committed++;
-                            current.Dispose();
-                            current = null;
+                            throw new PeerProtocolException(
+                                PeerRefusalReason.TermsRefused,
+                                $"The quota of {quota} bytes is exhausted: {usage} bytes are stored"
+                                + $" and the next object declares {header.Length}.");
+                        }
+
+                        try
+                        {
+                            current = new Incoming(spoolRoot, header.Key, header.Length);
+                            if (current.Complete)
+                            {
+                                await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
+                                committed++;
+                                usage += header.Length;
+                                current.Dispose();
+                                current = null;
+                            }
+                        }
+                        catch (Exception storage) when (storage is IOException or UnauthorizedAccessException)
+                        {
+                            throw CannotStore(storage);
                         }
 
                         break;
@@ -162,13 +220,21 @@ internal static class ReplicationResponder
                                 PeerRefusalReason.Malformed, "A chunk arrived with no object to append it to.");
                         }
 
-                        await current.AppendAsync(ReplicationChunk.Read(body), cancellationToken).ConfigureAwait(false);
-                        if (current.Complete)
+                        try
                         {
-                            await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
-                            committed++;
-                            current.Dispose();
-                            current = null;
+                            await current.AppendAsync(ReplicationChunk.Read(body), cancellationToken).ConfigureAwait(false);
+                            if (current.Complete)
+                            {
+                                await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
+                                committed++;
+                                usage += current.Length;
+                                current.Dispose();
+                                current = null;
+                            }
+                        }
+                        catch (Exception storage) when (storage is IOException or UnauthorizedAccessException)
+                        {
+                            throw CannotStore(storage);
                         }
 
                         break;
@@ -184,6 +250,42 @@ internal static class ReplicationResponder
             current?.Dispose();
         }
     }
+
+    /// <summary>
+    /// The peer's committed bytes across every repository attributed to it —
+    /// the quota's denominator (05 §1). Summed from the stores themselves, so
+    /// losing no separate counter can ever disagree with what is held.
+    /// </summary>
+    private static async ValueTask<ulong> UsageAsync(
+        string replicasRoot, IReadOnlyList<string> repositories, CancellationToken cancellationToken)
+    {
+        var total = 0UL;
+        foreach (var repositoryIdHex in repositories)
+        {
+            var path = Path.Combine(replicasRoot, repositoryIdHex);
+            if (!Directory.Exists(path))
+            {
+                continue;
+            }
+
+            var store = new LocalFileSystemObjectStore(path);
+            await foreach (var entry in store.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                total += (ulong)entry.Length;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Disk trouble spoken as itself: <c>storage_exhausted</c>, never
+    /// <c>terms_refused</c> — the quota said yes and the hardware said no,
+    /// and the two send the human to different fixes (05 §4).
+    /// </summary>
+    private static PeerProtocolException CannotStore(Exception storage) =>
+        new(PeerRefusalReason.StorageExhausted, $"The destination cannot store: {storage.Message}", storage);
 
     /// <summary>An object being received: spooled to a temp file, committed whole (03 §5).</summary>
     private sealed class Incoming : IDisposable
@@ -203,6 +305,8 @@ internal static class ReplicationResponder
         }
 
         public bool Complete => _received == _length;
+
+        public ulong Length => _length;
 
         public async ValueTask AppendAsync(ReplicationChunk chunk, CancellationToken cancellationToken)
         {

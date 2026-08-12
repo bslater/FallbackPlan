@@ -29,7 +29,12 @@ namespace FallbackPlan.Protocol;
 /// </param>
 public sealed record PeerTerms(ulong QuotaBytes, string ScheduleWindow, uint RetentionFloorGenerations)
 {
-    /// <summary>Terms that permit nothing — the safe default before any are offered.</summary>
+    /// <summary>
+    /// Terms declaring no limits: quota 0 is "no byte ceiling declared", not
+    /// "store nothing" (05 §1) — the unconfigured household default must not
+    /// be a refusal of everything. A destination that means "nothing" does
+    /// not pair, or revokes.
+    /// </summary>
     public static PeerTerms None { get; } = new(0, string.Empty, 0);
 
     /// <summary>
@@ -48,8 +53,12 @@ public sealed record PeerTerms(ulong QuotaBytes, string ScheduleWindow, uint Ret
     {
         ThrowHelper.ThrowIfNull(offered);
 
-        return QuotaBytes <= offered.QuotaBytes
-            && RetentionFloorGenerations <= offered.RetentionFloorGenerations;
+        // Quota 0 is "no ceiling" (05 §1), so an unbounded offer admits any
+        // request, and asking for "unbounded" exceeds every stated ceiling.
+        var quotaWithin = offered.QuotaBytes == 0
+            || (QuotaBytes > 0 && QuotaBytes <= offered.QuotaBytes);
+
+        return quotaWithin && RetentionFloorGenerations <= offered.RetentionFloorGenerations;
     }
 
     /// <summary>
@@ -69,7 +78,13 @@ public sealed record PeerTerms(ulong QuotaBytes, string ScheduleWindow, uint Ret
     {
         ThrowHelper.ThrowIfNull(previous);
 
-        return QuotaBytes < previous.QuotaBytes
+        // Quota 0 is "no ceiling" (05 §1): a ceiling appearing where none was
+        // is a narrowing, a ceiling lifted is not, and between two ceilings
+        // the smaller narrows.
+        var quotaNarrowed = QuotaBytes > 0
+            && (previous.QuotaBytes == 0 || QuotaBytes < previous.QuotaBytes);
+
+        return quotaNarrowed
             || RetentionFloorGenerations < previous.RetentionFloorGenerations
             || (previous.ScheduleWindow.Length == 0 && ScheduleWindow.Length > 0);
     }

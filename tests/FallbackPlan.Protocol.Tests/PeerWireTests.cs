@@ -82,6 +82,30 @@ public sealed class PeerWireTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Session_TheAcceptersHelloCarriesPerPeerTerms_TheDiallerAdoptsThem()
+    {
+        var serviceStore = Store("service");
+        var consoleStore = Store("console");
+        // The service's grant for the console carries the terms IT set — the
+        // per-peer form 05 §6 asks of a destination. The resolver runs only
+        // after authentication, because a stranger has no grant to read.
+        serviceStore.Pin(new PeerGrant(
+            _console.Identity, "a peer", PeerRole.StoresHere, new PeerTerms(123_456, string.Empty, 4), 1_722_600_000_000));
+        Pin(consoleStore, _service.Identity);
+
+        var (service, console) = await OpenSessionAsync(
+            serviceStore, consoleStore, _service.Identity, termsForPeer: grant => grant.Terms);
+
+        Assert.IsNotNull(console.TheirTerms);
+        Assert.AreEqual(123_456UL, console.TheirTerms.QuotaBytes);
+        Assert.AreEqual(4U, console.TheirTerms.RetentionFloorGenerations);
+
+        // The console offered none back — terms belong to the side lending
+        // the disk (01 §4), and this dialler lends nothing.
+        Assert.IsNull(service.TheirTerms);
+    }
+
+    [TestMethod]
     public async Task Session_TheDialledIdentityDiffers_IsRefusedAsIdentityChanged()
     {
         var serviceStore = Store("service");
@@ -140,7 +164,7 @@ public sealed class PeerWireTests : IDisposable
         {
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 await AcceptRawAsync(serviceListener), Now, Cancellation);
-            return await PeerSessionDriver.AcceptAsync(connection, _service, serviceStore, "service/test", null, Cancellation);
+            return await PeerSessionDriver.AcceptAsync(connection, _service, serviceStore, "service/test", null, null, Cancellation);
         });
 
         var consoleSide = Task.Run(async () =>
@@ -318,7 +342,8 @@ public sealed class PeerWireTests : IDisposable
     }
 
     private async Task<(PeerSession Service, PeerSession Console)> OpenSessionAsync(
-        PeerGrantStore serviceStore, PeerGrantStore consoleStore, PeerIdentity consoleExpects)
+        PeerGrantStore serviceStore, PeerGrantStore consoleStore, PeerIdentity consoleExpects,
+        Func<PeerGrant, PeerTerms?>? termsForPeer = null)
     {
         var (listener, endpoint) = Listen();
         using var _ = listener;
@@ -327,7 +352,8 @@ public sealed class PeerWireTests : IDisposable
         {
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 await AcceptRawAsync(listener), Now, Cancellation);
-            return await PeerSessionDriver.AcceptAsync(connection, _service, serviceStore, "service/test", null, Cancellation);
+            return await PeerSessionDriver.AcceptAsync(
+                connection, _service, serviceStore, "service/test", null, termsForPeer, Cancellation);
         });
 
         var consoleSide = Task.Run(async () =>

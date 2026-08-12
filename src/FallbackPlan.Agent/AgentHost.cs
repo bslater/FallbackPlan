@@ -53,7 +53,7 @@ public static class AgentHost
                   fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
-                                            [--label <name>] [--role stores-here|stores-for-us|both]
+                                            [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
@@ -151,7 +151,7 @@ public static class AgentHost
                     stateDirectory, Get("--fingerprint"), Get("--to"), args.Contains("--no-notify"),
                     output, error, cancellationToken).ConfigureAwait(false),
                 _ => await PairAsync(stateDirectory, Get("--remote-interface"), Get("--remote-port"), Get("--label"),
-                    Get("--role"), output, error, cancellationToken).ConfigureAwait(false),
+                    Get("--role"), Get("--quota"), output, error, cancellationToken).ConfigureAwait(false),
             };
         }
 
@@ -466,6 +466,7 @@ public static class AgentHost
         string? remotePort,
         string? label,
         string? roleText,
+        string? quotaText,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
@@ -476,7 +477,7 @@ public static class AgentHost
         {
             error.WriteLine(
                 "error: usage is `pair --state <dir> --remote-interface <ip> --remote-port <n>"
-                + " [--label <name>] [--role stores-here|stores-for-us|both]`.");
+                + " [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]`.");
             return 1;
         }
 
@@ -488,6 +489,23 @@ public static class AgentHost
         if (!PeerRoles.TryParse(roleText, out var role))
         {
             error.WriteLine($"error: --role '{roleText}' is not stores-here, stores-for-us, or both.");
+            return 1;
+        }
+
+        // Terms belong to the side that owns the disk (01 §4). A quota of 0 —
+        // the default — declares no byte ceiling (peer-protocol 05 §1).
+        var quota = 0UL;
+        if (quotaText is not null && !ulong.TryParse(quotaText, CultureInfo.InvariantCulture, out quota))
+        {
+            error.WriteLine($"error: --quota '{quotaText}' is not a number of bytes.");
+            return 1;
+        }
+
+        if (quota > 0 && role == PeerRole.StoresForUs)
+        {
+            error.WriteLine(
+                "error: --quota states what this device will store for the peer;"
+                + " it applies with --role stores-here or both.");
             return 1;
         }
 
@@ -512,7 +530,8 @@ public static class AgentHost
             accepted, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
 
         var result = await PairingCeremony.AcceptAsync(
-            connection.Stream, keypair, grants, label ?? Environment.MachineName, role, PeerTerms.None,
+            connection.Stream, keypair, grants, label ?? Environment.MachineName, role,
+            new PeerTerms(quota, string.Empty, 0),
             (prospect, _) => ValueTask.FromResult(Approve(prospect, output)),
             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false);
 
