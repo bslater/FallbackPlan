@@ -1,0 +1,301 @@
+using FallbackPlan.Agent;
+using FallbackPlan.Application;
+using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local;
+
+namespace FallbackPlan.Retention.Tests;
+
+/// <summary>
+/// The staging trim (ADR-0034 §6): historic data blobs leave staging once
+/// every destination entitled to them verifiably holds them — and only then.
+/// The newest snapshot's closure never trims (it is the dedup cache), an
+/// unverifiable destination blocks everything it is entitled to, a narrow
+/// destination blocks nothing it dropped, and the archive keeps publishing
+/// and converging cleanly afterwards.
+/// </summary>
+[TestClass]
+public sealed class StagingTrimTests : IDisposable
+{
+    private readonly string _root =
+        Path.Combine(Path.GetTempPath(), "fbp-staging-trim", Guid.NewGuid().ToString("n"));
+
+    private const string PassphraseText = "staging-trim-passphrase!!";
+    private static readonly string SetId = new('a', 32);
+
+    private string ArchivesRoot => Path.Combine(_root, "archives");
+    private string RepoPath => Path.Combine(ArchivesRoot, SetId);
+    private string StateDirectory => Path.Combine(_root, "state");
+    private string SourceRoot => Path.Combine(_root, "source");
+    private string VaultPath => Path.Combine(_root, "vault");
+
+    private static readonly DateTimeOffset Day1 = new(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+
+    public StagingTrimTests()
+    {
+        Directory.CreateDirectory(StateDirectory);
+        Directory.CreateDirectory(SourceRoot);
+        Directory.CreateDirectory(VaultPath);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day one content");
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new DestinationConfiguration
+                {
+                    Id = new string('1', 32), Name = "vault",
+                    Kind = DestinationKind.LocalPath, Path = VaultPath,
+                },
+            ],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = SetId,
+                    Name = "docs",
+                    Root = SourceRoot,
+                    Schedule = "every 4h",
+                    Destinations =
+                    [
+                        // Rules in force, but wide: the vault keeps everything,
+                        // so fan-out converges (the S1 path) and every blob is
+                        // entitled at the vault.
+                        new SetDestinationReference
+                        {
+                            Ref = "vault",
+                            Retention = new RetentionConfiguration { MinGenerations = 10 },
+                        },
+                    ],
+                },
+            ],
+        }.Save(Path.Combine(StateDirectory, "config.json"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_EveryHistoricBlobVerifiedAtTheVault_TrimsThemAndTheSetKeepsWorking()
+    {
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+
+        // Apply: the two historic data blobs go — the newest snapshot's
+        // closure stays, because it is what the next backup dedups against.
+        var report = await RunAsync(store, VaultVerification, apply: true, now: Day1.AddDays(2).AddHours(1));
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 2 historic data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+
+        // Metadata is untouched: snapshots, meta blobs, journal all stay, so
+        // every derivation the hub runs still sees the full history.
+        Assert.HasCount(3, await ListAsync(store, "snapshots/"));
+        Assert.IsNotEmpty(await ListAsync(store, "blobs/meta/"));
+
+        // The set keeps publishing: sequence continuity is untouched because
+        // trim never touches the journal or the snapshots.
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day four content");
+        await BackUpAsync(Day1.AddDays(3));
+        Assert.HasCount(4, await ListAsync(store, "snapshots/"));
+
+        // That backup's fan-out CONVERGED the vault while staging was a
+        // subset — and deleted nothing there (the S1 rule): the replica still
+        // holds all four days' data blobs and walks clean end to end.
+        var replica = new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single());
+        Assert.HasCount(4, await ListAsync(replica, "blobs/data/"));
+        await AssertWalksCleanAsync(replica, expectedSnapshots: 4);
+
+        // The next pass trims the blob day four's publication superseded —
+        // trim converges pass over pass instead of oscillating.
+        var second = await RunAsync(store, VaultVerification, apply: true, now: Day1.AddDays(3).AddHours(1));
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 1 historic data blob(s)", StringComparison.Ordinal), second.Lines);
+        Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_ADestinationNothingCanVouchFor_HoldsEveryBlobItIsEntitledTo()
+    {
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        // The vault's drive is unplugged: no store to probe, no ledger claim
+        // to trust — nothing may leave staging (FR-GC-009's discipline).
+        var report = await RunAsync(store, _ => TrimVerification.None, apply: true, now: Day1.AddDays(2).AddHours(1));
+
+        Assert.Contains(
+            line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.IsFalse(report.Lines.Any(line => line.StartsWith("trimmed:", StringComparison.Ordinal)));
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_APeerWithACurrentLedgerClaim_VerifiesWithoutTouchingItsStore()
+    {
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        // A remote destination is verified through the ledger: a completed
+        // sync at or past the current publication sequence carried everything
+        // the destination keeps — the same trust the replication gate rests
+        // on (FR-GC-009).
+        var nowMs = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
+        DestinationSyncStore.Open(StateDirectory).RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1_000_000);
+
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.Ledger,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference { Ref = "friend" });
+
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 2 historic data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_APeerWhoseLedgerClaimIsStale_BlocksTheTrim()
+    {
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        // The peer synced once, long ago — its claim covers sequence 1 and
+        // the archive is past it. The vault's verified copy is not enough:
+        // EVERY entitled destination must vouch (ADR-0034 §6).
+        var nowMs = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
+        DestinationSyncStore.Open(StateDirectory).RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1);
+
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.Ledger,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference { Ref = "friend" });
+
+        Assert.Contains(
+            line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_ANarrowDestinationThatDroppedTheBlobs_DoesNotBlockTheirTrim()
+    {
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        // The narrow destination keeps only the newest snapshot, so it was
+        // never entitled to the historic blobs — its being unverifiable is
+        // irrelevant to them. Only the vault must vouch, and it does.
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.None,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference
+            {
+                Ref = "friend",
+                Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+            });
+
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 2 historic data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+    }
+
+    private TrimVerification VaultVerification(string name) =>
+        TrimVerification.AgainstStore(
+            new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single()));
+
+    private async Task<RetentionReport> RunAsync(
+        LocalFileSystemObjectStore store,
+        Func<string, TrimVerification> verificationFor,
+        bool apply,
+        DateTimeOffset now,
+        SetDestinationReference? extraDestination = null)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+
+        var destinations = new List<SetDestinationReference>
+        {
+            new() { Ref = "vault", Retention = new RetentionConfiguration { MinGenerations = 10 } },
+        };
+        if (extraDestination is not null)
+        {
+            destinations.Add(extraDestination);
+        }
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        return await RetentionRunner.RunAsync(
+            store, repository,
+            policy: null,
+            destinations,
+            name => sync.Find(SetId, name),
+            verificationFor,
+            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
+            apply,
+            (ulong)now.ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+    }
+
+    private async Task BackUpThreeDaysAsync()
+    {
+        await BackUpAsync(Day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(Day1.AddDays(1));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+        await BackUpAsync(Day1.AddDays(2));
+    }
+
+    private async Task BackUpAsync(DateTimeOffset now)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
+    }
+
+    private static async Task AssertWalksCleanAsync(LocalFileSystemObjectStore replica, int expectedSnapshots)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(replica, passphrase, CancellationToken.None);
+
+        var survey = await StagingMark.SurveyAsync(replica, repository, CancellationToken.None);
+        Assert.HasCount(expectedSnapshots, survey.Snapshots);
+        Assert.IsEmpty(survey.Undecodable);
+
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var (_, unwalkable) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
+        Assert.IsEmpty(unwalkable);
+    }
+
+    private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)
+    {
+        var keys = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse(prefix), ListOptions.Default, CancellationToken.None))
+        {
+            keys.Add(entry.Key.Value);
+        }
+
+        return keys;
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+        {
+            try
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best effort.
+            }
+        }
+    }
+}

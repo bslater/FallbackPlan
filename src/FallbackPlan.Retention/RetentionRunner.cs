@@ -34,8 +34,9 @@ public static class RetentionRunner
     /// <param name="policy">The set's retention policy — absent means nothing expires.</param>
     /// <param name="destinations">The set's declared destination references, overrides included (FR-GC-010).</param>
     /// <param name="syncRecordFor">The sync-ledger row for a destination (FR-GC-009's input).</param>
+    /// <param name="trimVerificationFor">How each destination's holdings can be verified for the staging trim (ADR-0034 §6).</param>
     /// <param name="writerId">This device's writer identity, for tombstones.</param>
-    /// <param name="apply">False: report only. True: tombstone and sweep under the full gate.</param>
+    /// <param name="apply">False: report only. True: tombstone, sweep and trim under the full gate.</param>
     /// <param name="nowUnixMilliseconds">The clock — policy windows and informational stamps only.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <returns>The report.</returns>
@@ -45,6 +46,7 @@ public static class RetentionRunner
         RetentionConfiguration? policy,
         IReadOnlyList<SetDestinationReference> destinations,
         Func<string, DestinationSyncRecord?> syncRecordFor,
+        Func<string, TrimVerification> trimVerificationFor,
         WriterId writerId,
         bool apply,
         ulong nowUnixMilliseconds,
@@ -54,6 +56,7 @@ public static class RetentionRunner
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(destinations);
         ThrowHelper.ThrowIfNull(syncRecordFor);
+        ThrowHelper.ThrowIfNull(trimVerificationFor);
 
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
 
@@ -124,6 +127,14 @@ public static class RetentionRunner
         var plan = CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
+        // The trim decides either way — the dry run must say what would go
+        // (FR-GC-005) — and deletes only under apply, after the sweep.
+        var trim = await StagingTrim.PlanAsync(
+            store, reader, survey, policy, destinations, trimVerificationFor, syncRecordFor, intents,
+            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken)
+            .ConfigureAwait(false);
+        lines.AddRange(trim.Lines);
+
         if (!apply)
         {
             return new RetentionReport(lines, gate.Held, 0, null);
@@ -150,6 +161,16 @@ public static class RetentionRunner
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "
             + $"{swept.TombstonesCleared} tombstone(s) cleared");
         lines.AddRange(swept.Findings);
+
+        // The trim runs last: direct deletes of historic data blobs every
+        // entitled destination verifiably holds (ADR-0034 §6). A blob the
+        // sweep already removed counts nothing here.
+        if (trim.Eligible.Count > 0)
+        {
+            var (trimmed, bytes) = await StagingTrim.ExecuteAsync(store, trim, cancellationToken)
+                .ConfigureAwait(false);
+            lines.Add($"trimmed: {trimmed} historic data blob(s), {bytes} byte(s)");
+        }
 
         return new RetentionReport(lines, gate.Held, written, swept);
     }

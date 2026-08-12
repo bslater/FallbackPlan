@@ -333,6 +333,38 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestorePlan_TheStoreLosesTheDataBlobs_ReportsTheFilesAsMissing()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        // Only the DATA blobs go — the metadata blobs holding the manifests
+        // stay, which is exactly what a staging trim leaves behind
+        // (ADR-0034 §6). A probe that stops at the manifest's blob calls this
+        // snapshot whole; the plan must follow the manifest's segment
+        // references into the store to be honest about it (FR-RST-003).
+        foreach (var blob in Directory.EnumerateFiles(
+            Path.Combine(_harness.RepositoryPath, "blobs", "data"), "*", SearchOption.AllDirectories))
+        {
+            File.Delete(blob);
+        }
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+
+        Assert.IsNotEmpty(plan.MissingObjects);
+        Assert.Contains("notes.txt", plan.MissingObjects);
+    }
+
+    [TestMethod]
     public async Task Restore_CommandedThroughTheContract_WritesOnTheServiceMachine()
     {
         await _harness.CreateRepositoryAsync();

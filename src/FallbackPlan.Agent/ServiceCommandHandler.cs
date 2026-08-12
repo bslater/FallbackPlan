@@ -185,6 +185,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 set.Retention,
                 set.Destinations,
                 name => runtime.DestinationSync.Find(set.Id, name),
+                name => TrimVerificationFor(name, archive),
                 runtime.Writer,
                 command.Apply,
                 now,
@@ -207,6 +208,35 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         }
 
         return new RetentionResult(lines);
+    }
+
+    /// <summary>
+    /// How a destination's holdings can be verified for the staging trim
+    /// (ADR-0034 §6): a reachable local-path replica is probed key by key —
+    /// direct evidence; a peer is trusted through its sync-ledger claim, the
+    /// same trust the replication gate already rests on (FR-GC-009); anything
+    /// else — an unplugged drive, an unserved kind — cannot vouch, and every
+    /// blob it is entitled to stays in staging.
+    /// </summary>
+    private Retention.TrimVerification TrimVerificationFor(string destinationName, ArchiveHandle archive)
+    {
+        var destination = runtime.Configuration.FindDestination(destinationName);
+        switch (destination?.Kind)
+        {
+            case DestinationKind.LocalPath:
+                var replicaRoot = Path.Combine(
+                    destination.Path!, archive.Repository.RepositoryId.ToString());
+                return Directory.Exists(replicaRoot)
+                    ? Retention.TrimVerification.AgainstStore(
+                        new Storage.Local.LocalFileSystemObjectStore(replicaRoot))
+                    : Retention.TrimVerification.None;
+
+            case DestinationKind.Peer:
+                return Retention.TrimVerification.Ledger;
+
+            default:
+                return Retention.TrimVerification.None;
+        }
     }
 
     /// <inheritdoc/>
@@ -314,39 +344,90 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // catalogue alone cannot answer this — it is a cache, and a cache
         // ahead of the store says "nothing missing" about the very objects
         // the store has lost — so each located blob is probed against the
-        // store, one memoized metadata call per distinct blob. What the
-        // probe cannot see is a lost blob holding only the items' SEGMENTS
-        // (the plan carries manifests, not their references); naming those
-        // too is FR-RST-003's completeness work.
+        // store, one memoized metadata call per distinct blob. The manifest
+        // blob alone is not enough: an item's SEGMENTS live in other blobs —
+        // after a staging trim, precisely the ones no longer here (ADR-0034
+        // §6) — so each manifest is read (metadata never trims) and its
+        // referenced blobs are probed too (FR-RST-003).
         using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
+        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(archive.Repository.Keys.ContentIdKey);
         var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
+        var metaReaders = new Dictionary<ObjectKey, Repository.Packing.BlobReader?>();
         var missing = new List<string>();
 
-        foreach (var item in plan.Items)
+        try
         {
-            if (item.Kind == EntryKind.DirectoryPlaceholder)
+            foreach (var item in plan.Items)
             {
-                continue;
-            }
+                if (item.Kind == EntryKind.DirectoryPlaceholder)
+                {
+                    continue;
+                }
 
-            if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
-            {
-                missing.Add(item.Path);
-                continue;
-            }
+                if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
+                {
+                    missing.Add(item.Path);
+                    continue;
+                }
 
-            if (!blobPresent.TryGetValue(location.BlobId, out var present))
-            {
-                var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
-                present =
-                    await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
-                    || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
-                blobPresent[location.BlobId] = present;
-            }
+                if (!blobPresent.TryGetValue(location.BlobId, out var present))
+                {
+                    var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
+                    present =
+                        await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
+                        || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
+                    blobPresent[location.BlobId] = present;
+                }
 
-            if (!present)
+                if (!present)
+                {
+                    missing.Add(item.Path);
+                    continue;
+                }
+
+                // A manifest that is present but will not read is damage, not
+                // absence — verify's business, and nothing this plan can name
+                // segments from.
+                var manifest = await ReadManifestAsync(
+                    archive, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                    .ConfigureAwait(false);
+                if (manifest is null)
+                {
+                    continue;
+                }
+
+                var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
+                    .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
+                foreach (var referenced in references)
+                {
+                    if (catalogue.ResolveLocation(referenced) is not { } segmentLocation)
+                    {
+                        missing.Add(item.Path);
+                        break;
+                    }
+
+                    if (!blobPresent.TryGetValue(segmentLocation.BlobId, out var segmentPresent))
+                    {
+                        var segmentBlobKey = segmentLocation.StoreBlobKey ?? keyDeriver.Derive(segmentLocation.BlobId);
+                        segmentPresent =
+                            await BlobExistsAsync(archive, BlobClass.Data, segmentBlobKey, cancellationToken).ConfigureAwait(false)
+                            || await BlobExistsAsync(archive, BlobClass.Metadata, segmentBlobKey, cancellationToken).ConfigureAwait(false);
+                        blobPresent[segmentLocation.BlobId] = segmentPresent;
+                    }
+
+                    if (!segmentPresent)
+                    {
+                        missing.Add(item.Path);
+                        break;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            foreach (var reader in metaReaders.Values)
             {
-                missing.Add(item.Path);
+                reader?.Dispose();
             }
         }
 
@@ -354,6 +435,74 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
             (long)plan.SpaceEstimateBytes,
             missing);
+    }
+
+    /// <summary>
+    /// Reads one file-version manifest through its meta blob's authenticated
+    /// footer — the plan-side targeted read, memoized per blob because a
+    /// snapshot's manifests cluster in a few metadata blobs.
+    /// </summary>
+    private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
+        ArchiveHandle archive,
+        Domain.Identifiers.ObjectId objectId,
+        Repository.Catalogue.ResolvedLocation location,
+        Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
+        Repository.Crypto.ObjectIdDeriver objectIdDeriver,
+        Dictionary<ObjectKey, Repository.Packing.BlobReader?> metaReaders,
+        CancellationToken cancellationToken)
+    {
+        var storeKey = Repository.Packing.BlobStoreKeys.ForBlob(
+            BlobClass.Metadata, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId));
+
+        if (!metaReaders.TryGetValue(storeKey, out var reader))
+        {
+            try
+            {
+                var metadata = await archive.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+                reader = metadata.Metadata is not { Length: > 0 }
+                    ? null
+                    : await Repository.Packing.BlobReader.OpenAsync(
+                        archive.Store, storeKey, metadata.Metadata.Length, archive.Repository.RepositoryId,
+                        archive.Repository.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
+                        .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is Repository.Packing.BlobFormatException or IOException)
+            {
+                reader = null;
+            }
+
+            metaReaders[storeKey] = reader;
+        }
+
+        if (reader is null)
+        {
+            return null;
+        }
+
+        foreach (var entry in reader.RecordTable)
+        {
+            if (entry.ObjectId != objectId || entry.ObjectType != Domain.ObjectType.FileVersionManifest)
+            {
+                continue;
+            }
+
+            var read = await reader.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
+            if (read.Outcome != Repository.Packing.RecordReadOutcome.Ok || read.Plaintext is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext);
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private static async ValueTask<bool> BlobExistsAsync(
