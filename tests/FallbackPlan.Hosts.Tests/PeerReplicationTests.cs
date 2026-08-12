@@ -143,6 +143,65 @@ public sealed class PeerReplicationTests : IDisposable
         Assert.Contains("--fingerprint", result.Error, StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public async Task FanOut_APeerDestination_ConvergesWithoutACommand()
+    {
+        // No `replicate` verb anywhere in this test: the set declares a peer
+        // destination and the scheduler pass fans out to it (ADR-0034 §3,
+        // FR-DEST-002) — the hub doing automatically what the verb did by hand.
+        _source.WriteSourceFile("notes.txt", "fan me out");
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+
+        new FallbackPlan.Application.ClientConfiguration
+        {
+            SchemaVersion = FallbackPlan.Application.ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new FallbackPlan.Application.DestinationConfiguration
+                {
+                    Id = new string('1', 32),
+                    Name = "friend",
+                    Kind = FallbackPlan.Application.DestinationKind.Peer,
+                    Fingerprint = destinationFingerprint,
+                    Endpoint = DestinationAddress,
+                },
+            ],
+            BackupSets =
+            [
+                new FallbackPlan.Application.BackupSetConfiguration
+                {
+                    Id = _source.DocsSetId,
+                    Name = "docs",
+                    Root = _source.SourceRoot,
+                    Schedule = "every 4h",
+                    Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
+                },
+            ],
+        }.Save(Path.Combine(_source.StateDirectory, "config.json"));
+
+        var run = await RunAgentAsync(
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+
+        // The peer holds a byte-identical replica of the set's staging
+        // archive, and the ledger says so durably (FR-DEST-004).
+        var replicaPath = Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Single();
+        var staging = await ReadAllAsync(new LocalFileSystemObjectStore(_source.RepositoryPath));
+        var replica = await ReadAllAsync(new LocalFileSystemObjectStore(replicaPath));
+        Assert.AreEqual(staging.Count, replica.Count);
+        foreach (var (key, bytes) in staging)
+        {
+            Assert.IsTrue(replica.TryGetValue(key, out var copied), $"the replica is missing {key}");
+            Assert.IsTrue(bytes.SequenceEqual(copied!), $"the replica's {key} differs from the source's");
+        }
+
+        var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.InSync, record.State);
+    }
+
     private IPEndPoint? _endpoint;
     private string DestinationAddress => $"{_endpoint!.Address}:{_endpoint.Port}";
 

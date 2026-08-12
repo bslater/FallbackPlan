@@ -139,11 +139,8 @@ public static class FanOut
                 return;
 
             case DestinationKind.Peer:
-                // Served by the peer-destination slice; the manual `replicate`
-                // verb covers the gap meanwhile. Stated, not failed.
-                ledger.RecordFailure(
-                    set.Id, destinationName, DestinationSyncState.NotSupported,
-                    "peer destinations are not yet fanned out automatically — `replicate` covers the gap", nowMs);
+                await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken)
+                    .ConfigureAwait(false);
                 return;
 
             default:
@@ -153,6 +150,73 @@ public static class FanOut
                     set.Id, destinationName, DestinationSyncState.NotSupported,
                     $"destination kind '{destination.Kind}' is not yet supported", nowMs);
                 return;
+        }
+    }
+
+    /// <summary>
+    /// Pushes the set's archive to a paired peer over the replication
+    /// exchange (peer-protocol 03) — the same wire the manual `replicate`
+    /// verb drives, now driven by the hub (ADR-0034 §3). The endpoint comes
+    /// from the configuration and the key from the grant: the address book
+    /// and the trust decision live in different places on purpose
+    /// (FR-DEST-006, ADR-0030).
+    /// </summary>
+    private static async ValueTask PushToPeerAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken)
+    {
+        var ledger = runtime.DestinationSync;
+
+        var grants = Protocol.PeerGrantStore.Open(runtime.Options.StateDirectory);
+        var grant = grants.Grants.FirstOrDefault(candidate =>
+            string.Equals(candidate.Identity.Fingerprint, destination.Fingerprint, StringComparison.Ordinal));
+        if (grant is null)
+        {
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Failed,
+                $"no pairing matches fingerprint '{destination.Fingerprint}' — pair with the peer first", nowMs);
+            return;
+        }
+
+        var endpoint = destination.Endpoint!;
+        var separator = endpoint.LastIndexOf(':');
+        if (separator <= 0 || !int.TryParse(endpoint[(separator + 1)..], out var port))
+        {
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Failed,
+                $"endpoint '{endpoint}' is not host:port", nowMs);
+            return;
+        }
+
+        try
+        {
+            using var keypair = Protocol.PeerKeypairStore.Open(runtime.Options.StateDirectory);
+            await using var connection = await Protocol.PeerTlsConnection.DialAsync(
+                endpoint[..separator], port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            var session = await Protocol.PeerSessionDriver.DialAsync(
+                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            var committed = await ReplicationInitiator.PushAllAsync(
+                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, cancellationToken)
+                .ConfigureAwait(false);
+
+            ledger.RecordSuccess(set.Id, destination.Name, committed, nowMs);
+        }
+        catch (Protocol.PeerProtocolException refusal)
+        {
+            // Reached and refused — a stated reason, not an outage.
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Failed,
+                $"the peer refused replication: {refusal.Reason} — {refusal.Message}", nowMs);
+        }
+        catch (Exception exception) when (exception
+            is System.Net.Sockets.SocketException or IOException or System.Security.Authentication.AuthenticationException)
+        {
+            // Could not be reached: the gap closes itself when the peer
+            // returns (FR-DEST-003).
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Unavailable, exception.Message, nowMs);
         }
     }
 
