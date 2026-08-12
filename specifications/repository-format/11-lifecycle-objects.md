@@ -53,6 +53,8 @@ Four independent things break leases, and they are why the rule is absolute: clo
 
 `/tombstones/<object-type>/<object-id>` records that an object has been marked for deletion and when it becomes eligible. `<object-type>` is the two-lowercase-hex-digit rendering of the [02 §3.1](02-identifiers.md#31-object-types) type — `0d`, not `13` — and `<object-id>` is the 52-character base32 rendering of the object identifier.
 
+A **blob** has no [02 §3.1](02-identifiers.md#31-object-types) type — its identifier is writer-allocated, not content-derived ([02 §4](02-identifiers.md#4-blob-identifier)) — so a blob tombstone uses the type digits `07`: the reserved code that is already the blob domain in the store-key derivation ([02 §4.3](02-identifiers.md#43-not-leaking-writer-identity)) and that no record's `object_type` can ever carry. Its `<object-id>` is the 26-character base32 rendering of the 16-byte blob identifier, and key 3 below carries the 16 bytes — the width rule of §3.1.
+
 ```text
 tombstone = {
     1: u16       schema version, 1
