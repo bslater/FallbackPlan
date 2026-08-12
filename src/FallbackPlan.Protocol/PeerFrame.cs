@@ -34,6 +34,9 @@ public enum PeerMessageType : ushort
     /// <summary>The channel-bound signature (02 §3.1).</summary>
     SessionAuthProof = 9,
 
+    /// <summary>A peer announces it has ended the peering (01 §3; feature-gated as "termination-notice").</summary>
+    PeeringTermination = 10,
+
     /// <summary>A source's offer to replicate a repository (03 §3.1).</summary>
     ReplicationOffer = 256,
 
@@ -147,6 +150,13 @@ public sealed class PeerProtocolException : Exception
 
     /// <summary>The closed-set code a peer branches on (02 §6).</summary>
     public PeerRefusalReason Reason { get; }
+
+    /// <summary>
+    /// Whether this refusal arrived off the wire from the peer, as opposed to
+    /// being raised here against the peer. A received refusal is surfaced and
+    /// never echoed back as a refusal of its own (02 §6).
+    /// </summary>
+    public bool ReceivedFromPeer { get; init; }
 }
 
 /// <summary>

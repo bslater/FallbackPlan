@@ -669,3 +669,76 @@ internal static class PeerCbor
         return (ushort)value;
     }
 }
+
+/// <summary>
+/// A peer announces it has ended the peering (specification peer-protocol
+/// 01 §3; ADR-0030 Amendment 2). Best-effort and informational: revocation is
+/// a local act that needs no round trip — this message exists so the other
+/// household learns of the ending as a stated fact instead of as unexplained
+/// refusals. Feature-gated as <c>termination-notice</c>, so a peer that never
+/// offered the feature is never sent a type it cannot parse.
+/// </summary>
+/// <param name="Reason">What a human reads. Nothing may parse it.</param>
+/// <param name="GraceDays">How long the sender suggests holding stored data before eviction; informational, never an obligation.</param>
+public sealed record PeeringTermination(string Reason, ushort GraceDays) : IPeerMessage
+{
+    /// <summary>The most bytes the human-readable reason may occupy.</summary>
+    public const int MaximumReasonBytes = 256;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.PeeringTermination;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteTextString(
+            Encoding.UTF8.GetByteCount(Reason) <= MaximumReasonBytes
+                ? Reason
+                : throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, $"A termination reason exceeds {MaximumReasonBytes} bytes."));
+        writer.WriteInt32(2);
+        writer.WriteUInt32(GraceDays);
+    }
+
+    /// <summary>Reads a termination from a body positioned after the message type.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The termination.</returns>
+    /// <exception cref="PeerProtocolException">The body is not the shape above.</exception>
+    public static PeeringTermination Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        var reason = string.Empty;
+        ushort graceDays = 0;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    reason = reader.ReadTextString();
+                    if (Encoding.UTF8.GetByteCount(reason) > MaximumReasonBytes)
+                    {
+                        throw new PeerProtocolException(
+                            PeerRefusalReason.Malformed, $"A termination reason exceeds {MaximumReasonBytes} bytes.");
+                    }
+
+                    break;
+                case 2:
+                    graceDays = PeerCbor.ReadUInt16(reader);
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        return new PeeringTermination(reason, graceDays);
+    }
+}

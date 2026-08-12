@@ -26,6 +26,8 @@ After Open, the source drives a fixed sequence. Each step is one or more frames;
 
 The inventory precedes the transfer so the cheapest thing crosses first: the destination declares what it has once, and the source sends only the difference. An implementation MAY replace the explicit inventory with a compact set filter negotiated as a feature ([02 §6](02-session.md#6-feature-negotiation)); the explicit inventory is the base exchange every implementation supports.
 
+A dialler with no objects to move but a peering to end sends a **`PeeringTermination`** ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) in place of the offer, where its feature is negotiated; the exchange then carries no payload and the session ends. Anywhere else in the sequence the type is a violation like any other.
+
 ## 3 Messages
 
 Bodies are deterministic CBOR maps; key 0 is the message type ([02 §7](02-session.md#7-framing)). Keys below start at 1. An unknown key inside a known message is skipped; an unknown message type is refused ([02 §7](02-session.md#7-framing)).

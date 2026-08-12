@@ -202,6 +202,105 @@ public sealed class PeerReplicationTests : IDisposable
         Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.InSync, record.State);
     }
 
+    [TestMethod]
+    public async Task Unpair_WithTheDestinationReachable_LeavesADurableNoticeOnBothEnds()
+    {
+        // The ending is announced while the grant still authenticates the
+        // session, and both households keep a durable record of it
+        // (FR-DEST-008, ADR-0030 Amendment 2).
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+
+        var unpair = await RunAgentAsync(
+            "unpair", "--state", _source.StateDirectory,
+            "--fingerprint", destinationFingerprint, "--to", DestinationAddress);
+        Assert.AreEqual(0, unpair.ExitCode, unpair.Error);
+        Assert.Contains("notified", unpair.Output, StringComparison.Ordinal);
+
+        // The destination: a notice that survives restarts (re-opened store),
+        // and the source's grant gone. The listener handles the frame after
+        // the sender has already returned, so this waits rather than races.
+        await WaitForAsync(() =>
+            FallbackPlan.Application.NoticeStore.Open(_destinationState).Unacknowledged.Count > 0);
+        var destinationNotice = Assert.ContainsSingle(
+            FallbackPlan.Application.NoticeStore.Open(_destinationState).Unacknowledged);
+        Assert.Contains("ended the peering", destinationNotice.Message, StringComparison.Ordinal);
+        using (var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory))
+        {
+            Assert.IsNull(_destinationGrants!.Find(sourceKeypair.Identity));
+        }
+
+        // The source: its own grant revoked, tombstoned rather than merely
+        // forgotten — a dialler is later told `revoked`, not `not_paired`.
+        using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
+        var sourceGrants = PeerGrantStore.Open(_source.StateDirectory);
+        Assert.IsNull(sourceGrants.Find(destinationKeypair.Identity));
+        Assert.IsTrue(sourceGrants.IsRevoked(destinationKeypair.Identity));
+    }
+
+    [TestMethod]
+    public async Task FanOut_ThePeerRevokedThisHub_RaisesADurableNoticeFromTheRefusal()
+    {
+        // The other delivery path (FR-DEST-008): the spoke ended the peering
+        // while the hub was away, so the hub learns from the Revoked refusal
+        // at its next sync — and keeps the fact durably.
+        _source.WriteSourceFile("notes.txt", "fan me out");
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+
+        using (var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory))
+        {
+            // Through the listener's own store instance: revocation takes
+            // effect at the next session (01 §3), and the listener resolves
+            // grants from the store it was started with.
+            _destinationGrants!.Revoke(sourceKeypair.Identity);
+        }
+
+        new FallbackPlan.Application.ClientConfiguration
+        {
+            SchemaVersion = FallbackPlan.Application.ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new FallbackPlan.Application.DestinationConfiguration
+                {
+                    Id = new string('1', 32),
+                    Name = "friend",
+                    Kind = FallbackPlan.Application.DestinationKind.Peer,
+                    Fingerprint = destinationFingerprint,
+                    Endpoint = DestinationAddress,
+                },
+            ],
+            BackupSets =
+            [
+                new FallbackPlan.Application.BackupSetConfiguration
+                {
+                    Id = _source.DocsSetId,
+                    Name = "docs",
+                    Root = _source.SourceRoot,
+                    Schedule = "every 4h",
+                    Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
+                },
+            ],
+        }.Save(Path.Combine(_source.StateDirectory, "config.json"));
+
+        // Exit 0: the backup itself succeeded; the destination's state is the
+        // ledger's and the notice's to carry.
+        var run = await RunAgentAsync(
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+
+        var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(
+            FallbackPlan.Application.DestinationSyncState.Failed, record.State,
+            $"state={record.State} error={record.LastError}");
+        Assert.Contains("Revoked", record.LastError!, StringComparison.Ordinal);
+
+        var notice = Assert.ContainsSingle(
+            FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged);
+        Assert.Contains("ended the peering", notice.Message, StringComparison.Ordinal);
+    }
+
     private IPEndPoint? _endpoint;
     private string DestinationAddress => $"{_endpoint!.Address}:{_endpoint.Port}";
 
@@ -216,8 +315,8 @@ public sealed class PeerReplicationTests : IDisposable
         using var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory);
         using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
 
-        var destinationGrants = PeerGrantStore.Open(_destinationState);
-        destinationGrants.Pin(new PeerGrant(
+        _destinationGrants = PeerGrantStore.Open(_destinationState);
+        _destinationGrants.Pin(new PeerGrant(
             sourceKeypair.Identity, "source", destinationRoleForSource, PeerTerms.None, PairedAt));
 
         var sourceGrants = PeerGrantStore.Open(_source.StateDirectory);
@@ -226,7 +325,7 @@ public sealed class PeerReplicationTests : IDisposable
 
         var listenerKeypair = PeerKeypairStore.Open(_destinationState);
         var listener = RemoteServiceListener.Start(
-            listenerKeypair, destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
+            listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
             log: null, replicationStateDirectory: _destinationState);
         listener.Bind(new UnusedService());
         _endpoint = listener.Endpoint;
@@ -237,6 +336,18 @@ public sealed class PeerReplicationTests : IDisposable
     }
 
     private Stopper? _stop;
+    private PeerGrantStore? _destinationGrants;
+
+    /// <summary>Polls until the condition holds — the listener handles a frame after the sender has already returned.</summary>
+    private async Task WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.IsTrue(DateTimeOffset.UtcNow < deadline, "the condition did not hold within ten seconds");
+            await Task.Delay(50, _timeout.Token);
+        }
+    }
 
     private static Task<(int ExitCode, string Output, string Error)> RunAgentAsync(params string[] args) =>
         RunAsync(AgentHost.RunAsync, args);

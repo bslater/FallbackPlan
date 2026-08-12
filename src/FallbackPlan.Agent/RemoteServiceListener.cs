@@ -32,6 +32,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly Action<string>? _log;
     private readonly string? _replicasRoot;
     private readonly string? _spoolRoot;
+    private readonly string? _stateDirectory;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
@@ -52,6 +53,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         _socket = socket;
         _agentVersion = agentVersion;
         _log = log;
+        _stateDirectory = replicationStateDirectory;
         if (replicationStateDirectory is not null)
         {
             // A peer that stores objects here writes them into a replica store
@@ -223,6 +225,27 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
                 var outcome = await ReplicationResponder.ServeAsync(
                     _replicasRoot, _spoolRoot!, session.Stream, _stopping.Token).ConfigureAwait(false);
+
+                if (outcome.Termination is { } termination)
+                {
+                    // The peering ended, said so, and both sides now know: the
+                    // notice survives restarts until a human acknowledges it,
+                    // and the grant goes — what this device already stores for
+                    // that peer is its own to keep or evict on its own
+                    // timetable (01 §3, ADR-0030 Amendment 2).
+                    var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    FallbackPlan.Application.NoticeStore.Open(_stateDirectory!).Raise(
+                        $"peering-terminated:{session.Peer.Identity.Fingerprint}",
+                        $"Peer '{session.Peer.Label}' ({session.Peer.Identity.Fingerprint}) ended the peering"
+                        + $"{(termination.Reason.Length > 0 ? $": {termination.Reason}" : string.Empty)}. "
+                        + $"Data stored for it here is yours to keep or evict"
+                        + $"{(termination.GraceDays > 0 ? $"; it suggests a {termination.GraceDays}-day grace" : string.Empty)}.",
+                        now);
+                    _grants.Revoke(session.Peer.Identity);
+                    _log?.Invoke($"peering terminated by {peer}");
+                    return;
+                }
+
                 _log?.Invoke($"replicated {outcome.Committed} object(s) for repository {outcome.RepositoryId} from {peer}");
                 return;
             }

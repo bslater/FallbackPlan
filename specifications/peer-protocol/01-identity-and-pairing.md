@@ -139,6 +139,25 @@ A successful pairing writes a **grant** on each side, in durable local state ([N
 
 Grants are **revocable at either side, unilaterally, at any time**. Revocation takes effect on the next session; it does not reach across the network to delete anything already stored, and this specification does not pretend otherwise. What a destination does with objects it already holds after revoking is its own policy.
 
+Revoking a grant leaves a **tombstone**: the revoked identity's fingerprint, retained after the grant itself is gone. The tombstone is what lets a later session from that peer be refused `revoked` rather than `not_paired` ([02 §8](02-session.md#8-errors-and-refusal)) — the difference between "the peering was ended" and "you were never here", which call for different operator action. Re-pairing is the deliberate second act [§2.5](#25-rejecting-a-changed-identity) requires, and it clears the tombstone; the list grows only with deliberate endings, never with strangers.
+
+### 3.1 Ending a peering
+
+A side ending a peering SHOULD announce it before revoking, while its grant still authenticates a session — a peering that simply goes silent is indistinguishable from an outage, and the human on the other side deserves the distinction ([FR-DEST-008](../../docs/requirements/functional.md#destinations-and-fan-out), [ADR-0030 Amendment 2](../../docs/adr/0030-peer-identity-and-pairing.md#amendment-2-2026-08--the-pairing-lifecycle-completes-roles-on-the-wire-endings-announced-terms-enforced)).
+
+**`PeeringTermination`** (type 10, [02 §7](02-session.md#7-framing)):
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `text` | Reason, for a human (≤ 256 bytes) |
+| 2 | `u16` | Suggested grace, days — 0 for no suggestion |
+
+The message is gated by the **`termination-notice`** feature ([02 §6](02-session.md#6-feature-negotiation)): a side MUST NOT send it unless the feature is in the session's intersection, because an ungated build answers an unknown type with `message_unknown` and the announcement would end in a refusal instead of a notice. Against a peer that does not offer the feature, the sender revokes locally and lets the fallback below carry the fact.
+
+It is sent in the `Open` state, in place of the payload exchange the session would otherwise carry, and it is the last message of the session. The receiver MUST record a **durable notice** that survives restarts and is surfaced until a human acknowledges it, and MUST revoke its own grant for the sender. Objects it already stores for the ended peering remain its own to keep or evict on its own timetable — the grace in key 2 is the sender's suggestion, not a protocol obligation, and nothing here enforces it.
+
+Delivery is **best effort**. A peer that is unreachable, or that never offers a session again, is never told directly; it learns at its next dial, when the tombstone above turns its authentication into a `revoked` refusal. A dialler refused `revoked` MUST record the same durable notice the announcement would have produced — the refusal is the fallback delivery of the termination, not merely an error.
+
 ## 4 Terms
 
 Terms are set by the **destination** — the side that will store objects — and travel with the grant:

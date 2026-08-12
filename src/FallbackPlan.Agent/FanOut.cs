@@ -209,6 +209,18 @@ public static class FanOut
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed,
                 $"the peer refused replication: {refusal.Reason} — {refusal.Message}", nowMs);
+
+            if (refusal.Reason == Protocol.PeerRefusalReason.Revoked)
+            {
+                // The peer ended the peering while this hub was away — the
+                // refusal is the fallback delivery of that fact (ADR-0030
+                // Amendment 2), and it must survive until a human sees it.
+                runtime.Notices.Raise(
+                    $"peering-terminated:{destination.Fingerprint}",
+                    $"Peer '{destination.Name}' ended the peering — this set no longer replicates there. "
+                    + "Remove or replace the destination in the configuration.",
+                    nowMs);
+            }
         }
         catch (Exception exception) when (exception
             is System.Net.Sockets.SocketException or IOException or System.Security.Authentication.AuthenticationException)

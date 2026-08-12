@@ -26,7 +26,10 @@ internal static class ReplicationWire
         if (type == PeerMessageType.SessionRefuse)
         {
             var refusal = SessionRefuse.Read(body);
-            throw new PeerProtocolException(refusal.Reason, $"The peer refused: {refusal.Text}");
+            throw new PeerProtocolException(refusal.Reason, $"The peer refused: {refusal.Text}")
+            {
+                ReceivedFromPeer = true,
+            };
         }
 
         if (!Enum.IsDefined(type))
@@ -58,13 +61,27 @@ internal static class ReplicationWire
         return read(body);
     }
 
-    /// <summary>Sends a refusal for a raised violation, best effort, before closing.</summary>
+    /// <summary>
+    /// Sends a refusal for a raised violation, best effort, before closing.
+    /// A refusal the peer sent is never passed here — this side was refused,
+    /// it is refusing nobody.
+    /// </summary>
     public static async ValueTask TryRefuseAsync(Stream stream, PeerProtocolException exception)
     {
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await PeerFrame.WriteAsync(stream, SessionRefuse.From(exception), timeout.Token).ConfigureAwait(false);
+
+            // Linger until the peer closes: hanging up the moment the refusal
+            // is written turns the peer's in-flight write into a reset that
+            // purges the refusal out of its receive buffer unread. Draining
+            // to end-of-stream keeps the connection alive exactly long enough
+            // for the refusal to be read (02 §6).
+            var discard = new byte[4096];
+            while (await stream.ReadAsync(discard, timeout.Token).ConfigureAwait(false) > 0)
+            {
+            }
         }
         catch (Exception refusalFailure)
             when (refusalFailure is IOException or OperationCanceledException or ObjectDisposedException)

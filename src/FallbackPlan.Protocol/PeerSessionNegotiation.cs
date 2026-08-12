@@ -28,8 +28,11 @@ public static class PeerSessionNegotiation
     /// <summary>The oldest protocol version this build speaks.</summary>
     public const ushort OldestSupportedVersion = 1;
 
-    /// <summary>The features this build offers. None are defined at version 1 (02 §4).</summary>
-    public static IReadOnlyList<string> SupportedFeatures { get; } = [];
+    /// <summary>A peer that offers this understands <see cref="PeeringTermination"/> (01 §3).</summary>
+    public const string TerminationNoticeFeature = "termination-notice";
+
+    /// <summary>The features this build offers (02 §4).</summary>
+    public static IReadOnlyList<string> SupportedFeatures { get; } = [TerminationNoticeFeature];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>

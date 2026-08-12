@@ -1151,6 +1151,11 @@ public static class CliApplication
                         target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
 
                     error.WriteLine($"mode: service (remote) — {result.MachineName}");
+                    foreach (var notice in result.Notices)
+                    {
+                        output.WriteLine($"notice: {notice}");
+                    }
+
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine($"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}");

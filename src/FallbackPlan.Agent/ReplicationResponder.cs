@@ -17,7 +17,8 @@ internal static class ReplicationResponder
     /// <summary>The result of serving one replication session.</summary>
     /// <param name="RepositoryId">The repository whose objects were received, hex.</param>
     /// <param name="Committed">How many objects were committed.</param>
-    public sealed record Outcome(string RepositoryId, long Committed);
+    /// <param name="Termination">Present when the peer announced the peering's end instead of replicating (01 §3).</param>
+    public sealed record Outcome(string RepositoryId, long Committed, PeeringTermination? Termination = null);
 
     /// <summary>Serves one replication session from a source.</summary>
     /// <param name="replicasRoot">The directory under which per-repository replica stores live.</param>
@@ -34,9 +35,26 @@ internal static class ReplicationResponder
 
         try
         {
-            var offer = await ReplicationWire.ReadAsync(
-                stream, PeerMessageType.ReplicationOffer, ReplicationOffer.Read, cancellationToken)
-                .ConfigureAwait(false);
+            // The first frame is the offer — or, under the termination-notice
+            // feature, the announcement that there will never be another
+            // (ADR-0030 Amendment 2). The caller raises the durable notice;
+            // this layer only recognises the message.
+            var first = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+                ?? throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "The peer closed before sending a replication offer.");
+            if (first.Type == PeerMessageType.PeeringTermination)
+            {
+                return new Outcome(string.Empty, 0, PeeringTermination.Read(first.Body));
+            }
+
+            if (first.Type != PeerMessageType.ReplicationOffer)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"Expected a replication offer; the peer sent a {first.Type}.");
+            }
+
+            var offer = ReplicationOffer.Read(first.Body);
 
             if (offer.FormatCapability != ReplicationInitiator.FormatCapability)
             {
@@ -66,7 +84,11 @@ internal static class ReplicationResponder
         }
         catch (PeerProtocolException exception)
         {
-            await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            if (!exception.ReceivedFromPeer)
+            {
+                await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            }
+
             throw;
         }
     }

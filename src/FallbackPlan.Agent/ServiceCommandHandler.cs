@@ -659,7 +659,9 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             sets.Add(new BackupSetStatusDescriptor(set.Name, status, nextRun, rows));
         }
 
-        return new StatusResult(Environment.MachineName, sets, now);
+        return new StatusResult(
+            Environment.MachineName, sets, now,
+            [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")]);
     }
 
     /// <summary>

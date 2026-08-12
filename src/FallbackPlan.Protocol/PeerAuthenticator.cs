@@ -116,8 +116,10 @@ public sealed class PeerAuthenticator
 
         var grant = _grants.Find(theirs.Identity)
             ?? throw new PeerProtocolException(
-                PeerRefusalReason.NotPaired,
-                $"No grant exists for peer {theirs.Identity.Fingerprint}.");
+                _grants.IsRevoked(theirs.Identity) ? PeerRefusalReason.Revoked : PeerRefusalReason.NotPaired,
+                _grants.IsRevoked(theirs.Identity)
+                    ? $"The pairing with peer {theirs.Identity.Fingerprint} was ended."
+                    : $"No grant exists for peer {theirs.Identity.Fingerprint}.");
 
         _theirs = theirs;
         Peer = grant;

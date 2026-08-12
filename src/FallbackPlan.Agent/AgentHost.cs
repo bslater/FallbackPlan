@@ -55,11 +55,12 @@ public static class AgentHost
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
                                             [--label <name>] [--role stores-here|stores-for-us|both]
                   fallbackplan-agent pairings --state <dir>
-                  fallbackplan-agent unpair --state <dir> --fingerprint <fp>
+                  fallbackplan-agent unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent replicate --repo <path> --state <dir> --to <host:port> --fingerprint <fp>
+                  fallbackplan-agent notices --state <dir> [--ack <id>]
 
                 Backup sets, their destinations and their schedules come from
                 <state>/config.json. Each set's staging archive lives under
@@ -111,11 +112,25 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate" or "notices"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, or `replicate` — no other verb exists.");
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `replicate`, or `notices` — no other verb exists.");
             return 1;
+        }
+
+        // `notices` lists what awaits a human, or acknowledges one entry —
+        // the durable third channel (architecture 10 §3.1): a peering that
+        // ended at 3 a.m. is still known at breakfast.
+        if (args[0] == "notices")
+        {
+            if (stateDirectory is null)
+            {
+                error.WriteLine("error: usage is `notices --state <dir> [--ack <id>]`.");
+                return 1;
+            }
+
+            return Notices(stateDirectory, Get("--ack"), output, error);
         }
 
         // The pairing verbs need the state directory and no repository — a
@@ -132,7 +147,9 @@ public static class AgentHost
             return args[0] switch
             {
                 "pairings" => ListPairings(stateDirectory, output),
-                "unpair" => Unpair(stateDirectory, Get("--fingerprint"), output, error),
+                "unpair" => await UnpairAsync(
+                    stateDirectory, Get("--fingerprint"), Get("--to"), args.Contains("--no-notify"),
+                    output, error, cancellationToken).ConfigureAwait(false),
                 _ => await PairAsync(stateDirectory, Get("--remote-interface"), Get("--remote-port"), Get("--label"),
                     Get("--role"), output, error, cancellationToken).ConfigureAwait(false),
             };
@@ -528,6 +545,38 @@ public static class AgentHost
         _ => "both",
     };
 
+    private static int Notices(string stateDirectory, string? acknowledgeId, TextWriter output, TextWriter error)
+    {
+        var notices = FallbackPlan.Application.NoticeStore.Open(stateDirectory);
+
+        if (acknowledgeId is not null)
+        {
+            if (!notices.Acknowledge(acknowledgeId, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+            {
+                error.WriteLine($"error: no unacknowledged notice '{acknowledgeId}' exists.");
+                return 1;
+            }
+
+            output.WriteLine($"acknowledged {acknowledgeId}.");
+            return 0;
+        }
+
+        var pending = notices.Unacknowledged;
+        if (pending.Count == 0)
+        {
+            output.WriteLine("no notices.");
+            return 0;
+        }
+
+        foreach (var notice in pending)
+        {
+            var raised = DateTimeOffset.FromUnixTimeMilliseconds((long)notice.RaisedAt);
+            output.WriteLine($"[{notice.Id}] {raised:u}  {notice.Message}");
+        }
+
+        return 0;
+    }
+
     private static int ListPairings(string stateDirectory, TextWriter output)
     {
         var grants = PeerGrantStore.Open(stateDirectory);
@@ -545,11 +594,18 @@ public static class AgentHost
         return 0;
     }
 
-    private static int Unpair(string stateDirectory, string? fingerprint, TextWriter output, TextWriter error)
+    private static async Task<int> UnpairAsync(
+        string stateDirectory,
+        string? fingerprint,
+        string? to,
+        bool noNotify,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(fingerprint))
         {
-            error.WriteLine("error: usage is `unpair --state <dir> --fingerprint <fp>`.");
+            error.WriteLine("error: usage is `unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]`.");
             return 1;
         }
 
@@ -575,9 +631,90 @@ public static class AgentHost
             return 1;
         }
 
+        // Best-effort notice first, while the grant still authenticates the
+        // session (ADR-0030 Amendment 2): the ending should be a stated fact
+        // at the other house, not unexplained refusals. Revocation never
+        // waits on it — an unreachable peer learns from the Revoked refusal
+        // at its next dial instead.
+        if (!noNotify)
+        {
+            var endpoint = to ?? EndpointFor(stateDirectory, matches[0].Identity.Fingerprint);
+            if (endpoint is null)
+            {
+                output.WriteLine("no endpoint known for the peer — it will learn of the ending at its next dial.");
+            }
+            else
+            {
+                await TryNotifyTerminationAsync(
+                    stateDirectory, grants, matches[0], endpoint, output, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         grants.Revoke(matches[0].Identity);
         output.WriteLine($"revoked the pairing with {matches[0].Label} ({matches[0].Identity.Fingerprint}).");
         return 0;
+    }
+
+    /// <summary>The configured endpoint for a peer destination, when the address book has one.</summary>
+    private static string? EndpointFor(string stateDirectory, string peerFingerprint)
+    {
+        try
+        {
+            return ClientConfiguration.Load(Path.Combine(stateDirectory, "config.json")).Destinations
+                .FirstOrDefault(destination =>
+                    destination.Kind == DestinationKind.Peer
+                    && string.Equals(destination.Fingerprint, peerFingerprint, StringComparison.Ordinal))
+                ?.Endpoint;
+        }
+        catch (ClientStateException)
+        {
+            // An invalid configuration must not block a revocation.
+            return null;
+        }
+    }
+
+    private static async Task TryNotifyTerminationAsync(
+        string stateDirectory,
+        PeerGrantStore grants,
+        PeerGrant grant,
+        string endpoint,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseEndpoint(endpoint, out var host, out var port))
+        {
+            output.WriteLine($"'{endpoint}' is not host:port — the peer will learn of the ending at its next dial.");
+            return;
+        }
+
+        try
+        {
+            using var keypair = PeerKeypairStore.Open(stateDirectory);
+            await using var connection = await PeerTlsConnection.DialAsync(
+                host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            var session = await PeerSessionDriver.DialAsync(
+                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!session.Supports(PeerSessionNegotiation.TerminationNoticeFeature))
+            {
+                // An older peer is simply not sent a type it cannot parse
+                // (02: unknown types hard-fail); it learns from the refusal.
+                output.WriteLine("the peer predates termination notices — it will learn at its next dial.");
+                return;
+            }
+
+            await PeerFrame.WriteAsync(
+                session.Stream,
+                new PeeringTermination("the operator ended the pairing", GraceDays: 30),
+                cancellationToken).ConfigureAwait(false);
+            output.WriteLine($"notified {grant.Label} that the peering has ended.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            output.WriteLine(
+                $"could not notify the peer ({exception.Message}) — it will learn of the ending at its next dial.");
+        }
     }
 
     /// <summary>

@@ -134,5 +134,6 @@ public sealed class StatusAggregationTests
                     new BackupSetStatus(state, null, []),
                     NextRun: null,
                     Destinations: []))],
-            Now);
+            Now,
+            Notices: []);
 }

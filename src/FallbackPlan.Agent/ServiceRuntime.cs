@@ -78,6 +78,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The per-(set, destination) sync ledger (FR-DEST-004).</summary>
     public DestinationSyncStore DestinationSync { get; private set; } = null!;
 
+    /// <summary>The durable notices ledger (architecture 10 §3.1's third channel).</summary>
+    public NoticeStore Notices { get; private set; } = null!;
+
     /// <summary>Where progress goes.</summary>
     public ProgressHub Progress { get; }
 
@@ -129,6 +132,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 new ServiceRuntime(options, writerRole, passphrase.Clone(), state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
+                    Notices = NoticeStore.Open(options.StateDirectory),
                 });
         }
         catch

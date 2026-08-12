@@ -10,11 +10,12 @@ namespace FallbackPlan.Protocol;
 /// </summary>
 public sealed class PeerSession
 {
-    internal PeerSession(Stream stream, PeerGrant peer, ushort version)
+    internal PeerSession(Stream stream, PeerGrant peer, ushort version, IReadOnlyList<string> features)
     {
         Stream = stream;
         Peer = peer;
         Version = version;
+        Features = features;
     }
 
     /// <summary>The open duplex stream. What flows over it now is the payload, not the handshake.</summary>
@@ -25,6 +26,13 @@ public sealed class PeerSession
 
     /// <summary>The negotiated protocol version (02 §3).</summary>
     public ushort Version { get; }
+
+    /// <summary>The features in effect (02 §4) — a gated message is sent only when its feature is here.</summary>
+    public IReadOnlyList<string> Features { get; }
+
+    /// <summary>Whether a negotiated feature is in effect for this session.</summary>
+    /// <param name="feature">The feature name (02 §4).</param>
+    public bool Supports(string feature) => Features.Contains(feature, StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -140,14 +148,20 @@ public static class PeerSessionDriver
             var accept = PeerSessionNegotiation.Negotiate(ourHello, theirHello);
 
             authenticator.Open();
-            return new PeerSession(stream, peer, accept.Version);
+            return new PeerSession(stream, peer, accept.Version, accept.Features);
         }
         catch (PeerProtocolException exception)
         {
             // Tell the peer it was refused and nothing more (02 §6, §8). A
             // refusal that cannot itself be sent — the connection is already
-            // gone — is not worth masking the real failure with.
-            await TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            // gone — is not worth masking the real failure with. A refusal
+            // the peer sent is not echoed back: this side was refused, it is
+            // refusing nobody.
+            if (!exception.ReceivedFromPeer)
+            {
+                await TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            }
+
             throw;
         }
     }
@@ -170,7 +184,10 @@ public static class PeerSessionDriver
             // The peer refused us. Surface its reason as our failure rather
             // than mislabelling it — this side did not violate anything.
             var refusal = SessionRefuse.Read(body);
-            throw new PeerProtocolException(refusal.Reason, $"The peer refused: {refusal.Text}");
+            throw new PeerProtocolException(refusal.Reason, $"The peer refused: {refusal.Text}")
+            {
+                ReceivedFromPeer = true,
+            };
         }
 
         if (!Enum.IsDefined(type))
@@ -200,6 +217,18 @@ public static class PeerSessionDriver
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await PeerFrame.WriteAsync(stream, SessionRefuse.From(exception), timeout.Token).ConfigureAwait(false);
+
+            // Linger until the peer closes. Tearing the connection down the
+            // moment the refusal is written turns the peer's in-flight write
+            // into a reset, and the reset purges the refusal out of its
+            // receive buffer unread — a Revoked told as "broken pipe" loses
+            // the one fact the refusal existed to carry (02 §6). Reading
+            // until end-of-stream consumes whatever the peer was mid-send on
+            // and returns as soon as it has read the refusal and hung up.
+            var discard = new byte[4096];
+            while (await stream.ReadAsync(discard, timeout.Token).ConfigureAwait(false) > 0)
+            {
+            }
         }
         catch (Exception refusalFailure) when (refusalFailure is IOException or OperationCanceledException or ObjectDisposedException)
         {

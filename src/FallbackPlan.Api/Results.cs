@@ -196,10 +196,12 @@ public sealed record BackupSetStatusDescriptor(
 /// <param name="MachineName">The machine this service speaks for.</param>
 /// <param name="Sets">Per-set detail.</param>
 /// <param name="ObservedAt">When the service produced this, Unix milliseconds.</param>
+/// <param name="Notices">Durable events awaiting a human — surfaced here until acknowledged (10 §3.1).</param>
 public sealed record StatusResult(
     string MachineName,
     IReadOnlyList<BackupSetStatusDescriptor> Sets,
-    ulong ObservedAt) : ServiceResult;
+    ulong ObservedAt,
+    IReadOnlyList<string> Notices) : ServiceResult;
 
 /// <summary>The client configuration as JSON.</summary>
 /// <param name="Json">The configuration document.</param>

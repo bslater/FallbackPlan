@@ -92,11 +92,33 @@ public sealed class PeerGrantStore
     // whose order the disk decides.
     private readonly Lock _gate = new();
 
+    private readonly HashSet<string> _revoked = new(StringComparer.Ordinal);
+
     private PeerGrantStore(string path, Dictionary<string, PeerGrant> grants)
     {
         _path = path;
         _grants = grants;
+
+        var revokedPath = RevokedPath(path);
+        if (File.Exists(revokedPath))
+        {
+            try
+            {
+                _revoked = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(revokedPath), SerializerOptions)
+                    ?? new HashSet<string>(StringComparer.Ordinal);
+            }
+            catch (JsonException)
+            {
+                // Tombstones are a courtesy vocabulary — a dialler told
+                // not_paired instead of revoked has lost precision, not
+                // safety — so a corrupt list is set aside, never fatal.
+                File.Move(revokedPath, revokedPath + ".corrupt", overwrite: true);
+            }
+        }
     }
+
+    private static string RevokedPath(string grantsPath) =>
+        Path.Combine(Path.GetDirectoryName(grantsPath)!, "revoked-peers.json");
 
     /// <summary>Every grant, in no particular order.</summary>
     /// <remarks>A snapshot, not a view.</remarks>
@@ -163,6 +185,15 @@ public sealed class PeerGrantStore
             }
 
             _grants[Key(grant.Identity)] = grant;
+
+            // Re-pairing is the deliberate second act 01 §2.5 requires — it
+            // clears the tombstone, or a re-approved peer would still be told
+            // it was revoked.
+            if (_revoked.Remove(grant.Identity.Fingerprint))
+            {
+                SaveRevoked();
+            }
+
             Save();
         }
     }
@@ -201,10 +232,30 @@ public sealed class PeerGrantStore
                 return false;
             }
 
+            // The tombstone is what lets a later dialler be told `revoked`
+            // rather than `not_paired` — the difference between "the peering
+            // ended" and "you were never here" (ADR-0030 Amendment 2).
+            _revoked.Add(identity.Fingerprint);
+            SaveRevoked();
             Save();
             return true;
         }
     }
+
+    /// <summary>Whether a peer's grant was deliberately revoked (01 §3).</summary>
+    /// <param name="identity">The identity a peer presented.</param>
+    public bool IsRevoked(PeerIdentity identity)
+    {
+        ThrowHelper.ThrowIfNull(identity);
+
+        lock (_gate)
+        {
+            return _revoked.Contains(identity.Fingerprint);
+        }
+    }
+
+    private void SaveRevoked() =>
+        AtomicFile.WriteAllText(RevokedPath(_path), JsonSerializer.Serialize(_revoked, SerializerOptions));
 
     /// <summary>Replaces a grant's label, which carries no authority.</summary>
     /// <param name="identity">The peer to rename.</param>

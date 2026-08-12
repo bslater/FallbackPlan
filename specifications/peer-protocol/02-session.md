@@ -108,7 +108,7 @@ A failure of (2) or (3) is refused as `authentication_failed`. The two are not d
 
 **Only a side that was expecting a particular peer can report `identity_changed`.** An initiator dialled a pinned identity and can say that something else answered — which is the case [01 §2.5](01-identity-and-pairing.md#25-rejecting-a-changed-identity) exists for. A responder taking an inbound connection expected nobody in particular, so an unrecognised key there is `not_paired` and MUST NOT be reported as anything else. Distinguishing them would require knowing which pairing a stranger *meant* to be, and the only thing a stranger has offered is the key that is wrong.
 
-**`revoked` requires a retained revocation record, which this specification does not require.** Revocation removes a grant ([01 §3](01-identity-and-pairing.md#3-grants)); an implementation that keeps no tombstone reports `not_paired`, which is what it honestly knows. Keeping one means holding a permanent list of every peer ever unpaired, and that is a worse trade than a slightly vaguer refusal.
+**`revoked` requires a retained revocation record.** Revocation removes a grant, and a side that kept no record of the removal would honestly know only `not_paired`. [01 §3](01-identity-and-pairing.md#3-grants) therefore keeps a tombstone — the revoked identity's fingerprint, nothing more — because the two refusals call for different operator action, and because `revoked` is the fallback delivery of a termination the peer may never have heard announced ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)). Re-pairing clears the tombstone, so the list grows only with deliberate endings.
 
 ### 3.4 Why this holds
 
@@ -174,7 +174,13 @@ A side MUST NOT use a feature that is not in the intersection, and MUST NOT infe
 
 This mirrors the repository format's required/optional split ([repository format 00 §5](../repository-format/00-conventions.md#5-versioning-and-feature-negotiation)) for the same reason: a peer that supports most of a version needs a way to say so, rather than having to refuse everything or claim everything.
 
-No features are defined at protocol version 1. The mechanism is specified now because retrofitting negotiation onto a deployed protocol means a flag day, and the documents that will define features ([03–05](README.md#documents)) are not written yet.
+The features defined so far:
+
+| Identifier | Meaning |
+|------------|---------|
+| `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
+
+The mechanism predates its first feature deliberately — retrofitting negotiation onto a deployed protocol means a flag day — and `termination-notice` is the proof it was worth specifying early: the message it gates is announced only to peers that offered it, and an older build is never sent a type it would refuse as `message_unknown`.
 
 ## 7 Framing
 
@@ -199,7 +205,8 @@ frame = u32(payload_length) ‖ payload
 | 7 | `SessionRefuse` | §8 |
 | 8 | `SessionAuth` | §3.1 |
 | 9 | `SessionAuthProof` | §3.1 |
-| 10–255 | Reserved for this specification | — |
+| 10 | `PeeringTermination` | [01 §3.1](01-identity-and-pairing.md#31-ending-a-peering) |
+| 11–255 | Reserved for this specification | — |
 | 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
 | 262+ | Reserved for [04–05](README.md#documents) | — |
 
@@ -212,6 +219,8 @@ Length framing outside TLS is deliberate rather than redundant. It bounds alloca
 ## 8 Errors and refusal
 
 A side that cannot continue sends `SessionRefuse` (or `PairRefuse` during pairing) and closes. There is no error that leaves a session half-open.
+
+**Closing follows the refusal being *read*, not merely sent.** After writing the refusal, the refusing side SHOULD hold the connection open — reading and discarding whatever the peer has in flight — until the peer closes or a short timeout passes. Tearing the connection down at once turns the peer's in-flight write into a transport reset, and on common stacks the reset purges the unread refusal from the peer's receive buffer: a `revoked` experienced as a broken pipe loses the one fact the refusal existed to carry. For the same reason, a side that receives a refusal MUST NOT answer it with a refusal of its own — it closes, and that close is what releases the refusing side's linger.
 
 **`SessionRefuse`**
 

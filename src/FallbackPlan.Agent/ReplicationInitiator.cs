@@ -57,7 +57,11 @@ internal static class ReplicationInitiator
         }
         catch (PeerProtocolException exception)
         {
-            await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            if (!exception.ReceivedFromPeer)
+            {
+                await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            }
+
             throw;
         }
     }
