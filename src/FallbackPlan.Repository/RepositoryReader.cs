@@ -76,6 +76,16 @@ public sealed class RepositoryReader : IDisposable
     public IEnumerable<RecordTableEntry> AllRecords => _blobReaders.SelectMany(reader => reader.RecordTable);
 
     /// <summary>
+    /// Each loaded blob with the records its footer declares — the sweep
+    /// side's view (architecture 07 §3): a blob is deletable only when every
+    /// record it holds is unreachable, and a record duplicated across blobs
+    /// conservatively keeps each blob holding it. Skipped blobs are absent
+    /// here and must never be swept — see <see cref="SkippedBlobs"/>.
+    /// </summary>
+    public IEnumerable<(ObjectKey StoreKey, BlobId BlobId, IReadOnlyList<RecordTableEntry> Records)> Blobs =>
+        _blobReaders.Select(reader => (reader.StoreKey, reader.Envelope.BlobId, reader.RecordTable));
+
+    /// <summary>
     /// The blobs the last load could not open, each with the refusal's own
     /// message. A skipped blob's records read as absent — every downstream
     /// caller already refuses a missing record loudly — and never as wrong
