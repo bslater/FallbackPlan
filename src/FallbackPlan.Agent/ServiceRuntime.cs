@@ -75,6 +75,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The job journal.</summary>
     public JobStateStore Jobs { get; }
 
+    /// <summary>The per-(set, destination) sync ledger (FR-DEST-004).</summary>
+    public DestinationSyncStore DestinationSync { get; private set; } = null!;
+
     /// <summary>Where progress goes.</summary>
     public ProgressHub Progress { get; }
 
@@ -123,7 +126,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
             var jobs = JobStateStore.Open(options.StateDirectory);
 
             return ValueTask.FromResult(
-                new ServiceRuntime(options, writerRole, passphrase.Clone(), state, jobs));
+                new ServiceRuntime(options, writerRole, passphrase.Clone(), state, jobs)
+                {
+                    DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
+                });
         }
         catch
         {

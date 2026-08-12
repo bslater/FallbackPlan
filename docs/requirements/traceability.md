@@ -102,7 +102,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
-| FR-DEST-001..008 | [09 §4](../architecture/09-replication-and-peers.md#4-durability-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | `Application.Tests/ClientConfigurationTests` — the declaration half: named destinations with local optional (001), reserved kinds accepted (005), addresses in configuration only (006) · fan-out behaviour (002–004, 007–008) ahead in the arc | 2–4 |
+| FR-DEST-001..008 | [09 §4](../architecture/09-replication-and-peers.md#4-durability-policy) | [0034](../adr/0034-hub-and-spoke-destinations.md) | `Application.Tests/ClientConfigurationTests` — declaration: named destinations with local optional (001), reserved kinds accepted (005), addresses in configuration only (006); `Repository.Tests/AgentPassTests` — fan-out: byte-identical independently-openable replica (002), offline destination recorded and caught up unbidden (003), durable per-pair state (004); `InterruptionTests/StoreCopyOrderTests` — kill-anywhere copy order (002) · removal warnings (007) and termination notices (008) ahead in the arc | 2–4 |
 
 ### Replication and verification
 

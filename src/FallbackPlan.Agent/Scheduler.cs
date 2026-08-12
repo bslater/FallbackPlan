@@ -87,8 +87,68 @@ public static class Scheduler
             outcomes.Add(new AgentSetOutcome(outcome.SetName, outcome.Outcome, outcome.Detail));
         }
 
+        // Phase 2: fan-out (ADR-0034 §3). After the backups, so a fresh
+        // snapshot reaches its destinations in the same pass; and every pass,
+        // so a destination that was offline catches up under back-off with no
+        // operator action (FR-DEST-003). The pass IS the retry pump — there
+        // is no other timer.
+        var syncs = new List<Task>();
+        foreach (var set in runtime.Configuration.BackupSets)
+        {
+            if (!runtime.ArchiveExists(set.Id))
+            {
+                continue;
+            }
+
+            foreach (var reference in set.Destinations)
+            {
+                if (ShouldSync(runtime, set, reference.Ref, now)
+                    && FanOut.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sync)
+                {
+                    syncs.Add(sync);
+                }
+            }
+        }
+
+        await Task.WhenAll(syncs).ConfigureAwait(false);
+
         return new AgentPassResult(outcomes);
     }
+
+    /// <summary>
+    /// Whether a (set, destination) pair warrants an attempt this pass: yes
+    /// when never tried, when the staging archive moved past the last success,
+    /// and when a previous failure's back-off has elapsed. An in-sync pair
+    /// with nothing new costs nothing; a stated incapacity is refreshed only
+    /// once per new snapshot rather than retried.
+    /// </summary>
+    private static bool ShouldSync(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
+    {
+        var record = runtime.DestinationSync.Find(set.Id, destinationName);
+        if (record is null)
+        {
+            return true;
+        }
+
+        var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+        var behind = record.LastSuccessAt is null || record.LastSuccessAt < lastCompleted;
+
+        return record.State switch
+        {
+            DestinationSyncState.InSync => behind,
+            DestinationSyncState.NotSupported => record.LastAttemptAt < lastCompleted,
+
+            // Unavailable and failed retry under exponential back-off, capped
+            // at an hour, anchored to the poll cadence — the gap closes itself
+            // when the destination returns (FR-DEST-003), without hammering a
+            // drive that is simply unplugged for the week.
+            _ => (ulong)now.ToUnixTimeMilliseconds() >= record.LastAttemptAt + BackoffMs(runtime, record.ConsecutiveFailures),
+        };
+    }
+
+    private static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
+        Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
 
     /// <summary>
     /// Queues one set's backup and hands back a task that completes when it

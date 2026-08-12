@@ -529,8 +529,21 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // (ADR-0029 §4). The result is the job identity, not the backup — a
         // client watches progress rather than holding a connection open for
         // hours.
-        var job = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
-        _ = job.ContinueWith(static _ => { }, TaskScheduler.Default);
+        var now = DateTimeOffset.Now;
+        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true);
+
+        // A committed snapshot starts its fan-out promptly rather than waiting
+        // for the next pass (ADR-0034 §3); the pass still catches up anything
+        // this misses, so this is responsiveness, never correctness.
+        _ = job.ContinueWith(
+            completed =>
+            {
+                if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
+                {
+                    FanOut.EnqueueAll(runtime, set, now, userInitiated: true);
+                }
+            },
+            TaskScheduler.Default);
 
         return new JobAcceptedResult(Scheduler.LatestJobFor(runtime, set.Id) ?? string.Empty);
     }

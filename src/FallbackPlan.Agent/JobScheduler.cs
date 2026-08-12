@@ -11,6 +11,15 @@ public enum JobLane
 
     /// <summary>Restores and verification. Read paths, so they may run alongside a backup.</summary>
     Reader = 1,
+
+    /// <summary>
+    /// Fan-out to destinations (ADR-0029 §4 amendment). Copying sealed objects
+    /// takes no writer role, so the writer lane is wrong for it; and it is
+    /// long-running background transfer a user's restore must never wait
+    /// behind, so the reader lane is wrong too. One worker: destinations
+    /// mostly contend for the same uplink.
+    /// </summary>
+    Transfer = 2,
 }
 
 /// <summary>One queued piece of work.</summary>
@@ -54,6 +63,7 @@ public sealed class JobScheduler : IAsyncDisposable
 {
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _writerLane = new();
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _readerLane = new();
+    private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _transferLane = new();
     private readonly Dictionary<string, CancellationTokenSource> _running = [];
     private readonly SemaphoreSlim _pending = new(0);
     private readonly Lock _gate = new();
@@ -71,11 +81,14 @@ public sealed class JobScheduler : IAsyncDisposable
         // One worker per lane. The writer lane is one by decision, not by
         // accident; the reader lane is one for now because restores are
         // themselves internally bounded and a second would only compete for
-        // the same disk.
+        // the same disk; the transfer lane is one because destinations mostly
+        // contend for the same uplink — widening it per destination is the
+        // anticipated axis, taken on measurement, not speculatively.
         _workers =
         [
             Task.Run(() => PumpAsync(JobLane.Writer)),
             Task.Run(() => PumpAsync(JobLane.Reader)),
+            Task.Run(() => PumpAsync(JobLane.Transfer)),
         ];
     }
 
@@ -102,23 +115,40 @@ public sealed class JobScheduler : IAsyncDisposable
         }
     }
 
-    /// <summary>Queues a job.</summary>
+    /// <summary>
+    /// Queues a job. A job whose identity is already queued or running is
+    /// refused — the coalescing rule: one pending sync per
+    /// <c>(set, destination)</c> means a slow destination accumulates one
+    /// catch-up, not a backlog (ADR-0029 §4 amendment).
+    /// </summary>
     /// <param name="job">The work.</param>
-    public void Enqueue(QueuedJob job)
+    /// <returns><see langword="true"/> when queued; <see langword="false"/> when the identity is already active.</returns>
+    public bool Enqueue(QueuedJob job)
     {
         ThrowHelper.ThrowIfNull(job);
 
         lock (_gate)
         {
+            if (_running.ContainsKey(job.JobId))
+            {
+                return false;
+            }
+
             // Lower sorts first: a user-initiated job jumps ahead of scheduled
             // work already waiting, and ties break by arrival so nothing starves.
             var priority = job.UserInitiated ? 0 : 1;
-            var lane = job.Lane == JobLane.Writer ? _writerLane : _readerLane;
+            var lane = job.Lane switch
+            {
+                JobLane.Writer => _writerLane,
+                JobLane.Reader => _readerLane,
+                _ => _transferLane,
+            };
             lane.Enqueue(job, (priority, Interlocked.Increment(ref _arrival)));
             _running[job.JobId] = new CancellationTokenSource();
         }
 
         _pending.Release();
+        return true;
     }
 
     /// <summary>
@@ -155,8 +185,8 @@ public sealed class JobScheduler : IAsyncDisposable
             }
         }
 
-        // Wake both workers so they observe the stop.
-        _pending.Release(2);
+        // Wake every worker so each observes the stop.
+        _pending.Release(_workers.Length);
 
         try
         {
@@ -224,7 +254,12 @@ public sealed class JobScheduler : IAsyncDisposable
     {
         lock (_gate)
         {
-            var queue = lane == JobLane.Writer ? _writerLane : _readerLane;
+            var queue = lane switch
+            {
+                JobLane.Writer => _writerLane,
+                JobLane.Reader => _readerLane,
+                _ => _transferLane,
+            };
             if (queue.TryDequeue(out var dequeued, out _) && _running.TryGetValue(dequeued.JobId, out var source))
             {
                 job = dequeued;

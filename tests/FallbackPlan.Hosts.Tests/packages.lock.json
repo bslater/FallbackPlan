@@ -177,6 +177,7 @@
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Keystore": "[1.0.0, )",
           "FallbackPlan.Protocol": "[1.0.0, )",
+          "FallbackPlan.Replication": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
@@ -268,6 +269,13 @@
           "FallbackPlan.Repository.Packing": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.replication": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
         }
       },
       "fallbackplan.repository": {

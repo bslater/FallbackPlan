@@ -80,6 +80,13 @@
           "System.Formats.Cbor": "[10.0.10, )"
         }
       },
+      "fallbackplan.replication": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
+        }
+      },
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
