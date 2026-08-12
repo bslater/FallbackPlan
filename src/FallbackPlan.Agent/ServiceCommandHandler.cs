@@ -183,7 +183,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 archive.Store,
                 archive.Repository,
                 set.Retention,
-                [.. set.Destinations.Select(reference => reference.Ref)],
+                set.Destinations,
                 name => runtime.DestinationSync.Find(set.Id, name),
                 runtime.Writer,
                 command.Apply,

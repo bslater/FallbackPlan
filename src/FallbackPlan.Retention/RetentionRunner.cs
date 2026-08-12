@@ -32,7 +32,7 @@ public static class RetentionRunner
     /// <param name="store">The staging archive's store.</param>
     /// <param name="repository">The opened archive.</param>
     /// <param name="policy">The set's retention policy — absent means nothing expires.</param>
-    /// <param name="destinations">The set's declared destination names, all kinds.</param>
+    /// <param name="destinations">The set's declared destination references, overrides included (FR-GC-010).</param>
     /// <param name="syncRecordFor">The sync-ledger row for a destination (FR-GC-009's input).</param>
     /// <param name="writerId">This device's writer identity, for tombstones.</param>
     /// <param name="apply">False: report only. True: tombstone and sweep under the full gate.</param>
@@ -43,7 +43,7 @@ public static class RetentionRunner
         IObjectStore store,
         OpenedRepository repository,
         RetentionConfiguration? policy,
-        IReadOnlyList<string> destinations,
+        IReadOnlyList<SetDestinationReference> destinations,
         Func<string, DestinationSyncRecord?> syncRecordFor,
         WriterId writerId,
         bool apply,
@@ -62,8 +62,36 @@ public static class RetentionRunner
             policy ?? new RetentionConfiguration(),
             DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds));
 
+        // Per-destination keep-awareness (FR-GC-010): a destination whose own
+        // policy drops a snapshot never holds it, so it never holds up its
+        // expiry from staging either. Each override's keep-set is computed
+        // over the same facts the set-level selection used.
+        var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
+        var keptByDestination = destinations.ToDictionary(
+            reference => reference.Ref,
+            reference =>
+            {
+                var effective = reference.Retention ?? policy;
+                if (!DestinationConvergence.HasRules(effective))
+                {
+                    return null;
+                }
+
+                return RetentionPlanner
+                    .Select(facts, effective!, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds))
+                    .Keep.Select(keep => keep.Snapshot.SnapshotId)
+                    .ToHashSet(StringComparer.Ordinal);
+            },
+            StringComparer.Ordinal);
+
         var gate = ReplicationGate.Apply(
-            selection.Expire, destinations, syncRecordFor, policy?.DeferralDays, nowUnixMilliseconds);
+            selection.Expire,
+            [.. destinations.Select(reference => reference.Ref)],
+            syncRecordFor,
+            keptBy: (name, snapshot) =>
+                keptByDestination.GetValueOrDefault(name) is not { } kept || kept.Contains(snapshot.SnapshotId),
+            policy?.DeferralDays,
+            nowUnixMilliseconds);
 
         // The mark walks keep ∪ held: a snapshot the gate is holding must
         // keep its whole closure — it is still the only copy somewhere.

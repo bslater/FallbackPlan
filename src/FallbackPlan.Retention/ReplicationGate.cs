@@ -46,11 +46,34 @@ public static class ReplicationGate
         IReadOnlyList<string> destinations,
         Func<string, DestinationSyncRecord?> recordFor,
         int? deferralDays,
+        ulong nowUnixMilliseconds) =>
+        Apply(expire, destinations, recordFor, keptBy: static (_, _) => true, deferralDays, nowUnixMilliseconds);
+
+    /// <summary>
+    /// Applies the gate with per-destination keep-awareness (FR-GC-010): a
+    /// destination whose own policy drops a snapshot will never hold it, so
+    /// it must never hold up that snapshot's expiry from staging either —
+    /// otherwise one narrow destination pins staging forever.
+    /// </summary>
+    /// <param name="expire">What the set's policy no longer protects.</param>
+    /// <param name="destinations">The set's declared destination names.</param>
+    /// <param name="recordFor">The sync ledger row for a destination.</param>
+    /// <param name="keptBy">Whether a destination's effective policy keeps a snapshot.</param>
+    /// <param name="deferralDays">The configured bound, or null for the default.</param>
+    /// <param name="nowUnixMilliseconds">The clock — laggard lag only.</param>
+    /// <returns>The verdict.</returns>
+    public static GateResult Apply(
+        IReadOnlyList<SnapshotFact> expire,
+        IReadOnlyList<string> destinations,
+        Func<string, DestinationSyncRecord?> recordFor,
+        Func<string, SnapshotFact, bool> keptBy,
+        int? deferralDays,
         ulong nowUnixMilliseconds)
     {
         ThrowHelper.ThrowIfNull(expire);
         ThrowHelper.ThrowIfNull(destinations);
         ThrowHelper.ThrowIfNull(recordFor);
+        ThrowHelper.ThrowIfNull(keptBy);
 
         var boundMs = (ulong)(deferralDays ?? DefaultDeferralDays) * 24UL * 3_600_000UL;
         var records = destinations.ToDictionary(name => name, recordFor, StringComparer.Ordinal);
@@ -60,7 +83,8 @@ public static class ReplicationGate
         foreach (var snapshot in expire)
         {
             var awaiting = destinations
-                .Where(name => (records[name]?.SyncedSequence ?? 0) < snapshot.PublicationSequence)
+                .Where(name => keptBy(name, snapshot)
+                    && (records[name]?.SyncedSequence ?? 0) < snapshot.PublicationSequence)
                 .ToList();
 
             if (awaiting.Count == 0)

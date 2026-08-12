@@ -128,9 +128,13 @@ public sealed class RetentionCycleTests : IDisposable
 
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        // The gate consulted with the ledger emptied: the destination has
-        // never received anything, so nothing may expire (FR-GC-009) — held,
-        // named, and nothing tombstoned even under --apply.
+        // The gate consulted with the ledger emptied: the destination is
+        // entitled to more history than the set keeps (a wider override,
+        // FR-GC-010) and has never received any of it, so nothing may expire
+        // (FR-GC-009) — held, named, and nothing tombstoned even under
+        // --apply. A destination whose policy also drops the snapshot never
+        // holds expiry up: pushing it would be futile, since convergence
+        // would remove it again on arrival.
         using var passphrase = Passphrase.Create(PassphraseText);
         using var repository = await RepositoryLifecycle.OpenAsync(
             store, passphrase, CancellationToken.None);
@@ -138,7 +142,11 @@ public sealed class RetentionCycleTests : IDisposable
         var report = await RetentionRunner.RunAsync(
             store, repository,
             new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
-            ["vault"],
+            [new SetDestinationReference
+            {
+                Ref = "vault",
+                Retention = new RetentionConfiguration { MinGenerations = 10 },
+            }],
             _ => null,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply: true,
@@ -212,7 +220,7 @@ public sealed class RetentionCycleTests : IDisposable
         return await RetentionRunner.RunAsync(
             store, repository,
             new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
-            ["vault"],
+            [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name),
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply,

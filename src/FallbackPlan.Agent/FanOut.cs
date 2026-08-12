@@ -341,10 +341,37 @@ public static class FanOut
             // crossed, so the claim stops at the pre-copy sequence.
             var syncedSequence = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
-            var outcome = await StoreToStoreCopier.CopyAsync(
-                archive.Store, new LocalFileSystemObjectStore(replicaRoot), cancellationToken).ConfigureAwait(false);
+            var replica = new LocalFileSystemObjectStore(replicaRoot);
 
-            ledger.RecordSuccess(set.Id, destination.Name, outcome.Copied, nowMs, syncedSequence);
+            // A destination under a retention policy holds exactly its
+            // keep-set's closure, converged in one operation with the copy so
+            // fan-out and retention cannot disagree (FR-GC-010). One without
+            // a policy — and any pass where the staging graph will not walk
+            // cleanly — gets the conservative whole copy.
+            var effective = set.Destinations
+                .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
+                ?.Retention ?? set.Retention;
+            var keeps = Retention.DestinationConvergence.HasRules(effective)
+                ? await Retention.DestinationConvergence.ComputeKeepsAsync(
+                    archive.Store, archive.Repository, effective!,
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
+                : null;
+
+            long copied;
+            if (keeps is not null)
+            {
+                var converged = await StoreToStoreCopier.ConvergeAsync(
+                    archive.Store, replica, keeps, cancellationToken).ConfigureAwait(false);
+                copied = converged.Copied;
+            }
+            else
+            {
+                var outcome = await StoreToStoreCopier.CopyAsync(
+                    archive.Store, replica, cancellationToken).ConfigureAwait(false);
+                copied = outcome.Copied;
+            }
+
+            ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
