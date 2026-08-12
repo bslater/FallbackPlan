@@ -444,6 +444,18 @@ public sealed class ServiceTests : IDisposable
         var set = Assert.ContainsSingle(status.Sets);
         Assert.IsNotNull(set.NextRun);
         Assert.AreEqual(Environment.MachineName, status.MachineName);
+
+        // And beneath the roll-up, the matrix: one row per declared
+        // destination, naming where the pair stands (FR-DEST-004) — present
+        // even for a set with no snapshot, because "which destinations does
+        // this set have and where do they stand" is a question with an
+        // answer before the first backup. (The CLI backup above wrote under
+        // its own default set, so "docs" itself has never backed up.)
+        var row = Assert.ContainsSingle(set.Destinations);
+        Assert.AreEqual("vault", row.Name);
+        Assert.AreEqual("local-path", row.Kind);
+        Assert.AreEqual("behind", row.State);
+        Assert.AreEqual(FallbackPlan.Domain.Status.ProtectionState.NeverBackedUp, set.Status.State);
     }
 
     public void Dispose()

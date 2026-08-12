@@ -194,23 +194,35 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.IsTrue(File.Exists(Path.Combine(_stateDirectory, "jobs.json.corrupt")));
     }
 
+    private static DestinationStatusInput Destination(
+        string name = "vault",
+        DestinationSyncState sync = DestinationSyncState.InSync,
+        bool sameDomain = false,
+        DestinationKind kind = DestinationKind.LocalPath) => new()
+    {
+        Name = name,
+        Kind = kind,
+        Sync = sync,
+        SameFailureDomain = sameDomain,
+    };
+
     private static StatusInputs HealthyInputs() => new()
     {
         LatestSnapshotAt = 1_722_600_000_000,
         LatestCaptureStatus = 1,
-        DestinationReachable = true,
-        SameFailureDomain = false,
+        Destinations = [Destination()],
         DamageFindings = 0,
         RequiredObjectsMissing = false,
     };
 
     [TestMethod]
-    public void BackupSetStatus_TheStoreIsOnTheSourceDevice_ReportsCapturedRatherThanProtected()
+    public void BackupSetStatus_TheOnlyInSyncDestinationSharesTheSourceDevice_ReportsCapturedRatherThanProtected()
     {
-        // PT-8: the most common consumer configuration — repository on the
+        // PT-8: the most common consumer configuration — a destination on the
         // same disk as the source — is real protection against mistakes and
         // none against losing the disk. Never merged with `protected`.
-        var status = StatusDeriver.Derive(HealthyInputs() with { SameFailureDomain = true });
+        var status = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(sameDomain: true)] });
         Assert.AreEqual(ProtectionState.Captured, status.State);
         Assert.Contains(warning => warning.Contains("failure domain", StringComparison.Ordinal), status.Warnings);
 
@@ -218,9 +230,58 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_AnOffDomainDestinationIsInSync_ProtectsEvenWhileAnotherLags()
+    {
+        // The matrix rolls up truthfully: one destination behind does not
+        // undo the protection another provides — it becomes a warning naming
+        // the laggard (ADR-0027 amendment).
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination(), Destination("usb", DestinationSyncState.Unavailable)],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+        Assert.Contains(warning => warning.Contains("usb", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_EveryDestinationIsBehindOrUnreachable_ReportsDegraded()
+    {
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(sync: DestinationSyncState.Behind),
+                Destination("usb", DestinationSyncState.Unavailable),
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AReservedKind_IsAWarningRatherThanAFailure()
+    {
+        // FR-DEST-005: a configured cloud destination the runtime cannot
+        // serve yet is a stated incapacity. Alone it caps the set at
+        // Captured — nothing off-domain holds the data — but it never
+        // manufactures a Degraded.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination("s3-main", DestinationSyncState.NotSupported, kind: DestinationKind.S3)],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
+        Assert.Contains(warning => warning.Contains("s3-main", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
     public void BackupSetStatus_DegradedAndUnrecoverableTogether_KeepsThemDistinct()
     {
-        var degraded = StatusDeriver.Derive(HealthyInputs() with { DestinationReachable = false });
+        var degraded = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination(sync: DestinationSyncState.Unavailable)],
+        });
         var unrecoverable = StatusDeriver.Derive(HealthyInputs() with { RequiredObjectsMissing = true });
 
         Assert.AreEqual(ProtectionState.Degraded, degraded.State);
@@ -231,7 +292,7 @@ public sealed class ApplicationServiceTests : IDisposable
         var both = StatusDeriver.Derive(HealthyInputs() with
         {
             RequiredObjectsMissing = true,
-            DestinationReachable = false,
+            Destinations = [Destination(sync: DestinationSyncState.Unavailable)],
             DamageFindings = 3,
         });
         Assert.AreEqual(ProtectionState.Unrecoverable, both.State);

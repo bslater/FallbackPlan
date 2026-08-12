@@ -132,6 +132,7 @@ public sealed class StatusAggregationTests
                 new BackupSetStatusDescriptor(
                     $"set-{index}",
                     new BackupSetStatus(state, null, []),
-                    NextRun: null))],
+                    NextRun: null,
+                    Destinations: []))],
             Now);
 }

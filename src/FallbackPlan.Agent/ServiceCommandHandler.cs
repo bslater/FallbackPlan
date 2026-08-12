@@ -637,14 +637,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 findings = catalogue.Findings().Count;
             }
 
+            var (inputs, rows) = DescribeDestinations(configuration, set);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
                 LatestCaptureStatus = latest?.CaptureStatus,
-                // Still the single-destination placeholder: the per-destination
-                // matrix is the fan-out slice's work (ADR-0027 amendment).
-                DestinationReachable = runtime.ArchiveExists(set.Id),
-                SameFailureDomain = true,
+                Destinations = inputs,
                 DamageFindings = findings,
                 RequiredObjectsMissing = false,
             });
@@ -658,11 +656,104 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now).ToString("u");
             }
 
-            sets.Add(new BackupSetStatusDescriptor(set.Name, status, nextRun));
+            sets.Add(new BackupSetStatusDescriptor(set.Name, status, nextRun, rows));
         }
 
         return new StatusResult(Environment.MachineName, sets, now);
     }
+
+    /// <summary>
+    /// One set's destination matrix, twice over: the derivation's inputs and
+    /// the client's rows, built together so they cannot disagree.
+    /// </summary>
+    private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows)
+        DescribeDestinations(ClientConfiguration configuration, BackupSetConfiguration set)
+    {
+        var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+        var inputs = new List<DestinationStatusInput>();
+        var rows = new List<DestinationStatusDescriptor>();
+
+        foreach (var reference in set.Destinations)
+        {
+            var destination = configuration.FindDestination(reference.Ref);
+            if (destination is null)
+            {
+                // Validation refuses dangling references, so this is a config
+                // edited mid-flight — reported, never invented around.
+                inputs.Add(new DestinationStatusInput
+                {
+                    Name = reference.Ref,
+                    Kind = DestinationKind.LocalPath,
+                    Sync = DestinationSyncState.Failed,
+                    SameFailureDomain = false,
+                    Detail = "no longer declared",
+                });
+                rows.Add(new DestinationStatusDescriptor(reference.Ref, "?", "failed", null, "no longer declared"));
+                continue;
+            }
+
+            var record = runtime.DestinationSync.Find(set.Id, reference.Ref);
+            var sync = record?.State ?? DestinationSyncState.Behind;
+            if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompleted)
+            {
+                // In sync as of an older snapshot: the staging archive moved on.
+                sync = DestinationSyncState.Behind;
+            }
+
+            inputs.Add(new DestinationStatusInput
+            {
+                Name = destination.Name,
+                Kind = destination.Kind,
+                Sync = sync,
+                SameFailureDomain = SharesSourceFailureDomain(set, destination),
+                LastSuccessAt = record?.LastSuccessAt,
+                Detail = record?.LastError,
+            });
+            rows.Add(new DestinationStatusDescriptor(
+                destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt, record?.LastError));
+        }
+
+        return (inputs, rows);
+    }
+
+    /// <summary>
+    /// Whether a destination demonstrably shares the source's failure domain.
+    /// A local path is compared by device identity — the real comparison that
+    /// replaces the placeholder (ADR-0018 Amendment 1) — staying conservative
+    /// (same) when the platform cannot say. A peer or cloud destination is
+    /// another machine by construction.
+    /// </summary>
+    private static bool SharesSourceFailureDomain(BackupSetConfiguration set, DestinationConfiguration destination)
+    {
+        if (destination.Kind != DestinationKind.LocalPath)
+        {
+            return false;
+        }
+
+        return !(set.Root.Length > 0
+            && Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
+            && destination.Path is { Length: > 0 }
+            && Filesystem.Local.LocalFileSystemSource.TryStat(destination.Path, out var destinationStat)
+            && rootStat.Device != destinationStat.Device);
+    }
+
+    private static string KindLabel(DestinationKind kind) => kind switch
+    {
+        DestinationKind.LocalPath => "local-path",
+        DestinationKind.Peer => "peer",
+        DestinationKind.S3 => "s3",
+        DestinationKind.AzureBlob => "azure-blob",
+        _ => "dropbox",
+    };
+
+    private static string StateLabel(DestinationSyncState state) => state switch
+    {
+        DestinationSyncState.InSync => "in-sync",
+        DestinationSyncState.Behind => "behind",
+        DestinationSyncState.Unavailable => "unavailable",
+        DestinationSyncState.Failed => "failed",
+        _ => "not-supported",
+    };
 
     private ServiceDescriptionResult Describe() =>
         new ServiceDescriptionResult(

@@ -1141,7 +1141,14 @@ public static class CliApplication
                     error.WriteLine($"mode: service (remote) — {result.MachineName}");
                     foreach (var set in result.Sets)
                     {
-                        output.WriteLine($"{set.SetName,-20} {set.Status,-14} next: {set.NextRun ?? "manual"}");
+                        output.WriteLine($"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}");
+                        foreach (var row in set.Destinations)
+                        {
+                            // The matrix beneath the roll-up (ADR-0028 §8):
+                            // the detail is what the summary was computed from.
+                            output.WriteLine(
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                        }
                     }
 
                     return 0;
@@ -1156,7 +1163,7 @@ public static class CliApplication
                 var findings = catalogue.Findings();
                 var requiredMissing = findings.Any(finding =>
                     finding.Kind is DamageKind.MissingBlob or DamageKind.MissingIndexObject);
-                var reachable = File.Exists(Path.Combine(repoPath, "repository-format"));
+                var ledger = DestinationSyncStore.Open(session.StateDirectory);
                 var snapshots = catalogue.EnumerateSnapshots();
 
                 var sets = configuration.BackupSets.Count > 0
@@ -1171,22 +1178,46 @@ public static class CliApplication
                     var setId = Convert.FromHexString(set.Id);
                     var latest = snapshots.FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
 
-                    // The failure-domain fact (PT-8): same device as the source is
-                    // never `protected`. Unknown roots stay conservative.
-                    var sameDomain = true;
-                    if (set.Root.Length > 0 &&
-                        FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat) &&
-                        FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(repoPath, out var repoStat))
+                    // The destination matrix (ADR-0034): one row per declared
+                    // destination, from the sync ledger. The failure-domain
+                    // fact (PT-8) is a device-identity comparison for a local
+                    // path, conservative when the platform cannot say; a peer
+                    // or cloud destination is another machine by construction.
+                    var lastCompleted = jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+                    var destinations = new List<DestinationStatusInput>();
+                    foreach (var reference in set.Destinations)
                     {
-                        sameDomain = rootStat.Device == repoStat.Device;
+                        var declared = configuration.FindDestination(reference.Ref);
+                        var record = ledger.Find(set.Id, reference.Ref);
+                        var sync = record?.State ?? DestinationSyncState.Behind;
+                        if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompleted)
+                        {
+                            sync = DestinationSyncState.Behind;
+                        }
+
+                        var sameDomain = declared?.Kind == DestinationKind.LocalPath
+                            && !(set.Root.Length > 0
+                                && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
+                                && declared.Path is { Length: > 0 }
+                                && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(declared.Path, out var destinationStat)
+                                && rootStat.Device != destinationStat.Device);
+
+                        destinations.Add(new DestinationStatusInput
+                        {
+                            Name = reference.Ref,
+                            Kind = declared?.Kind ?? DestinationKind.LocalPath,
+                            Sync = sync,
+                            SameFailureDomain = sameDomain,
+                            LastSuccessAt = record?.LastSuccessAt,
+                            Detail = record?.LastError,
+                        });
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs
                     {
                         LatestSnapshotAt = latest?.CapturedAt,
                         LatestCaptureStatus = latest?.CaptureStatus,
-                        DestinationReachable = reachable,
-                        SameFailureDomain = sameDomain,
+                        Destinations = destinations,
                         DamageFindings = findings.Count,
                         RequiredObjectsMissing = requiredMissing,
                     });

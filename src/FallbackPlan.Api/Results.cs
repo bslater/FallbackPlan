@@ -164,11 +164,29 @@ public sealed record VerificationResult(long ObjectsChecked, long Failures, stri
 /// <param name="Findings">The findings, in the order they matter.</param>
 public sealed record CheckResult(IReadOnlyList<string> Findings) : ServiceResult;
 
-/// <summary>One set's derived protection status, with the set it belongs to.</summary>
+/// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
+/// <param name="Name">The destination's declared name.</param>
+/// <param name="Kind">Its declared kind, in the configuration's spelling.</param>
+/// <param name="State">Where the pair stands: <c>in-sync</c>, <c>behind</c>, <c>unavailable</c>, <c>failed</c>, or <c>not-supported</c>.</param>
+/// <param name="LastSuccessAt">When it last synced, Unix milliseconds; null when never.</param>
+/// <param name="Detail">What the last failure said, or null.</param>
+public sealed record DestinationStatusDescriptor(
+    string Name,
+    string Kind,
+    string State,
+    ulong? LastSuccessAt,
+    string? Detail);
+
+/// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>
-/// <param name="Status">The derived status.</param>
+/// <param name="Status">The derived status — computed from the matrix, never beside it (ADR-0028 §8).</param>
 /// <param name="NextRun">When the schedule next fires, ISO-8601, or null for manual-only.</param>
-public sealed record BackupSetStatusDescriptor(string SetName, BackupSetStatus Status, string? NextRun);
+/// <param name="Destinations">The matrix rows, in declaration order.</param>
+public sealed record BackupSetStatusDescriptor(
+    string SetName,
+    BackupSetStatus Status,
+    string? NextRun,
+    IReadOnlyList<DestinationStatusDescriptor> Destinations);
 
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
