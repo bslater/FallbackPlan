@@ -121,6 +121,31 @@ And **a destination's deletions are keyed to the hub's plan**, never inferred
 from local reachability, because local reachability at a replica is exactly the
 partial view this ADR exists to distrust.
 
+## Amendment 5 (2026-08) — the grace generation, realised
+
+Building the collector surfaced a conflation the design had survived on
+paper: the number every code path called "the generation" is the **key
+generation**, which advances on key rotation — not on publication. A grace
+period counted in it would never run, and a replication gate compared
+against it would hold nothing, because rotation is rare and publication is
+the event both actually wait for.
+
+A per-set staging archive is **single-writer by construction**
+([ADR-0034](0034-hub-and-spoke-destinations.md)), and a single writer has
+exactly one per-publication monotonic every participant can see: its
+**journal sequence**, carried in cleartext as each standalone snapshot
+record's counter ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md)
+§Decision 7). The staging collector therefore counts its grace in that
+sequence — a tombstone becomes eligible only after the writer has visibly
+published past the decision — and the replication gate compares each
+snapshot's publication sequence to the highest sequence a destination's
+sync had when it began. Sealing and signing keep using the key generation,
+which is what derives keys; only the ordering arithmetic moved. When
+multi-writer archives exist, this returns to the index generation
+[specification 11 §3.1](../../specifications/repository-format/11-lifecycle-objects.md#31-the-grace-period-is-counted-in-generations-not-in-time)
+speaks of; the property preserved is the same — no clock, only visible
+advancement.
+
 ## Status history
 
 | Date | Status | Note |

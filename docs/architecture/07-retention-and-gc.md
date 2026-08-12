@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §11 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-**Built:** **No.** No collector, no mark, no sweep, no compaction — nothing reclaims space — see [implementation status](../implementation-status.md).
+**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Compaction (steps 6–9) and destination convergence (§3.0.1) are not built — see [implementation status](../implementation-status.md).
 
 ---
 

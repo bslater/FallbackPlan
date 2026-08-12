@@ -76,6 +76,8 @@ The signature has the semantics of [06 §6.1](06-manifests.md#61-signature): rep
 
 `object_id` is 32 bytes for every object type except a blob, whose identifier is 16 ([02 §4](02-identifiers.md#4-blob-identifier)). A reader MUST validate the width against `object_type` and refuse a mismatch.
 
+In a **single-writer archive** — a hub's staging archive is one by construction — the generation this field counts MAY be realised as the writer's journal sequence, which is that archive's per-publication monotonic and is visible in cleartext as each standalone record's counter. The property is the same either way: eligibility arrives only with visible advancement, never with a clock. → [ADR-0009 Amendment 5](../../docs/adr/0009-garbage-collection-safety.md#amendment-5-2026-08--the-grace-generation-realised)
+
 ### 3.2 What a collector must do before deleting
 
 A collector MUST NOT delete an object unless **all** of the following hold:
