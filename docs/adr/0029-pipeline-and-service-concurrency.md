@@ -170,6 +170,21 @@ question inside one process rather than a locking question across several.
   become void-delta obligations discharged by the next publication, exactly as a
   crash's would.
 
+#### Amendment (2026-08): a third lane for fan-out
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) adds a kind of work the two
+lanes above cannot honestly carry: copying a set's staging archive out to its
+destinations. It takes no writer role — fan-out reads sealed, immutable objects
+— so the writer lane is wrong for it; and it is long-running background
+transfer that must never make a user's restore wait, so the reader lane is
+wrong for it too. Fan-out therefore runs in its own **transfer lane**: one
+worker to start (destinations mostly contend for the same uplink), at most one
+queued-or-running job per `(set, destination)` so a slow destination coalesces
+its backlog instead of queueing it — the coalescing rule of ADR-0027 §1,
+applied to transfers — and the same yield-to-user-initiated priority as
+everything else. Widening the lane per destination is the anticipated axis if
+measurement ever shows independent links idling; it is not done speculatively.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -335,3 +350,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Proposed | Written alongside ADR-0028, after benchmarks showed the gap is serial cost rather than thread count |
 | 2026-08 | Accepted | The shape is settled; §6's sequence is under way and its status is recorded above |
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
+| 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |

@@ -18,7 +18,11 @@ This document is **normative for terminology**. Where any other document, code i
 | **Snapshot** | An immutable point-in-time representation of a backup set. |
 | **Repository** | The logical collection of encrypted content, metadata, indexes, and snapshots, identified by a repository ID. |
 | **Store** | Physical object storage holding repository objects — a local directory, a peer, or a cloud bucket/container. |
-| **Replica** | A store holding a copy of all or a defined subset of a repository's objects. |
+| **Replica** | A store holding a copy of a repository's objects. A destination's replica is **whole-archive**: complete, self-verifying, independently restorable. It may lawfully lag the source or hold a hub-trimmed subset under retention; it never diverges ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). |
+| **Destination** | A named place a backup set replicates to, declared once in the client configuration and referenced by name from sets: a directory on a local or removable drive (`local-path`), a paired peer (`peer`), or — schema-accepted now, implemented later — a cloud store. Holds a whole-archive replica of the set's staging archive. None of a set's destinations has to be local. |
+| **Hub** | The service instance on a user's machine, in its orchestrating role: it manages the machine's backup sets, holds each set's staging archive, fans snapshots out to every available destination, and plans retention for all of them. |
+| **Spoke** | A destination, viewed from its hub. A spoke that is a peer runs its own FallbackPlan service and is a hub for its own sets; the roles are per-relationship, not per-installation. |
+| **Staging archive** | The per-set repository archive on the hub where publication lands. Internal — a cache the hub manages, not a destination a user configures or a policy counts. What makes capture unconditional and fan-out a copy of sealed objects. |
 | **Segment** | A logical portion of a file's byte stream, produced by the backup set's segmentation profile. |
 | **Segment record** | The stored form of one segment: compressed, independently encrypted, independently authenticated. |
 | **Blob** | An immutable physical container holding many segment or metadata records, plus a recovery footer. |
@@ -115,13 +119,13 @@ Conflating the two makes protection hostage to the least available destination: 
 
 The first release replicates repository objects, not live source folders:
 
-- a source scan produces a snapshot;
+- a source scan produces a snapshot, published once into the set's staging archive;
 - the snapshot references immutable trees, file-version manifests, and segments;
-- peers exchange missing immutable objects;
+- the hub fans missing immutable objects out to each of the set's destinations as they are available, and catches up the ones that were not;
 - a snapshot commits to a replica once its referenced objects are durable there;
 - a deletion appears in a later snapshot and erases nothing;
-- retention selects which snapshots remain protected;
-- garbage collection removes unreachable objects only after safety checks and grace periods.
+- retention selects which snapshots remain protected, per set and per destination;
+- garbage collection removes unreachable objects only after safety checks and grace periods — marked by the hub, executed at each destination on its instruction.
 
 This yields the transfer efficiency of synchronisation while preserving backup semantics.
 

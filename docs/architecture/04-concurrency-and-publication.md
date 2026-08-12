@@ -143,26 +143,25 @@ Under the split, a snapshot commits locally and is immediately protective. It be
 
 ### 6.3 Policy evaluation
 
-A backup set declares its durability policy over replication state:
+A backup set declares one or more named destinations — none of which has to be local ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)) — and its durability policy is evaluated over their replication state. Commit itself is always against the set's **staging archive** on the hub, which is what keeps capture unconditional; staging is internal and no policy counts it:
 
 ```text
 Snapshot captured when:
-  - any replica: durable
+  - committed to the set's staging archive
 
 Snapshot protected when:
-  - at least one replica outside the source's failure domain: durable
+  - at least one destination outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
-  - local repository:  durable, and
-  - at least one peer: durable
+  - every destination the set's policy requires: durable
 
-Snapshot healthy when:
-  - local repository:  verified within 7 days,  and
-  - trusted peer:      verified within 30 days, and
-  - cloud replica:     durable within 24 hours
+Snapshot healthy when (example policy):
+  - a local-path destination: verified within 7 days,  and
+  - a peer destination:       verified within 30 days, and
+  - a cloud destination:      durable within 24 hours
 ```
 
-This gives the status model in [`10-observability.md`](10-observability.md) something truthful to say. "Protected locally, waiting on the offsite copy" is a real state that the original design could not express — it would have shown no recent backup at all.
+This gives the status model in [`10-observability.md`](10-observability.md) something truthful to say. "Captured, waiting on the offsite copy" is a real state that the original design could not express — it would have shown no recent backup at all.
 
 ### 6.4 `protected` requires an independent failure domain
 
@@ -177,7 +176,7 @@ Replicas therefore declare a **failure domain**, and `protected` requires at lea
 | `same-site` | NAS or peer on the same LAN | Survives machine loss, not site loss |
 | `independent` | Offsite peer, cloud store | Yes |
 
-A snapshot committed only to a same-volume replica is `captured`, never `protected`, and the first-run flow warns when the only configured destination shares a failure domain with the source.
+A snapshot committed only to staging, or replicated only to a same-volume destination, is `captured`, never `protected` — the staging archive shares the source's domain by construction and never counts ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). The first-run flow warns when all of a set's configured destinations share a failure domain with the source.
 
 Without this, the most common consumer setup — accept the default local repository, never bring the offsite peer online — reads as `protected` right up until the disk dies. That is the "consumer UI hides degraded state → false confidence" risk the original proposal named as a major risk, and it would have been reintroduced by the fix for it ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain), [ADR-0018](../adr/0018-replica-failure-domains.md)).
 
@@ -218,6 +217,14 @@ machine may hold it, and the answer is exactly one:
 > **A device's writer role is held by one process at a time.** While a service
 > is running it is that process; any other local process is a client of it
 > ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md)).
+
+Under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the hub holds one
+such archive — and therefore one writer role, one gapless sequence, one spool —
+**per backup set**, all inside the one process the state-directory lock
+protects. The rule's arithmetic changes; the rule does not. Destinations never
+hold a writer role at all: every object at a destination was sealed in a
+staging archive and copied there, so nothing at a destination ever allocates a
+sequence number ([ADR-0034 §3](../adr/0034-hub-and-spoke-destinations.md)).
 
 The rule is not fastidiousness. Two processes sharing a state directory share a
 writer identity, and therefore share the single monotonic gapless sequence

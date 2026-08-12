@@ -417,6 +417,25 @@ have drifted is **refused rather than read**, because permissions are the only
 thing protecting it and carrying on would keep working while the property had
 already been lost.
 
+## Amendment (2026-08): one process, several archives — the writer rule is counted per archive
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) replaces the service's single
+repository with one staging archive per backup set. Nothing in this ADR's
+decision moves: there is still exactly one service process, one state
+directory, one writer lock on it, and every other local process is still a
+client. What changes is arithmetic. "One local writer per repository" was
+written when the service held one repository; it now holds N, and the rule's
+instances multiply with it — **the service holds N writer roles, one per set
+archive, each with its own gapless sequence, all inside the one process the
+lock already protects.** The hazard analysis of the Context section is
+untouched, because the hazard was two *processes* sharing a sequence space, and
+the lock that prevents it guards the state directory that now contains all N
+sequences.
+
+The CLI's direct mode and the recovery tool carry over unchanged: a repository
+path is a repository path, whether it is a staging archive, a destination copy,
+or the pre-0034 single archive.
+
 ## Implementation status (2026-08)
 
 Built: the writer-role exclusion (§4), the local binding (§5), the command
@@ -462,3 +481,4 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Accepted | Restore, verify and check served over the surface on the reader lane; the CLI routes them and backup to a running service |
 | 2026-08 | Accepted | The remote binding (§5) built on ADR-0030's now-carried transport: a paired console reaches the service, an unpaired one is refused, and a remotely commanded restore writes on the service's machine — closing topologies 3 and 4 |
 | 2026-08 | Accepted | How the OS hosts the process decided in [ADR-0033](0033-hosting-under-an-os-service-manager.md): clean shutdown on a manager's stop, the Windows SCM bridge, and generated systemd/launchd/`sc.exe` registration |
+| 2026-08 | Accepted (amended) | One process, N staging archives: the writer rule is per archive, all roles held by the one locked service process ([ADR-0034](0034-hub-and-spoke-destinations.md)) |

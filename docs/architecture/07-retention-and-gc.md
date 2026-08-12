@@ -18,6 +18,14 @@ A retention policy change therefore has no immediate physical effect. It becomes
 
 ## 2. Retention policy
 
+Policy is declared **per backup set**, with optional **per-destination
+overrides** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md), FR-GC-010):
+the set's policy is what its destinations follow unless a destination's entry
+narrows or widens it — a small always-on disk keeping four monthly snapshots
+while the offsite peer keeps twelve is a configuration, not a fork. The hub
+computes every keep-set, because only the hub can read manifests; a destination
+never decides what to keep, only what it refuses to drop (its floor, §5).
+
 Composable rules, evaluated against snapshot capture times:
 
 - keep every snapshot for 24 hours;
@@ -39,7 +47,7 @@ Consider a set keeping hourly snapshots for 7 days locally, replicating to a pee
 
 The rule is therefore: **retention shall not expire a snapshot that has not reached the destinations its own policy requires**, unless a configured bound on that deferral is exceeded — at which point the resulting history gap is raised as a warning requiring action, never applied silently.
 
-The local repository is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default.
+The set's staging archive is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default. The same gate, run to completion, is what makes staging *trimmable*: once every configured destination holds an object durably, staging may drop it — which is how a set with no local destination stops paying for two local copies ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
 
 Deleted-file history is separately configured because it answers a different question. "How far back can I go?" is about snapshot age; "can I still get the file I deleted last spring?" is about how long tombstoned content survives, and users reason about the two independently.
 
@@ -72,6 +80,20 @@ Steps 6 and 9 exist because the collector creates blobs, and **any component tha
 Without them, a replacement blob is unreferenced between its creation and the publication of its index entries, which is precisely the window step 4 protects writers from. A second collector — permitted, since [`04-concurrency-and-publication.md` §8](04-concurrency-and-publication.md#8-concurrent-maintenance) requires no global exclusive lock — would not mark it and could delete it. The first collector then publishes index entries pointing into a deleted blob and tombstones the originals, destroying both copies of every record in the batch.
 
 That is permanent loss of live data reachable from protected snapshots: the exact failure the write-intent mechanism was introduced to prevent, in the one code path that had not absorbed the lesson ([PT-3](../review/2026-08-fix-pressure-test.md#pt-3--compaction-output-blobs-are-unprotected-between-creation-and-index-publication)).
+
+### 3.0.1 Where the collector runs under hub-and-spoke
+
+Every step above executes against a set's **staging archive**, on the hub,
+where the keys and the writer role live ([ADR-0009 Amendment 4](../adr/0009-garbage-collection-safety.md#amendment-4-2026-08--where-the-collector-runs-under-hub-and-spoke)).
+Destinations are never collected; they are **converged**: the hub computes what
+a destination should hold — that destination's keep-set closure, under its
+policy override if it has one — and executes the difference as plain store
+operations against a local-path destination, or as deletion instructions to a
+peer, who deletes exactly what it is told and nothing else, bounded below by
+its own granted floor. A destination's local reachability is never an input,
+because a replica's view is exactly the partial view this algorithm exists to
+distrust. Compaction likewise runs only in staging and reaches destinations as
+ordinary replication ([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates)).
 
 ### 3.1 Step 4 is the one that matters
 
@@ -112,7 +134,7 @@ Ransomware and accidental mass deletion look identical to a backup system: a lar
 - **Stronger authorisation** for retention reduction and bulk snapshot deletion than for ordinary backup.
 - **Signed audit records** for every destructive action.
 
-The retention floor is the most valuable of these, because it is the only one that holds when the source device is fully compromised — which is the case that matters.
+The retention floor is the most valuable of these, because it is the only one that holds when the source device is fully compromised — which is the case that matters. Under hub-planned retention it is enforced at the destination's own edge: a deletion instruction that would take a peer below its granted floor is refused with a stated reason, and the hub records the refusal rather than retrying it (FR-GC-010). The floor is expressed in generations and the policy in wall-clock rules; where they disagree, the destination keeps the union — everything its floor requires *and* everything the policy selects.
 
 None of this substitutes for endpoint security ([`00-overview.md` §4.3](00-overview.md#43-explicit-non-goals-for-the-first-release)), and historical snapshots may contain the malware itself. Restore defaults to a quarantine path for exactly that reason ([`08-restore-and-recovery.md` §3](08-restore-and-recovery.md#3-restore-verification)).
 

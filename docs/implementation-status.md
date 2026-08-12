@@ -58,6 +58,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
 | [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager | **Partly built** | `Agent/ServiceProcessHost.cs`, `Agent/WindowsServiceHost.cs`, `Agent/ServiceUnit.cs` · [notes](#0033--the-os-can-own-the-process) |
+| [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations | **Specified only** | [notes](#0034--decided-and-not-yet-begun) |
 
 ---
 
@@ -147,6 +148,10 @@ Built, in `FallbackPlan.Agent`: the agent now behaves as a service the operating
 
 Not built, and honestly so: the Windows SCM and launchd *lifecycles* cannot run on this Linux CI, so their live Start/Stop is verified manually while their testable parts — the generation, and the Windows adapter's cancel path — are unit-tested. Self-contained publishing and signed installers remain a Phase 4 concern; the generated artifacts reference whatever executable path is deployed.
 
+### 0034 — decided, and not yet begun
+
+Nothing of it is in `src/` yet, deliberately: the decision round landed first so the refactoring has something to be checked against. What exists today is the raw material the ADR reshapes — one service archive (`Agent/ServiceRuntime.cs`), sets without destinations (`Application/ClientConfiguration.cs`), whole-repository replication driven by hand (`Agent/ReplicationInitiator.cs`, `Application/ReplicationStateStore.cs`) — and the amended ADRs record how each piece moves. The implementation arc is sequenced in the [roadmap](roadmap.md): configuration first, then per-set staging archives, then fan-out, and retention staged behind it.
+
 ---
 
 ## By phase
@@ -155,9 +160,10 @@ Not built, and honestly so: the Windows SCM and launchd *lifecycles* cannot run 
 |-------|-------|
 | [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
-| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Service boundary built on both bindings; peer protocol carried over a real socket; object replication built (whole-repository scope), a replica recovered from end to end; snapshot scoping, verification and quotas (specs 04–05) ahead |
-| 3 — Cloud object stores | Not started |
-| 4 — Retention, GC, compaction | Not started — see [0009](#0009--the-intents-are-written-nothing-collects-yet) |
+| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Service boundary built on both bindings; peer protocol carried over a real socket; object replication built (whole-repository scope), a replica recovered from end to end; verification (spec 04) ahead; the remainder — roles, termination, quotas — sequenced in the hub-and-spoke arc |
+| [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-current) | Specified ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)); implementation not started — see [0034](#0034--decided-and-not-yet-begun) |
+| 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
+| 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0009](#0009--the-intents-are-written-nothing-collects-yet) |
 | 5 — CrashPlan import | Not started, gated on legal review |
 
 ---

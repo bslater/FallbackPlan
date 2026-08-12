@@ -110,6 +110,48 @@ The cost is honest and small: two message types, one round trip that overlaps in
 
 Specified in [peer-protocol 02 §1–§3](../../specifications/peer-protocol/02-session.md#1-transport).
 
+## Amendment 2 (2026-08) — the pairing lifecycle completes: roles on the wire, endings announced, terms enforced
+
+[ADR-0034](0034-hub-and-spoke-destinations.md)'s hub-and-spoke shape asks three
+things of the peering machinery that the first implementation deliberately
+deferred, and this amendment commits to them. The identity model of §1–§2 and
+the channel construction of Amendment 1 are untouched throughout.
+
+**The role is negotiated in the ceremony, not assumed afterwards.** Pairing
+today establishes *who* each side is; which way data flows is recorded locally
+by each side, unauthenticated and uncoordinated — both shipped verbs simply
+assume "they store for us". The direction of storage is part of what the two
+humans are approving, so it joins the ceremony: the offer proposes a role, the
+acceptance confirms or refuses it, and the bytes enter the authenticated
+transcript so the two grants cannot disagree about which of them lends the
+disk. This is a ceremony version change; pre-existing pairings do not carry a
+negotiated role and must be redone, a break sanctioned pre-1.0 and stated
+plainly by the refusing side.
+
+**Either side may end the peering, and the ending is announced.** Revocation
+was local-only by explicit design (peer-protocol 01 §3), which is right as the
+*mechanism* — no protocol round-trip can be a precondition for withdrawing
+consent — and incomplete as the *experience*: the other household discovers the
+ending as unexplained refusals, or never. A best-effort **termination notice**
+now travels when the ender can reach the peer (feature-gated, so an older peer
+that cannot understand it is simply not sent it), and the long-idle refusal
+reason `Revoked` — defined from the start and never sent — becomes the fallback
+signal for the dialler that was unreachable when the ending happened. Both
+paths land as a durable notice the user sees in `status` until acknowledged: a
+spoke learns "this hub will stop sending; the data you hold for it is yours to
+evict after the grace period", a hub learns "this destination is gone —
+reconfigure the sets that counted on it". Eviction remains the storing side's
+own act, on its own timetable.
+
+**The terms of §3 stop being decorative.** Quota, window and retention floor
+travel on the wire today and are enforced nowhere. The destination now refuses
+storage past its granted quota with the refusal vocabulary the protocol already
+reserves for exactly this, distinctly from disk-full and from transient failure
+— the lender's disk is bounded by the lender, mid-transfer, not by the
+borrower's good manners. And §3's narrowing rule gets its mechanism: terms in a
+session hello narrower than the grant surface as a durable notice and a
+degraded set, never as silent non-replication.
+
 ## Status history
 
 | Date | Status | Note |
@@ -117,3 +159,4 @@ Specified in [peer-protocol 02 §1–§3](../../specifications/peer-protocol/02-
 | 2026-08 | Proposed | Written with the peer-protocol specification's pairing and session documents; nothing implemented yet |
 | 2026-08 | Amended | Amendment 1: RFC 7250 found unreachable on the reference platform; authentication moved from TLS into the protocol, guarantee preserved |
 | 2026-08 | Accepted | The decision stands after Amendment 1 rebuilt its mechanism: a transport keypair the repository knows nothing about, proven by a channel-bound signature in the protocol rather than by TLS. It is now built and carried over a real TLS socket, including a man-in-the-middle test the construction defeats and a pairing ceremony performed by two real processes; a paired console reaches the service and an unpaired one is refused. The [implementation status](../implementation-status.md#0030--the-socket-exists) says what remains — peer replication itself (specs 03–05). |
+| 2026-08 | Accepted (amended) | Amendment 2: the role joins the authenticated ceremony, endings produce notices with `Revoked` as the fallback signal, and the destination's terms are enforced at its own edge ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

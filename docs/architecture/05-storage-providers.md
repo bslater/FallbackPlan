@@ -105,6 +105,15 @@ Two capabilities change engine behaviour rather than merely informing it:
 
 ## 4. Providers
 
+A provider is how a **destination kind** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
+touches bytes: `local-path` is the local filesystem provider aimed at a
+directory the user named, `peer` reaches a paired instance over the peer
+protocol, and the cloud kinds below arrive in phase 3 as further `IObjectStore`
+implementations behind the same contract. Fan-out neither knows nor cares which
+kind it is copying to — that indifference is the seam
+([ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)),
+and it is why a cloud bucket is one more destination rather than a feature.
+
 ### 4.1 Local filesystem
 
 Durable file creation with explicit flush · atomic temp-to-final rename where the filesystem supports it · permissions hardening on the repository directory · removable-media detection · filesystem capability reporting · protection against path traversal and symlink redirection when the repository path is attacker-influenced.

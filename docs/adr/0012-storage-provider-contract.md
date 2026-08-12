@@ -90,9 +90,36 @@ The first implementation (`FallbackPlan.Storage.Abstractions` + the local filesy
 
 The contract suite named below now exists as `ObjectStoreContractTests`, inherited per provider; the simulated-fault cases (throttling, credential expiry, eventual visibility, quota) remain to be added alongside the first remote provider.
 
+## Amendment 2 (2026-08) — the contract is also the fan-out seam
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) makes every destination an
+object store holding a whole-archive replica, which promotes this contract from
+"the engine's storage boundary" to **the seam the hub copies archives across**:
+a store-to-store copier reads from the staging archive's store and writes to a
+destination's through nothing but this interface. That is the design working as
+intended — a cloud provider becomes a destination kind by implementing
+`IObjectStore` and passing the contract suite, with no fan-out code knowing
+which kind it is — and it firms up two obligations that were latent:
+
+- **`DeleteAsync` gets its first production caller** in hub-planned retention
+  against local-path destinations, so the deletion semantics of Amendment 1
+  (`Deleted`/`NotFound`/`PreconditionFailed`) stop being test-only surface.
+- **The copier's ordering discipline is a caller obligation, stated here:**
+  objects are copied in dependency order (blobs before the metadata that
+  references them, heads last) and deleted in the reverse, so a destination
+  interrupted at any byte is a lagging-but-valid replica, never a corrupt one.
+  The contract itself stays order-free; the guarantee is the copier's, built on
+  `PutOutcome.AlreadyExists` idempotency.
+
+The simulated-fault cases the contract suite still lacks — throttling,
+credential expiry, eventual visibility, quota — remain scheduled with the first
+remote provider, and matter more now that a provider failure is a destination
+failure a status matrix must classify.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Revisit after the first two providers are implemented |
 | 2026-08 | Proposed (amended) | Amendment 1: concrete type shapes fixed by the Wave A6 implementation |
+| 2026-08 | Proposed (amended) | Amendment 2: the contract is the fan-out seam — copier ordering stated, deletion activated by retention ([ADR-0034](0034-hub-and-spoke-destinations.md)) |

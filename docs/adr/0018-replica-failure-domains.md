@@ -77,8 +77,28 @@ The domain is declared rather than inferred. A cloud store is `independent`; a m
 
 **Require an independent replica before any backup runs.** Rejected as hostile: a local-only backup is worth having, and refusing to start until an offsite destination exists would push users to no backup at all.
 
+## Amendment 1 (2026-08) — the domain is declared per configured destination
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) makes destinations named
+configuration entries that backup sets reference, so the failure domain now has
+an unambiguous home: **each destination declares its domain in its
+configuration entry**, defaulting sensibly by kind (a directory on the source
+volume is `same-volume` by volume-identity comparison rather than by trust; a
+peer or cloud destination defaults to `independent` unless the user says
+otherwise) and always overridable, because §Rationale's point stands — only the
+user knows where the NAS actually sits.
+
+Two consequences of the hub-and-spoke shape. The evaluation becomes a matrix —
+`protected` is judged per set over that set's destinations, not over one global
+replica list. And the set's staging archive **never counts**: it shares the
+source's domain by construction and ADR-0034 makes it a cache rather than a
+replica, so the first-run warning of §First-run-says-so now triggers when a
+set's *destinations* all share the source's domain, which is the same honesty
+with the new vocabulary.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Forced into the open by PT-8 |
+| 2026-08 | Accepted (amended) | Amendment 1: domains are declared per configured destination and evaluated per set; staging never counts ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

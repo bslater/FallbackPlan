@@ -174,6 +174,23 @@ states (`replicated`, `policy-compliant`) activate with multi-destination
 replication in a later phase; the vocabulary and derivation seams exist
 now so the UI never has to re-learn the words.
 
+#### Amendment (2026-08): the derivation gains its destination axis
+
+That later phase is [ADR-0034](0034-hub-and-spoke-destinations.md), and the
+promise above is called in: the derivation's input becomes **per set, per
+configured destination** — reachability, sync state, declared failure domain,
+last success — and the single-destination booleans retire. The vocabulary does
+not change; what changes is what earns each word. `Captured` is commit to the
+set's staging archive. `Protected` requires at least one destination outside
+the source's failure domain **in sync** — staging never counts
+([ADR-0018 Amendment 1](0018-replica-failure-domains.md)). Every destination
+behind, unreachable or refusing is `Degraded`, with the per-destination reason
+carried, not summarised away. A destination kind the schema accepts but the
+runtime cannot serve yet reports as exactly that — a stated incapacity, not a
+failure. The never-merge rules hold at the same single derivation site, which
+is the point of having one: the matrix is the truth and every roll-up is
+computed from it in front of the reader.
+
 ## Consequences
 
 ### Amendment (2026-08): the peer-host model is superseded

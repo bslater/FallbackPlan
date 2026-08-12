@@ -63,9 +63,31 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 
 **Configuration in the repository.** Attractive — it would survive a clean machine — but it would leak backup-set names and destination endpoints into a store we treat as untrusted, and it would make configuration edits repository writes. Rejected. Policy *manifests* already record what each snapshot used, which covers the audit need.
 
+## Amendment 1 (2026-08) — where the hub-and-spoke state lands in the split
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) adds three kinds of client-side
+state, and each slots into an existing row of the table rather than a new one.
+**Destination declarations** — names, kinds, paths, peer fingerprints and
+endpoints, per-set references and retention policies — are **configuration**:
+user-edited, schema-versioned, exportable. The export guidance changes with
+them: the file still holds no secrets, but it now names who stores your backups
+and where, so "exportable without secrets" is no longer "shareable without
+thought", and the docs say so. **Per-destination sync state** (what each
+destination holds, when it was last reached, why it last failed) and **notices**
+(a peering ended, terms narrowed, a quota was hit) are journal-shaped files
+beside `jobs.json`: not rebuildable from the repository, tolerable to lose —
+sync state re-derives from a destination inventory pass, and a lost notice is
+re-raised by the condition still holding — and therefore deliberately outside
+the durable-state file whose loss costs the device its identity.
+
+The rejected alternative "configuration in the repository" stays rejected, and
+gains its sharpest example yet: destination endpoints in the repository would
+hand every destination the list of all the others.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted | Built and held to: `LocalStateSeparationTests` deletes the catalogue and asserts device identity and configuration survive, which is the whole claim. Nothing about the three-way split awaits a later phase. |
+| 2026-08 | Accepted (amended) | Amendment 1: destinations are configuration, sync state and notices are sacrificial journals beside `jobs.json` ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

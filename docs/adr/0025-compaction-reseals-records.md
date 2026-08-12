@@ -124,8 +124,21 @@ AAD while the contradiction stands, making the eventual resolution a
 format revision instead of a documentation fix. Resolving now, while both
 options were still free, was the point of this pass. Rejected.
 
+## Amendment 1 (2026-08) — compaction runs in staging and propagates
+
+Re-sealing needs the repository keys and a writer identity, and under
+[ADR-0034](0034-hub-and-spoke-destinations.md) exactly one place per set has
+both: the hub's staging archive. A compaction pass therefore runs there, under
+the set's own writer sequence, and its output reaches every destination as
+ordinary replication — new blobs copied, superseded ones deleted under the
+deletion discipline. No destination ever compacts, allocates a sequence number,
+or re-seals anything; a destination that could would have the keys, which is
+the property the whole design refuses. §4's cost accounting is unchanged, paid
+once in staging rather than once per copy.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Resolves Q15 with no format change; 04 §4 rewritten to match; compaction defined as a re-sealing operation for Phase 4 |
+| 2026-08 | Accepted (amended) | Amendment 1: compaction is a staging-archive operation whose output replicates; destinations never re-seal ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

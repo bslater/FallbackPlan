@@ -16,6 +16,8 @@ The technical centre is a **streaming archive engine**. It divides files into se
 
 A repository is replicated between FallbackPlan instances and storage providers. Live folders are **not** bidirectional synchronisation roots. Each source device publishes immutable snapshots; a destination may hold snapshots for many source devices; deleting a file creates new snapshot state rather than erasing history.
 
+The operational shape is **hub and spoke** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). The **hub** is the service instance installed on a user's machine: it manages that machine's backup sets and holds each set's staging archive. The **spokes** are a set's declared destinations — a peer's FallbackPlan instance, a directory on a local or removable drive, in a later phase a cloud store — and each holds a complete, independently restorable replica of the set's archive. The hub publishes each snapshot once, fans it out to every configured destination that is available, catches up the ones that were not, and routinely runs retention against all of them. No destination has to be local: a set backed up only to a friend's machine is a first-class configuration.
+
 ## 2. Product promise
 
 A user should be able to answer all of these without specialist knowledge:
@@ -211,7 +213,11 @@ The second:
 
 > Pair two computers → transfer the repository snapshot to the destination → destroy the source installation → restore solely from the destination and recovery kit.
 
-Azure, S3, retention pruning, and CrashPlan conversion layer on only after both are reliable. This ordering makes recoverability — not feature count — the foundation.
+The third ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)):
+
+> Declare a set with two destinations and no other local copy → back up on schedule → the hub fans out to both, catches up the one that was offline → retention ages each destination under its own policy → either peer ends the peering and both sides see a durable notice → restore independently from each destination.
+
+Azure, S3, and CrashPlan conversion layer on only after all three are reliable — a cloud bucket enters as one more destination kind behind the same fan-out, not as a separate feature. This ordering makes recoverability — not feature count — the foundation.
 
 ---
 

@@ -95,14 +95,22 @@ would be a second implementation of §1's derivation rules, free to drift from
 the first — and the never-merge rules of §1.2 only hold if one place decides
 them.
 
-Two channels, deliberately distinct:
+Three channels, deliberately distinct:
 
-| | **Status** | **Progress events** |
-|---|---|---|
-| Answers | "am I protected?" (§1) | "what is happening right now?" |
-| Shape | Queried, derived on demand | Streamed while a job runs |
-| Carries | The §1.1 vocabulary, per set and per destination | Job identity, §3 state, counts of files and bytes |
-| Survives a restart | Yes — derived from durable state | No — a job restarted is a new stream |
+| | **Status** | **Progress events** | **Notices** |
+|---|---|---|---|
+| Answers | "am I protected?" (§1) | "what is happening right now?" | "what happened while I was not looking?" |
+| Shape | Queried, derived on demand | Streamed while a job runs | Durable records, held until acknowledged |
+| Carries | The §1.1 vocabulary, per set and per destination | Job identity, §3 state, counts of files and bytes | The event and its consequence: a peering ended, terms narrowed, a quota was hit, a removed destination still holds data |
+| Survives a restart | Yes — derived from durable state | No — a job restarted is a new stream | Yes — that is the point |
+
+Notices exist because hub-and-spoke ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
+creates events that are neither a state nor a moment: a friend ending a peering
+at 3 a.m. must still be known at breakfast, after a reboot, without the
+condition needing to re-occur. A notice is raised once, surfaces in `status`
+and its own listing until a human acknowledges it, and names the action it
+asks for. It is not a log line — a log line is what nobody reads until
+afterwards.
 
 **Progress events are not telemetry.** They may carry job identity because they
 travel to an authenticated local caller or a paired remote client and are shown

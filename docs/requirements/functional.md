@@ -94,6 +94,19 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-KIT-005 **[new]** | Kit status — never generated, saved, stale — shall be surfaced continuously. | Changing destinations marks the kit stale. |
 | FR-KIT-006 **[new]** | A recovery drill restoring a file using only the kit shall be a supported, prompted workflow. | The drill runs without the catalogue or durable local state. |
 
+## Destinations and fan-out
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-DEST-001 **[new]** | A backup set shall declare one or more named destinations, referencing declarations made once at the top level of the client configuration. None of them need be local: a set whose only destination is a peer or a removable drive is valid. A set with no destinations is rejected at configuration time with a stated reason. | Configuration with a peer-only set validates; configuration with a destination-less set is refused naming the set. |
+| FR-DEST-002 **[new]** | Each snapshot shall be published exactly once, into the set's staging archive, and fanned out to destinations as immutable-object copies. No destination holds an archive whose journal references objects deliberately absent from it. | Two destinations of one set hold byte-identical archives after sync; each restores independently with the recovery tool. |
+| FR-DEST-003 **[new]** | An unavailable destination shall not delay or fail capture. The gap shall be recorded per `(set, destination)` and closed automatically when the destination returns, without operator action. | A backup with one destination offline completes; the destination catches up on its next appearance with no command issued. |
+| FR-DEST-004 **[new]** | Per-`(set, destination)` sync state — last attempt, last success, how far behind, and the failure class of the last error — shall be durable across service restarts and reported per destination, never summarised into one flag. | After a restart, `status` still names which destination is behind and why. |
+| FR-DEST-005 **[new]** | Destination kinds `local-path` and `peer` shall be operational. Kinds `s3`, `azure-blob`, and `dropbox` shall be accepted by configuration validation and refused at runtime as a stated incapacity, distinct from failure. | A configured cloud destination reports "not yet supported", not `degraded`; it appears in the status matrix as such. |
+| FR-DEST-006 **[new]** | Destination addresses — paths, peer endpoints and fingerprints — shall live only in the local configuration. Pairing grants shall hold no endpoint; the repository shall hold no destination list. | A grant round-trips with no address field; a repository fixture contains no endpoint bytes. |
+| FR-DEST-007 **[new]** | Removing a destination shall warn what remains there and that the hub stops managing it — the data at the destination is not deleted by the removal. | Removal names the sets affected and the copies left behind; the destination's archive is untouched. |
+| FR-DEST-008 **[new]** | Either side of a peering may end it unilaterally. The ending shall produce a durable notice on both sides — delivered when reachable, inferred from refusal otherwise — surfaced until acknowledged. | Terminating while the peer is offline still surfaces a notice at that peer's next dial; both households see a warning that survives restart. |
+
 ## Replication and verification
 
 | ID | Requirement | Acceptance |
@@ -121,6 +134,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-GC-007 **[new]** | Destination-side retention floors shall not be reducible by a source device. | A source request to reduce below the floor is refused and audited. |
 | FR-GC-008 **[new]** | Retention reduction and bulk snapshot deletion shall require stronger authorisation than ordinary backup, and shall produce signed audit records. | Both are recorded and attributable. |
 | FR-GC-009 **[new]** | Retention shall not expire a snapshot that has not reached the destinations its own policy requires, unless a configured deferral bound is exceeded — at which point the resulting history gap shall be raised as a warning requiring action. | A destination offline beyond the local retention window does not cause history to be lost from every replica silently. |
+| FR-GC-010 **[new]** | Retention policy shall be declared per backup set, with optional per-destination overrides. The hub computes each destination's keep-set — only the hub can read manifests — and a destination deletes only what the hub instructs, bounded below by its own granted retention floor: an instruction that would breach the floor is refused with a stated reason. | Two destinations of one set hold different snapshot ranges under different overrides, each restorable; a floor-breaching instruction is refused and the refusal is visible at the hub. |
 
 ## Quotas and capacity
 

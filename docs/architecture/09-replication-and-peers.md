@@ -52,33 +52,37 @@ Specified in [`specifications/peer-protocol/01`](../../specifications/peer-proto
 - The **destination** sets quota, storage path, schedule window, and retention floor. These are its terms: a source may operate under narrower ones of its own choosing and can never ask for more generous. The storage path is deliberately not on the wire at all — a source that knew it would be a source that could name it.
 - A source never receives unrestricted filesystem access to a destination — it speaks the repository protocol ([`05-storage-providers.md` §4.2](05-storage-providers.md#42-fallbackplan-peer)).
 - A destination cannot read source content. Holding blobs conveys no ability to decrypt them.
+- **The direction of storage is part of what is approved.** The ceremony's offer proposes which side stores for which — one way, the other, or both — and the acceptance confirms it inside the authenticated transcript, so the two grants cannot disagree about who lends the disk ([ADR-0030 Amendment 2](../adr/0030-peer-identity-and-pairing.md#amendment-2-2026-08--the-pairing-lifecycle-completes-roles-on-the-wire-endings-announced-terms-enforced)).
 
-That last pair of properties is what makes "back up to a friend's computer" a reasonable thing to ask of a friend. Neither party has to trust the other with anything.
+That pair of properties above — protocol-only access, ciphertext-only holding — is what makes "back up to a friend's computer" a reasonable thing to ask of a friend. Neither party has to trust the other with anything.
+
+### 3.1 Ending a peering
+
+Either side may end a peering unilaterally, at any time, for any reason — revocation is a local act and no protocol round-trip is ever a precondition for it ([peer-protocol 01 §3](../../specifications/peer-protocol/01-identity-and-pairing.md)). What the ending must not be is *silent*. The ender sends a best-effort **termination notice** when the peer is reachable (feature-gated, so an older peer is simply not sent what it cannot parse); a peer that was unreachable learns the same thing from the `Revoked` refusal at its next dial. Both paths produce a **durable notice** the user sees until acknowledged: the hub that lost a destination is told to reconfigure the sets that counted on it, and the spoke left holding a departed hub's ciphertext is told the data is now its own to evict, after a stated grace period. Eviction is the storing side's own decision on its own timetable — the notice creates awareness, never an obligation.
 
 ## 4. Durability policy
 
-A backup set declares its policy over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)):
+A backup set declares one or more named destinations, and its policy is evaluated over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication), [ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). **None of the destinations has to be local.** Publication always lands in the set's staging archive on the hub — that is what makes capture unconditional — but staging is a cache the hub manages, not a destination a policy may count:
 
 ```text
 Snapshot captured when:
-  - any replica: durable
+  - committed to the set's staging archive
 
 Snapshot protected when:
-  - at least one replica outside the source's failure domain: durable
+  - at least one destination outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
-  - local repository:  durable, and
-  - at least one peer: durable
+  - every destination the set's policy requires: durable
 
-Snapshot healthy when:
-  - local repository:  verified within 7 days,  and
-  - trusted peer:      verified within 30 days, and
-  - cloud replica:     durable within 24 hours
+Snapshot healthy when (example policy):
+  - a local-path destination: verified within 7 days,  and
+  - a peer destination:       verified within 30 days, and
+  - a cloud destination:      durable within 24 hours
 ```
 
-Because commit is per-replica, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured locally, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+Because commit is to staging and replication is per destination, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
 
-`protected` deliberately requires a replica outside the source's failure domain, so that a local repository sharing a disk with the source data never reads as safe. Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
+`protected` deliberately requires a destination outside the source's failure domain, so that a repository directory sharing a disk with the source data never reads as safe — and the staging archive, which shares the source's domain by construction, never counts at all ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
 
 ## 5. Destination verification
 

@@ -99,9 +99,32 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 
 **Collect only blobs older than a long fixed age.** Rejected. An age threshold long enough to be safe for a slow initial backup is long enough to make collection useless, and it is still a clock.
 
+## Amendment 4 (2026-08) — where the collector runs under hub-and-spoke
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) splits one archive into a
+staging archive per set plus whole-archive replicas at destinations, and the
+collector's world divides the same way. **Marking happens where the keys are:
+the hub computes the keep-set and its object closure against the set's staging
+archive**, under every safety mechanism above, unchanged — intents, generation
+cut-off, grace, revalidation. Destinations are then *converged, not collected*:
+a local-path destination has the hub's plan executed against it directly, and a
+peer is instructed which objects to delete and deletes exactly those, bounded
+by its own granted floor — a spoke holds ciphertext it cannot mark, so it never
+runs this algorithm and never decides what is garbage.
+
+Two rules join the four mechanisms for the fan-out world. **Deletion may not
+outrun replication**: an object leaves staging only when every configured
+destination of the set holds it, or the deferral bound of
+[ADR-0011 Amendment 2](0011-commit-versus-replication-semantics.md) has been
+raised as a warning — the same gate that later makes staging trimmable at all.
+And **a destination's deletions are keyed to the hub's plan**, never inferred
+from local reachability, because local reachability at a replica is exactly the
+partial view this ADR exists to distrust.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |
+| 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
