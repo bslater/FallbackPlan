@@ -13,7 +13,9 @@ namespace FallbackPlan.Retention;
 /// <param name="Fact">The planner's view: identity, capture time, generation.</param>
 /// <param name="Manifest">The decoded manifest, for the closure walk.</param>
 /// <param name="StoreKey">Where the standalone snapshot object lives — the key an expiry deletes.</param>
-public sealed record SurveyedSnapshot(SnapshotFact Fact, SnapshotManifest Manifest, ObjectKey StoreKey);
+/// <param name="ManifestObjectId">The manifest's derived object identity — what a tombstone for the snapshot names (spec 11 §3).</param>
+public sealed record SurveyedSnapshot(
+    SnapshotFact Fact, SnapshotManifest Manifest, ObjectKey StoreKey, ObjectId ManifestObjectId);
 
 /// <summary>What the snapshot survey found, damage included.</summary>
 /// <param name="Snapshots">Every snapshot that decoded, newest first.</param>
@@ -32,7 +34,7 @@ public sealed record SnapshotSurvey(
 /// the authority a deletion hangs off — and walk each protected snapshot's
 /// full closure into a reachable-object set. The walk covers what the
 /// forensic rebuilder's walk covers plus the pieces it never needed: the
-/// policy manifest, the error manifest, and parent file-version chains.
+/// policy manifest and the error manifest.
 /// </summary>
 public static class StagingMark
 {
@@ -49,6 +51,8 @@ public static class StagingMark
 
         var snapshots = new List<SurveyedSnapshot>();
         var undecodable = new List<string>();
+        var contentIdKey = repository.Hierarchy.DeriveContentIdKey();
+        var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(contentIdKey);
 
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("snapshots/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -85,7 +89,11 @@ public static class StagingMark
                             decoded.Manifest.CaptureCompletedAt,
                             decoded.Manifest.PublicationGeneration),
                         decoded.Manifest,
-                        entry.Key));
+                        entry.Key,
+                        deriver.Derive(
+                            FallbackPlan.Domain.ObjectType.SnapshotManifest,
+                            FallbackPlan.Repository.Crypto.ContentHasher.Hash(
+                                SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span)))));
                 }
                 finally
                 {
@@ -107,8 +115,8 @@ public static class StagingMark
 
     /// <summary>
     /// Walks the protected snapshots' full closure into a reachable-object
-    /// set: root tree → subtrees and continuations → file versions (and
-    /// their parent chains) → segments and alternate streams, plus each
+    /// set: root tree → subtrees and continuations → file versions →
+    /// segments and alternate streams, plus each
     /// snapshot's policy and error manifests.
     /// </summary>
     /// <param name="reader">The footer-truth reader, blobs already loaded.</param>
@@ -209,15 +217,15 @@ public static class StagingMark
             reachable.Add(stream.ObjectId);
         }
 
-        if (manifest.ParentVersion is { } parent)
-        {
-            // The parent chain stays reachable: a kept version's history
-            // walks through versions that may belong only to expired
-            // snapshots, and deletion-only collection keeps the walkable
-            // graph whole rather than reasoning about who still needs it.
-            await WalkFileVersionAsync(reader, parent, reachable, unwalkable, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        // ParentVersion is deliberately NOT walked. It is lineage, not a
+        // restore dependency — nothing dereferences it to read content — and
+        // following it would chain every kept version back through every
+        // expired one, pinning the whole history forever and making
+        // retention free nothing. A kept manifest may therefore name a
+        // parent that no longer exists; that dangling lineage is accepted,
+        // exactly as the snapshot's own ParentSnapshots may name expired
+        // snapshots. Deleted-file history (architecture 07 §2's separately
+        // configured duration) will bound-walk parents when it is built.
     }
 
     private static async ValueTask<T?> ReadAsync<T>(

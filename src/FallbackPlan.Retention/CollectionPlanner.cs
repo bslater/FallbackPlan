@@ -9,8 +9,9 @@ namespace FallbackPlan.Retention;
 
 /// <summary>One blob the plan would delete whole.</summary>
 /// <param name="StoreKey">The blob's store key.</param>
+/// <param name="BlobId">Its writer-allocated identity — what a tombstone names (spec 11 §3).</param>
 /// <param name="Records">How many records it holds — all unreachable, or it would not be here.</param>
-public sealed record DeletableBlob(ObjectKey StoreKey, long Records);
+public sealed record DeletableBlob(ObjectKey StoreKey, BlobId BlobId, long Records);
 
 /// <summary>
 /// What one collection pass would do — produced before anything is done,
@@ -122,7 +123,7 @@ public static class CollectionPlanner
                 continue;
             }
 
-            deletable.Add(new DeletableBlob(storeKey, records.Count));
+            deletable.Add(new DeletableBlob(storeKey, blobId, records.Count));
         }
 
         return new CollectionPlan(
