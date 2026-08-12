@@ -166,6 +166,15 @@
           "FallbackPlan.Repository": "[1.0.0, )"
         }
       },
+      "fallbackplan.retention": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
+        }
+      },
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {

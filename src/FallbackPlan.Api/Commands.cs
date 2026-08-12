@@ -20,6 +20,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
+[JsonDerivedType(typeof(RetentionCommand), "retention")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -79,6 +80,15 @@ public sealed record VerifyCommand(string Level) : ServiceCommand;
 /// <summary>Checks repository health and reports findings.</summary>
 /// <param name="Level">One of <c>locator</c>, <c>digest</c>, <c>records</c>.</param>
 public sealed record CheckCommand(string Level) : ServiceCommand;
+
+/// <summary>
+/// Runs a retention pass over every configured set (architecture 07). The
+/// dry-run report is always produced; with <paramref name="Apply"/> the
+/// condemned are tombstoned and the grace-expired swept — the destructive
+/// half, which is why it is not the default (FR-GC-005).
+/// </summary>
+/// <param name="Apply">False reports only; true tombstones and sweeps.</param>
+public sealed record RetentionCommand(bool Apply) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

@@ -48,6 +48,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(RestoreResult), "restore")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
+[JsonDerivedType(typeof(RetentionResult), "retention")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -163,6 +164,10 @@ public sealed record VerificationResult(long ObjectsChecked, long Failures, stri
 /// <summary>What a health check found.</summary>
 /// <param name="Findings">The findings, in the order they matter.</param>
 public sealed record CheckResult(IReadOnlyList<string> Findings) : ServiceResult;
+
+/// <summary>A retention pass's report, per set in configuration order (FR-GC-005).</summary>
+/// <param name="Lines">The report — what is protected and why, what is held for a laggard, what went.</param>
+public sealed record RetentionResult(IReadOnlyList<string> Lines) : ServiceResult;
 
 /// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
 /// <param name="Name">The destination's declared name.</param>

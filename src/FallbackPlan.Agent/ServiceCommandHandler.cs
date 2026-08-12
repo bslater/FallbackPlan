@@ -59,6 +59,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     $"check {check.Level}",
                     token => CheckAsync(check, token),
                     cancellationToken).ConfigureAwait(false),
+                RetentionCommand retention => await OnWriterLaneAsync(
+                    retention.Apply ? "retention apply" : "retention plan",
+                    token => RetentionAsync(retention, token),
+                    cancellationToken).ConfigureAwait(false),
                 _ => await DispatchAsync(command, cancellationToken).ConfigureAwait(false),
             };
         }
@@ -125,6 +129,84 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // by work nobody is waiting for.
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
         return await completion.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs a pass on the queue's writer lane and waits for it. Retention is
+    /// a writer: it tombstones and deletes in the staging archives, so it
+    /// serialises against backups rather than racing them (ADR-0029 §4's
+    /// reasoning, applied to the one maintenance path that mutates).
+    /// </summary>
+    private async ValueTask<ServiceResult> OnWriterLaneAsync(
+        string description,
+        Func<CancellationToken, ValueTask<ServiceResult>> work,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var jobId = $"write-{Guid.NewGuid():n}";
+
+        runtime.Queue.Enqueue(new QueuedJob(
+            jobId,
+            JobLane.Writer,
+            UserInitiated: true,
+            description,
+            async token =>
+            {
+                try
+                {
+                    completion.SetResult(await work(token).ConfigureAwait(false));
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            }));
+
+        using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// One retention pass per configured set with a staging archive
+    /// (architecture 07): report always, tombstone and sweep only on apply.
+    /// A gate hold past its deferral bound raises the FR-GC-009 warning as a
+    /// durable notice.
+    /// </summary>
+    private async ValueTask<ServiceResult> RetentionAsync(RetentionCommand command, CancellationToken cancellationToken)
+    {
+        var lines = new List<string>();
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var report = await Retention.RetentionRunner.RunAsync(
+                archive.Store,
+                archive.Repository,
+                set.Retention,
+                [.. set.Destinations.Select(reference => reference.Ref)],
+                name => runtime.DestinationSync.Find(set.Id, name),
+                runtime.Writer,
+                command.Apply,
+                now,
+                cancellationToken).ConfigureAwait(false);
+
+            lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
+
+            foreach (var held in report.Held.Where(candidate => candidate.DeferralExceeded))
+            {
+                foreach (var laggard in held.AwaitingDestinations)
+                {
+                    runtime.Notices.Raise(
+                        $"retention-deferred:{set.Id}:{laggard}",
+                        $"Set '{set.Name}' holds expired history because destination '{laggard}' has not "
+                        + "received it for longer than the deferral bound — reconnect the destination or "
+                        + "remove it, or the staging archive keeps growing (FR-GC-009).",
+                        now);
+                }
+            }
+        }
+
+        return new RetentionResult(lines);
     }
 
     /// <inheritdoc/>

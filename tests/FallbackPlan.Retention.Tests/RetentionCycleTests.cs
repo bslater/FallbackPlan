@@ -152,6 +152,50 @@ public sealed class RetentionCycleTests : IDisposable
         Assert.HasCount(2, await ListAsync(store, "snapshots/"));
     }
 
+    [TestMethod]
+    public async Task RetentionVerb_DryRunThenApply_ReportsAndActsThroughTheServiceSurface()
+    {
+        var variable = "FBP_RETENTION_TEST_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, PassphraseText);
+        try
+        {
+            var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+            await BackUpAsync(day1);
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+            await BackUpAsync(day1.AddDays(1));
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+            await BackUpAsync(day1.AddDays(2));
+
+            // The default is the dry run — the verb reports and touches nothing.
+            var dry = await RunVerbAsync(variable);
+            Assert.AreEqual(0, dry.ExitCode, dry.Error);
+            Assert.Contains("would delete: 2 snapshot", dry.Output, StringComparison.Ordinal);
+            Assert.HasCount(3, await ListAsync(new LocalFileSystemObjectStore(RepoPath), "snapshots/"));
+
+            // --apply tombstones through the same service surface a console
+            // would use — on the writer lane, serialised against backups.
+            var apply = await RunVerbAsync(variable, "--apply");
+            Assert.AreEqual(0, apply.ExitCode, apply.Error);
+            Assert.Contains("tombstoned: ", apply.Output, StringComparison.Ordinal);
+            Assert.Contains("awaiting grace", apply.Output, StringComparison.Ordinal);
+            Assert.IsNotEmpty(await ListAsync(new LocalFileSystemObjectStore(RepoPath), "tombstones/"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    private async Task<(int ExitCode, string Output, string Error)> RunVerbAsync(string variable, params string[] extra)
+    {
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["retention", "--archives", ArchivesRoot, "--state", StateDirectory, "--passphrase-env", variable, .. extra],
+            output, error, CancellationToken.None);
+        return (exit, output.ToString(), error.ToString());
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);

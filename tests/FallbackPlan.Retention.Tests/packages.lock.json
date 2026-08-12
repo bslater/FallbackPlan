@@ -176,6 +176,7 @@
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Restore": "[1.0.0, )",
+          "FallbackPlan.Retention": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )",
           "System.ServiceProcess.ServiceController": "[10.0.10, )"
         }

@@ -199,6 +199,7 @@
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Restore": "[1.0.0, )",
+          "FallbackPlan.Retention": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )",
           "System.ServiceProcess.ServiceController": "[10.0.10, )"
         }
@@ -372,6 +373,15 @@
           "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.retention": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )"
         }
       },
       "fallbackplan.storage.abstractions": {

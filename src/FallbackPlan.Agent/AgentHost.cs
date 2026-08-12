@@ -112,10 +112,10 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate" or "notices"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "replicate" or "notices" or "retention"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `replicate`, or `notices` — no other verb exists.");
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `replicate`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -288,6 +288,42 @@ public static class AgentHost
             {
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
+            }
+        }
+
+        // `retention [--apply]` runs one pass per configured set
+        // (architecture 07): the mandatory dry-run report either way,
+        // tombstones and the grace-expired sweep only with --apply — through
+        // the same service surface a console uses, so the writer lane
+        // serialises it against anything else that writes (FR-GC-005/008).
+        if (args[0] == "retention")
+        {
+            using var retentionPassphrase = Passphrase.Create(passphraseValue);
+            await using var retentionRuntime = await ServiceRuntime.StartAsync(
+                new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                retentionPassphrase, cancellationToken).ConfigureAwait(false);
+
+            var handler = new ServiceCommandHandler(retentionRuntime, RemoteBindingState.Off);
+            var result = await handler.ExecuteAsync(
+                new Api.RetentionCommand(args.Contains("--apply")), cancellationToken).ConfigureAwait(false);
+
+            switch (result)
+            {
+                case Api.RetentionResult report:
+                    foreach (var line in report.Lines)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return 0;
+
+                case Api.ServiceError failure:
+                    error.WriteLine($"error: {failure.Message}");
+                    return 2;
+
+                default:
+                    error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
+                    return 2;
             }
         }
 
