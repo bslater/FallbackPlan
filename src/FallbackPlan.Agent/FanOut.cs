@@ -131,25 +131,38 @@ public static class FanOut
             return;
         }
 
-        switch (destination.Kind)
+        // The set gate (ADR-0029 Amendment 2): a retention apply may be
+        // mutating this set's staging, and a convergence computed against a
+        // moving staging archive can conspire with the trim to delete a
+        // blob's last copy. The sync waits — retention passes are minutes.
+        var gate = runtime.SetGate(set.Id);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            case DestinationKind.LocalPath:
-                await CopyToLocalPathAsync(runtime, set, destination, archive, nowMs, cancellationToken)
-                    .ConfigureAwait(false);
-                return;
+            switch (destination.Kind)
+            {
+                case DestinationKind.LocalPath:
+                    await CopyToLocalPathAsync(runtime, set, destination, archive, nowMs, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
 
-            case DestinationKind.Peer:
-                await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken)
-                    .ConfigureAwait(false);
-                return;
+                case DestinationKind.Peer:
+                    await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
 
-            default:
-                // The reserved cloud kinds (FR-DEST-005): configuration models
-                // them, the runtime does not serve them yet.
-                ledger.RecordFailure(
-                    set.Id, destinationName, DestinationSyncState.NotSupported,
-                    $"destination kind '{destination.Kind}' is not yet supported", nowMs);
-                return;
+                default:
+                    // The reserved cloud kinds (FR-DEST-005): configuration models
+                    // them, the runtime does not serve them yet.
+                    ledger.RecordFailure(
+                        set.Id, destinationName, DestinationSyncState.NotSupported,
+                        $"destination kind '{destination.Kind}' is not yet supported", nowMs);
+                    return;
+            }
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 

@@ -205,6 +205,89 @@ public sealed class StagingTrimTests : IDisposable
         Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
     }
 
+    [TestMethod]
+    public async Task Trim_AReplicaCopyVanishesBetweenPlanAndExecute_LeavesTheStagingCopyAlone()
+    {
+        // The trim's plan is evidence gathered at one moment; a convergence
+        // computed against a narrower keep-set can delete the verified
+        // copies at the replica before the plan executes. Execution must
+        // re-check the evidence at the moment of deletion — otherwise the
+        // blob is lost everywhere (ADR-0029 Amendment 2's belt-and-braces).
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+
+        var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var sealing = Math.Max(
+            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
+        IReadOnlyList<FallbackPlan.Repository.Index.Journal.JournalRecord> records;
+        int unparseable;
+        using (var journal = new FallbackPlan.Repository.Index.Journal.JournalReader(
+            store, repository.RepositoryId, repository.Hierarchy))
+        {
+            (records, unparseable, _) = await journal.LoadAsync(sealing, CancellationToken.None);
+        }
+
+        var now = Day1.AddDays(2).AddHours(1);
+        var intents = FallbackPlan.Repository.Index.Journal.IntentSurveyor.Survey(
+            records, unparseable, sealing, (ulong)now.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        var plan = await StagingTrim.PlanAsync(
+            store, reader, survey,
+            setPolicy: null,
+            [new SetDestinationReference { Ref = "vault", Retention = new RetentionConfiguration { MinGenerations = 10 } }],
+            VaultVerification,
+            name => sync.Find(SetId, name),
+            intents, now, CancellationToken.None);
+        Assert.HasCount(2, plan.Eligible);
+
+        // The race, made deterministic: between plan and execute, a
+        // convergence pass under a narrower filter removes the data blobs
+        // from the replica (the control assertion proves it really did).
+        var replica = new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single());
+        var converged = await FallbackPlan.Replication.StoreToStoreCopier.ConvergeAsync(
+            store, replica,
+            key => !key.StartsWith("blobs/data/", StringComparison.Ordinal),
+            CancellationToken.None);
+        Assert.IsGreaterThanOrEqualTo(2, converged.Deleted);
+
+        // Execution re-verifies and refuses: the staging copies are now the
+        // only copies, and every one of them stays.
+        var (deleted, _) = await StagingTrim.ExecuteAsync(store, plan, VaultVerification, CancellationToken.None);
+        Assert.AreEqual(0, deleted);
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_APassClockBehindTheLastSync_RefusesTheLedgerClaim()
+    {
+        // A pass whose clock sits BEHIND the last sync computes entitlement
+        // the destination may already have converged away from — its ledger
+        // claim cannot be trusted, and the blobs stay.
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        var syncedAt = (ulong)Day1.AddDays(3).ToUnixTimeMilliseconds();
+        DestinationSyncStore.Open(StateDirectory).RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
+
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.Ledger,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference { Ref = "friend" });
+
+        Assert.Contains(
+            line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
     private TrimVerification VaultVerification(string name) =>
         TrimVerification.AgainstStore(
             new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single()));

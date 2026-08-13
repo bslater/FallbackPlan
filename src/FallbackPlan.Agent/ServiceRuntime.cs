@@ -49,6 +49,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private readonly Passphrase _passphrase;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _setGates =
+        new(StringComparer.Ordinal);
 
     private ServiceRuntime(
         ServiceOptions options,
@@ -95,6 +97,24 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The current configuration, re-read so an edit takes effect without a restart.</summary>
     public ClientConfiguration Configuration => ClientConfiguration.Load(ConfigurationPath);
+
+    /// <summary>
+    /// The per-set exclusion between a destructive retention apply and a
+    /// running sync (ADR-0029 Amendment 2). The transfer lane was justified
+    /// by "fan-out reads sealed, immutable objects"; the staging trim made
+    /// staging mutable, so the two operations that can now disagree about
+    /// one set's objects — a trim that verified a replica holds a blob, and
+    /// a convergence that is about to drop that blob there — serialise on
+    /// this gate. Fan-out waits (a retention pass is minutes); a retention
+    /// apply tries and defers, because a first sync can run for hours and
+    /// the writer lane must never stall behind it.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    public SemaphoreSlim SetGate(string setId)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+        return _setGates.GetOrAdd(setId, _ => new SemaphoreSlim(1, 1));
+    }
 
     /// <summary>The directory holding one set's staging archive.</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -279,6 +299,14 @@ public sealed class ServiceRuntime : IAsyncDisposable
         _archives.Clear();
         _passphrase.Dispose();
         _archivesGate.Dispose();
+
+        // After the queue has drained: nothing can be waiting on a set gate.
+        foreach (var gate in _setGates.Values)
+        {
+            gate.Dispose();
+        }
+
+        _setGates.Clear();
         _writerRole.Dispose();
     }
 }

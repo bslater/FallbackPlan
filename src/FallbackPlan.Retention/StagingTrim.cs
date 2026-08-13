@@ -59,7 +59,8 @@ public sealed record TrimPlan(
 /// <summary>One blob the trim may remove.</summary>
 /// <param name="StoreKey">The staging store key.</param>
 /// <param name="Length">Its size, for the report.</param>
-public sealed record TrimCandidate(ObjectKey StoreKey, long Length);
+/// <param name="EntitledDestinations">The destinations whose verified copies the decision rests on — re-checked at deletion time.</param>
+public sealed record TrimCandidate(ObjectKey StoreKey, long Length, IReadOnlyList<string> EntitledDestinations);
 
 /// <summary>
 /// The staging trim (ADR-0034 §6): drops HISTORIC data blobs from the staging
@@ -211,6 +212,7 @@ public static class StagingTrim
         var maxPublicationSequence = survey.Snapshots.Count == 0
             ? 0UL
             : survey.Snapshots.Max(snapshot => snapshot.Fact.PublicationSequence);
+        var nowUnixMilliseconds = (ulong)now.ToUnixTimeMilliseconds();
 
         var eligible = new List<TrimCandidate>();
         var eligibleBytes = 0L;
@@ -246,10 +248,18 @@ public static class StagingTrim
                 {
                     TrimVerification.StoreProbe probe => await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken)
                         .ConfigureAwait(false),
+                    // The claim also demands this pass's clock be at or past
+                    // the sync it rests on: entitlement here is computed at
+                    // `now`, and a pass running BEHIND the last sync could
+                    // hold a wider keep-set than the one the destination
+                    // actually converged to — vouching for a blob the
+                    // destination was instructed to drop.
                     TrimVerification.LedgerClaim => maxPublicationSequence > 0
                         && blob.Records.Any(record => fullClosure.Contains(record.ObjectId))
                         && syncRecordFor(reference.Ref) is { } record
-                        && record.SyncedSequence >= maxPublicationSequence,
+                        && record.SyncedSequence >= maxPublicationSequence
+                        && record.LastSuccessAt is { } lastSuccess
+                        && nowUnixMilliseconds >= lastSuccess,
                     _ => false,
                 };
 
@@ -266,7 +276,8 @@ public static class StagingTrim
             }
 
             var length = lengths.GetValueOrDefault(key);
-            eligible.Add(new TrimCandidate(blob.StoreKey, length));
+            eligible.Add(new TrimCandidate(
+                blob.StoreKey, length, [.. entitled.Select(reference => reference.Ref)]));
             eligibleBytes += length;
         }
 
@@ -283,20 +294,57 @@ public static class StagingTrim
     }
 
     /// <summary>Deletes the plan's eligible blobs from staging.</summary>
+    /// <remarks>
+    /// The plan's evidence is re-checked at the moment of deletion for every
+    /// destination whose store can be asked directly: the tombstone and
+    /// sweep phases run between planning and this pass, and a replica is a
+    /// directory anything may touch — a copy that was there when the plan
+    /// was made and is gone now means the blob stays. A ledger claim needs
+    /// no re-check, because a synced sequence only ever advances; anything
+    /// else answering for a destination now is a change of world, and the
+    /// blob stays for the next pass to re-plan.
+    /// </remarks>
     /// <param name="store">The staging archive's store.</param>
     /// <param name="plan">The plan to execute.</param>
+    /// <param name="verificationFor">The same verifications the plan was built from.</param>
     /// <param name="cancellationToken">Stops the deletes; a re-run re-plans from scratch.</param>
-    /// <returns>What actually went — a blob already gone counts nothing.</returns>
+    /// <returns>What actually went — a blob already gone, or no longer verified, counts nothing.</returns>
     public static async ValueTask<(int Deleted, long Bytes)> ExecuteAsync(
-        IObjectStore store, TrimPlan plan, CancellationToken cancellationToken)
+        IObjectStore store,
+        TrimPlan plan,
+        Func<string, TrimVerification> verificationFor,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(plan);
+        ThrowHelper.ThrowIfNull(verificationFor);
 
         var deleted = 0;
         var bytes = 0L;
         foreach (var candidate in plan.Eligible)
         {
+            var verified = true;
+            foreach (var name in candidate.EntitledDestinations)
+            {
+                verified = verificationFor(name) switch
+                {
+                    TrimVerification.StoreProbe probe =>
+                        await HoldsAsync(probe.Replica, candidate.StoreKey, cancellationToken).ConfigureAwait(false),
+                    TrimVerification.LedgerClaim => true,
+                    _ => false,
+                };
+
+                if (!verified)
+                {
+                    break;
+                }
+            }
+
+            if (!verified)
+            {
+                continue;
+            }
+
             var outcome = await store.DeleteAsync(candidate.StoreKey, DeleteConditions.None, cancellationToken)
                 .ConfigureAwait(false);
             if (outcome.Outcome == DeleteOutcome.Deleted)

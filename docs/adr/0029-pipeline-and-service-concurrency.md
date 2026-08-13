@@ -185,6 +185,31 @@ applied to transfers — and the same yield-to-user-initiated priority as
 everything else. Widening the lane per destination is the anticipated axis if
 measurement ever shows independent links idling; it is not done speculatively.
 
+#### Amendment 2 (2026-08): the transfer lane's premise, and the set gate
+
+The paragraph above justified a free-running transfer lane on "fan-out reads
+sealed, immutable objects". The staging trim ([ADR-0034 §6](0034-hub-and-spoke-destinations.md#6-the-costs-accepted))
+quietly broke that premise: a retention apply now deletes historic data blobs
+from staging, so staging is immutable per object but not per archive, and two
+operations that each hold half the truth can run at once. The concrete hazard
+is a lost blob: the trim verifies a replica holds it, a concurrent convergence
+— computed against the staging archive the same pass's sweep is mutating, and
+therefore against a narrower keep-set than the trim's entitlement — drops it
+at the replica, and the trim then removes the staging copy of a blob that no
+longer exists anywhere.
+
+The rule: **a destructive retention apply and a sync for the same set are
+mutually exclusive**, on a per-set gate the runtime owns. The asymmetry
+matters as much as the exclusion. A sync *waits* for the gate — a retention
+pass is minutes, and the sync was going to read the post-retention truth
+anyway. A retention apply *tries* the gate and, when a sync holds it, runs
+that set report-only and says so — a first sync can run for hours, and the
+writer lane, where backups queue, must never stall behind one. Two
+belt-and-braces guards back the gate for the mutations it cannot see: the
+trim re-verifies each replica-probed copy at the moment of deletion, and both
+convergence drop paths list staging immediately before condemning rather than
+trusting an opening inventory an hours-long push has made stale.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.

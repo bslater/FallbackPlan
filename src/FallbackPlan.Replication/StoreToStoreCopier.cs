@@ -168,18 +168,6 @@ public static class StoreToStoreCopier
             held.Add(entry.Key.Value);
         }
 
-        // The source's own listing bounds what the drop half may condemn: a
-        // key the destination holds that staging no longer lists — a trimmed
-        // data blob — may be the only copy left, and a filter computed from
-        // staging cannot vouch for it either way. Unknown is kept (ADR-0034
-        // §6's trim rests on this).
-        var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            sourceKeys.Add(entry.Key.Value);
-        }
-
         var copied = 0L;
         var alreadyHeld = 0L;
         var matched = new HashSet<string>(StringComparer.Ordinal);
@@ -223,6 +211,20 @@ public static class StoreToStoreCopier
                     copied++;
                 }
             }
+        }
+
+        // The source's own listing bounds what the drop half may condemn: a
+        // key the destination holds that staging no longer lists — a trimmed
+        // data blob — may be the only copy left, and a filter computed from
+        // staging cannot vouch for it either way. Unknown is kept (ADR-0034
+        // §6's trim rests on this). Listed HERE, after the push half: an
+        // hours-long copy must not condemn on the strength of a stale
+        // opening inventory (ADR-0029 Amendment 2).
+        var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            sourceKeys.Add(entry.Key.Value);
         }
 
         // The drop half, reverse dependency order: a snapshot object goes

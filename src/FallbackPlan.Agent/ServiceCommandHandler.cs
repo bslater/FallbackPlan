@@ -179,19 +179,52 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
         foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
-            var report = await Retention.RetentionRunner.RunAsync(
-                archive.Store,
-                archive.Repository,
-                set.Retention,
-                set.Destinations,
-                name => runtime.DestinationSync.Find(set.Id, name),
-                name => TrimVerificationFor(name, archive),
-                runtime.Writer,
-                command.Apply,
-                now,
-                cancellationToken).ConfigureAwait(false);
+            // The set gate (ADR-0029 Amendment 2): the destructive half must
+            // not run while a sync for this set is mid-flight — the two can
+            // otherwise conspire to delete a trimmed blob's last copy. A sync
+            // can run for hours, and the writer lane must never stall behind
+            // one, so retention TRIES: unavailable means this set reports
+            // only, and the deferral is named.
+            SemaphoreSlim? acquiredGate = null;
+            var apply = command.Apply;
+            if (apply)
+            {
+                var gate = runtime.SetGate(set.Id);
+                if (gate.Wait(0, CancellationToken.None))
+                {
+                    acquiredGate = gate;
+                }
+                else
+                {
+                    apply = false;
+                }
+            }
+
+            Retention.RetentionReport report;
+            try
+            {
+                report = await Retention.RetentionRunner.RunAsync(
+                    archive.Store,
+                    archive.Repository,
+                    set.Retention,
+                    set.Destinations,
+                    name => runtime.DestinationSync.Find(set.Id, name),
+                    name => TrimVerificationFor(name, archive),
+                    runtime.Writer,
+                    apply,
+                    now,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                acquiredGate?.Release();
+            }
 
             lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
+            if (command.Apply && !apply)
+            {
+                lines.Add($"{set.Name}: apply deferred — a sync for this set is in flight; re-run retention");
+            }
 
             foreach (var held in report.Held.Where(candidate => candidate.DeferralExceeded))
             {
