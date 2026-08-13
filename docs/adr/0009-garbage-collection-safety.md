@@ -116,7 +116,7 @@ Two rules join the four mechanisms for the fan-out world. **Deletion may not
 outrun replication**: an object leaves staging only when every configured
 destination of the set holds it, or the deferral bound of
 [ADR-0011 Amendment 2](0011-commit-versus-replication-semantics.md) has been
-raised as a warning — the same gate that later makes staging trimmable at all.
+raised as a warning — the same gate that makes staging trimmable at all.
 And **a destination's deletions are keyed to the hub's plan**, never inferred
 from local reachability, because local reachability at a replica is exactly the
 partial view this ADR exists to distrust.

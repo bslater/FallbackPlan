@@ -20,14 +20,14 @@ the source of every summary), and the wire protocol that moves objects between t
 services exists and is proven (peer-protocol 03).
 
 What was never designed is the middle: **how one service fans a backup set out to
-N destinations.** Today the service opens exactly one repository at one path
-(`ServiceOptions.RepositoryPath`), every backup set publishes into it, a second
-copy exists only when an operator runs the `replicate` verb by hand, and a
-`BackupSetConfiguration` carries sources and a schedule but no destinations and no
-retention. The one archive is simultaneously the working store, the only replica,
-and — because architecture 04 §6.3 and 09 §4 made a durable *local* repository the
-precondition for everything else — a mandatory one. A user whose only destination
-is a friend's machine cannot be expressed at all.
+N destinations.** At the time of this decision the service opened exactly one repository at one path
+(`ServiceOptions.RepositoryPath`), every backup set published into it, a second
+copy existed only when an operator ran the since-retired `replicate` verb by hand,
+and a `BackupSetConfiguration` carried sources and a schedule but no destinations
+and no retention. The one archive was simultaneously the working store, the only
+replica, and — because architecture 04 §6.3 and 09 §4 made a durable *local*
+repository the precondition for everything else — a mandatory one. A user whose
+only destination is a friend's machine could not be expressed at all.
 
 Giving a set N destinations forces the data-model question this record settles,
 because everything else — orchestration, retention, status, quota — follows from
@@ -90,7 +90,9 @@ what snapshot *n* contains. Writes originate in staging, always — including
 future compaction, which re-seals in staging and propagates as ordinary new
 objects (ADR-0025). What the hub does *to* a destination is copy objects in
 dependency order and, under retention, delete them; it never asks a destination
-to create anything.
+to create anything. The fan-out runs after every backup and on every scheduler
+pass, and the `sync` verb — agent and paired console alike — drives the same
+path on demand, answering from the per-pair sync ledger.
 
 ### 4. The hub orchestrates; retention at a destination is hub-planned deletion
 
@@ -208,3 +210,4 @@ peer protocol — unconfigurable, and because "local" was never the point:
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Decided ahead of implementation, with the config, orchestration and retention slices to follow. Amends ADR-0009/0010/0011/0012/0018/0025/0027/0028/0029/0030 as recorded in each. |
+| 2026-08 | Built | All eleven arc slices landed, the §6 staging trim included, plus the sync/retention operator verbs; the trim's convergence hazard is closed by the per-set gate of [ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate). Destination verification (peer-protocol 04) remains ahead. |

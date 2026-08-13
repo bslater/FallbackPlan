@@ -459,7 +459,7 @@ paired console commands the service and receives results but, by default, no fil
 content (§6): a restore it commands writes on the service's machine, and the
 console is told the counts and the path. The shipped CLI drives this over
 `--connect <host:port> --fingerprint <fp> --state <dir>`: `backup`, `verify`,
-`check`, `restore`, `snapshots`, `ls` and `status` route to the remote service,
+`check`, `restore`, `snapshots`, `ls`, `status`, `sync` and `retention` route to the remote service,
 the pinned service named by fingerprint because a grant holds a key and never an
 address. This closes topologies 3 and 4 of §1.
 What a paired console may additionally *do* — stream restored content (Q18),
