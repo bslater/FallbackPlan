@@ -1212,7 +1212,7 @@ public static class CliApplication
                             // The matrix beneath the roll-up (ADR-0028 §8):
                             // the detail is what the summary was computed from.
                             output.WriteLine(
-                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
 
@@ -1260,19 +1260,30 @@ public static class CliApplication
                             sync = DestinationSyncState.Behind;
                         }
 
-                        var sameDomain = declared?.Kind == DestinationKind.LocalPath
-                            && !(set.Root.Length > 0
+                        // The declaration wins; the default is derived by
+                        // kind, conservatively (FR-SNP-007, ADR-0018
+                        // Amendment 2) — the same resolution the service
+                        // handler applies.
+                        var domain = declared?.FailureDomain ?? (declared?.Kind ?? DestinationKind.LocalPath) switch
+                        {
+                            DestinationKind.LocalPath =>
+                                set.Root.Length > 0
                                 && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
-                                && declared.Path is { Length: > 0 }
+                                && declared?.Path is { Length: > 0 }
                                 && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(declared.Path, out var destinationStat)
-                                && rootStat.Device != destinationStat.Device);
+                                && rootStat.Device != destinationStat.Device
+                                    ? FailureDomain.SameMachine
+                                    : FailureDomain.SameVolume,
+                            DestinationKind.Peer => FailureDomain.SameSite,
+                            _ => FailureDomain.Independent,
+                        };
 
                         destinations.Add(new DestinationStatusInput
                         {
                             Name = reference.Ref,
                             Kind = declared?.Kind ?? DestinationKind.LocalPath,
                             Sync = sync,
-                            SameFailureDomain = sameDomain,
+                            Domain = domain,
                             LastSuccessAt = record?.LastSuccessAt,
                             Detail = record?.LastError,
                             SyncedSequence = record?.SyncedSequence ?? 0,

@@ -197,13 +197,13 @@ public sealed class ApplicationServiceTests : IDisposable
     private static DestinationStatusInput Destination(
         string name = "vault",
         DestinationSyncState sync = DestinationSyncState.InSync,
-        bool sameDomain = false,
+        FailureDomain domain = FailureDomain.Independent,
         DestinationKind kind = DestinationKind.LocalPath) => new()
     {
         Name = name,
         Kind = kind,
         Sync = sync,
-        SameFailureDomain = sameDomain,
+        Domain = domain,
     };
 
     private static StatusInputs HealthyInputs() => new()
@@ -222,11 +222,59 @@ public sealed class ApplicationServiceTests : IDisposable
         // same disk as the source — is real protection against mistakes and
         // none against losing the disk. Never merged with `protected`.
         var status = StatusDeriver.Derive(
-            HealthyInputs() with { Destinations = [Destination(sameDomain: true)] });
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
         Assert.AreEqual(ProtectionState.Captured, status.State);
         Assert.Contains(warning => warning.Contains("failure domain", StringComparison.Ordinal), status.Warnings);
 
         Assert.AreEqual(ProtectionState.Protected, StatusDeriver.Derive(HealthyInputs()).State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_TheFourDomains_EarnExactlyWhatTheySurvive()
+    {
+        // FR-SNP-007's four answers to "if this machine is destroyed, does a
+        // copy survive?": the two that die with it cap at Captured however
+        // healthy their sync is; the two that survive it protect.
+        var sameVolume = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
+        Assert.AreEqual(ProtectionState.Captured, sameVolume.State);
+
+        var sameMachine = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameMachine)] });
+        Assert.AreEqual(ProtectionState.Captured, sameMachine.State);
+        Assert.Contains(
+            warning => warning.Contains("same-machine", StringComparison.Ordinal), sameMachine.Warnings);
+
+        var sameSite = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameSite)] });
+        Assert.AreEqual(ProtectionState.Protected, sameSite.State);
+
+        var independent = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.Independent)] });
+        Assert.AreEqual(ProtectionState.Protected, independent.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ProtectionRestingOnSameSiteAlone_SaysSo()
+    {
+        // Honest about the residue (ADR-0018): a same-site copy answers the
+        // machine question, not the site one — and the warning goes away the
+        // moment an independent destination is in sync too.
+        var siteOnly = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameSite)] });
+        Assert.Contains(
+            warning => warning.Contains("not losing the site", StringComparison.Ordinal), siteOnly.Warnings);
+
+        var withIndependent = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(domain: FailureDomain.SameSite),
+                Destination("offsite", domain: FailureDomain.Independent),
+            ],
+        });
+        Assert.DoesNotContain(
+            warning => warning.Contains("not losing the site", StringComparison.Ordinal), withIndependent.Warnings);
     }
 
     [TestMethod]
@@ -386,7 +434,7 @@ public sealed class ApplicationServiceTests : IDisposable
         {
             Destinations =
             [
-                Destination(sameDomain: true) with
+                Destination(domain: FailureDomain.SameVolume) with
                 {
                     SyncedSequence = 3,
                     VerifiedAt = 1_722_500_000_000,

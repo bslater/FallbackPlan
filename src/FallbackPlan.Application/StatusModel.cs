@@ -21,13 +21,15 @@ public sealed record DestinationStatusInput
     public required DestinationSyncState Sync { get; init; }
 
     /// <summary>
-    /// Whether the destination demonstrably sits in the source's own failure
-    /// domain (same device/volume by identity comparison). True caps what it
-    /// can earn at <see cref="ProtectionState.Captured"/> (PT-8) — and the
-    /// staging archive never appears here at all: it is a cache, not a
-    /// destination (ADR-0018 Amendment 1).
+    /// Where the destination sits relative to the source (FR-SNP-007):
+    /// declared in configuration or derived by kind (ADR-0018 Amendment 2).
+    /// <see cref="FailureDomain.SameVolume"/> and <see cref="FailureDomain.SameMachine"/>
+    /// die with the machine, so they cap what the destination can earn at
+    /// <see cref="ProtectionState.Captured"/> (PT-8) — and the staging
+    /// archive never appears here at all: it is a cache, not a destination
+    /// (ADR-0018 Amendment 1).
     /// </summary>
-    public required bool SameFailureDomain { get; init; }
+    public required FailureDomain Domain { get; init; }
 
     /// <summary>When this pair last synced, Unix milliseconds; null when never.</summary>
     public ulong? LastSuccessAt { get; init; }
@@ -149,6 +151,7 @@ public static class StatusDeriver
         // The matrix, one row per destination — the truth every roll-up is
         // computed from, never invented beside (ADR-0028 §8).
         var protectedByAny = false;
+        var independentInSync = false;
         var capturedOnlyByAny = false;
         var supportedButNotInSync = false;
         DestinationStatusInput? verifiedBy = null;
@@ -157,8 +160,13 @@ public static class StatusDeriver
         {
             switch (destination.Sync)
             {
-                case DestinationSyncState.InSync when !destination.SameFailureDomain:
+                // Protected asks one question: if this machine is destroyed,
+                // does a copy survive (FR-SNP-007, ADR-0018)? Same-site and
+                // independent answer yes; same-volume and same-machine die
+                // with it, however healthy their sync is.
+                case DestinationSyncState.InSync when destination.Domain >= FailureDomain.SameSite:
                     protectedByAny = true;
+                    independentInSync |= destination.Domain == FailureDomain.Independent;
 
                     // Verified current: proven bytes at least as new as the
                     // sync's own claim (peer-protocol 04). A destination whose
@@ -176,7 +184,7 @@ public static class StatusDeriver
                 case DestinationSyncState.InSync:
                     capturedOnlyByAny = true;
                     warnings.Add(
-                        $"'{destination.Name}' shares the source's failure domain — a safeguard against mistakes, none against losing the disk.");
+                        $"'{destination.Name}' shares the source's failure domain ({DomainLabel(destination.Domain)}) — a safeguard against mistakes, none against losing the machine.");
                     break;
 
                 case DestinationSyncState.NotSupported:
@@ -195,6 +203,14 @@ public static class StatusDeriver
 
         if (protectedByAny)
         {
+            if (!independentInSync)
+            {
+                // Honest about the residue (ADR-0018): a same-site copy
+                // answers the machine question, not the site one.
+                warnings.Add(
+                    "Protection rests on same-site destination(s) — a copy at the same site survives losing this machine, not losing the site.");
+            }
+
             // Verified only ever appears WITH coverage and age (10 §1.2), and
             // only from a destination that is in sync, off-domain, and whose
             // proof covers what the sync delivered — bytes read back off the
@@ -235,5 +251,14 @@ public static class StatusDeriver
         DestinationSyncState.Unavailable => "unreachable",
         DestinationSyncState.Failed => "failing",
         _ => state.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>The configuration's spelling of a domain (FR-SNP-007).</summary>
+    public static string DomainLabel(FailureDomain domain) => domain switch
+    {
+        FailureDomain.SameVolume => "same-volume",
+        FailureDomain.SameMachine => "same-machine",
+        FailureDomain.SameSite => "same-site",
+        _ => "independent",
     };
 }

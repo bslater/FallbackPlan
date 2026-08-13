@@ -34,6 +34,31 @@ public enum DestinationKind
 }
 
 /// <summary>
+/// Where a destination sits relative to the source (FR-SNP-007, ADR-0018):
+/// the four answers to "if this machine is destroyed, does a copy survive?".
+/// Ordered — a larger value survives strictly more.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<FailureDomain>))]
+public enum FailureDomain
+{
+    /// <summary>On the source's own volume — survives mistakes, nothing physical.</summary>
+    [JsonStringEnumMemberName("same-volume")]
+    SameVolume = 0,
+
+    /// <summary>A second disk in the source machine — survives disk failure, not theft, fire, or ransomware.</summary>
+    [JsonStringEnumMemberName("same-machine")]
+    SameMachine = 1,
+
+    /// <summary>A NAS or peer on the same LAN — survives machine loss, not site loss.</summary>
+    [JsonStringEnumMemberName("same-site")]
+    SameSite = 2,
+
+    /// <summary>An offsite peer or cloud store.</summary>
+    [JsonStringEnumMemberName("independent")]
+    Independent = 3,
+}
+
+/// <summary>
 /// One declared destination: a named place backup sets replicate to,
 /// referenced from sets by name (FR-DEST-001). Addresses live here and only
 /// here — a pairing grant holds a key and terms, never an endpoint
@@ -65,6 +90,18 @@ public sealed record DestinationConfiguration
     /// <summary>The endpoint to dial (host:port), for <see cref="DestinationKind.Peer"/>.</summary>
     [JsonPropertyName("endpoint")]
     public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// The declared failure domain (FR-SNP-007, ADR-0018 Amendment 2) — only
+    /// the user knows where the NAS actually sits. Absent, the default is
+    /// derived by kind: a local path by device-identity comparison
+    /// (same-volume or same-machine, never further), a peer <c>same-site</c>
+    /// — a LAN friend does not survive the house fire, so calling one
+    /// independent is a declaration, not an assumption — and a cloud kind
+    /// <c>independent</c>.
+    /// </summary>
+    [JsonPropertyName("failure_domain")]
+    public FailureDomain? FailureDomain { get; init; }
 }
 
 /// <summary>

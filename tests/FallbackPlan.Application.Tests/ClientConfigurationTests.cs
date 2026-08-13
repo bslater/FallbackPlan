@@ -101,6 +101,46 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    public void SaveThenLoad_ADeclaredFailureDomain_RoundTrips()
+    {
+        // The declaration wins over any derived default (FR-SNP-007,
+        // ADR-0018 Amendment 2): only the user knows where the NAS sits.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Peer("alice") with { FailureDomain = FailureDomain.Independent }],
+            BackupSets = [Set("docs", Ref("alice"))],
+        }.Save(ConfigPath);
+
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(FailureDomain.Independent, loaded.FindDestination("alice")!.FailureDomain);
+        Assert.Contains("\"independent\"", loaded.ExportJson(), StringComparison.Ordinal);
+
+        // Undeclared stays undeclared — the default is derived at status
+        // time by kind, never written back into the file.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Peer("bob", '3')],
+            BackupSets = [Set("docs", Ref("bob"))],
+        }.Save(ConfigPath);
+        Assert.IsNull(ClientConfiguration.Load(ConfigPath).FindDestination("bob")!.FailureDomain);
+    }
+
+    [TestMethod]
+    public void Load_AFailureDomainOutsideTheVocabulary_IsRefused()
+    {
+        File.WriteAllText(ConfigPath, $$"""
+            { "schema_version": 2,
+              "destinations": [ { "id": "{{new string('1', 32)}}", "name": "usb", "kind": "local-path",
+                                  "path": "/mnt/u", "failure_domain": "very-safe" } ],
+              "backup_sets": [ { "id": "{{new string('a', 32)}}", "name": "docs", "root": "/d", "destinations": [ "usb" ] } ] }
+            """);
+
+        Assert.ThrowsExactly<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
+    }
+
+    [TestMethod]
     public void Load_SchemaVersion1_IsRefusedWithTheMigration()
     {
         File.WriteAllText(ConfigPath, """{ "schema_version": 1, "backup_sets": [] }""");

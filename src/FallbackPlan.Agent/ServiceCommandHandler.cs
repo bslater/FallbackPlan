@@ -1124,10 +1124,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     Name = reference.Ref,
                     Kind = DestinationKind.LocalPath,
                     Sync = DestinationSyncState.Failed,
-                    SameFailureDomain = false,
+                    // Conservative: an undeclarable destination earns nothing.
+                    Domain = FailureDomain.SameVolume,
                     Detail = "no longer declared",
                 });
-                rows.Add(new DestinationStatusDescriptor(reference.Ref, "?", "failed", null, "no longer declared"));
+                rows.Add(new DestinationStatusDescriptor(
+                    reference.Ref, "?", "failed", null, "no longer declared", "same-volume"));
                 continue;
             }
 
@@ -1139,12 +1141,13 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 sync = DestinationSyncState.Behind;
             }
 
+            var domain = DomainOf(set, destination);
             inputs.Add(new DestinationStatusInput
             {
                 Name = destination.Name,
                 Kind = destination.Kind,
                 Sync = sync,
-                SameFailureDomain = SharesSourceFailureDomain(set, destination),
+                Domain = domain,
                 LastSuccessAt = record?.LastSuccessAt,
                 Detail = record?.LastError,
                 SyncedSequence = record?.SyncedSequence ?? 0,
@@ -1154,31 +1157,43 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 VerifiedPopulation = record?.VerifiedPopulation ?? 0,
             });
             rows.Add(new DestinationStatusDescriptor(
-                destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt, record?.LastError));
+                destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt,
+                record?.LastError, StatusDeriver.DomainLabel(domain)));
         }
 
         return (inputs, rows);
     }
 
     /// <summary>
-    /// Whether a destination demonstrably shares the source's failure domain.
-    /// A local path is compared by device identity — the real comparison that
-    /// replaces the placeholder (ADR-0018 Amendment 1) — staying conservative
-    /// (same) when the platform cannot say. A peer or cloud destination is
-    /// another machine by construction.
+    /// The destination's failure domain (FR-SNP-007): the declaration wins —
+    /// only the user knows where the NAS actually sits (ADR-0018) — and the
+    /// default is derived by kind. A local path is compared by device
+    /// identity, staying conservative (same-volume) when the platform cannot
+    /// say, and never inferring past same-machine: a second disk still dies
+    /// with the machine. A peer defaults to same-site — a LAN friend does
+    /// not survive the house fire — and a cloud kind to independent
+    /// (ADR-0018 Amendment 2).
     /// </summary>
-    private static bool SharesSourceFailureDomain(BackupSetConfiguration set, DestinationConfiguration destination)
+    private static FailureDomain DomainOf(BackupSetConfiguration set, DestinationConfiguration destination)
     {
-        if (destination.Kind != DestinationKind.LocalPath)
+        if (destination.FailureDomain is { } declared)
         {
-            return false;
+            return declared;
         }
 
-        return !(set.Root.Length > 0
-            && Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
-            && destination.Path is { Length: > 0 }
-            && Filesystem.Local.LocalFileSystemSource.TryStat(destination.Path, out var destinationStat)
-            && rootStat.Device != destinationStat.Device);
+        return destination.Kind switch
+        {
+            DestinationKind.LocalPath =>
+                set.Root.Length > 0
+                && Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
+                && destination.Path is { Length: > 0 }
+                && Filesystem.Local.LocalFileSystemSource.TryStat(destination.Path, out var destinationStat)
+                && rootStat.Device != destinationStat.Device
+                    ? FailureDomain.SameMachine
+                    : FailureDomain.SameVolume,
+            DestinationKind.Peer => FailureDomain.SameSite,
+            _ => FailureDomain.Independent,
+        };
     }
 
     private static string KindLabel(DestinationKind kind) => kind switch
