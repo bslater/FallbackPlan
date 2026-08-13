@@ -45,10 +45,21 @@ public static class PeerSessionNegotiation
     /// <param name="agentVersion">Informational build string.</param>
     /// <param name="terms">Terms, when this side is the destination (01 §4).</param>
     /// <param name="required">Features this side requires of the peer.</param>
+    /// <param name="offered">
+    /// What this endpoint offers, defaulting to everything this build supports.
+    /// The offered set is a property of the endpoint rather than a global
+    /// constant (02 §4: "each side offers what it supports"), and narrowing it
+    /// is the only way to stand an older peer in front of this one without
+    /// checking out an older build — which is what the compatibility tests do
+    /// with it. Nothing in production passes anything but the default.
+    /// </param>
     /// <returns>The hello.</returns>
     public static SessionHello Hello(
-        string agentVersion, PeerTerms? terms = null, IReadOnlyList<string>? required = null) =>
-        new(OldestSupportedVersion, CurrentVersion, SupportedFeatures, required ?? [], agentVersion, terms);
+        string agentVersion,
+        PeerTerms? terms = null,
+        IReadOnlyList<string>? required = null,
+        IReadOnlyList<string>? offered = null) =>
+        new(OldestSupportedVersion, CurrentVersion, offered ?? SupportedFeatures, required ?? [], agentVersion, terms);
 
     /// <summary>Negotiates a session from two hellos.</summary>
     /// <param name="ours">The hello this side sent.</param>

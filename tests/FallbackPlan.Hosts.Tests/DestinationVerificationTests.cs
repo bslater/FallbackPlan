@@ -90,6 +90,59 @@ public sealed class DestinationVerificationTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Sync_APeerThatDoesNotOfferVerification_SyncsCleanlyAndClaimsNothing()
+    {
+        // The older-peer path, end to end (peer-protocol 04 §1): a build that
+        // predates the feature never offers it, so the source MUST NOT send a
+        // challenge — an unknown type would be refused as `message_unknown`
+        // and take the whole session with it. The sync must succeed anyway,
+        // and it must claim nothing it did not prove.
+        _source.WriteSourceFile("notes.txt", "no challenges here");
+        var destinationFingerprint = await StartDestinationAsync(
+            PeerRole.StoresHere, offeredFeatures: FeaturesWithoutVerification);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var run = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+
+        var sync = await RunSyncAsync();
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
+        Assert.Contains("docs -> friend: in sync", sync.Output, StringComparison.Ordinal);
+
+        // The replica really was written — this is a completed sync, not a
+        // silent no-op that would pass the assertions below for free.
+        var replica = Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Single();
+        Assert.IsNotEmpty(Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories));
+
+        var record = DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, $"state={record.State} error={record.LastError}");
+        Assert.IsGreaterThanOrEqualTo(1UL, record.SyncedSequence, "the sync claims what it delivered");
+
+        // Nothing verified, and nothing pretended: the stamps stay at their
+        // never-set defaults rather than being filled in by a sync that could
+        // not ask. A peer that cannot answer is not a failure either — no
+        // notice is raised (04 §1: cannot-prove is an answer, not an error).
+        Assert.IsNull(record.VerifiedAt, "a peer that was never challenged must carry no proof date");
+        Assert.AreEqual(0UL, record.VerifiedSequence);
+        Assert.AreEqual(0, record.VerifiedObjects);
+        Assert.AreEqual(0, record.VerifiedPopulation);
+        Assert.IsEmpty(NoticeStore.Open(_source.StateDirectory).Unacknowledged);
+
+        // And the status surface says the honest word: protected by an
+        // off-domain destination, but never `verified`, and never a coverage
+        // clause for a proof that was never asked for (10 §1.2).
+        var status = await RunStatusAsync();
+        Assert.AreEqual(0, status.ExitCode, status.Error);
+        Assert.Contains("Protected", status.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Verified", status.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("% of objects at", status.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Sync_ATamperedByteAtTheLocalPathReplica_FailsVerificationDurably()
     {
         // A local-path replica converges clean, then a snapshot object rots
@@ -233,8 +286,24 @@ public sealed class DestinationVerificationTests : IDisposable
         return (exit, output.ToString(), error.ToString());
     }
 
+    /// <summary>
+    /// What a build predating destination verification offers: everything in
+    /// the 02 §6 registry except the one feature under test.
+    /// </summary>
+    private static readonly string[] FeaturesWithoutVerification =
+    [
+        PeerSessionNegotiation.RetentionInstructionFeature,
+        PeerSessionNegotiation.TerminationNoticeFeature,
+    ];
+
     /// <summary>Stands up the destination listener with reciprocal pinned grants.</summary>
-    private async Task<string> StartDestinationAsync(PeerRole destinationRoleForSource)
+    /// <param name="destinationRoleForSource">The role the destination grants the source.</param>
+    /// <param name="offeredFeatures">
+    /// What the destination announces in its hello; null offers everything
+    /// this build supports, which is what a current peer does.
+    /// </param>
+    private async Task<string> StartDestinationAsync(
+        PeerRole destinationRoleForSource, IReadOnlyList<string>? offeredFeatures = null)
     {
         using var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory);
         using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
@@ -249,7 +318,7 @@ public sealed class DestinationVerificationTests : IDisposable
         var listenerKeypair = PeerKeypairStore.Open(_destinationState);
         var listener = RemoteServiceListener.Start(
             listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            log: null, replicationStateDirectory: _destinationState);
+            log: null, replicationStateDirectory: _destinationState, offeredFeatures: offeredFeatures);
         listener.Bind(new UnusedService());
         _endpoint = listener.Endpoint;
         _stop = new Stopper(listener, listenerKeypair);

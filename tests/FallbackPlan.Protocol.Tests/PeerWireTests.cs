@@ -164,7 +164,8 @@ public sealed class PeerWireTests : IDisposable
         {
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 await AcceptRawAsync(serviceListener), Now, Cancellation);
-            return await PeerSessionDriver.AcceptAsync(connection, _service, serviceStore, "service/test", null, null, Cancellation);
+            return await PeerSessionDriver.AcceptAsync(
+                connection, _service, serviceStore, "service/test", null, null, cancellationToken: Cancellation);
         });
 
         var consoleSide = Task.Run(async () =>
@@ -353,7 +354,8 @@ public sealed class PeerWireTests : IDisposable
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 await AcceptRawAsync(listener), Now, Cancellation);
             return await PeerSessionDriver.AcceptAsync(
-                connection, _service, serviceStore, "service/test", null, termsForPeer, Cancellation);
+                connection, _service, serviceStore, "service/test", null, termsForPeer,
+                cancellationToken: Cancellation);
         });
 
         var consoleSide = Task.Run(async () =>

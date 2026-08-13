@@ -29,6 +29,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly PeerGrantStore _grants;
     private readonly Socket _socket;
     private readonly string _agentVersion;
+    private readonly IReadOnlyList<string>? _offeredFeatures;
     private readonly Action<string>? _log;
     private readonly string? _replicasRoot;
     private readonly string? _spoolRoot;
@@ -47,12 +48,14 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         Socket socket,
         string agentVersion,
         Action<string>? log,
-        string? replicationStateDirectory)
+        string? replicationStateDirectory,
+        IReadOnlyList<string>? offeredFeatures)
     {
         _keypair = keypair;
         _grants = grants;
         _socket = socket;
         _agentVersion = agentVersion;
+        _offeredFeatures = offeredFeatures;
         _log = log;
         _stateDirectory = replicationStateDirectory;
         if (replicationStateDirectory is not null)
@@ -91,13 +94,21 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// spool (03 §8). When null, an inbound peer whose grant permits storing
     /// here is refused, because the service has nowhere to put what it offers.
     /// </param>
+    /// <param name="offeredFeatures">
+    /// What this binding offers in its hello, defaulting to everything this
+    /// build supports (see <see cref="PeerSessionNegotiation.Hello"/>).
+    /// Narrowing it is how a compatibility test stands an older destination in
+    /// front of a current source; nothing in production passes anything but
+    /// the default.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
         IPEndPoint endpoint,
         string agentVersion,
         Action<string>? log = null,
-        string? replicationStateDirectory = null)
+        string? replicationStateDirectory = null,
+        IReadOnlyList<string>? offeredFeatures = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -108,7 +119,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         {
             socket.Bind(endpoint);
             socket.Listen(backlog: 16);
-            return new RemoteServiceListener(keypair, grants, socket, agentVersion, log, replicationStateDirectory);
+            return new RemoteServiceListener(
+                keypair, grants, socket, agentVersion, log, replicationStateDirectory, offeredFeatures);
         }
         catch
         {
@@ -208,7 +220,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 session = await PeerSessionDriver.AcceptAsync(
                     connection, _keypair, _grants, _agentVersion, terms: null,
                     termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
-                    _stopping.Token).ConfigureAwait(false);
+                    offeredFeatures: _offeredFeatures,
+                    cancellationToken: _stopping.Token).ConfigureAwait(false);
             }
             catch (PeerProtocolException refusal)
             {
