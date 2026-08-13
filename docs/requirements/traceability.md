@@ -72,7 +72,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-DED-001 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` | 2 |
 | FR-DED-002 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests`, `Repository.Tests/StaleCatalogueTests` *(the zero-read posture survives the existence probe; a stale row is refused instead of dangling)* | 0 |
 | FR-DED-003 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md), [0026 §9](../adr/0026-phase-1-capture-shapes.md) — outcome durability explicitly deferred: v1 re-verifies after a catalogue rebuild | `Repository.Tests/DedupTrustDomainTests` | 2 |
-| FR-DED-004 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | — *(unmet; the unverified domain is selectable and behaves as specified — `Repository.Tests/DedupTrustDomainTests` holds that — but no acknowledgement gate exists, so nothing stops it being enabled silently. The gate belongs where the domain is chosen, which is the client, not the engine)* | 2 |
+| FR-DED-004 | [03 §5.2](../architecture/03-crypto.md#52-the-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` (cannot be enabled without the acknowledgement — the publication pipeline refuses to construct), `Domain.Tests/CapturePolicyValidationTests` (validation names the defect) | 2 |
 
 ### Snapshots
 
@@ -80,8 +80,8 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 |----|------|-----|------|-------|
 | FR-SNP-001 | [04 §6](../architecture/04-concurrency-and-publication.md#6-commit-versus-replication) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Repository.Tests/PublicationOrchestratorTests` | 1 |
 | FR-SNP-002 | [01 §5](../architecture/01-domain-model.md#5-replication-not-synchronisation) | — | `Repository.Tests/IncrementalBackupTests` | 1 |
-| FR-SNP-003 | [04 §6.1](../architecture/04-concurrency-and-publication.md#61-the-distinction) | [0011](../adr/0011-commit-versus-replication-semantics.md) | — *(untested; phase 2)* | 2 |
-| FR-SNP-007 | [04 §6.4](../architecture/04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) | [0018](../adr/0018-replica-failure-domains.md) | — *(untested; phase 2)* | 2 |
+| FR-SNP-003 | [04 §6.1](../architecture/04-concurrency-and-publication.md#61-the-distinction) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Application.Tests/SnapshotReplicationTests` (the five states derived from the ledger), `Hosts.Tests/ServiceTests` (a real snapshot listing reads "vault: verified") | 2 |
+| FR-SNP-007 | [04 §6.4](../architecture/04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) | [0018](../adr/0018-replica-failure-domains.md) | `Repository.Tests/ApplicationServiceTests` (each domain earns exactly what it survives; same-volume reports captured never protected), `Application.Tests/ClientConfigurationTests` (declared domain round-trips; vocabulary refused) | 2 |
 | FR-SNP-004 | [04 §4](../architecture/04-concurrency-and-publication.md#4-write-intent) | [0009](../adr/0009-garbage-collection-safety.md) | `InterruptionTests/ConcurrentUploadTests` | 0 |
 | FR-SNP-005 | [04 §4.2.1](../architecture/04-concurrency-and-publication.md#421-expiry-needs-two-conditions-not-one) | [0009](../adr/0009-garbage-collection-safety.md) | `Repository.Tests/JournalTests` | 4 |
 | FR-SNP-006 | [02 §5.3](../architecture/02-repository-format.md#53-spooling-and-sealing) | [0016](../adr/0016-blob-identifier-formation.md) | `Repository.Tests/BlobStoreKeysTests`, `InterruptionTests/SequenceRollbackTests` | 0 |
@@ -111,8 +111,8 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-REP-001 | [09 §1](../architecture/09-replication-and-peers.md#1-what-replication-moves) | [0011](../adr/0011-commit-versus-replication-semantics.md) | `Hosts.Tests/PeerReplicationTests` — a declared peer destination converges on schedule and on demand (the sync verb), and the recovery tool restores from the replica; `Protocol.Tests/ReplicationMessageTests` · per-(set, destination) state is the sync ledger, pinned under FR-DEST-004 | 2 |
 | FR-REP-002 | [05 §4](../architecture/05-storage-providers.md#4-providers) | [0012](../adr/0012-storage-provider-contract.md) | `Repository.Tests/RepositoryDescriptorCodecTests`, `Repository.Tests/RepositoryLifecycleTests` | 3 |
 | FR-REP-003 | [04 §5.1](../architecture/04-concurrency-and-publication.md#51-interruption-at-each-step) | — | `Hosts.Tests/PeerReplicationTests` — a re-run commits nothing already held, and each object commits whole (create-if-absent) so none is ever visible partial · within-object resume is a deferred replication refinement, outside the hub-and-spoke arc | 2 |
-| FR-REP-004 | [09 §2.1](../architecture/09-replication-and-peers.md#21-version-skew) | [0014](../adr/0014-format-versioning-and-stability.md) | — *(untested; phase 2)* | 2 |
-| FR-VER-001..005 | [09 §5](../architecture/09-replication-and-peers.md#5-destination-verification) | — | — *(untested; phase 2)* | 2 |
+| FR-REP-004 | [09 §2.1](../architecture/09-replication-and-peers.md#21-version-skew) | [0014](../adr/0014-format-versioning-and-stability.md) | `Protocol.Tests/PeerSessionNegotiationTests` (version ranges and required features refuse with stated reasons), `Hosts.Tests/VersionSkewTests` (an unimplemented format capability refuses over the wire before any transfer) | 2 |
+| FR-VER-001..005 | [09 §5](../architecture/09-replication-and-peers.md#5-destination-verification) | — | `Hosts.Tests/DestinationVerificationTests` (tampered bytes at a peer and at a local path caught, recorded durably; stamps carry coverage and age), `Protocol.Tests/ReplicationMessageTests` (challenge/proof codecs, widths, RangeChallenge freshness) | 2 |
 
 ### Retention, GC, quotas
 
@@ -171,7 +171,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-COMP-001..003 | [02 §2](../architecture/02-repository-format.md#2-object-classes) | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.Tests/RepositoryDescriptorCodecTests` | 0 |
 | NFR-COMP-004 | [02](../architecture/02-repository-format.md) | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.ConformanceTests/FixtureRepositoryTests`, `Repository.Tests/CanonicalCborRejectionTests` | freeze |
 | NFR-COMP-005 | [05 §1](../architecture/05-storage-providers.md#1-principles) | [0012](../adr/0012-storage-provider-contract.md) | `ArchitectureTests/DependencyRuleTests` | 3 |
-| NFR-COMP-006 | [09 §2.1](../architecture/09-replication-and-peers.md#21-version-skew) | [0014](../adr/0014-format-versioning-and-stability.md) | — *(untested; phase 2)* | 2 |
+| NFR-COMP-006 | [09 §2.1](../architecture/09-replication-and-peers.md#21-version-skew) | [0014](../adr/0014-format-versioning-and-stability.md) | `Protocol.Tests/PeerSessionNegotiationTests` (negotiation refuses with stated reasons both directions), `Hosts.Tests/VersionSkewTests` (skewed capability refused cleanly, nothing stored, no undefined state) | 2 |
 | NFR-COMP-007 | — | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.Tests/RepositoryLifecycleTests` | 0 |
 | NFR-OPS-001, 002 | [10](../architecture/10-observability.md) | — | `Api.Tests/StatusAggregationTests` | 1 |
 | NFR-OPS-003 | [11 §3](../architecture/11-solution-structure.md#3-local-state-separation) | [0010](../adr/0010-local-store-separation.md) | `Domain.Tests/CapturePolicyValidationTests` | 1 |

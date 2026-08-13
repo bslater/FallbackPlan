@@ -312,9 +312,11 @@ whether its actions are attributable to a person. Neither gates who it is, so
 the identity and session layers can be built while they stay open.
 
 Of the peer-protocol documents this once owed — 03 (replication), 04
-(verification) and 05 (quotas) — 03 and 05 are since written and implemented,
-and 06 (retention instructions) landed beside them. Only 04 remains: its
-behaviour is fixed in architecture 09 §5; what is missing is the wire encoding.
+(verification) and 05 (quotas) — all are since written and implemented,
+with 06 (retention instructions) landed beside them. 04 was the last:
+its keyed random-range challenge now rides every sync, with the tampered-byte
+cases proven against a peer over the wire and a local-path replica by
+read-back ([spec 04](../specifications/peer-protocol/04-verification.md)).
 
 ### 2. The proof debt the pipeline integrity review left on the table
 

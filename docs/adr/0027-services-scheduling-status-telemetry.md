@@ -191,6 +191,18 @@ failure. The never-merge rules hold at the same single derivation site, which
 is the point of having one: the matrix is the truth and every roll-up is
 computed from it in front of the reader.
 
+With destination verification built
+([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)),
+`verified` is earned the same per-destination way: the repository-level
+verification input this ADR sketched was never produced in practice and is
+replaced by per-destination stamps from the sync ledger — when bytes were
+last proven, how many ranges of how many eligible objects, and the highest
+publication sequence the sample covered. The roll-up says `verified` only
+for a destination that is in sync, outside the machine's failure domain
+([ADR-0018 Amendment 2](0018-replica-failure-domains.md)), and whose proof
+covers what its last sync delivered; the claim carries the real coverage
+fraction and its date, never a bare tick, exactly as §4 required.
+
 ## Consequences
 
 ### Amendment (2026-08): the peer-host model is superseded
