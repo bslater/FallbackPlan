@@ -830,8 +830,11 @@ public static class CliApplication
                         var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
                             .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                         var captureStatus = snapshot.CaptureStatus == 1 ? "complete" : "partial";
+                        var destinations = snapshot.Destinations is { Count: > 0 }
+                            ? "  " + string.Join(", ", snapshot.Destinations)
+                            : string.Empty;
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s)"));
+                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){destinations}"));
                     }
 
                     return 0;

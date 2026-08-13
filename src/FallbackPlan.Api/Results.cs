@@ -115,12 +115,19 @@ public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResu
 /// <param name="CapturedAt">When it was captured, Unix milliseconds.</param>
 /// <param name="CaptureStatus">1 complete, 2 partial.</param>
 /// <param name="Files">How many files it holds.</param>
+/// <param name="Destinations">
+/// Where this snapshot stands at each of its set's destinations, one
+/// <c>name: state</c> line per destination with the FR-SNP-003 vocabulary
+/// (<c>pending</c>, <c>replicating</c>, <c>durable</c>, <c>verified</c>,
+/// <c>degraded</c>); null from a service that could not derive it.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
     ulong CapturedAt,
     byte CaptureStatus,
-    long Files);
+    long Files,
+    IReadOnlyList<string>? Destinations = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">The snapshots, oldest first.</param>

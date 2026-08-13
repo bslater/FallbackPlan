@@ -72,6 +72,15 @@ public sealed record CapturePolicy
     public required DedupTrustDomain DedupTrustDomain { get; init; }
 
     /// <summary>
+    /// The explicit acknowledgement <see cref="Configuration.DedupTrustDomain.RepositoryUnverified"/>
+    /// requires (FR-DED-004): setting it records that a faulty or hostile
+    /// writer can corrupt other devices' backups. The domain cannot be
+    /// enabled without it — validation names the defect and the publication
+    /// pipeline refuses to construct.
+    /// </summary>
+    public bool AcknowledgesUnverifiedDedupRisk { get; init; }
+
+    /// <summary>
     /// How much of the pipeline may run at once (ADR-0029 §3).
     /// </summary>
     /// <remarks>
@@ -147,6 +156,15 @@ public sealed record CapturePolicy
             (defects ??= []).Add(new ConfigurationDefect(
                 "dedup_trust_domain_unknown",
                 $"Trust domain {(byte)DedupTrustDomain} is not defined (specification 09 §5)."));
+        }
+
+        if (DedupTrustDomain == DedupTrustDomain.RepositoryUnverified && !AcknowledgesUnverifiedDedupRisk)
+        {
+            (defects ??= []).Add(new ConfigurationDefect(
+                "unverified_dedup_unacknowledged",
+                "The repository-unverified trust domain reuses other writers' segments without reading them, "
+                + "so a faulty or hostile writer can corrupt this device's backups. It cannot be enabled "
+                + "without acknowledging that risk (FR-DED-004)."));
         }
 
         var compression = Compression.Validate();

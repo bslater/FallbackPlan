@@ -91,6 +91,21 @@ public sealed class CapturePolicyValidationTests
     }
 
     [TestMethod]
+    public void Validate_UnverifiedDomainWithoutTheAcknowledgement_NamesThatDefect()
+    {
+        // FR-DED-004: the unverified domain records that a faulty or hostile
+        // writer can corrupt other devices' backups — it cannot be enabled
+        // silently.
+        var policy = CapturePolicy.Default with
+        {
+            DedupTrustDomain = DedupTrustDomain.RepositoryUnverified,
+        };
+
+        Assert.IsTrue(policy.Validate().Has("unverified_dedup_unacknowledged"));
+        Assert.IsTrue((policy with { AcknowledgesUnverifiedDedupRisk = true }).Validate().IsValid);
+    }
+
+    [TestMethod]
     public void Validate_TrustDomainIsUnknown_NamesThatDefect()
     {
         var policy = CapturePolicy.Default with { DedupTrustDomain = (DedupTrustDomain)9 };

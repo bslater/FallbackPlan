@@ -152,6 +152,19 @@ public sealed partial class PublicationOrchestrator
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
+        // FR-DED-004's gate, enforced where publications start: the
+        // unverified domain reuses other writers' segments without reading
+        // them, and it cannot be enabled without the acknowledgement that
+        // records what that risks.
+        if (policy.DedupTrustDomain == DedupTrustDomain.RepositoryUnverified
+            && !policy.AcknowledgesUnverifiedDedupRisk)
+        {
+            throw new ArgumentException(
+                "The repository-unverified trust domain requires the explicit acknowledgement that a "
+                + "faulty or hostile writer can corrupt other devices' backups (FR-DED-004).",
+                nameof(policy));
+        }
+
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;

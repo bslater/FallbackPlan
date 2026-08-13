@@ -1008,18 +1008,77 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     private async ValueTask<ServiceResult> ListSnapshotsAsync(CancellationToken cancellationToken)
     {
         var snapshots = new List<SnapshotDescriptor>();
-        foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
+            // The per-(snapshot, destination) vocabulary (FR-SNP-003) is
+            // derived here from the same ledger rows the gate and the status
+            // roll-up read — its currency is the snapshot's publication
+            // sequence, parsed from the standalone records' cleartext.
+            var sequences = await SnapshotSequencesAsync(archive, cancellationToken).ConfigureAwait(false);
+
             using var catalogue = archive.OpenReadCatalogue();
-            snapshots.AddRange(catalogue.EnumerateSnapshots().Select(row => new SnapshotDescriptor(
-                Convert.ToHexString(row.SnapshotId.Span).ToLowerInvariant(),
-                Convert.ToHexString(row.BackupSetId.Span).ToLowerInvariant(),
-                row.CapturedAt,
-                row.CaptureStatus,
-                0)));
+            foreach (var row in catalogue.EnumerateSnapshots())
+            {
+                List<string>? destinations = null;
+                if (sequences.TryGetValue(row.ObjectId, out var sequence))
+                {
+                    destinations = [.. set.Destinations.Select(reference => string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"{reference.Ref}: {SnapshotReplication.Label(SnapshotReplication.Derive(
+                            sequence,
+                            runtime.DestinationSync.Find(set.Id, reference.Ref),
+                            runtime.Queue.IsActive(FanOut.JobIdFor(set.Id, reference.Ref))))}"))];
+                }
+
+                snapshots.Add(new SnapshotDescriptor(
+                    Convert.ToHexString(row.SnapshotId.Span).ToLowerInvariant(),
+                    Convert.ToHexString(row.BackupSetId.Span).ToLowerInvariant(),
+                    row.CapturedAt,
+                    row.CaptureStatus,
+                    0,
+                    destinations));
+            }
         }
 
         return new SnapshotsResult(snapshots);
+    }
+
+    /// <summary>
+    /// Each snapshot object's publication sequence, keyed by its record
+    /// object id — read from the standalone framing's cleartext counter, the
+    /// per-publication monotonic the replication ledger also speaks
+    /// (FR-GC-009). An unparseable object simply claims nothing here.
+    /// </summary>
+    private static async ValueTask<Dictionary<Domain.Identifiers.ObjectId, ulong>> SnapshotSequencesAsync(
+        ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        var sequences = new Dictionary<Domain.Identifiers.ObjectId, ulong>();
+        await foreach (var entry in archive.Store.ListAsync(
+            Storage.Abstractions.ObjectPrefix.Parse("snapshots/"),
+            Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+        {
+            using var read = await archive.Store.OpenReadAsync(entry.Key, range: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (read.Outcome != Storage.Abstractions.OpenReadOutcome.Found)
+            {
+                continue;
+            }
+
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var record = Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray());
+                sequences[record.Header.ObjectId] = record.Counter;
+            }
+            catch (FormatException)
+            {
+                // Includes RecordFormatException: an object that does not
+                // parse as a standalone record claims no sequence.
+            }
+        }
+
+        return sequences;
     }
 
     private async ValueTask<ServiceResult> ListDirectoryAsync(ListDirectoryCommand command, CancellationToken cancellationToken)

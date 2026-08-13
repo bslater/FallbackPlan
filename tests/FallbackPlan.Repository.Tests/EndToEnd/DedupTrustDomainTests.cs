@@ -92,6 +92,31 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public void UnverifiedDomain_WithoutTheAcknowledgement_CannotBeEnabled()
+    {
+        // FR-DED-004: opting out of reuse verification is opting into
+        // trusting every other writer's honesty and health. The pipeline
+        // refuses to start until that is acknowledged explicitly, and the
+        // policy's own validation names the same defect.
+        var unacknowledged = SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.RepositoryUnverified };
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var spool = Path.Combine(SpoolDirectory, "unacknowledged");
+        Directory.CreateDirectory(spool);
+
+        var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
+            unacknowledged, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
+        Assert.Contains("acknowledge", refusal.Message, StringComparison.OrdinalIgnoreCase);
+
+        var validation = unacknowledged.Validate();
+        Assert.IsFalse(validation.IsValid);
+        Assert.IsTrue(validation.Has("unverified_dedup_unacknowledged"));
+    }
+
+    [TestMethod]
     public async Task UnverifiedDomain_AnotherWritersSegments_AreReusedWithoutBeingRead()
     {
         using var second = await SecondWriterPublishes(
@@ -317,7 +342,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy with { DedupTrustDomain = domain, Concurrency = concurrency },
+            SmallBlobPolicy with
+            {
+                DedupTrustDomain = domain,
+                Concurrency = concurrency,
+                // FR-DED-004: the unverified domain cannot be enabled without
+                // the explicit acknowledgement; these tests opt in knowingly.
+                AcknowledgesUnverifiedDedupRisk = domain == DedupTrustDomain.RepositoryUnverified,
+            },
             Repo,
             writer,
             KeyGeneration.Zero,

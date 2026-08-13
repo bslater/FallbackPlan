@@ -64,6 +64,7 @@ public sealed class ServiceTests : IDisposable
         _harness.WriteSourceFile("notes.txt", new string('x', 200_000));
         _harness.WriteSourceFile("deep/more.txt", new string('y', 200_000));
         _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
 
         await using var runtime = await StartAsync();
         var seen = new List<JobState>();
@@ -122,6 +123,19 @@ public sealed class ServiceTests : IDisposable
 
         Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
         Assert.ContainsSingle(snapshots.Snapshots);
+
+        // The backup chains a fan-out; once the ledger says the vault is in
+        // sync, the snapshot listing carries the per-destination vocabulary
+        // (FR-SNP-003) — verified, because a local-path sync reads its
+        // sampled bytes back before recording success (peer-protocol 04).
+        await WaitForAsync(() =>
+            runtime.DestinationSync.Find(_harness.DocsSetId, "vault")?.State
+                == FallbackPlan.Application.DestinationSyncState.InSync);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var replicated);
+        var row = Assert.ContainsSingle(replicated.Snapshots);
+        Assert.IsNotNull(row.Destinations);
+        Assert.Contains("vault: verified", row.Destinations);
 
         await _timeout.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
