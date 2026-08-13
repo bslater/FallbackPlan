@@ -84,6 +84,65 @@ public sealed class RetentionSyncInterlockTests : IDisposable
             line => line.Contains("in sync", StringComparison.Ordinal), report.Lines);
     }
 
+    [TestMethod]
+    public async Task SyncVerb_WhileAServiceHoldsTheWriterRole_FailsCleanlyNamingTheHolder()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        // A running service holds the writer role; the one-shot verb must be
+        // refused with the holder named (FR-SVC-002) — never a stack trace.
+        await using var runtime = await StartAsync();
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+
+        Assert.AreEqual(1, result.ExitCode, result.All);
+        Assert.Contains("writer role", result.Error, StringComparison.Ordinal);
+
+        var retention = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "retention", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+
+        Assert.AreEqual(1, retention.ExitCode, retention.All);
+        Assert.Contains("writer role", retention.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sync_APairAlreadyQueued_IsReportedNotDoubled()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        // Something already occupies the (set, destination) identity on the
+        // transfer lane: the command must coalesce and say so, not double
+        // the work and not pretend a fresh sync ran.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+            FanOut.JobIdFor(_harness.DocsSetId, "vault"), JobLane.Transfer, UserInitiated: true,
+            "hold the pair", async _ => await release.Task)));
+
+        try
+        {
+            Assert.IsInstanceOfType<SyncResult>(
+                await handler.ExecuteAsync(new SyncCommand(null, null), _timeout.Token), out var report);
+            Assert.Contains(
+                line => line.Contains("already syncing", StringComparison.Ordinal), report.Lines);
+        }
+        finally
+        {
+            release.SetResult();
+        }
+    }
+
     private async Task<ServiceRuntime> StartAsync()
     {
         using var passphrase = Passphrase.Create(

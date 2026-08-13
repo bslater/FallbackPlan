@@ -886,7 +886,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     : $"No matching set declares destination '{command.DestinationName}'.");
         }
 
-        foreach (var (_, _, wait) in pairs)
+        foreach (var (set, destination, wait) in pairs)
         {
             if (wait is null)
             {
@@ -899,8 +899,13 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                // A sync that faulted unexpectedly still gets its row read
-                // below; the ledger is the report's single source of truth.
+                // A sync that faulted past FanOut's own handlers never wrote
+                // its row — and the report below reads the ledger, so an
+                // unrecorded fault would replay the LAST outcome as if it
+                // were this one's. Record the truth first (FR-DEST-004).
+                runtime.DestinationSync.RecordFailure(
+                    set.Id, destination, DestinationSyncState.Failed, exception.Message,
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             }
         }
 

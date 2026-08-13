@@ -21,6 +21,14 @@ public sealed record ServiceOptions
 
     /// <summary>How often the scheduler evaluates due-ness.</summary>
     public int PollSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Where a job that faults past its own handler is reported. The lane
+    /// worker's catch is the last line of defence, and its old default —
+    /// nowhere — discarded such faults whole; a fan-out that dies of an
+    /// unexpected exception must at least leave a line a human can find.
+    /// </summary>
+    public Action<string, Exception?>? Log { get; init; }
 }
 
 /// <summary>
@@ -65,7 +73,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
-        Queue = new JobScheduler();
+        Queue = new JobScheduler(options.Log);
     }
 
     /// <summary>How this service was started.</summary>

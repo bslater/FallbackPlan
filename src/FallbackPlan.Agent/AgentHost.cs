@@ -287,40 +287,74 @@ public static class AgentHost
             }
         }
 
-        // `retention [--apply]` runs one pass per configured set
-        // (architecture 07): the mandatory dry-run report either way,
-        // tombstones and the grace-expired sweep only with --apply — through
-        // the same service surface a console uses, so the writer lane
-        // serialises it against anything else that writes (FR-GC-005/008).
-        if (args[0] == "retention")
+        // A one-shot verb that speaks the service surface: its own runtime
+        // (taking the writer role for its duration), one command, the lines
+        // printed. The expected start-up refusals — a running service holds
+        // the role, an archive refuses to open, a wrong passphrase — are
+        // rendered as errors here, exactly as the `run` verb renders them; an
+        // unhandled stack trace is never the answer to a held lock.
+        async Task<int> ServiceVerbAsync(
+            Api.ServiceCommand command, Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
         {
-            using var retentionPassphrase = Passphrase.Create(passphraseValue);
-            await using var retentionRuntime = await ServiceRuntime.StartAsync(
-                new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
-                retentionPassphrase, cancellationToken).ConfigureAwait(false);
-
-            var handler = new ServiceCommandHandler(retentionRuntime, RemoteBindingState.Off);
-            var result = await handler.ExecuteAsync(
-                new Api.RetentionCommand(args.Contains("--apply")), cancellationToken).ConfigureAwait(false);
-
-            switch (result)
+            try
             {
-                case Api.RetentionResult report:
-                    foreach (var line in report.Lines)
+                using var verbPassphrase = Passphrase.Create(passphraseValue);
+                await using var verbRuntime = await ServiceRuntime.StartAsync(
+                    new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                    verbPassphrase, cancellationToken).ConfigureAwait(false);
+
+                var handler = new ServiceCommandHandler(verbRuntime, RemoteBindingState.Off);
+                var result = await handler.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+
+                if (reportLines(result) is { } lines)
+                {
+                    foreach (var line in lines)
                     {
                         output.WriteLine(line);
                     }
 
                     return 0;
+                }
 
-                case Api.ServiceError failure:
+                if (result is Api.ServiceError failure)
+                {
                     error.WriteLine($"error: {failure.Message}");
                     return 2;
+                }
 
-                default:
-                    error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
-                    return 2;
+                error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
+                return 2;
             }
+            catch (ClientStateException exception)
+            {
+                // A running service, or a CLI holding the writer role, is
+                // refused by name (FR-SVC-002) — the command surface of that
+                // service is the way in while it runs.
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
+            catch (RepositoryOpenException exception)
+            {
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
+            catch (KeyUnwrapFailedException)
+            {
+                error.WriteLine("error: the passphrase does not open this repository.");
+                return 1;
+            }
+        }
+
+        // `retention [--apply]` runs one pass per configured set
+        // (architecture 07): the mandatory dry-run report either way,
+        // tombstones, sweep and trim only with --apply — through the same
+        // service surface a console uses, so the writer lane serialises it
+        // against anything else that writes (FR-GC-005/008).
+        if (args[0] == "retention")
+        {
+            return await ServiceVerbAsync(
+                new Api.RetentionCommand(args.Contains("--apply")),
+                result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }
 
         // `sync [--set] [--destination]` converges declared destinations now,
@@ -329,33 +363,9 @@ public static class AgentHost
         // is read from the refreshed sync ledger.
         if (args[0] == "sync")
         {
-            using var syncPassphrase = Passphrase.Create(passphraseValue);
-            await using var syncRuntime = await ServiceRuntime.StartAsync(
-                new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
-                syncPassphrase, cancellationToken).ConfigureAwait(false);
-
-            var handler = new ServiceCommandHandler(syncRuntime, RemoteBindingState.Off);
-            var result = await handler.ExecuteAsync(
-                new Api.SyncCommand(Get("--set"), Get("--destination")), cancellationToken).ConfigureAwait(false);
-
-            switch (result)
-            {
-                case Api.SyncResult report:
-                    foreach (var line in report.Lines)
-                    {
-                        output.WriteLine(line);
-                    }
-
-                    return 0;
-
-                case Api.ServiceError failure:
-                    error.WriteLine($"error: {failure.Message}");
-                    return 2;
-
-                default:
-                    error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
-                    return 2;
-            }
+            return await ServiceVerbAsync(
+                new Api.SyncCommand(Get("--set"), Get("--destination")),
+                result => (result as Api.SyncResult)?.Lines).ConfigureAwait(false);
         }
 
         // The remote binding is off unless the operator names an interface to
@@ -409,6 +419,8 @@ public static class AgentHost
             ArchivesRoot = archivesRoot!,
             StateDirectory = stateDirectory,
             PollSeconds = pollSeconds,
+            Log = (message, exception) => output.WriteLine(
+                $"{DateTimeOffset.Now:u}  {message}{(exception is null ? string.Empty : $": {exception.Message}")}"),
         };
 
         try
