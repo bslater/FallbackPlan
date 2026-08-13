@@ -65,7 +65,15 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _readerLane = new();
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _transferLane = new();
     private readonly Dictionary<string, CancellationTokenSource> _running = [];
-    private readonly SemaphoreSlim _pending = new(0);
+
+    // One signal per lane, not one shared: with a shared semaphore, a token
+    // released for a busy lane could only be consumed by the OTHER lanes'
+    // workers, which handed it back and re-waited at thread-pool speed for
+    // the whole duration of the running job — a core burnt for the length
+    // of a multi-hour transfer with a second one queued.
+    private readonly SemaphoreSlim _writerPending = new(0);
+    private readonly SemaphoreSlim _readerPending = new(0);
+    private readonly SemaphoreSlim _transferPending = new(0);
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task[] _workers;
@@ -117,9 +125,10 @@ public sealed class JobScheduler : IAsyncDisposable
 
     /// <summary>
     /// Queues a job. A job whose identity is already queued or running is
-    /// refused — the coalescing rule: one pending sync per
-    /// <c>(set, destination)</c> means a slow destination accumulates one
-    /// catch-up, not a backlog (ADR-0029 §4 amendment).
+    /// refused outright — the coalescing rule (ADR-0029 §4 amendment): the
+    /// duplicate is dropped, not queued behind, and the catch-up comes from
+    /// the next scheduler pass re-evaluating the pair, so a slow destination
+    /// faces one retry stream rather than a backlog.
     /// </summary>
     /// <param name="job">The work.</param>
     /// <returns><see langword="true"/> when queued; <see langword="false"/> when the identity is already active.</returns>
@@ -147,7 +156,7 @@ public sealed class JobScheduler : IAsyncDisposable
             _running[job.JobId] = new CancellationTokenSource();
         }
 
-        _pending.Release();
+        Pending(job.Lane).Release();
         return true;
     }
 
@@ -186,7 +195,9 @@ public sealed class JobScheduler : IAsyncDisposable
         }
 
         // Wake every worker so each observes the stop.
-        _pending.Release(_workers.Length);
+        _writerPending.Release();
+        _readerPending.Release();
+        _transferPending.Release();
 
         try
         {
@@ -207,9 +218,18 @@ public sealed class JobScheduler : IAsyncDisposable
             _running.Clear();
         }
 
-        _pending.Dispose();
+        _writerPending.Dispose();
+        _readerPending.Dispose();
+        _transferPending.Dispose();
         _stopping.Dispose();
     }
+
+    private SemaphoreSlim Pending(JobLane lane) => lane switch
+    {
+        JobLane.Writer => _writerPending,
+        JobLane.Reader => _readerPending,
+        _ => _transferPending,
+    };
 
     private async Task PumpAsync(JobLane lane)
     {
@@ -217,7 +237,7 @@ public sealed class JobScheduler : IAsyncDisposable
         {
             try
             {
-                await _pending.WaitAsync(_stopping.Token).ConfigureAwait(false);
+                await Pending(lane).WaitAsync(_stopping.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -226,10 +246,9 @@ public sealed class JobScheduler : IAsyncDisposable
 
             if (!TryDequeue(lane, out var job, out var cancellation))
             {
-                // The signal belonged to the other lane. Hand it back so that
-                // lane's worker still sees it.
-                _pending.Release();
-                await Task.Yield();
+                // A token with no job behind it — the queue was drained by
+                // disposal. Nothing to hand anywhere: each lane's tokens are
+                // its own.
                 continue;
             }
 

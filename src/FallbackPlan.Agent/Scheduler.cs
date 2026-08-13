@@ -110,7 +110,26 @@ public static class Scheduler
             }
         }
 
-        await Task.WhenAll(syncs).ConfigureAwait(false);
+        // The wait honours shutdown: a stop signal mid-transfer must reach
+        // the runtime's disposal — which is what cancels the jobs — rather
+        // than sit behind an hours-long fan-out until the service manager
+        // gives up and kills the process.
+        try
+        {
+            await Task.WhenAll(syncs).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The syncs themselves resume on the next pass; each object
+            // committed whole or not at all.
+        }
+        catch (Exception)
+        {
+            // A sync that faulted past its own handlers is the lane worker's
+            // to log and the ledger's to carry — the pass only synchronises,
+            // and the next pass retries the pair under back-off. One faulted
+            // destination must never take the scheduler loop down.
+        }
 
         return new AgentPassResult(outcomes);
     }
