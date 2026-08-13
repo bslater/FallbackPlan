@@ -401,86 +401,75 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // referenced blobs are probed too (FR-RST-003).
         using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
         using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(archive.Repository.Keys.ContentIdKey);
+        using var metaReaders = new MetaReaderCache();
         var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
-        var metaReaders = new Dictionary<ObjectKey, Repository.Packing.BlobReader?>();
         var missing = new List<string>();
 
-        try
+        foreach (var item in plan.Items)
         {
-            foreach (var item in plan.Items)
+            if (item.Kind == EntryKind.DirectoryPlaceholder)
             {
-                if (item.Kind == EntryKind.DirectoryPlaceholder)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
+            if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
+            {
+                missing.Add(item.Path);
+                continue;
+            }
+
+            if (!blobPresent.TryGetValue(location.BlobId, out var present))
+            {
+                var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
+                present =
+                    await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
+                    || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
+                blobPresent[location.BlobId] = present;
+            }
+
+            if (!present)
+            {
+                missing.Add(item.Path);
+                continue;
+            }
+
+            // A manifest that is present but will not read is damage, not
+            // absence — verify's business, and nothing this plan can name
+            // segments from.
+            var manifest = await ReadManifestAsync(
+                archive, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                .ConfigureAwait(false);
+            if (manifest is null)
+            {
+                continue;
+            }
+
+            var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
+                .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
+            foreach (var referenced in references)
+            {
+                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation)
                 {
                     missing.Add(item.Path);
-                    continue;
+                    break;
                 }
 
-                if (!blobPresent.TryGetValue(location.BlobId, out var present))
+                if (!blobPresent.TryGetValue(segmentLocation.BlobId, out var segmentPresent))
                 {
-                    var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
-                    present =
-                        await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
-                        || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
-                    blobPresent[location.BlobId] = present;
+                    var segmentBlobKey = segmentLocation.StoreBlobKey ?? keyDeriver.Derive(segmentLocation.BlobId);
+                    segmentPresent =
+                        await BlobExistsAsync(archive, BlobClass.Data, segmentBlobKey, cancellationToken).ConfigureAwait(false)
+                        || await BlobExistsAsync(archive, BlobClass.Metadata, segmentBlobKey, cancellationToken).ConfigureAwait(false);
+                    blobPresent[segmentLocation.BlobId] = segmentPresent;
                 }
 
-                if (!present)
+                if (!segmentPresent)
                 {
                     missing.Add(item.Path);
-                    continue;
-                }
-
-                // A manifest that is present but will not read is damage, not
-                // absence — verify's business, and nothing this plan can name
-                // segments from.
-                var manifest = await ReadManifestAsync(
-                    archive, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
-                    .ConfigureAwait(false);
-                if (manifest is null)
-                {
-                    continue;
-                }
-
-                var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
-                    .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
-                foreach (var referenced in references)
-                {
-                    if (catalogue.ResolveLocation(referenced) is not { } segmentLocation)
-                    {
-                        missing.Add(item.Path);
-                        break;
-                    }
-
-                    if (!blobPresent.TryGetValue(segmentLocation.BlobId, out var segmentPresent))
-                    {
-                        var segmentBlobKey = segmentLocation.StoreBlobKey ?? keyDeriver.Derive(segmentLocation.BlobId);
-                        segmentPresent =
-                            await BlobExistsAsync(archive, BlobClass.Data, segmentBlobKey, cancellationToken).ConfigureAwait(false)
-                            || await BlobExistsAsync(archive, BlobClass.Metadata, segmentBlobKey, cancellationToken).ConfigureAwait(false);
-                        blobPresent[segmentLocation.BlobId] = segmentPresent;
-                    }
-
-                    if (!segmentPresent)
-                    {
-                        missing.Add(item.Path);
-                        break;
-                    }
+                    break;
                 }
             }
         }
-        finally
-        {
-            foreach (var reader in metaReaders.Values)
-            {
-                reader?.Dispose();
-            }
-        }
-
         return new RestorePlanResult(
             plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
             (long)plan.SpaceEstimateBytes,
@@ -489,7 +478,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
     /// <summary>
     /// Reads one file-version manifest through its meta blob's authenticated
-    /// footer — the plan-side targeted read, memoized per blob because a
+    /// footer — the plan-side targeted read, cached per blob because a
     /// snapshot's manifests cluster in a few metadata blobs.
     /// </summary>
     private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
@@ -498,14 +487,15 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         Repository.Catalogue.ResolvedLocation location,
         Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
         Repository.Crypto.ObjectIdDeriver objectIdDeriver,
-        Dictionary<ObjectKey, Repository.Packing.BlobReader?> metaReaders,
+        MetaReaderCache metaReaders,
         CancellationToken cancellationToken)
     {
         var storeKey = Repository.Packing.BlobStoreKeys.ForBlob(
             BlobClass.Metadata, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId));
 
-        if (!metaReaders.TryGetValue(storeKey, out var reader))
+        if (!metaReaders.TryGet(storeKey, out var cached))
         {
+            Repository.Packing.BlobReader? reader;
             try
             {
                 var metadata = await archive.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
@@ -521,38 +511,98 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 reader = null;
             }
 
-            metaReaders[storeKey] = reader;
+            cached = metaReaders.Add(storeKey, reader);
         }
 
-        if (reader is null)
+        if (cached is null || !cached.Manifests.TryGetValue(objectId, out var located))
         {
             return null;
         }
 
-        foreach (var entry in reader.RecordTable)
+        var read = await cached.Reader.ReadRecordAsync(located, cancellationToken).ConfigureAwait(false);
+        if (read.Outcome != Repository.Packing.RecordReadOutcome.Ok || read.Plaintext is null)
         {
-            if (entry.ObjectId != objectId || entry.ObjectType != Domain.ObjectType.FileVersionManifest)
-            {
-                continue;
-            }
-
-            var read = await reader.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
-            if (read.Outcome != Repository.Packing.RecordReadOutcome.Ok || read.Plaintext is null)
-            {
-                return null;
-            }
-
-            try
-            {
-                return Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext);
-            }
-            catch (FormatException)
-            {
-                return null;
-            }
+            return null;
         }
 
-        return null;
+        try
+        {
+            return Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The plan probe's open meta-blob readers: memoized, because a
+    /// snapshot's manifests cluster in a few metadata blobs — and BOUNDED,
+    /// because a whole-snapshot plan can touch as many metadata blobs as the
+    /// repository holds, and plan memory must not scale with repository size
+    /// (NFR-PERF-001). Each reader carries an object-id index over its
+    /// manifest records, so the per-item lookup is a dictionary hit rather
+    /// than a scan of the blob's whole record table.
+    /// </summary>
+    private sealed class MetaReaderCache : IDisposable
+    {
+        private const int Capacity = 32;
+
+        private readonly Dictionary<ObjectKey, Cached?> _entries = [];
+        private readonly Queue<ObjectKey> _openOrder = new();
+
+        /// <summary>One open reader and its manifest index.</summary>
+        public sealed record Cached(
+            Repository.Packing.BlobReader Reader,
+            IReadOnlyDictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry> Manifests);
+
+        /// <summary>Looks a blob up; a null <paramref name="cached"/> with a true return is a remembered unreadable blob.</summary>
+        public bool TryGet(ObjectKey key, out Cached? cached) => _entries.TryGetValue(key, out cached);
+
+        /// <summary>Caches a freshly opened reader (or the fact that the blob would not open).</summary>
+        public Cached? Add(ObjectKey key, Repository.Packing.BlobReader? reader)
+        {
+            if (reader is null)
+            {
+                // Negative entries are a key and a null — never worth evicting.
+                _entries[key] = null;
+                return null;
+            }
+
+            if (_openOrder.Count >= Capacity)
+            {
+                var evicted = _openOrder.Dequeue();
+                if (_entries.Remove(evicted, out var old))
+                {
+                    old?.Reader.Dispose();
+                }
+            }
+
+            var manifests = new Dictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry>();
+            foreach (var entry in reader.RecordTable)
+            {
+                if (entry.ObjectType == Domain.ObjectType.FileVersionManifest)
+                {
+                    manifests.TryAdd(entry.ObjectId, entry);
+                }
+            }
+
+            var cached = new Cached(reader, manifests);
+            _entries[key] = cached;
+            _openOrder.Enqueue(key);
+            return cached;
+        }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            foreach (var cached in _entries.Values)
+            {
+                cached?.Reader.Dispose();
+            }
+
+            _entries.Clear();
+        }
     }
 
     private static async ValueTask<bool> BlobExistsAsync(
