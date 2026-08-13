@@ -303,13 +303,20 @@ def main() -> int:
     # A cell may both name a class and disclaim it — "measured by X, but the
     # figure is stated against a machine none of it ran on". The marker wins:
     # counting those as tested is exactly the flattery this column had before.
-    tested = sum(
-        1
-        for line in traceability.splitlines()
-        if ROW_PATTERN.match(line)
-        and "`" in line.split("|")[4]
-        and not UNTESTED_PATTERN.search(line.split("|")[4])
-    )
+    # And the count is of REQUIREMENTS, not rows: a row like FR-KIT-001..006
+    # carries six of them, and counting it as one made the summary read 94/161
+    # when 134 requirements were actually traced — rows against requirements
+    # is apples against oranges.
+    tested_ids: set[str] = set()
+    for line in traceability.splitlines():
+        match = ROW_PATTERN.match(line)
+        if (
+            match
+            and "`" in line.split("|")[4]
+            and not UNTESTED_PATTERN.search(line.split("|")[4])
+        ):
+            tested_ids |= traced_ids(match.group(1))
+    tested = len(tested_ids & defined_set)
 
     print(f"requirements defined : {len(defined)}")
     print(f"traceability tested  : {tested}/{len(defined_set)}")

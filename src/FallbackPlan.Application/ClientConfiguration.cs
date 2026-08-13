@@ -29,7 +29,7 @@ public sealed record BackupSetConfiguration
     [JsonPropertyName("exclude_rules")]
     public IReadOnlyList<string> ExcludeRules { get; init; } = [];
 
-    /// <summary>Schedule placeholder — semantics land with the Agent (phase-1 push 2).</summary>
+    /// <summary>The set's schedule, evaluated by the scheduler's due-ness pass (ADR-0027 §1); null means manual-only.</summary>
     [JsonPropertyName("schedule")]
     public string? Schedule { get; init; }
 

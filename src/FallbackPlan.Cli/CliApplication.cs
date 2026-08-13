@@ -86,7 +86,8 @@ public static class CliApplication
             Description = "Fingerprint of the pinned service to expect when using --connect (the key it was paired to must answer).",
         };
 
-        var root = new RootCommand("FallbackPlan low-level repository tooling (phase 0)");
+        var root = new RootCommand(
+            "FallbackPlan — encrypted backup: repository tooling, backup and restore, and the console for a running service");
 
         Command WithSession(Command command)
         {

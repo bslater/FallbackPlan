@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.10, §8.1–8.2 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
 
-**Built:** Publication yes; the collector this section also constrains does not exist — see [implementation status](../implementation-status.md).
+**Built:** Publication yes; the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead — see [implementation status](../implementation-status.md).
 
 ---
 

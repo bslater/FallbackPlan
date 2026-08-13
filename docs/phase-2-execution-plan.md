@@ -207,6 +207,8 @@ restated here with the test that will prove each:
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
 | An unpaired remote client is refused, and a substituted identity refused rather than prompted | `Hosts.Tests/RemoteBindingTests` — an unpaired console dialling a real socket is refused `not_paired` while the local binding still answers; `Protocol.Tests/PeerWireTests` proves `identity_changed` over the wire and the man-in-the-middle relay caught by channel binding |
 | A restore commanded remotely writes on the service's machine, no plaintext crossing | `Hosts.Tests/RemoteBindingTests` — a paired `RemoteServiceClient` commands a restore; the files land under the service-side path and the console receives counts, outcome and a path string, never content |
+| *(peer criterion)* No relay required on a LAN | **Unproven either way** — peers dial declared endpoints; no relay exists and none is needed on a routable LAN, but nothing exercises discovery or NAT traversal. Deferred with LAN discovery. |
+| *(peer criterion)* Multi-day disconnection and resumption | **Proven at pass scale, not soak scale** — an offline destination is recorded, retried under back-off, and converges with no command when it returns (`Repository.Tests/EndToEnd/AgentPassTests`, `Hosts.Tests/PeerReplicationTests`); the resumption mechanics carry any gap length because each object commits whole. The literal multi-day soak has not been run. |
 
 ### What is not met, said plainly
 
@@ -309,9 +311,10 @@ what a paired console may *do* — whether restored content may stream to it, an
 whether its actions are attributable to a person. Neither gates who it is, so
 the identity and session layers can be built while they stay open.
 
-Still owed before peer-to-peer replication itself: peer-protocol documents 03
-(replication), 04 (verification) and 05 (quotas). Their behaviour is fixed in
-architecture 09 §1, §5 and §6; what is missing is the wire encoding.
+Of the peer-protocol documents this once owed — 03 (replication), 04
+(verification) and 05 (quotas) — 03 and 05 are since written and implemented,
+and 06 (retention instructions) landed beside them. Only 04 remains: its
+behaviour is fixed in architecture 09 §5; what is missing is the wire encoding.
 
 ### 2. The proof debt the pipeline integrity review left on the table
 
