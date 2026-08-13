@@ -301,15 +301,103 @@ public sealed class ApplicationServiceTests : IDisposable
     [TestMethod]
     public void BackupSetStatus_Verified_CarriesCoverageAndAgeRatherThanABareTick()
     {
-        var detail = new VerificationDetail(Coverage: 0.35, VerifiedAtUnixMilliseconds: 1_722_500_000_000);
-        var verified = StatusDeriver.Derive(HealthyInputs() with { LastVerification = detail });
+        // Verified is earned per destination (peer-protocol 04): in sync,
+        // off-domain, and a proof covering what the sync delivered. The
+        // claim carries the pass's real coverage fraction and its date —
+        // never a bare tick (10 §1.2, FR-VER-003).
+        var verified = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
 
         Assert.AreEqual(ProtectionState.Verified, verified.State);
-        Assert.AreEqual(detail, verified.Verification);
+        Assert.AreEqual(new VerificationDetail(0.35, 1_722_500_000_000), verified.Verification);
 
-        // Without a verification record the state is Protected, not an
+        // Without a verification stamp the state is Protected, not an
         // unverified "verified" (10 §1.2).
         Assert.AreEqual(ProtectionState.Protected, StatusDeriver.Derive(HealthyInputs()).State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerificationStampOlderThanTheSync_FallsBackToProtected()
+    {
+        // A later sync ran unverified — an older peer build, say. The stamp
+        // went stale, not wrong: the destination is still protected, and
+        // "verified" waits for a proof covering the newer delivery.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 5,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerifiedStampOnAFailingDestination_DoesNotEarnVerified()
+    {
+        // The destination proved bytes once, then failed — the roll-up says
+        // Degraded, and the old claim rides along as a dated fact rather
+        // than being erased or promoted.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(sync: DestinationSyncState.Failed) with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+        Assert.IsNotNull(status.Verification, "the dated claim is carried, never invented into Verified");
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerifiedStampInsideTheSourceFailureDomain_CapsAtCaptured()
+    {
+        // PT-8 outranks verification: proving bytes on the source's own disk
+        // proves nothing about surviving that disk.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(sameDomain: true) with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
     }
 
     [TestMethod]

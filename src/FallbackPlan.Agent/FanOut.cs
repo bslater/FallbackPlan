@@ -249,32 +249,33 @@ public static class FanOut
             // every key listed here is carried by the push that follows, so a
             // failed proof afterwards can only mean the destination's copy is
             // wrong — never that the sample raced a publication.
-            var samples = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
+            var plan = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
                 ? await VerificationSampler.SampleAsync(
                     archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
                     .ConfigureAwait(false)
-                : [];
+                : new VerificationSampler.SamplePlan([], 0);
 
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (samples.Count > 0)
+            if (plan.Samples.Count > 0)
             {
                 // Challenges ride after the acknowledgement and after any
                 // retention exchange (peer-protocol 04 §1): what this proves
                 // is what the session leaves behind, not what it deletes.
                 var verification = await ReplicationInitiator.ChallengeAsync(
-                    archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, samples,
+                    archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, plan.Samples,
                     cancellationToken).ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
-                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                    RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
                     return;
                 }
 
                 ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
-                ledger.RecordVerification(set.Id, destination.Name, verification.Passed, syncedSequence, nowMs);
+                ledger.RecordVerification(
+                    set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
                 return;
             }
 
@@ -428,7 +429,7 @@ public static class FanOut
             // itself: everything sampled is carried by the copy below, so a
             // mismatch afterwards is the replica's fault, never a race with a
             // publication that had not crossed yet.
-            var samples = await VerificationSampler.SampleAsync(
+            var plan = await VerificationSampler.SampleAsync(
                 archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -446,22 +447,23 @@ public static class FanOut
                 copied = outcome.Copied;
             }
 
-            if (samples.Count > 0)
+            if (plan.Samples.Count > 0)
             {
                 // The local twin of the peer challenge (peer-protocol 04):
                 // both destination kinds earn "verified" from bytes read back
                 // off the destination's own disk, never from a copy having
                 // reported success (FR-VER-001).
-                var verification = await VerifyReplicaAsync(archive.Store, replica, samples, cancellationToken)
+                var verification = await VerifyReplicaAsync(archive.Store, replica, plan.Samples, cancellationToken)
                     .ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
-                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                    RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
                     return;
                 }
 
                 ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
-                ledger.RecordVerification(set.Id, destination.Name, verification.Passed, syncedSequence, nowMs);
+                ledger.RecordVerification(
+                    set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
                 return;
             }
 

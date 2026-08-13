@@ -27,6 +27,14 @@ internal static class VerificationSampler
     private const uint PreferredLength = 4096;
 
     /// <summary>
+    /// What one pass will challenge, and how much it could have: the
+    /// population is the coverage denominator status reports (FR-VER-003).
+    /// </summary>
+    /// <param name="Samples">The keys and ranges to challenge.</param>
+    /// <param name="Population">Objects that were eligible when the sample was drawn.</param>
+    public sealed record SamplePlan(IReadOnlyList<ReplicationInitiator.VerificationSample> Samples, int Population);
+
+    /// <summary>
     /// Draws up to <paramref name="budget"/> samples from the source listing.
     /// </summary>
     /// <param name="source">The staging archive's store.</param>
@@ -40,8 +48,8 @@ internal static class VerificationSampler
     /// </param>
     /// <param name="budget">The most samples to draw.</param>
     /// <param name="cancellationToken">Cancels the listing.</param>
-    /// <returns>The samples, at most <paramref name="budget"/>.</returns>
-    public static async Task<IReadOnlyList<ReplicationInitiator.VerificationSample>> SampleAsync(
+    /// <returns>The samples — at most <paramref name="budget"/> — with the eligible population.</returns>
+    public static async Task<SamplePlan> SampleAsync(
         IObjectStore source,
         Func<string, bool>? keeps,
         string? newestSnapshotKey,
@@ -92,7 +100,7 @@ internal static class VerificationSampler
             reservoir.Insert(0, newest);
         }
 
-        return reservoir;
+        return new SamplePlan(reservoir, seen + (newest is null ? 0 : 1));
     }
 
     /// <summary>A random range inside an object of the given length.</summary>

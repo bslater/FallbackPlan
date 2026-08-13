@@ -1147,6 +1147,11 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 SameFailureDomain = SharesSourceFailureDomain(set, destination),
                 LastSuccessAt = record?.LastSuccessAt,
                 Detail = record?.LastError,
+                SyncedSequence = record?.SyncedSequence ?? 0,
+                VerifiedAt = record?.VerifiedAt,
+                VerifiedSequence = record?.VerifiedSequence ?? 0,
+                VerifiedObjects = record?.VerifiedObjects ?? 0,
+                VerifiedPopulation = record?.VerifiedPopulation ?? 0,
             });
             rows.Add(new DestinationStatusDescriptor(
                 destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt, record?.LastError));

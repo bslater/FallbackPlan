@@ -87,6 +87,14 @@ public sealed record DestinationSyncRecord
     /// <summary>Ranges the last passed verification proved.</summary>
     [JsonPropertyName("verified_objects")]
     public int VerifiedObjects { get; init; }
+
+    /// <summary>
+    /// How many objects were eligible when that sample was drawn — the
+    /// denominator that turns <see cref="VerifiedObjects"/> into the coverage
+    /// fraction status reports (FR-VER-003).
+    /// </summary>
+    [JsonPropertyName("verified_population")]
+    public int VerifiedPopulation { get; init; }
 }
 
 /// <summary>
@@ -194,6 +202,7 @@ public sealed class DestinationSyncStore
             VerifiedAt = previous?.VerifiedAt,
             VerifiedSequence = previous?.VerifiedSequence ?? 0,
             VerifiedObjects = previous?.VerifiedObjects ?? 0,
+            VerifiedPopulation = previous?.VerifiedPopulation ?? 0,
         });
     }
 
@@ -206,10 +215,12 @@ public sealed class DestinationSyncStore
     /// <param name="setId">The backup set.</param>
     /// <param name="destination">The destination's declared name.</param>
     /// <param name="objects">Ranges the pass proved.</param>
+    /// <param name="population">Objects eligible when the sample was drawn — the coverage denominator.</param>
     /// <param name="verifiedSequence">The highest publication sequence the pass's sample covered.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
     public DestinationSyncRecord RecordVerification(
-        string setId, string destination, int objects, ulong verifiedSequence, ulong nowUnixMilliseconds)
+        string setId, string destination, int objects, int population, ulong verifiedSequence,
+        ulong nowUnixMilliseconds)
     {
         var previous = Find(setId, destination);
         return Upsert(new DestinationSyncRecord
@@ -226,6 +237,7 @@ public sealed class DestinationSyncStore
             VerifiedAt = nowUnixMilliseconds,
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
+            VerifiedPopulation = population,
         });
     }
 
@@ -250,6 +262,7 @@ public sealed class DestinationSyncStore
             VerifiedAt = previous?.VerifiedAt,
             VerifiedSequence = previous?.VerifiedSequence ?? 0,
             VerifiedObjects = previous?.VerifiedObjects ?? 0,
+            VerifiedPopulation = previous?.VerifiedPopulation ?? 0,
         });
     }
 

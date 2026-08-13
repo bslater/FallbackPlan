@@ -34,6 +34,32 @@ public sealed record DestinationStatusInput
 
     /// <summary>What the last failure said, for the warning to repeat verbatim.</summary>
     public string? Detail { get; init; }
+
+    /// <summary>
+    /// The highest publication sequence the last successful sync delivered —
+    /// what the destination claims to hold (FR-GC-009's currency).
+    /// </summary>
+    public ulong SyncedSequence { get; init; }
+
+    /// <summary>
+    /// When a verification pass last proved sampled bytes at this destination
+    /// (peer-protocol 04); null when never. The age half of FR-VER-003.
+    /// </summary>
+    public ulong? VerifiedAt { get; init; }
+
+    /// <summary>
+    /// The highest publication sequence a passed verification covered. The
+    /// destination's copy is <b>verified current</b> only while this is at
+    /// least <see cref="SyncedSequence"/> — a later unverified sync makes the
+    /// stamp stale, never wrong.
+    /// </summary>
+    public ulong VerifiedSequence { get; init; }
+
+    /// <summary>Ranges the last passed verification proved — the coverage numerator.</summary>
+    public int VerifiedObjects { get; init; }
+
+    /// <summary>Objects eligible when that sample was drawn — the coverage denominator.</summary>
+    public int VerifiedPopulation { get; init; }
 }
 
 /// <summary>
@@ -59,9 +85,6 @@ public sealed record StatusInputs
 
     /// <summary>Whether a damage report names required objects with no readable copy.</summary>
     public required bool RequiredObjectsMissing { get; init; }
-
-    /// <summary>The last recorded verification run, when any.</summary>
-    public VerificationDetail? LastVerification { get; init; }
 }
 
 /// <summary>
@@ -93,13 +116,22 @@ public static class StatusDeriver
             return new BackupSetStatus(ProtectionState.NeverBackedUp, null, ["No snapshot has ever committed for this set."]);
         }
 
+        // The most recent proof of bytes at any destination, whatever state
+        // that destination is in NOW: a claim is a date and a coverage, and a
+        // later failure dates it rather than erases it (FR-VER-003).
+        var latestClaim = inputs.Destinations
+            .Where(destination => destination.VerifiedAt is not null)
+            .OrderByDescending(destination => destination.VerifiedAt!.Value)
+            .Select(DetailOf)
+            .FirstOrDefault();
+
         // Unrecoverable means data is already gone — it outranks
         // everything and is never softened into "a problem" (10 §1.1).
         if (inputs.RequiredObjectsMissing)
         {
             return new BackupSetStatus(
                 ProtectionState.Unrecoverable,
-                inputs.LastVerification,
+                latestClaim,
                 ["Required objects are missing or damaged with no replica able to heal them."]);
         }
 
@@ -111,7 +143,7 @@ public static class StatusDeriver
         if (inputs.DamageFindings > 0)
         {
             warnings.Add($"{inputs.DamageFindings} damage finding(s) are open — run `check`.");
-            return new BackupSetStatus(ProtectionState.Degraded, inputs.LastVerification, warnings);
+            return new BackupSetStatus(ProtectionState.Degraded, latestClaim, warnings);
         }
 
         // The matrix, one row per destination — the truth every roll-up is
@@ -119,6 +151,7 @@ public static class StatusDeriver
         var protectedByAny = false;
         var capturedOnlyByAny = false;
         var supportedButNotInSync = false;
+        DestinationStatusInput? verifiedBy = null;
 
         foreach (var destination in inputs.Destinations)
         {
@@ -126,6 +159,18 @@ public static class StatusDeriver
             {
                 case DestinationSyncState.InSync when !destination.SameFailureDomain:
                     protectedByAny = true;
+
+                    // Verified current: proven bytes at least as new as the
+                    // sync's own claim (peer-protocol 04). A destination whose
+                    // last sync ran unverified — an older peer build, say —
+                    // stays Protected: the stamp goes stale, never wrong.
+                    if (destination.VerifiedAt is not null
+                        && destination.VerifiedSequence >= destination.SyncedSequence
+                        && (verifiedBy is null || destination.VerifiedAt > verifiedBy.VerifiedAt))
+                    {
+                        verifiedBy = destination;
+                    }
+
                     break;
 
                 case DestinationSyncState.InSync:
@@ -150,9 +195,12 @@ public static class StatusDeriver
 
         if (protectedByAny)
         {
-            // Verified only ever appears WITH coverage and age (10 §1.2).
-            return inputs.LastVerification is not null
-                ? new BackupSetStatus(ProtectionState.Verified, inputs.LastVerification, warnings)
+            // Verified only ever appears WITH coverage and age (10 §1.2), and
+            // only from a destination that is in sync, off-domain, and whose
+            // proof covers what the sync delivered — bytes read back off the
+            // destination's own disk, never its word (FR-VER-001).
+            return verifiedBy is not null
+                ? new BackupSetStatus(ProtectionState.Verified, DetailOf(verifiedBy), warnings)
                 : new BackupSetStatus(ProtectionState.Protected, null, warnings);
         }
 
@@ -160,7 +208,7 @@ public static class StatusDeriver
         {
             // A destination that should hold the data does not — recoverable
             // today, and the reason each is not is already in the warnings.
-            return new BackupSetStatus(ProtectionState.Degraded, inputs.LastVerification, warnings);
+            return new BackupSetStatus(ProtectionState.Degraded, latestClaim, warnings);
         }
 
         // What remains: in sync only within the source's failure domain, or
@@ -171,8 +219,15 @@ public static class StatusDeriver
             warnings.Add("No destination holds this set's data yet.");
         }
 
-        return new BackupSetStatus(ProtectionState.Captured, inputs.LastVerification, warnings);
+        return new BackupSetStatus(ProtectionState.Captured, latestClaim, warnings);
     }
+
+    /// <summary>The stamp as the vocabulary carries it: coverage and age, never a tick (10 §1.2).</summary>
+    private static VerificationDetail DetailOf(DestinationStatusInput destination) => new(
+        destination.VerifiedPopulation > 0
+            ? (double)destination.VerifiedObjects / destination.VerifiedPopulation
+            : 0,
+        destination.VerifiedAt!.Value);
 
     private static string Describe(DestinationSyncState state) => state switch
     {

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -57,10 +58,16 @@ public sealed class DestinationVerificationTests : IDisposable
         // responder read off its own disk (04 §2), and both destination
         // kinds earn the identical ledger fact.
         _source.WriteSourceFile("notes.txt", "stamp me remotely");
-        await _source.CreateRepositoryAsync();
-        await _source.BackUpAsync();
         var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
         WritePeerConfiguration(destinationFingerprint);
+
+        // The agent pass captures under the configured set and fans out —
+        // the same path the schedule drives (FR-DEST-002).
+        var run = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var sync = await RunSyncAsync();
         Assert.AreEqual(0, sync.ExitCode, sync.Error);
@@ -72,6 +79,14 @@ public sealed class DestinationVerificationTests : IDisposable
         Assert.AreEqual(record.SyncedSequence, record.VerifiedSequence,
             "what was verified is exactly what the sync claimed to deliver");
         Assert.IsGreaterThanOrEqualTo(1, record.VerifiedObjects, "at least the newest snapshot was proven");
+
+        // The stamp reaches the user: an off-domain, in-sync, proof-covered
+        // destination earns `verified`, rendered with its coverage and age —
+        // never a bare tick (10 §1.2, ADR-0027 §4).
+        var status = await RunStatusAsync();
+        Assert.AreEqual(0, status.ExitCode, status.Error);
+        Assert.Contains("Verified", status.Output, StringComparison.Ordinal);
+        Assert.Contains("% of objects at", status.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -200,6 +215,23 @@ public sealed class DestinationVerificationTests : IDisposable
         AgentHost.RunAsync,
         "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
         "--passphrase-env", _source.PassphraseVariable);
+
+    /// <summary>Runs the CLI `status` verb in direct mode, output captured.</summary>
+    private async Task<(int ExitCode, string Output, string Error)> RunStatusAsync()
+    {
+        var output = new StringWriter(new StringBuilder(), System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(new StringBuilder(), System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await Cli.CliApplication.RunAsync(
+            [
+                "status", "--repo", _source.RepositoryPath,
+                "--passphrase-env", _source.PassphraseVariable, "--state", _source.StateDirectory,
+            ],
+            new System.CommandLine.InvocationConfiguration
+            {
+                Output = output, Error = error, EnableDefaultExceptionHandler = false,
+            });
+        return (exit, output.ToString(), error.ToString());
+    }
 
     /// <summary>Stands up the destination listener with reciprocal pinned grants.</summary>
     private async Task<string> StartDestinationAsync(PeerRole destinationRoleForSource)

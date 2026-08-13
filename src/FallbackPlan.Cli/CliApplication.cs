@@ -1203,7 +1203,10 @@ public static class CliApplication
 
                     foreach (var set in result.Sets)
                     {
-                        output.WriteLine($"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}");
+                        // A verification claim is a coverage and a date, never
+                        // a bare tick (10 §1.2) — rendered wherever it exists.
+                        output.WriteLine(
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}");
                         foreach (var row in set.Destinations)
                         {
                             // The matrix beneath the roll-up (ADR-0028 §8):
@@ -1272,6 +1275,11 @@ public static class CliApplication
                             SameFailureDomain = sameDomain,
                             LastSuccessAt = record?.LastSuccessAt,
                             Detail = record?.LastError,
+                            SyncedSequence = record?.SyncedSequence ?? 0,
+                            VerifiedAt = record?.VerifiedAt,
+                            VerifiedSequence = record?.VerifiedSequence ?? 0,
+                            VerifiedObjects = record?.VerifiedObjects ?? 0,
+                            VerifiedPopulation = record?.VerifiedPopulation ?? 0,
                         });
                     }
 
@@ -1300,7 +1308,8 @@ public static class CliApplication
                             .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
                     }
 
-                    output.WriteLine($"{set.Name,-20} {status.State,-14} last: {lastProtected}  next: {nextRun}");
+                    output.WriteLine(
+                        $"{set.Name,-20} {status.State,-14} last: {lastProtected}  next: {nextRun}{DescribeVerification(status.Verification)}");
                     foreach (var warning in status.Warnings)
                     {
                         output.WriteLine($"{string.Empty,-20} warning: {warning}");
@@ -1314,4 +1323,16 @@ public static class CliApplication
         return await root.Parse(args).InvokeAsync(configuration).ConfigureAwait(false);
 
     }
+
+    /// <summary>
+    /// A verification claim rendered as coverage and age — the only form
+    /// `verified` is allowed to take (10 §1.2) — or nothing when no pass has
+    /// ever proven bytes at a destination.
+    /// </summary>
+    private static string DescribeVerification(FallbackPlan.Domain.Status.VerificationDetail? verification) =>
+        verification is { } detail
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"  verified: {detail.Coverage:P0} of objects at {DateTimeOffset.FromUnixTimeMilliseconds((long)detail.VerifiedAtUnixMilliseconds):yyyy-MM-dd HH:mm}")
+            : string.Empty;
 }
