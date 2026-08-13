@@ -1,6 +1,6 @@
 # FallbackPlan peer protocol — specification
 
-**Protocol version:** 1 (draft) · **Status:** incomplete — verification unwritten; see [Documents](#documents) · **Implemented:** 01, 02, 03's base object exchange, 05's quota enforcement and 06's retention instructions, over a real TLS socket
+**Protocol version:** 1 (draft) · **Status:** all seven documents written; see [Documents](#documents) · **Implemented:** 01, 02, 03's base object exchange, 05's quota enforcement and 06's retention instructions, over a real TLS socket; 04's verification exchange is written ahead of its implementation
 
 ---
 
@@ -27,7 +27,7 @@ It is written to the same standard as the [repository format](../repository-form
 
 ## Documents
 
-This set is **incomplete, and the table says which parts**. A missing document is stated here rather than discovered by an implementer halfway through, because the alternative — drafting the remaining three thinly so the set *looks* whole — is how a specification becomes something nobody can build from.
+All seven documents are now written; the table says which are also implemented. The set spent its first months deliberately incomplete, with the missing parts stated here rather than discovered by an implementer halfway through — the alternative, drafting the remainder thinly so the set *looked* whole, is how a specification becomes something nobody can build from.
 
 | # | Document | Covers | Status |
 |---|----------|--------|--------|
@@ -35,7 +35,7 @@ This set is **incomplete, and the table says which parts**. A missing document i
 | 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony with negotiated storage roles, pinning, grants and terms | Written; implemented |
 | 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written; implemented |
 | 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
-| 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |
+| 04 | [Verification](04-verification.md) | The keyed random-range challenge and its sampling policy | Written |
 | 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
 | 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
 
@@ -45,7 +45,7 @@ Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-
 
 Document 03 is now written, and its base object exchange is implemented: a source pushes a repository's objects to a paired destination over an Open session, the destination stores the ciphertext it cannot read, and the transfer is resumable because each object commits whole or not at all. `FallbackPlan.Hosts.Tests` proves it end to end over loopback — a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica. What 03 defers to a later slice is the optimization, not the mechanism: a compact object-set filter (an optional negotiated feature) in place of the explicit inventory, and snapshot-scoped replication in place of the whole-repository scope.
 
-Document 05 is now written and its enforcement implemented: a destination attributes each replica to the peer that offered it, refuses `terms_refused` at the object boundary when the peer's quota would be crossed, refuses `storage_exhausted` when its own storage fails, and announces its current terms in every hello so a source learns a narrowing before the first refusal. Document 04 has its behaviour fixed in architecture already — [09 §5](../../docs/architecture/09-replication-and-peers.md#5-destination-verification) gives the challenge construction and the reasoning behind it — so what is missing there is the wire encoding, not the design.
+Document 05 is now written and its enforcement implemented: a destination attributes each replica to the peer that offered it, refuses `terms_refused` at the object boundary when the peer's quota would be crossed, refuses `storage_exhausted` when its own storage fails, and announces its current terms in every hello so a source learns a narrowing before the first refusal. Document 04 is now written too — the wire encoding of the challenge construction [09 §5](../../docs/architecture/09-replication-and-peers.md#5-destination-verification) fixed in architecture — with its implementation the next slice.
 
 ## Requirement language
 

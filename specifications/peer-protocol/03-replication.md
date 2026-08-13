@@ -140,4 +140,4 @@ Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse
 
 ---
 
-**Previous:** [02 — Session](02-session.md) · **Next:** Verification — [not written](README.md#documents)
+**Previous:** [02 — Session](02-session.md) · **Next:** [04 — Verification](04-verification.md)

@@ -178,6 +178,7 @@ The features defined so far:
 
 | Identifier | Meaning |
 |------------|---------|
+| `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)) |
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
 
@@ -210,6 +211,7 @@ frame = u32(payload_length) ‖ payload
 | 11–255 | Reserved for this specification | — |
 | 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
+| 264–265 | Verification | [04](04-verification.md#4-messages) |
 | 264+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
