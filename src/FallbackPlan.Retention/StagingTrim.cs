@@ -142,7 +142,7 @@ public static class StagingTrim
             .ConfigureAwait(false);
         if (fullUnwalkable.Count > 0)
         {
-            return Nothing("trim: skipped — the staging graph would not walk cleanly");
+            return Nothing("trim: skipped — the staging graph would not walk cleanly (full history)");
         }
 
         var currentBlobKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -153,7 +153,7 @@ public static class StagingTrim
                 .ConfigureAwait(false);
             if (currentUnwalkable.Count > 0)
             {
-                return Nothing("trim: skipped — the staging graph would not walk cleanly");
+                return Nothing("trim: skipped — the staging graph would not walk cleanly (newest snapshot)");
             }
 
             foreach (var blob in reader.Blobs)
@@ -187,7 +187,8 @@ public static class StagingTrim
                 .ConfigureAwait(false);
             if (unwalkable.Count > 0)
             {
-                return Nothing("trim: skipped — the staging graph would not walk cleanly");
+                return Nothing(
+                    $"trim: skipped — the staging graph would not walk cleanly (destination '{reference.Ref}')");
             }
 
             var keys = new HashSet<string>(StringComparer.Ordinal);
@@ -221,12 +222,17 @@ public static class StagingTrim
         // Candidates come from the loaded footers, never the raw listing: a
         // blob the reader had to skip is one nobody can reason about, and it
         // stays until verify names its damage.
+        var unverifiable = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var blob in reader.Blobs)
         {
             var key = blob.StoreKey.Value;
             if (!key.StartsWith("blobs/data/", StringComparison.Ordinal)
                 || currentBlobKeys.Contains(key)
-                || intents.IsCovered(blob.BlobId))
+                || intents.IsCovered(blob.BlobId)
+                // Only HISTORY trims: a blob no surveyed snapshot reaches is
+                // unreferenced debris — the tombstone cycle's business, with
+                // its grace and revalidation, never the trim's direct delete.
+                || !blob.Records.Any(record => fullClosure.Contains(record.ObjectId)))
             {
                 continue;
             }
@@ -236,15 +242,16 @@ public static class StagingTrim
                 .ToList();
             if (entitled.Count == 0)
             {
-                // No destination is entitled to it: unreferenced debris, which
-                // is the tombstone cycle's business, never the trim's.
+                // Reachable, yet no destination keeps it — every policy
+                // dropped its snapshots. Staging keeps it until they expire.
                 continue;
             }
 
             var verified = true;
             foreach (var reference in entitled)
             {
-                verified = verificationFor(reference.Ref) switch
+                var verification = verificationFor(reference.Ref);
+                verified = verification switch
                 {
                     TrimVerification.StoreProbe probe => await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken)
                         .ConfigureAwait(false),
@@ -255,7 +262,6 @@ public static class StagingTrim
                     // actually converged to — vouching for a blob the
                     // destination was instructed to drop.
                     TrimVerification.LedgerClaim => maxPublicationSequence > 0
-                        && blob.Records.Any(record => fullClosure.Contains(record.ObjectId))
                         && syncRecordFor(reference.Ref) is { } record
                         && record.SyncedSequence >= maxPublicationSequence
                         && record.LastSuccessAt is { } lastSuccess
@@ -265,6 +271,11 @@ public static class StagingTrim
 
                 if (!verified)
                 {
+                    if (verification is TrimVerification.Unverifiable)
+                    {
+                        unverifiable.Add(reference.Ref);
+                    }
+
                     break;
                 }
             }
@@ -288,6 +299,11 @@ public static class StagingTrim
         if (heldBack > 0)
         {
             lines.Add($"trim held back: {heldBack} data blob(s) awaiting a verified copy at every destination");
+        }
+
+        foreach (var name in unverifiable)
+        {
+            lines.Add($"trim: destination '{name}' cannot vouch for its copies right now");
         }
 
         return new TrimPlan(eligible, eligibleBytes, heldBack, lines);
@@ -345,8 +361,21 @@ public static class StagingTrim
                 continue;
             }
 
-            var outcome = await store.DeleteAsync(candidate.StoreKey, DeleteConditions.None, cancellationToken)
-                .ConfigureAwait(false);
+            DeleteResult outcome;
+            try
+            {
+                outcome = await store.DeleteAsync(candidate.StoreKey, DeleteConditions.None, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A file the platform will not release right now — Windows
+                // holds a sharing violation over a blob mid-read — stays for
+                // the next pass; one stubborn file must not abort the trim,
+                // let alone the sets still waiting behind this one.
+                continue;
+            }
+
             if (outcome.Outcome == DeleteOutcome.Deleted)
             {
                 deleted++;
@@ -365,8 +394,13 @@ public static class StagingTrim
             var metadata = await replica.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
             return metadata.Metadata is { Length: > 0 };
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Whatever a store's fault looks like — an unplugged drive's
+            // IOException today, a provider's auth or transport failure
+            // later — the answer is the same: this copy cannot be vouched
+            // for, and the fault of one destination must never abort the
+            // whole multi-set retention pass.
             return false;
         }
     }

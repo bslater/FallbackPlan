@@ -200,6 +200,22 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 }
             }
 
+            // Resolved once per destination per set: the verification OBJECT
+            // is stable for the pass, while every probe through it still
+            // asks the store afresh — which is what the execute-time
+            // re-verification depends on.
+            var verifications = new Dictionary<string, Retention.TrimVerification>(StringComparer.Ordinal);
+            Retention.TrimVerification VerificationFor(string name)
+            {
+                if (!verifications.TryGetValue(name, out var verification))
+                {
+                    verification = TrimVerificationFor(name, archive);
+                    verifications[name] = verification;
+                }
+
+                return verification;
+            }
+
             Retention.RetentionReport report;
             try
             {
@@ -209,7 +225,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     set.Retention,
                     set.Destinations,
                     name => runtime.DestinationSync.Find(set.Id, name),
-                    name => TrimVerificationFor(name, archive),
+                    VerificationFor,
                     runtime.Writer,
                     apply,
                     now,

@@ -122,13 +122,138 @@ public sealed class StagingTrimTests : IDisposable
         var store = new LocalFileSystemObjectStore(RepoPath);
 
         // The vault's drive is unplugged: no store to probe, no ledger claim
-        // to trust — nothing may leave staging (FR-GC-009's discipline).
+        // to trust — nothing may leave staging (FR-GC-009's discipline), and
+        // the report names WHO could not vouch, not just how much stayed.
         var report = await RunAsync(store, _ => TrimVerification.None, apply: true, now: Day1.AddDays(2).AddHours(1));
 
         Assert.Contains(
             line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.Contains(
+            line => line.Contains("destination 'vault' cannot vouch", StringComparison.Ordinal), report.Lines);
         Assert.IsFalse(report.Lines.Any(line => line.StartsWith("trimmed:", StringComparison.Ordinal)));
         Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_ABlobNoSurveyedSnapshotReaches_IsTheCollectorsBusinessNotTheTrims()
+    {
+        // Deleting a snapshot object from staging (what the sweep does)
+        // leaves its unique data blob unreachable — debris. A destination
+        // without rules is entitled to everything, and the replica really
+        // holds the blob, but the trim's direct delete must never stand in
+        // for the tombstone cycle's grace and revalidation (FR-GC-006).
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        using (var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None))
+        {
+            var surveyed = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
+            var oldest = surveyed.Snapshots.MinBy(snapshot => snapshot.Fact.PublicationSequence)!;
+            await store.DeleteAsync(oldest.StoreKey, DeleteConditions.None, CancellationToken.None);
+        }
+
+        // Day two's blob is history and trims; day one's is debris and
+        // stays; day three's is the current generation and stays.
+        var report = await RunAsyncWithoutRules(store, now: Day1.AddDays(2).AddHours(1));
+
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 1 historic data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(2, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task Trim_ALivePublicationIntentCoversABlob_HoldsItWhateverTheReplicaSays()
+    {
+        // The single highest-consequence exclusion: an in-flight
+        // publication's blob may already sit at a whole-copy replica, so the
+        // store probe answers yes — and deleting the staging copy would tear
+        // the publication the intent journal exists to protect (ADR-0009).
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+
+        var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        // Fabricate the collector's view: one live intent covering every
+        // data blob in the archive — the shape of a capture mid-flight.
+        var covered = reader.Blobs
+            .Where(blob => blob.StoreKey.Value.StartsWith("blobs/data/", StringComparison.Ordinal))
+            .Select(blob => blob.BlobId)
+            .ToList();
+        var intents = new FallbackPlan.Repository.Index.Journal.IntentSurvey(
+            [
+                new FallbackPlan.Repository.Index.Journal.LiveIntent(
+                    WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
+                    Sequence: 1,
+                    new FallbackPlan.Repository.Index.Journal.JournalPayload.WriteIntent(
+                        Convert.FromHexString(SetId), covered, 3_600_000, 999,
+                        FallbackPlan.Repository.Index.Journal.IntentPurpose.Backup),
+                    IssuedAt: 0,
+                    covered),
+            ],
+            HasUnparseableIntent: false);
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        var plan = await StagingTrim.PlanAsync(
+            store, reader, survey,
+            setPolicy: null,
+            [new SetDestinationReference { Ref = "vault", Retention = new RetentionConfiguration { MinGenerations = 10 } }],
+            VaultVerification,
+            name => sync.Find(SetId, name),
+            intents, Day1.AddDays(2).AddHours(1), CancellationToken.None);
+
+        Assert.IsEmpty(plan.Eligible);
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_AReplicaStoreThatFaults_HoldsTheBlobsInsteadOfAbortingThePass()
+    {
+        // A store fault is not evidence of anything except that nothing can
+        // be vouched for — whatever exception a provider surfaces it as. It
+        // must degrade to held-back, never abort the whole retention pass.
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        var report = await RunAsync(
+            store,
+            _ => TrimVerification.AgainstStore(new ThrowingStore()),
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1));
+
+        Assert.Contains(
+            line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    /// <summary>A provider whose every call surfaces a non-IO fault.</summary>
+    private sealed class ThrowingStore : IObjectStore
+    {
+        public StoreCapabilities Capabilities => new();
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the provider's session expired");
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key, Func<CancellationToken, ValueTask<Stream>> openContent,
+            PutConditions conditions, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the provider's session expired");
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(
+            ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the provider's session expired");
+
+        public ValueTask<OpenReadResult> OpenReadAsync(
+            ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the provider's session expired");
+
+        public ValueTask<DeleteResult> DeleteAsync(
+            ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the provider's session expired");
     }
 
     [TestMethod]
@@ -291,6 +416,25 @@ public sealed class StagingTrimTests : IDisposable
     private TrimVerification VaultVerification(string name) =>
         TrimVerification.AgainstStore(
             new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single()));
+
+    /// <summary>A pass where the vault has NO rules — entitled to everything.</summary>
+    private async Task<RetentionReport> RunAsyncWithoutRules(LocalFileSystemObjectStore store, DateTimeOffset now)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        return await RetentionRunner.RunAsync(
+            store, repository,
+            policy: null,
+            [new SetDestinationReference { Ref = "vault" }],
+            name => sync.Find(SetId, name),
+            VaultVerification,
+            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
+            apply: true,
+            (ulong)now.ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+    }
 
     private async Task<RetentionReport> RunAsync(
         LocalFileSystemObjectStore store,

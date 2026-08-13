@@ -70,22 +70,22 @@ public static class RetentionRunner
         // expiry from staging either. Each override's keep-set is computed
         // over the same facts the set-level selection used.
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
-        var keptByDestination = destinations.ToDictionary(
-            reference => reference.Ref,
-            reference =>
-            {
-                var effective = reference.Retention ?? policy;
-                if (!DestinationConvergence.HasRules(effective))
-                {
-                    return null;
-                }
 
-                return RetentionPlanner
+        // Indexer assignment, not ToDictionary: a duplicated reference —
+        // impossible through validated configuration, but this method is
+        // callable directly — must not escape the command surface as a raw
+        // ArgumentException (NFR-PORT-004).
+        var keptByDestination = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
+        foreach (var reference in destinations)
+        {
+            var effective = reference.Retention ?? policy;
+            keptByDestination[reference.Ref] = !DestinationConvergence.HasRules(effective)
+                ? null
+                : RetentionPlanner
                     .Select(facts, effective!, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds))
                     .Keep.Select(keep => keep.Snapshot.SnapshotId)
                     .ToHashSet(StringComparer.Ordinal);
-            },
-            StringComparer.Ordinal);
+        }
 
         var gate = ReplicationGate.Apply(
             selection.Expire,
