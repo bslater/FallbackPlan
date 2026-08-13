@@ -67,6 +67,26 @@ public sealed record DestinationSyncRecord
     /// </summary>
     [JsonPropertyName("synced_sequence")]
     public ulong SyncedSequence { get; init; }
+
+    /// <summary>
+    /// When a verification pass last proved sampled bytes at this destination,
+    /// Unix milliseconds; null when never verified. Status reports coverage
+    /// and age, never a bare boolean (FR-VER-003).
+    /// </summary>
+    [JsonPropertyName("verified_at")]
+    public ulong? VerifiedAt { get; init; }
+
+    /// <summary>
+    /// The highest publication sequence a passed verification covered — the
+    /// pass sampled a listing that included the snapshot carrying this
+    /// sequence. Monotonic, like <see cref="SyncedSequence"/>.
+    /// </summary>
+    [JsonPropertyName("verified_sequence")]
+    public ulong VerifiedSequence { get; init; }
+
+    /// <summary>Ranges the last passed verification proved.</summary>
+    [JsonPropertyName("verified_objects")]
+    public int VerifiedObjects { get; init; }
 }
 
 /// <summary>
@@ -169,6 +189,43 @@ public sealed class DestinationSyncStore
             ConsecutiveFailures = 0,
             // A later sync never un-holds what an earlier one delivered.
             SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
+            // Verification stamps outlive the sync that earned them: they say
+            // when bytes were last proven, which a newer copy does not undo.
+            VerifiedAt = previous?.VerifiedAt,
+            VerifiedSequence = previous?.VerifiedSequence ?? 0,
+            VerifiedObjects = previous?.VerifiedObjects ?? 0,
+        });
+    }
+
+    /// <summary>
+    /// Records a passed verification: sampled bytes were proven present at
+    /// the destination just now (FR-VER-005's happy half). The failure half
+    /// goes through <see cref="RecordFailure"/> — a failed proof is a sync
+    /// failure, and the stamps here keep saying when bytes were LAST proven.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="objects">Ranges the pass proved.</param>
+    /// <param name="verifiedSequence">The highest publication sequence the pass's sample covered.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordVerification(
+        string setId, string destination, int objects, ulong verifiedSequence, ulong nowUnixMilliseconds)
+    {
+        var previous = Find(setId, destination);
+        return Upsert(new DestinationSyncRecord
+        {
+            SetId = setId,
+            Destination = destination,
+            State = previous?.State ?? DestinationSyncState.InSync,
+            LastAttemptAt = previous?.LastAttemptAt ?? nowUnixMilliseconds,
+            LastSuccessAt = previous?.LastSuccessAt,
+            Objects = previous?.Objects ?? 0,
+            ConsecutiveFailures = previous?.ConsecutiveFailures ?? 0,
+            LastError = previous?.LastError,
+            SyncedSequence = previous?.SyncedSequence ?? 0,
+            VerifiedAt = nowUnixMilliseconds,
+            VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
+            VerifiedObjects = objects,
         });
     }
 
@@ -190,6 +247,9 @@ public sealed class DestinationSyncStore
             ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
             LastError = error,
             SyncedSequence = previous?.SyncedSequence ?? 0,
+            VerifiedAt = previous?.VerifiedAt,
+            VerifiedSequence = previous?.VerifiedSequence ?? 0,
+            VerifiedObjects = previous?.VerifiedObjects ?? 0,
         });
     }
 

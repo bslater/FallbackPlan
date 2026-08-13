@@ -233,7 +233,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
                 var outcome = await ReplicationResponder.ServeAsync(
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
-                    session.Supports(PeerSessionNegotiation.RetentionInstructionFeature), _stopping.Token)
+                    session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token)
                     .ConfigureAwait(false);
 
                 if (outcome.Termination is { } termination)

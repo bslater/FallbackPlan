@@ -138,6 +138,126 @@ internal static class ReplicationInitiator
         }
     }
 
+    /// <summary>One key and range to challenge (peer-protocol 04).</summary>
+    /// <param name="Key">The store key.</param>
+    /// <param name="Offset">The range's byte offset.</param>
+    /// <param name="Length">The range's length.</param>
+    public sealed record VerificationSample(string Key, ulong Offset, uint Length);
+
+    /// <summary>What one challenge run established.</summary>
+    /// <param name="Passed">Samples the destination proved.</param>
+    /// <param name="Failed">Keys the destination could not prove, or proved wrongly.</param>
+    public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed);
+
+    /// <summary>
+    /// Issues keyed random-range challenges after the exchange (peer-protocol
+    /// 04): for each sample, the expected proof is computed from this side's
+    /// own bytes and compared against the destination's answer. A wrong or
+    /// missing proof is a FINDING for the caller to record, never a protocol
+    /// error — the session continues to the next sample.
+    /// </summary>
+    /// <param name="source">The staging archive's store — the ground truth.</param>
+    /// <param name="repositoryId">The repository the keys belong to (16 bytes).</param>
+    /// <param name="stream">The open session stream, post-acknowledgement.</param>
+    /// <param name="samples">What to challenge.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>What was proven and what was not.</returns>
+    public static async Task<VerificationOutcome> ChallengeAsync(
+        IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
+        IReadOnlyList<VerificationSample> samples, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(samples);
+
+        try
+        {
+            var passed = 0;
+            var failed = new List<string>();
+            foreach (var sample in samples)
+            {
+                var expected = await ReadSampleAsync(source, sample, cancellationToken).ConfigureAwait(false);
+                if (expected is null)
+                {
+                    // Staging itself could not read the range — there is no
+                    // ground truth to compare against, so the sample proves
+                    // nothing either way.
+                    continue;
+                }
+
+                var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(
+                    VerificationChallenge.NonceLength);
+                var challengeKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(
+                    VerificationChallenge.ChallengeKeyLength);
+
+                await PeerFrame.WriteAsync(
+                    stream,
+                    new VerificationChallenge(
+                        repositoryId, sample.Key, sample.Offset, sample.Length, nonce, challengeKey),
+                    cancellationToken).ConfigureAwait(false);
+
+                var proof = await ReplicationWire.ReadAsync(
+                    stream, PeerMessageType.VerificationProof, VerificationProof.Read, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var want = RangeChallenge.Compute(
+                    challengeKey, nonce, sample.Key, sample.Offset, sample.Length, expected);
+                if (proof.Held
+                    && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(proof.Proof.Span, want))
+                {
+                    passed++;
+                }
+                else
+                {
+                    failed.Add(sample.Key);
+                }
+            }
+
+            return new VerificationOutcome(passed, failed);
+        }
+        catch (PeerProtocolException exception)
+        {
+            if (!exception.ReceivedFromPeer)
+            {
+                await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
+    private static async Task<byte[]?> ReadSampleAsync(
+        IObjectStore source, VerificationSample sample, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var read = await source.OpenReadAsync(
+                ObjectKey.Parse(sample.Key),
+                new ObjectRange((long)sample.Offset, checked((long)sample.Length)), cancellationToken)
+                .ConfigureAwait(false);
+            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+            {
+                return null;
+            }
+
+            var bytes = new byte[sample.Length];
+            var filled = 0;
+            int got;
+            while (filled < bytes.Length
+                && (got = await read.Content.ReadAsync(bytes.AsMemory(filled), cancellationToken)
+                    .ConfigureAwait(false)) > 0)
+            {
+                filled += got;
+            }
+
+            return filled == bytes.Length ? bytes : null;
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Lifecycle objects never replicate: destinations are converged, never collected.</summary>
     private static bool IsStagingOnly(string key) =>
         key.StartsWith("tombstones/", StringComparison.Ordinal)

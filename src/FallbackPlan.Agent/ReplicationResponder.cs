@@ -29,12 +29,14 @@ internal static class ReplicationResponder
     /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
     /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
+    /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <returns>What was received.</returns>
     public static async Task<Outcome> ServeAsync(
         string replicasRoot, string spoolRoot, Stream stream,
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
         bool retentionNegotiated,
+        bool verificationNegotiated,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(replicasRoot);
@@ -121,8 +123,9 @@ internal static class ReplicationResponder
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
                 .ConfigureAwait(false);
 
-            var retentionDeleted = await ServeRetentionAsync(
-                replica, offer.RepositoryId, peer, retentionNegotiated, stream, cancellationToken)
+            var retentionDeleted = await ServeAfterAckAsync(
+                replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated,
+                stream, cancellationToken)
                 .ConfigureAwait(false);
 
             return new Outcome(repositoryIdHex, committed, RetentionDeleted: retentionDeleted);
@@ -139,50 +142,182 @@ internal static class ReplicationResponder
     }
 
     /// <summary>
-    /// Serves an optional retention instruction after the object exchange
-    /// (peer-protocol 06): the commander computed, this side deletes exactly
-    /// what it is told — bounded below by the granted retention floor, which
-    /// is the one safeguard that holds when the hub is compromised. The
-    /// floor check needs no decryption: snapshot objects are counted by
-    /// prefix, so a spoke that cannot read a single manifest can still
-    /// refuse to breach it.
+    /// Serves whatever follows the acknowledgement: an optional retention
+    /// instruction (peer-protocol 06), then any number of verification
+    /// challenges (04) — in that order, because verifying a key the same
+    /// session then deletes proves nothing anyone keeps. The session ends
+    /// when the peer closes.
+    /// </summary>
+    private static async Task<long> ServeAfterAckAsync(
+        LocalFileSystemObjectStore replica,
+        ReadOnlyMemory<byte> offeredRepositoryId,
+        Protocol.PeerGrant peer,
+        bool retentionNegotiated,
+        bool verificationNegotiated,
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        var retentionDeleted = 0L;
+        var retentionServed = false;
+        var challengeServed = false;
+
+        while (true)
+        {
+            // The session may simply end here — everything after the
+            // acknowledgement is optional.
+            var frame = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (frame is null)
+            {
+                return retentionDeleted;
+            }
+
+            switch (frame.Value.Type)
+            {
+                case PeerMessageType.RetentionOffer when !retentionServed && !challengeServed:
+                    if (!retentionNegotiated)
+                    {
+                        // Sending a gated message outside the negotiated
+                        // intersection is a violation, not a capability
+                        // probe (02 §6).
+                        throw new PeerProtocolException(
+                            PeerRefusalReason.FeatureUnsupported,
+                            "A retention instruction arrived without the retention-instruction feature in effect.");
+                    }
+
+                    retentionDeleted = await ServeRetentionAsync(
+                        replica, offeredRepositoryId, peer, frame.Value.Body, stream, cancellationToken)
+                        .ConfigureAwait(false);
+                    retentionServed = true;
+                    break;
+
+                case PeerMessageType.VerificationChallenge:
+                    if (!verificationNegotiated)
+                    {
+                        throw new PeerProtocolException(
+                            PeerRefusalReason.FeatureUnsupported,
+                            "A verification challenge arrived without the destination-verification feature in effect.");
+                    }
+
+                    await ServeChallengeAsync(replica, offeredRepositoryId, frame.Value.Body, stream, cancellationToken)
+                        .ConfigureAwait(false);
+                    challengeServed = true;
+                    break;
+
+                default:
+                    throw new PeerProtocolException(
+                        PeerRefusalReason.Malformed,
+                        $"A {frame.Value.Type} is not permitted after the replication acknowledgement.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Answers one keyed random-range challenge (peer-protocol 04): read
+    /// exactly the named range from the stored copy and prove it, or answer
+    /// honestly that this side cannot — which is the answer the challenge
+    /// exists to force into the open. No keys are involved: the proof is
+    /// over ciphertext this side already holds.
+    /// </summary>
+    private static async Task ServeChallengeAsync(
+        LocalFileSystemObjectStore replica,
+        ReadOnlyMemory<byte> offeredRepositoryId,
+        System.Formats.Cbor.CborReader body,
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        var challenge = VerificationChallenge.Read(body);
+
+        if (!challenge.RepositoryId.Span.SequenceEqual(offeredRepositoryId.Span))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "A verification challenge names a repository other than the one this session replicated.");
+        }
+
+        if (challenge.Key.StartsWith("tombstones/", StringComparison.Ordinal)
+            || challenge.Key.StartsWith("leases/", StringComparison.Ordinal))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A verification challenge may not name '{challenge.Key}' — lifecycle keys never replicate (04 §4.1).");
+        }
+
+        var bytes = await ReadRangeAsync(replica, challenge, cancellationToken).ConfigureAwait(false);
+        if (bytes is null)
+        {
+            await PeerFrame.WriteAsync(
+                stream, new VerificationProof(Held: false, ReadOnlyMemory<byte>.Empty), cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var proof = RangeChallenge.Compute(
+            challenge.ChallengeKey.Span, challenge.Nonce.Span, challenge.Key,
+            challenge.Offset, challenge.Length, bytes);
+        await PeerFrame.WriteAsync(stream, new VerificationProof(Held: true, proof), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The exact challenged range, or null for every honest inability (04 §4.2).</summary>
+    private static async Task<byte[]?> ReadRangeAsync(
+        LocalFileSystemObjectStore replica, VerificationChallenge challenge, CancellationToken cancellationToken)
+    {
+        if (!ObjectKey.TryParse(challenge.Key, out var key))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var read = await replica.OpenReadAsync(
+                key, new ObjectRange((long)challenge.Offset, checked((long)challenge.Length)), cancellationToken)
+                .ConfigureAwait(false);
+            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+            {
+                return null;
+            }
+
+            var bytes = new byte[challenge.Length];
+            var filled = 0;
+            int got;
+            while (filled < bytes.Length
+                && (got = await read.Content.ReadAsync(bytes.AsMemory(filled), cancellationToken)
+                    .ConfigureAwait(false)) > 0)
+            {
+                filled += got;
+            }
+
+            // A short copy cannot prove the range — which is exactly what
+            // the challenge exists to catch.
+            return filled == bytes.Length ? bytes : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Serves a retention instruction (peer-protocol 06): the commander
+    /// computed, this side deletes exactly what it is told — bounded below
+    /// by the granted retention floor, which is the one safeguard that holds
+    /// when the hub is compromised. The floor check needs no decryption:
+    /// snapshot objects are counted by prefix, so a spoke that cannot read a
+    /// single manifest can still refuse to breach it.
     /// </summary>
     private static async Task<long> ServeRetentionAsync(
         LocalFileSystemObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
-        bool retentionNegotiated,
+        System.Formats.Cbor.CborReader firstBody,
         Stream stream,
         CancellationToken cancellationToken)
     {
-        // The session may simply end here — the instruction is optional.
-        var first = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
-        if (first is null)
-        {
-            return 0;
-        }
-
-        if (first.Value.Type != PeerMessageType.RetentionOffer)
-        {
-            throw new PeerProtocolException(
-                PeerRefusalReason.Malformed,
-                $"A {first.Value.Type} is not permitted after the replication acknowledgement.");
-        }
-
-        if (!retentionNegotiated)
-        {
-            // Sending a gated message outside the negotiated intersection is
-            // a violation, not a capability probe (02 §6).
-            throw new PeerProtocolException(
-                PeerRefusalReason.FeatureUnsupported,
-                "A retention instruction arrived without the retention-instruction feature in effect.");
-        }
-
         // Every page is read before anything is deleted: the floor check is
         // over the whole instruction, or a piecewise pass could breach it in
         // total (06 §4.1).
         var drops = new List<string>();
-        var page = RetentionOffer.Read(first.Value.Body);
+        var page = RetentionOffer.Read(firstBody);
         while (true)
         {
             if (!page.RepositoryId.Span.SequenceEqual(offeredRepositoryId.Span))

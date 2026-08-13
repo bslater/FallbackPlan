@@ -121,4 +121,108 @@ public sealed class ReplicationMessageTests
         var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(page));
         Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
     }
+
+    [TestMethod]
+    public void VerificationChallengeAndProof_RoundTrip()
+    {
+        // The verifier's question and both possible answers (peer-protocol
+        // 04 §4): pinned before either side speaks them in production.
+        var challenge = new VerificationChallenge(
+            new byte[16], "blobs/data/aa/one", Offset: 4096, Length: 512,
+            new byte[VerificationChallenge.NonceLength], new byte[VerificationChallenge.ChallengeKeyLength]);
+        Assert.AreEqual(challenge, RoundTrip(challenge, VerificationChallenge.Read));
+
+        var held = new VerificationProof(Held: true, new byte[VerificationProof.ProofLength]);
+        Assert.AreEqual(held, RoundTrip(held, VerificationProof.Read));
+
+        var cannotProve = new VerificationProof(Held: false, ReadOnlyMemory<byte>.Empty);
+        Assert.AreEqual(cannotProve, RoundTrip(cannotProve, VerificationProof.Read));
+    }
+
+    [TestMethod]
+    public void VerificationChallenge_ViolatingAWidthOrBound_IsRefusedOnWrite()
+    {
+        var nonce = new byte[VerificationChallenge.NonceLength];
+        var key = new byte[VerificationChallenge.ChallengeKeyLength];
+
+        foreach (var wrong in new VerificationChallenge[]
+        {
+            new(new byte[15], "blobs/data/aa/one", 0, 1, nonce, key),
+            new(new byte[16], "", 0, 1, nonce, key),
+            new(new byte[16], "blobs/data/aa/one", 0, 0, nonce, key),
+            new(new byte[16], "blobs/data/aa/one", 0, VerificationChallenge.MaximumLength + 1, nonce, key),
+            new(new byte[16], "blobs/data/aa/one", 0, 1, new byte[15], key),
+            new(new byte[16], "blobs/data/aa/one", 0, 1, nonce, new byte[31]),
+        })
+        {
+            var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(wrong));
+            Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+        }
+    }
+
+    [TestMethod]
+    public void VerificationProof_WhoseStatusAndPayloadDisagree_IsRefused()
+    {
+        // Status 0 promises a 32-byte MAC; status 1 promises nothing. A body
+        // saying both, or neither, is malformed (04 §4.2).
+        var shortProof = new VerificationProof(Held: true, new byte[16]);
+        var writeRefusal = Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(shortProof));
+        Assert.AreEqual(PeerRefusalReason.Malformed, writeRefusal.Reason);
+
+        // A held=false body carrying a proof anyway must be refused on read;
+        // the honest writer cannot produce one, so it is hand-built here.
+        var writer = new System.Formats.Cbor.CborWriter(System.Formats.Cbor.CborConformanceMode.Canonical);
+        writer.WriteStartMap(2);
+        writer.WriteInt32(1);
+        writer.WriteUInt32(1);
+        writer.WriteInt32(2);
+        writer.WriteByteString(new byte[VerificationProof.ProofLength]);
+        writer.WriteEndMap();
+        var reader = new System.Formats.Cbor.CborReader(
+            writer.Encode(), System.Formats.Cbor.CborConformanceMode.Canonical);
+        var readRefusal = Assert.ThrowsExactly<PeerProtocolException>(() => VerificationProof.Read(reader));
+        Assert.AreEqual(PeerRefusalReason.Malformed, readRefusal.Reason);
+    }
+
+    [TestMethod]
+    public void VerificationTypes_ArePermittedOnlyWhenOpen()
+    {
+        foreach (var type in new[] { PeerMessageType.VerificationChallenge, PeerMessageType.VerificationProof })
+        {
+            Assert.IsTrue(PeerAuthenticator.Permits(PeerSessionState.Open, type), $"{type} should be permitted when Open");
+            Assert.IsFalse(
+                PeerAuthenticator.Permits(PeerSessionState.Authenticated, type),
+                $"{type} must not be permitted before Open");
+        }
+    }
+
+    [TestMethod]
+    public void RangeChallenge_IsDeterministicAndFreshnessSensitive()
+    {
+        var challengeKey = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        var nonce = Enumerable.Range(0, 16).Select(i => (byte)(i + 100)).ToArray();
+        var bytes = "the exact stored bytes"u8.ToArray();
+
+        var proof = RangeChallenge.Compute(challengeKey, nonce, "blobs/data/aa/one", 7, (uint)bytes.Length, bytes);
+        var again = RangeChallenge.Compute(challengeKey, nonce, "blobs/data/aa/one", 7, (uint)bytes.Length, bytes);
+        Assert.HasCount(32, proof);
+        CollectionAssert.AreEqual(proof, again, "the same challenge over the same bytes must reproduce");
+
+        var otherNonce = (byte[])nonce.Clone();
+        otherNonce[0] ^= 1;
+        CollectionAssert.AreNotEqual(
+            proof,
+            RangeChallenge.Compute(challengeKey, otherNonce, "blobs/data/aa/one", 7, (uint)bytes.Length, bytes),
+            "a fresh nonce must produce a fresh proof — nothing precomputed survives it");
+
+        var tampered = (byte[])bytes.Clone();
+        tampered[^1] ^= 1;
+        CollectionAssert.AreNotEqual(
+            proof,
+            RangeChallenge.Compute(challengeKey, nonce, "blobs/data/aa/one", 7, (uint)tampered.Length, tampered),
+            "one flipped byte in the range must change the proof");
+
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            RangeChallenge.Compute(challengeKey, nonce, "blobs/data/aa/one", 7, (uint)bytes.Length + 1, bytes));
+    }
 }

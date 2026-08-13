@@ -60,6 +60,12 @@ public enum PeerMessageType : ushort
 
     /// <summary>The spoke confirms what it deleted (06 §4.2).</summary>
     RetentionAck = 263,
+
+    /// <summary>A keyed random-range challenge (04 §4.1).</summary>
+    VerificationChallenge = 264,
+
+    /// <summary>The destination's proof of possession, or its honest inability (04 §4.2).</summary>
+    VerificationProof = 265,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

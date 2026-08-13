@@ -227,7 +227,7 @@ public static class FanOut
             // Read before the push begins, same as the local-path copy: the
             // gate's claim is "everything at or before this sequence is
             // there" (FR-GC-009).
-            var syncedSequence = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
 
             // A peer under a retention policy converges like a local path
@@ -245,10 +245,42 @@ public static class FanOut
                     DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
                 : null;
 
+            // Samples are drawn from the pre-push listing under the set gate:
+            // every key listed here is carried by the push that follows, so a
+            // failed proof afterwards can only mean the destination's copy is
+            // wrong — never that the sample raced a publication.
+            var samples = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
+                ? await VerificationSampler.SampleAsync(
+                    archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
+                    .ConfigureAwait(false)
+                : [];
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
                 .ConfigureAwait(false);
 
+            if (samples.Count > 0)
+            {
+                // Challenges ride after the acknowledgement and after any
+                // retention exchange (peer-protocol 04 §1): what this proves
+                // is what the session leaves behind, not what it deletes.
+                var verification = await ReplicationInitiator.ChallengeAsync(
+                    archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, samples,
+                    cancellationToken).ConfigureAwait(false);
+                if (verification.Failed.Count > 0)
+                {
+                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                    return;
+                }
+
+                ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
+                ledger.RecordVerification(set.Id, destination.Name, verification.Passed, syncedSequence, nowMs);
+                return;
+            }
+
+            // Feature absent, or nothing eligible to sample: the sync stands,
+            // unverified by challenge — a stated posture, never an error
+            // (peer-protocol 04 §1).
             ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         }
         catch (Protocol.PeerProtocolException refusal)
@@ -302,15 +334,18 @@ public static class FanOut
 
     /// <summary>
     /// The staging archive's highest snapshot publication sequence — the
-    /// replication gate's currency (FR-GC-009). Read from the standalone
-    /// snapshot records' cleartext counters: the one per-publication
-    /// monotonic a single-writer staging archive has, needing no keys and
-    /// no catalogue.
+    /// replication gate's currency (FR-GC-009) — and the store key of the
+    /// snapshot carrying it, which every verification sample includes so the
+    /// newest recovery point is the best-verified one (FR-VER-002). Read
+    /// from the standalone snapshot records' cleartext counters: the one
+    /// per-publication monotonic a single-writer staging archive has,
+    /// needing no keys and no catalogue.
     /// </summary>
-    private static async ValueTask<ulong> StagingPublicationSequenceAsync(
+    private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
         var highest = 0UL;
+        string? newestKey = null;
         await foreach (var entry in archive.Store.ListAsync(
             Storage.Abstractions.ObjectPrefix.Parse("snapshots/"),
             Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -326,8 +361,12 @@ public static class FanOut
             await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
             try
             {
-                highest = Math.Max(
-                    highest, Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray()).Counter);
+                var counter = Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray()).Counter;
+                if (newestKey is null || counter > highest)
+                {
+                    highest = Math.Max(highest, counter);
+                    newestKey = entry.Key.Value;
+                }
             }
             catch (FormatException)
             {
@@ -336,7 +375,7 @@ public static class FanOut
             }
         }
 
-        return highest;
+        return (highest, newestKey);
     }
 
     private static async ValueTask CopyToLocalPathAsync(
@@ -367,7 +406,7 @@ public static class FanOut
             // it, which is what the replication gate compares snapshots to
             // (FR-GC-009). A snapshot publishing mid-copy may or may not have
             // crossed, so the claim stops at the pre-copy sequence.
-            var syncedSequence = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
             var replica = new LocalFileSystemObjectStore(replicaRoot);
 
@@ -385,6 +424,14 @@ public static class FanOut
                     DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
                 : null;
 
+            // Samples come from the pre-copy listing, filtered like the copy
+            // itself: everything sampled is carried by the copy below, so a
+            // mismatch afterwards is the replica's fault, never a race with a
+            // publication that had not crossed yet.
+            var samples = await VerificationSampler.SampleAsync(
+                archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
+                .ConfigureAwait(false);
+
             long copied;
             if (keeps is not null)
             {
@@ -399,6 +446,25 @@ public static class FanOut
                 copied = outcome.Copied;
             }
 
+            if (samples.Count > 0)
+            {
+                // The local twin of the peer challenge (peer-protocol 04):
+                // both destination kinds earn "verified" from bytes read back
+                // off the destination's own disk, never from a copy having
+                // reported success (FR-VER-001).
+                var verification = await VerifyReplicaAsync(archive.Store, replica, samples, cancellationToken)
+                    .ConfigureAwait(false);
+                if (verification.Failed.Count > 0)
+                {
+                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                    return;
+                }
+
+                ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
+                ledger.RecordVerification(set.Id, destination.Name, verification.Passed, syncedSequence, nowMs);
+                return;
+            }
+
             ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -406,5 +472,63 @@ public static class FanOut
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
         }
+    }
+
+    /// <summary>
+    /// Reads each sampled range back from the replica and compares it to
+    /// staging's bytes. Absent, short, or different answers are findings; a
+    /// range staging itself cannot read proves nothing either way.
+    /// </summary>
+    private static async ValueTask<ReplicationInitiator.VerificationOutcome> VerifyReplicaAsync(
+        Storage.Abstractions.IObjectStore staging, Storage.Abstractions.IObjectStore replica,
+        IReadOnlyList<ReplicationInitiator.VerificationSample> samples, CancellationToken cancellationToken)
+    {
+        var passed = 0;
+        var failed = new List<string>();
+        foreach (var sample in samples)
+        {
+            var expected = await VerificationSampler.ReadRangeAsync(staging, sample, cancellationToken)
+                .ConfigureAwait(false);
+            if (expected is null)
+            {
+                continue;
+            }
+
+            var actual = await VerificationSampler.ReadRangeAsync(replica, sample, cancellationToken)
+                .ConfigureAwait(false);
+            if (actual is not null && expected.AsSpan().SequenceEqual(actual))
+            {
+                passed++;
+            }
+            else
+            {
+                failed.Add(sample.Key);
+            }
+        }
+
+        return new ReplicationInitiator.VerificationOutcome(passed, failed);
+    }
+
+    /// <summary>
+    /// A failed proof is a durable finding, never a silent retry (FR-VER-005):
+    /// the pair's row goes <see cref="DestinationSyncState.Failed"/> — so the
+    /// destination stops counting toward protection and the trim gate — and a
+    /// notice names the destination and the first unproven key until a human
+    /// acknowledges it.
+    /// </summary>
+    private static void RecordVerificationFailure(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        ReplicationInitiator.VerificationOutcome verification, int sampled, ulong nowMs)
+    {
+        var summary = $"verification failed: {verification.Failed.Count} of {sampled} sampled range(s) "
+            + $"could not be proven, first '{verification.Failed[0]}'";
+        runtime.DestinationSync.RecordFailure(
+            set.Id, destinationName, DestinationSyncState.Failed, summary, nowMs);
+        runtime.Notices.Raise(
+            $"verification-failed:{set.Id}:{destinationName}",
+            $"Destination '{destinationName}' failed verification for set '{set.Name}': "
+            + $"{verification.Failed.Count} of {sampled} sampled range(s) unproven (first: '{verification.Failed[0]}'). "
+            + "Its copy may be damaged or withheld; it does not count toward protection until a sync verifies clean.",
+            nowMs);
     }
 }

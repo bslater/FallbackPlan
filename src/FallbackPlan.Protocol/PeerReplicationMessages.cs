@@ -587,3 +587,221 @@ public sealed record RetentionAck(ulong Deleted) : IPeerMessage
     /// <returns>The acknowledgement.</returns>
     public static RetentionAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
 }
+
+/// <summary>
+/// A keyed random-range challenge (specification peer-protocol 04 §4.1): the
+/// verifier names a store key, a byte range inside it, and a fresh nonce and
+/// challenge key. A proof over exactly those bytes cannot be precomputed,
+/// cached, or replayed — producing it requires holding them at this moment
+/// (FR-VER-001).
+/// </summary>
+/// <param name="RepositoryId">The repository the key belongs to (16 bytes).</param>
+/// <param name="Key">The store key to prove.</param>
+/// <param name="Offset">The range's byte offset.</param>
+/// <param name="Length">The range's length in bytes (1–65536).</param>
+/// <param name="Nonce">Fresh per challenge (16 bytes).</param>
+/// <param name="ChallengeKey">Fresh per challenge (32 bytes) — freshness, not secrecy.</param>
+public sealed record VerificationChallenge(
+    ReadOnlyMemory<byte> RepositoryId,
+    string Key,
+    ulong Offset,
+    uint Length,
+    ReadOnlyMemory<byte> Nonce,
+    ReadOnlyMemory<byte> ChallengeKey) : IPeerMessage
+{
+    /// <summary>The longest range one challenge may name (04 §4.1).</summary>
+    public const uint MaximumLength = 65_536;
+
+    /// <summary>The nonce's width.</summary>
+    public const int NonceLength = 16;
+
+    /// <summary>The challenge key's width.</summary>
+    public const int ChallengeKeyLength = 32;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.VerificationChallenge;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 6;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (RepositoryId.Length != ReplicationOffer.RepositoryIdLength
+            || Nonce.Length != NonceLength
+            || ChallengeKey.Length != ChallengeKeyLength
+            || Length is 0 or > MaximumLength
+            || string.IsNullOrEmpty(Key))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A verification challenge violates a 04 §4.1 width or bound.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(RepositoryId.Span);
+        writer.WriteInt32(2);
+        writer.WriteTextString(Key);
+        writer.WriteInt32(3);
+        writer.WriteUInt64(Offset);
+        writer.WriteInt32(4);
+        writer.WriteUInt32(Length);
+        writer.WriteInt32(5);
+        writer.WriteByteString(Nonce.Span);
+        writer.WriteInt32(6);
+        writer.WriteByteString(ChallengeKey.Span);
+    }
+
+    /// <summary>Reads one challenge.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The challenge.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 04 §4.1.</exception>
+    public static VerificationChallenge Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        byte[]? repositoryId = null;
+        string? key = null;
+        var offset = 0UL;
+        var length = 0U;
+        byte[]? nonce = null;
+        byte[]? challengeKey = null;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            switch (entry)
+            {
+                case 1:
+                    repositoryId = reader.ReadByteString();
+                    break;
+                case 2:
+                    key = reader.ReadTextString();
+                    break;
+                case 3:
+                    offset = reader.ReadUInt64();
+                    break;
+                case 4:
+                    length = reader.ReadUInt32();
+                    break;
+                case 5:
+                    nonce = reader.ReadByteString();
+                    break;
+                case 6:
+                    challengeKey = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (repositoryId is null || repositoryId.Length != ReplicationOffer.RepositoryIdLength
+            || key is null or "" || Encoding.UTF8.GetByteCount(key) > ReplicationInventory.MaximumKeyBytes
+            || length is 0 or > MaximumLength
+            || nonce is null || nonce.Length != NonceLength
+            || challengeKey is null || challengeKey.Length != ChallengeKeyLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A verification challenge violates a 04 §4.1 width or bound.");
+        }
+
+        return new VerificationChallenge(repositoryId, key, offset, length, nonce, challengeKey);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(VerificationChallenge? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && Offset == other.Offset && Length == other.Length
+        && RepositoryId.Span.SequenceEqual(other.RepositoryId.Span)
+        && Nonce.Span.SequenceEqual(other.Nonce.Span)
+        && ChallengeKey.Span.SequenceEqual(other.ChallengeKey.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Key, Offset, Length);
+}
+
+/// <summary>
+/// The destination's answer to a challenge (specification peer-protocol
+/// 04 §4.2): a proof over the exact stored bytes, or the honest statement
+/// that it cannot produce one — which is the answer the challenge exists to
+/// force into the open.
+/// </summary>
+/// <param name="Held">Whether a proof follows.</param>
+/// <param name="Proof">The MAC of 04 §2; present exactly when <paramref name="Held"/>.</param>
+public sealed record VerificationProof(bool Held, ReadOnlyMemory<byte> Proof) : IPeerMessage
+{
+    /// <summary>The proof's width.</summary>
+    public const int ProofLength = 32;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.VerificationProof;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => Held ? 2 : 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Held && Proof.Length != ProofLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A verification proof is 32 bytes.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteUInt32(Held ? 0U : 1U);
+        if (Held)
+        {
+            writer.WriteInt32(2);
+            writer.WriteByteString(Proof.Span);
+        }
+    }
+
+    /// <summary>Reads one proof.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The proof.</returns>
+    /// <exception cref="PeerProtocolException">Status and proof disagree (04 §4.2).</exception>
+    public static VerificationProof Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        uint? status = null;
+        byte[]? proof = null;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            switch (entry)
+            {
+                case 1:
+                    status = reader.ReadUInt32();
+                    break;
+                case 2:
+                    proof = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        return status switch
+        {
+            0 when proof is { Length: ProofLength } => new VerificationProof(true, proof),
+            1 when proof is null => new VerificationProof(false, ReadOnlyMemory<byte>.Empty),
+            _ => throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "A verification proof's status and payload disagree (04 §4.2)."),
+        };
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(VerificationProof? other) =>
+        other is not null && Held == other.Held && Proof.Span.SequenceEqual(other.Proof.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Held, Proof.Length);
+}
