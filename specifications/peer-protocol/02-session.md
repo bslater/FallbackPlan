@@ -178,7 +178,7 @@ The features defined so far:
 
 | Identifier | Meaning |
 |------------|---------|
-| `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)) |
+| `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)). A source **requires** this of a destination it replicates to, so declining it refuses the session rather than silently forgoing the check |
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
 

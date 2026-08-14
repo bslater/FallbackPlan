@@ -25,10 +25,33 @@ destination's disk, sampled and dated, never to the destination's word.
 
 The exchange is gated by the feature **`destination-verification`**
 ([02 §6](02-session.md#6-feature-negotiation)): a source MUST NOT send a
-challenge unless the feature is in the session's intersection. Against a
-destination that does not offer it, the source records the destination as
-unverifiable by challenge and carries on — an older build is never sent a type
-it would refuse as `message_unknown`.
+challenge unless the feature is in the session's intersection, so an older
+build is never sent a type it would refuse as `message_unknown`.
+
+A source MUST **require** the feature of a destination it replicates to,
+naming it in the hello's required set so a destination that does not offer it
+is refused at negotiation with `feature_unsupported` before any object crosses
+(FR-VER-006). This document once said the source records such a destination as
+unverifiable and carries on; that was wrong, and the reason is worth stating
+where it will be read. Verification is the stated mitigation for a destination
+that discards data and claims otherwise ([T-8](../../docs/threat-model.md#t-8-destination-withholding-data)),
+the feature set is the destination's own declaration, and a mitigation the
+defended-against party may decline in silence is not a mitigation. It was also
+the cheaper move: a destination that offered the feature and failed a challenge
+earned a durable finding (§5), while one that never offered it earned nothing
+at all.
+
+A deployment may still keep a destination it cannot challenge, but not by
+accident: the source's configuration must say so for that destination
+explicitly, and a destination kept on those terms never reports `verified` and
+never satisfies a gate that would delete the source's last copy of an object
+(FR-VER-006, [ADR-0034 §6](../../docs/adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+
+> The parallel wording in [06 §1](06-retention.md#1-feature-and-placement) for
+> `retention-instruction` is deliberately *not* changed to match. A spoke that
+> will not accept retention instructions costs disk; a destination that will
+> not prove itself costs the guarantee. Only one of those is worth refusing a
+> session over.
 
 Challenges ride the replication session of [03](03-replication.md), after
 `ReplicationAck` — and after the retention exchange of [06](06-retention.md)

@@ -139,8 +139,10 @@ of the archives assigned there — is the architecture. **Staging pays same-disk
 generation** now that the trim FR-GC-009's gate enables is built: a retention
 pass under `--apply` deletes HISTORIC data blobs from staging once every
 destination entitled to them verifiably holds them — a reachable local-path
-replica probed key by key, a peer trusted through its sync-ledger claim, the
-same trust the replication gate rests on. The newest snapshot's closure stays
+replica probed key by key, and, for every destination kind, a verification
+proof covering the pass's sequence (Amendment 1 below; FR-VER-006). The word
+"verifiably" was load-bearing and, for a peer, was once satisfied by the
+sync-ledger claim alone. The newest snapshot's closure stays
 deliberately: the dedup trust gate probes staging before every reuse, so
 trimming the current generation would make the next backup re-store every
 unchanged file and fan the duplicates out again — and the convergence rule
@@ -205,9 +207,36 @@ because it makes the friend's-machine-only user — the founding scenario of the
 peer protocol — unconfigurable, and because "local" was never the point:
 *off-domain and in-sync* is what protects data, and ADR-0018 already said so.
 
+## Amendment 1 (2026-08) — the trim gate takes proof, and destinations must be provable
+
+§6 said the trim removes what every entitled destination "verifiably holds",
+and for a local-path replica that was a per-key probe. For a peer it was the
+sync-ledger claim — a record of what the hub **sent**, never of what the
+destination still has. Staging therefore deleted its last copy of a historic
+data blob on a peer's say-so, and the verification stamps that
+[peer-protocol 04](../../specifications/peer-protocol/04-verification.md)
+produces were consulted nowhere in the retention engine.
+
+Both bases now additionally require a verification proof covering the pass's
+publication sequence. A local path keeps its per-key probe as well, because the
+two establish different things: the probe says *this key is present*, the stamp
+says *this destination holds real bytes*. Freshness needs no new configuration:
+the last **successful** sync must itself have proven something, so a success
+recorded after the last proof leaves the proof behind the state it would vouch
+for, and it stops counting.
+
+Two consequences worth stating plainly. A destination knowingly kept without
+proof (FR-VER-006) never satisfies the gate, so staging keeps history for it
+indefinitely — refusing to prove and authorising deletion are not both
+available, and the disk cost of that choice belongs to whoever makes it. And
+the deletion pass re-reads the ledger per candidate rather than treating a
+ledger claim as monotonic: a synced sequence only advances, but a proof can be
+withdrawn by a failure between planning and deleting.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Decided ahead of implementation, with the config, orchestration and retention slices to follow. Amends ADR-0009/0010/0011/0012/0018/0025/0027/0028/0029/0030 as recorded in each. |
-| 2026-08 | Built | All eleven arc slices landed, the §6 staging trim included, plus the sync/retention operator verbs; the trim's convergence hazard is closed by the per-set gate of [ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate). Destination verification (peer-protocol 04) remains ahead. |
+| 2026-08 | Built | All eleven arc slices landed, the §6 staging trim included, plus the sync/retention operator verbs; the trim's convergence hazard is closed by the per-set gate of [ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate). |
+| 2026-08 | Built (amended) | Amendment 1: destination verification ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)) is built and required, and the §6 trim gate now takes a proof rather than a claim for every destination kind. |

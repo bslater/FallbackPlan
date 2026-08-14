@@ -63,7 +63,7 @@ A store or peer presents a stale snapshot set to hide recent backups or restore 
 ### T-8 Destination withholding data
 A destination claims to hold data it has discarded.
 **Mitigation:** keyed random-range challenges that cannot be precomputed or cached ([`09-replication-and-peers.md` §5](architecture/09-replication-and-peers.md#5-destination-verification)); coverage and challenge age reported rather than a boolean.
-**Residual:** a challenge proves possession *now*, not willingness to serve a restore later. Only a recovery drill proves that.
+**Residual:** a challenge proves possession *now*, not willingness to serve a restore later. Only a recovery drill proves that. The mitigation is no longer declinable — a destination that does not offer the challenge feature is refused rather than replicated to, since the feature set is the destination's own declaration and this mitigation defends against that same destination (FR-VER-006). Keeping an unprovable destination requires an explicit acknowledgement, and one kept on those terms never reports `verified` and never licenses reclaiming the source's last copy.
 
 ### T-9 Compromised destination without source keys
 **Mitigation:** destinations never receive content keys. A destination holding every blob can decrypt nothing.
