@@ -133,6 +133,76 @@ public sealed class RetentionTrimVerbTests : IDisposable
         }
     }
 
+    [TestMethod]
+    public async Task RetentionApplyVerb_APeerExcusedFromProving_IsNamedRatherThanCountedSilently()
+    {
+        var variable = "FBP_TRIM_VERB_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, PassphraseText);
+        try
+        {
+            await BackUpAsync(Day1);
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+            await BackUpAsync(Day1.AddDays(1));
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+            await BackUpAsync(Day1.AddDays(2));
+
+            // The peer declares itself unprovable — and is then given the
+            // strongest ledger row a proven peer could have. It must still not
+            // license the delete: a destination that will not be challenged
+            // cannot authorise us forgetting bytes on its say-so (FR-VER-006).
+            // Mapping it by KIND would hand it the ledger basis, fail the
+            // proof test, and leave the operator a bare count with no
+            // destination named.
+            DeclineVerificationAtThePeer();
+            var syncedAt = (ulong)DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds();
+            var ledger = DestinationSyncStore.Open(StateDirectory);
+            ledger.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
+            ledger.RecordVerification(
+                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, syncedAt);
+
+            var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+            var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+            var exit = await AgentHost.RunAsync(
+                ["retention", "--archives", ArchivesRoot, "--state", StateDirectory,
+                    "--passphrase-env", variable, "--apply"],
+                output, error, CancellationToken.None);
+
+            Assert.AreEqual(0, exit, error.ToString());
+            var text = output.ToString();
+            Assert.DoesNotContain("trimmed:", text, StringComparison.Ordinal);
+
+            // The line names the destination and says outright that waiting is
+            // not one of the ways out.
+            Assert.Contains("destination 'friend' is declared unprovable", text, StringComparison.Ordinal);
+            Assert.Contains("give it retention rules", text, StringComparison.Ordinal);
+
+            var staging = new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, SetId));
+            Assert.HasCount(3, await ListAsync(staging, "blobs/data/"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    /// <summary>Rewrites the configuration with the peer excused from verification.</summary>
+    private void DeclineVerificationAtThePeer()
+    {
+        var path = Path.Combine(StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        new ClientConfiguration
+        {
+            SchemaVersion = configuration.SchemaVersion,
+            Destinations =
+            [
+                .. configuration.Destinations.Select(destination => destination.Kind == DestinationKind.Peer
+                    ? destination with { Verification = VerificationPolicy.AcknowledgedNone }
+                    : destination),
+            ],
+            BackupSets = configuration.BackupSets,
+        }.Save(path);
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);

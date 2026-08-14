@@ -19,6 +19,9 @@ public abstract record TrimVerification
     /// <summary>No verification is possible — see <see cref="Unverifiable"/>.</summary>
     public static readonly TrimVerification None = new Unverifiable();
 
+    /// <summary>The destination declines to prove anything — see <see cref="Unprovable"/>.</summary>
+    public static readonly TrimVerification Declined = new Unprovable();
+
     /// <summary>A direct per-key probe — see <see cref="StoreProbe"/>.</summary>
     public static TrimVerification AgainstStore(IObjectStore replica) => new StoreProbe(replica);
 
@@ -43,6 +46,16 @@ public abstract record TrimVerification
     /// drive, an unsupported kind. Every blob it is entitled to stays.
     /// </summary>
     public sealed record Unverifiable : TrimVerification;
+
+    /// <summary>
+    /// The destination is declared unprovable by its own configuration
+    /// (<c>verification: acknowledged-none</c>). Distinct from
+    /// <see cref="Unverifiable"/> because "right now" is false of it: nothing
+    /// will change on its own, and the report must say so rather than imply a
+    /// wait. You cannot both refuse to prove and authorise a deletion
+    /// (FR-VER-006).
+    /// </summary>
+    public sealed record Unprovable : TrimVerification;
 }
 
 /// <summary>What one trim pass may remove, and why the rest stays.</summary>
@@ -230,7 +243,10 @@ public static class StagingTrim
         // Candidates come from the loaded footers, never the raw listing: a
         // blob the reader had to skip is one nobody can reason about, and it
         // stays until verify names its damage.
-        var unverifiable = new SortedSet<string>(StringComparer.Ordinal);
+        // Which destination stalled the trim, and why. Retention stalling with
+        // nothing but a count is the shape an operator cannot act on, so every
+        // blocking destination earns a named line (FR-GC-005).
+        var blocked = new SortedDictionary<string, TrimHold>(StringComparer.Ordinal);
         foreach (var blob in reader.Blobs)
         {
             var key = blob.StoreKey.Value;
@@ -267,36 +283,46 @@ public static class StagingTrim
                 // us forgetting them.
                 var proven = Proves(syncRecordFor(reference.Ref), maxPublicationSequence);
 
-                verified = verification switch
+                var hold = verification switch
                 {
+                    TrimVerification.Unprovable => TrimHold.Declared,
+                    TrimVerification.Unverifiable => TrimHold.Unreachable,
+                    // Whatever the basis, an unproven destination stalls here
+                    // first — naming the missing proof beats naming whichever
+                    // second test would also have failed.
+                    _ when !proven => TrimHold.Unproven,
                     // Two different facts, both needed: the probe says this
                     // exact key is present, the stamp says the destination
                     // genuinely holds real bytes rather than plausible-looking
                     // empty files.
-                    TrimVerification.StoreProbe probe => proven
-                        && await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken).ConfigureAwait(false),
+                    TrimVerification.StoreProbe probe =>
+                        await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken).ConfigureAwait(false)
+                            ? null
+                            : TrimHold.DoesNotHold,
                     // The claim also demands this pass's clock be at or past
                     // the sync it rests on: entitlement here is computed at
                     // `now`, and a pass running BEHIND the last sync could
                     // hold a wider keep-set than the one the destination
                     // actually converged to — vouching for a blob the
                     // destination was instructed to drop.
-                    TrimVerification.LedgerClaim => proven
-                        && maxPublicationSequence > 0
+                    TrimVerification.LedgerClaim =>
+                        maxPublicationSequence > 0
                         && syncRecordFor(reference.Ref) is { } record
                         && record.SyncedSequence >= maxPublicationSequence
                         && record.LastSuccessAt is { } lastSuccess
-                        && nowUnixMilliseconds >= lastSuccess,
-                    _ => false,
+                        && nowUnixMilliseconds >= lastSuccess
+                            ? null
+                            : (TrimHold?)TrimHold.Unproven,
+                    _ => TrimHold.Unreachable,
                 };
 
-                if (!verified)
+                if (hold is { } reason)
                 {
-                    if (verification is TrimVerification.Unverifiable)
-                    {
-                        unverifiable.Add(reference.Ref);
-                    }
-
+                    // First reason wins: a destination that stalls on one blob
+                    // stalls on the rest for the same cause, and one line per
+                    // destination is the point.
+                    blocked.TryAdd(reference.Ref, reason);
+                    verified = false;
                     break;
                 }
             }
@@ -322,9 +348,9 @@ public static class StagingTrim
             lines.Add($"trim held back: {heldBack} data blob(s) awaiting a verified copy at every destination");
         }
 
-        foreach (var name in unverifiable)
+        foreach (var (name, reason) in blocked)
         {
-            lines.Add($"trim: destination '{name}' cannot vouch for its copies right now");
+            lines.Add($"trim: destination '{name}' {Explain(reason)}");
         }
 
         return new TrimPlan(eligible, eligibleBytes, heldBack, lines)
@@ -415,6 +441,37 @@ public static class StagingTrim
 
         return (deleted, bytes);
     }
+
+    /// <summary>Why one destination stalled the trim.</summary>
+    private enum TrimHold
+    {
+        /// <summary>Declared unprovable in configuration — nothing will change on its own.</summary>
+        Declared,
+
+        /// <summary>Unreachable or of an unsupported kind — a later pass may find it.</summary>
+        Unreachable,
+
+        /// <summary>Reachable, but it has not proven what it was last sent.</summary>
+        Unproven,
+
+        /// <summary>Proven and reachable, but its store does not hold this blob.</summary>
+        DoesNotHold,
+    }
+
+    /// <summary>
+    /// The operator-facing half of each hold. Only the reasons that genuinely
+    /// clear on their own say "right now"; a declared-unprovable destination
+    /// names the three ways out instead, because waiting is not one of them.
+    /// </summary>
+    private static string Explain(TrimHold reason) => reason switch
+    {
+        TrimHold.Declared =>
+            "is declared unprovable, so staging keeps its history — fix it so it can be verified, "
+            + "remove it, or give it retention rules so it is not entitled to the history at all",
+        TrimHold.Unreachable => "cannot vouch for its copies right now",
+        TrimHold.Unproven => "has not proven what it was last sent",
+        _ => "does not hold every historic blob staging would drop",
+    };
 
     /// <summary>
     /// Whether a destination has PROVEN, recently enough to matter, that it

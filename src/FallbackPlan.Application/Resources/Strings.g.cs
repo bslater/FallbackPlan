@@ -122,6 +122,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationFieldNotForKind, arg0, arg1);
 
     /// <summary>
+    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// </summary>
+    private static string ClientConfiguration_DestinationCannotDeclineVerification => Get(nameof(ClientConfiguration_DestinationCannotDeclineVerification));
+
+    /// <summary>
+    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationCannotDeclineVerification(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationCannotDeclineVerification, arg0);
+
+    /// <summary>
     /// Destination '{0}': id must be 32 hex digits.
     /// </summary>
     private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));

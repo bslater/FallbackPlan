@@ -215,6 +215,19 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "fingerprint/endpoint"));
         }
+
+        // The acknowledgement exists for destinations that genuinely cannot be
+        // challenged — an older peer, a kind with no verification path. A
+        // directory this hub owns is neither: the hub reads it back to verify
+        // and the check costs sixteen ranges of a few kilobytes. Accepting the
+        // excuse here would buy nothing measurable and permanently forfeit the
+        // staging trim, so it is refused at load rather than regretted later
+        // (FR-VER-006).
+        if (requiresPath && !destination.RequiresVerification)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationCannotDeclineVerification(destination.Name));
+        }
     }
 
     private static void ValidateSetDestinations(BackupSetConfiguration set, HashSet<string> destinationNames)

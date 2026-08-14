@@ -358,7 +358,42 @@ public sealed class StagingTrimTests : IDisposable
 
         Assert.Contains(
             line => line.StartsWith("trim held back: 2 data blob(s)", StringComparison.Ordinal), report.Lines);
+
+        // And the count alone is not the report. Retention stalling is an
+        // operator problem, so the destination holding it up is named with the
+        // reason — a bare number leaves nothing to act on (FR-GC-005).
+        Assert.Contains(
+            line => line.Contains(
+                "destination 'friend' has not proven what it was last sent", StringComparison.Ordinal),
+            report.Lines);
         Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_AVaultMissingTheBlob_NamesWhatItDoesNotHold()
+    {
+        // The probe basis stalling had no named line at all before: only a
+        // destination the caller mapped to Unverifiable was ever named, so a
+        // reachable replica that had silently lost an object vanished into the
+        // count — which is precisely the case an operator most needs to see.
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        var replicaRoot = Directory.GetDirectories(VaultPath).Single();
+
+        foreach (var path in Directory
+            .EnumerateFiles(Path.Combine(replicaRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
+            .Take(1))
+        {
+            File.Delete(path);
+        }
+
+        var report = await RunAsync(store, VaultVerification, apply: true, now: Day1.AddDays(2).AddHours(1));
+
+        Assert.Contains(
+            line => line.Contains(
+                "destination 'vault' does not hold every historic blob staging would drop",
+                StringComparison.Ordinal),
+            report.Lines);
     }
 
     [TestMethod]

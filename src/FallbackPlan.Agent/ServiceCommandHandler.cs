@@ -262,14 +262,26 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     /// <summary>
     /// How a destination's holdings can be verified for the staging trim
     /// (ADR-0034 §6): a reachable local-path replica is probed key by key —
-    /// direct evidence; a peer is trusted through its sync-ledger claim, the
-    /// same trust the replication gate already rests on (FR-GC-009); anything
-    /// else — an unplugged drive, an unserved kind — cannot vouch, and every
-    /// blob it is entitled to stays in staging.
+    /// direct evidence; a peer is trusted through its sync-ledger claim
+    /// <b>backed by a verification stamp</b> (FR-VER-006); anything else — an
+    /// unplugged drive, an unserved kind — cannot vouch, and every blob it is
+    /// entitled to stays in staging.
     /// </summary>
+    /// <remarks>
+    /// The declared policy is read <b>before</b> the kind. A destination
+    /// excused from proving is unverifiable by its own declaration, whatever
+    /// its kind — mapping it by kind would hand it a basis it can never
+    /// satisfy, and the operator would see the resulting stall as a bare
+    /// count with no destination named.
+    /// </remarks>
     private Retention.TrimVerification TrimVerificationFor(string destinationName, ArchiveHandle archive)
     {
         var destination = runtime.Configuration.FindDestination(destinationName);
+        if (destination is { RequiresVerification: false })
+        {
+            return Retention.TrimVerification.Declined;
+        }
+
         switch (destination?.Kind)
         {
             case DestinationKind.LocalPath:

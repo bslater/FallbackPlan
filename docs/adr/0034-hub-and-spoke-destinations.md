@@ -233,6 +233,17 @@ the deletion pass re-reads the ledger per candidate rather than treating a
 ledger claim as monotonic: a synced sequence only advances, but a proof can be
 withdrawn by a failure between planning and deleting.
 
+Because that first consequence is a **standing** cost rather than a transient
+one, the retention report names every destination that stalled the trim and
+why: declared unprovable, unreachable right now, reachable but unproven, or
+holding less than staging would drop. Only the reasons that clear on their own
+say "right now"; a declared-unprovable destination is told the three ways out —
+make it verifiable, remove it, or give it retention rules so it is not entitled
+to the history at all. A bare held-back count was the shape an operator could
+not act on. For the same reason the acknowledgement is refused outright on a
+`local-path` destination: the hub reads a directory it owns to verify it, so
+the excuse buys nothing measurable there and costs the trim its licence.
+
 ## Status history
 
 | Date | Status | Note |

@@ -82,6 +82,9 @@
   <data name="ClientConfiguration_DestinationFieldNotForKind" xml:space="preserve">
     <value>Destination '{0}': '{1}' does not apply to its kind.</value>
   </data>
+  <data name="ClientConfiguration_DestinationCannotDeclineVerification" xml:space="preserve">
+    <value>Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.</value>
+  </data>
   <data name="ClientConfiguration_DestinationIdMustHex" xml:space="preserve">
     <value>Destination '{0}': id must be 32 hex digits.</value>
   </data>

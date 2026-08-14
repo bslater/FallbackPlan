@@ -158,6 +158,35 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    public void Load_ALocalPathDestinationDecliningVerification_IsRefused()
+    {
+        // The acknowledgement is for destinations that genuinely cannot be
+        // challenged. A directory this hub owns is not one: it reads it back
+        // itself, at a cost of sixteen ranges of a few kilobytes. Accepting
+        // the excuse would buy nothing and permanently forfeit the staging
+        // trim, so it is refused at load rather than regretted later.
+        var declining = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { Verification = VerificationPolicy.AcknowledgedNone }],
+            BackupSets = [Set("docs", Ref("usb"))],
+        };
+
+        var refusal = Assert.ThrowsExactly<ClientStateException>(() => declining.Save(ConfigPath));
+        Assert.Contains("usb", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("acknowledged-none", refusal.Message, StringComparison.Ordinal);
+
+        // Stating the default explicitly is fine — it is the same policy.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { Verification = VerificationPolicy.Required }],
+            BackupSets = [Set("docs", Ref("usb"))],
+        }.Save(ConfigPath);
+        Assert.IsTrue(ClientConfiguration.Load(ConfigPath).FindDestination("usb")!.RequiresVerification);
+    }
+
+    [TestMethod]
     public void Load_AVerificationPolicyOutsideTheVocabulary_IsRefused()
     {
         // Notably including the plausible-looking ones: there is no "none",
