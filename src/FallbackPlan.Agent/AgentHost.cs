@@ -790,8 +790,11 @@ public static class AgentHost
             using var keypair = PeerKeypairStore.Open(stateDirectory);
             await using var connection = await PeerTlsConnection.DialAsync(
                 host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            // A termination notice demands nothing of the peer beyond hearing
+            // it: this dial carries no feature requirement.
             var session = await PeerSessionDriver.DialAsync(
-                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
+                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null,
+                cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             if (!session.Supports(PeerSessionNegotiation.TerminationNoticeFeature))

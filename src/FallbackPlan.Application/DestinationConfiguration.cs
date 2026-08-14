@@ -59,6 +59,36 @@ public enum FailureDomain
 }
 
 /// <summary>
+/// Whether a destination must prove it holds what it claims (FR-VER-006,
+/// peer-protocol 04 §1).
+/// </summary>
+/// <remarks>
+/// There are exactly two values and no boolean, deliberately. Verification is
+/// the stated mitigation for a destination that discards data and says
+/// otherwise (<c>threat-model</c> T-8), and a mitigation the defended-against
+/// party may decline in silence is not a mitigation. Keeping an unverifiable
+/// destination therefore takes the word <see cref="AcknowledgedNone"/> in the
+/// configuration file — a value nobody types by accident, carrying its own
+/// acknowledgement the way FR-DED-004's does for unverified dedup.
+/// </remarks>
+[JsonConverter(typeof(JsonStringEnumConverter<VerificationPolicy>))]
+public enum VerificationPolicy
+{
+    /// <summary>The destination must answer challenges; one that cannot is refused.</summary>
+    [JsonStringEnumMemberName("required")]
+    Required = 0,
+
+    /// <summary>
+    /// This destination is knowingly kept without proof. It still receives
+    /// backups and still counts as a copy, but it can never report
+    /// <c>verified</c> and never authorises a staging trim — nothing that
+    /// refuses to prove may license deleting the last local copy.
+    /// </summary>
+    [JsonStringEnumMemberName("acknowledged-none")]
+    AcknowledgedNone = 1,
+}
+
+/// <summary>
 /// One declared destination: a named place backup sets replicate to,
 /// referenced from sets by name (FR-DEST-001). Addresses live here and only
 /// here — a pairing grant holds a key and terms, never an endpoint
@@ -102,6 +132,18 @@ public sealed record DestinationConfiguration
     /// </summary>
     [JsonPropertyName("failure_domain")]
     public FailureDomain? FailureDomain { get; init; }
+
+    /// <summary>
+    /// Whether this destination must prove possession (FR-VER-006). Absent
+    /// means <see cref="VerificationPolicy.Required"/>: the safe answer is the
+    /// one you get by not thinking about it.
+    /// </summary>
+    [JsonPropertyName("verification")]
+    public VerificationPolicy? Verification { get; init; }
+
+    /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
+    [JsonIgnore]
+    public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;
 }
 
 /// <summary>

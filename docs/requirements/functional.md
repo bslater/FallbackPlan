@@ -120,6 +120,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-VER-003 **[new]** | Verification status shall be reported as coverage and age, never as a bare boolean. | No UI surface presents "verified" without both. |
 | FR-VER-004 **[new]** | Full on-demand verification shall be available and shall run before a recovery drill. | It completes and reports per-object results. |
 | FR-VER-005 **[new]** | A verification failure shall mark the affected `(snapshot, destination)` `degraded` and raise a warning requiring action. | Status changes and the warning appears. |
+| FR-VER-006 **[new]** | A destination shall be verifiable. One that cannot answer challenges shall be refused rather than replicated to, unless the configuration explicitly acknowledges keeping it unproven; an unproven destination shall never report `verified` and shall never license reclaiming the source's last local copy. | A peer that does not offer verification is refused with a stated reason and holds nothing; the acknowledgement is a value that cannot be set by accident; an unproven destination never satisfies the staging-trim gate. |
 
 ## Retention and garbage collection
 

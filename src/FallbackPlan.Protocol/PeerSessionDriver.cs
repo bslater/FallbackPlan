@@ -100,7 +100,7 @@ public static class PeerSessionDriver
         CancellationToken cancellationToken = default) =>
         RunAsync(
             connection, keypair, grants, expected: null, agentVersion, terms, termsForPeer, offeredFeatures,
-            cancellationToken);
+            requiredFeatures: null, cancellationToken);
 
     /// <summary>Dials a known peer: authenticate the one expected, then open.</summary>
     /// <param name="connection">The TLS connection, its bindings already known.</param>
@@ -109,6 +109,14 @@ public static class PeerSessionDriver
     /// <param name="expected">The peer this side dialled — an unexpected answer is refused hard (01 §2.5).</param>
     /// <param name="agentVersion">Informational build string for the hello.</param>
     /// <param name="terms">Terms to offer when this side is the destination (01 §4).</param>
+    /// <param name="requiredFeatures">
+    /// Features this side demands of the peer (02 §6): a peer that does not
+    /// offer one is refused at negotiation with
+    /// <see cref="PeerRefusalReason.FeatureUnsupported"/> naming it, before any
+    /// payload crosses. A source uses this to refuse a destination that cannot
+    /// prove possession (04 §1, FR-VER-006); a console demands nothing, because
+    /// it stores nothing.
+    /// </param>
     /// <param name="cancellationToken">Cancels the handshake.</param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused, or refused this side.</exception>
@@ -119,12 +127,13 @@ public static class PeerSessionDriver
         PeerIdentity expected,
         string agentVersion,
         PeerTerms? terms = null,
+        IReadOnlyList<string>? requiredFeatures = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(expected);
         return RunAsync(
             connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, offeredFeatures: null,
-            cancellationToken);
+            requiredFeatures, cancellationToken);
     }
 
     private static async ValueTask<PeerSession> RunAsync(
@@ -136,6 +145,7 @@ public static class PeerSessionDriver
         PeerTerms? terms,
         Func<PeerGrant, PeerTerms?>? termsForPeer,
         IReadOnlyList<string>? offeredFeatures,
+        IReadOnlyList<string>? requiredFeatures,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(connection);
@@ -172,7 +182,8 @@ public static class PeerSessionDriver
             // the grant and differ per peer, and only an authenticated peer
             // has one (05 §6).
             var ourHello = PeerSessionNegotiation.Hello(
-                agentVersion, termsForPeer is not null ? termsForPeer(peer) : terms, required: null, offeredFeatures);
+                agentVersion, termsForPeer is not null ? termsForPeer(peer) : terms, requiredFeatures,
+                offeredFeatures);
             await PeerFrame.WriteAsync(stream, ourHello, cancellationToken).ConfigureAwait(false);
 
             var theirHello = await ReadAsync<SessionHello>(

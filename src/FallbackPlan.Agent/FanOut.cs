@@ -22,6 +22,10 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 public static class FanOut
 {
+    /// <summary>What a source demands of a destination that must prove itself (FR-VER-006).</summary>
+    private static readonly string[] VerificationRequirement =
+        [Protocol.PeerSessionNegotiation.DestinationVerificationFeature];
+
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
     /// <param name="destinationName">The declared destination name.</param>
@@ -206,8 +210,15 @@ public static class FanOut
             using var keypair = Protocol.PeerKeypairStore.Open(runtime.Options.StateDirectory);
             await using var connection = await Protocol.PeerTlsConnection.DialAsync(
                 endpoint[..separator], port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            // A destination that will not prove possession is refused at
+            // negotiation, before a byte crosses (04 §1, FR-VER-006): the
+            // mitigation T-8 names cannot be one the defended-against party
+            // declines in silence. Excusing it takes the acknowledged word in
+            // the configuration.
             var session = await Protocol.PeerSessionDriver.DialAsync(
-                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null, cancellationToken)
+                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null,
+                requiredFeatures: destination.RequiresVerification ? VerificationRequirement : null,
+                cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             // The destination's hello carries its current terms; they are
@@ -309,6 +320,21 @@ public static class FanOut
                     $"peering-terminated:{destination.Fingerprint}",
                     $"Peer '{destination.Name}' ended the peering — this set no longer replicates there. "
                     + "Remove or replace the destination in the configuration.",
+                    nowMs);
+            }
+
+            if (refusal.Reason == Protocol.PeerRefusalReason.FeatureUnsupported)
+            {
+                // The destination cannot prove it holds what it is given, so
+                // this hub will not build on it (FR-VER-006). Name both ways
+                // out, because the right one is the human's call: fix the
+                // destination, or take the unverifiable copy knowingly.
+                runtime.Notices.Raise(
+                    $"verification-unsupported:{set.Id}:{destination.Name}",
+                    $"Destination '{destination.Name}' cannot answer verification challenges, so set "
+                    + $"'{set.Name}' is not replicating there: an unprovable copy is not protection. "
+                    + "Upgrade that peer, or — knowing it can never be proven and can never license "
+                    + "reclaiming local space — set its `verification` to `acknowledged-none`.",
                     nowMs);
             }
 

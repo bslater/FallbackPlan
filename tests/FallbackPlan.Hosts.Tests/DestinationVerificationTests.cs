@@ -90,17 +90,66 @@ public sealed class DestinationVerificationTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Sync_APeerThatDoesNotOfferVerification_SyncsCleanlyAndClaimsNothing()
+    public async Task Sync_APeerThatCannotProveItself_IsRefusedRatherThanQuietlyTrusted()
     {
-        // The older-peer path, end to end (peer-protocol 04 §1): a build that
-        // predates the feature never offers it, so the source MUST NOT send a
-        // challenge — an unknown type would be refused as `message_unknown`
-        // and take the whole session with it. The sync must succeed anyway,
-        // and it must claim nothing it did not prove.
-        _source.WriteSourceFile("notes.txt", "no challenges here");
+        // FR-VER-006, and the reversal of an earlier posture: a destination
+        // that will not answer challenges used to be synced to anyway and
+        // simply left unstamped. But verification is the stated mitigation
+        // for a destination that discards data and says otherwise (T-8), and
+        // a mitigation the defended-against party can decline in silence is
+        // no mitigation — declining was strictly cheaper than failing a
+        // challenge. So the hub now refuses to build on it at all.
+        _source.WriteSourceFile("notes.txt", "prove it or lose me");
         var destinationFingerprint = await StartDestinationAsync(
             PeerRole.StoresHere, offeredFeatures: FeaturesWithoutVerification);
         WritePeerConfiguration(destinationFingerprint);
+
+        var run = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+
+        // Exit 0: the backup itself succeeded. The destination's state is the
+        // ledger's and the notice's to carry, never the pass's.
+        var sync = await RunSyncAsync();
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
+
+        var record = DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.Failed, record.State, $"state={record.State} error={record.LastError}");
+        Assert.Contains("FeatureUnsupported", record.LastError!, StringComparison.Ordinal);
+        Assert.Contains("destination-verification", record.LastError!, StringComparison.Ordinal);
+
+        // Refused at negotiation, so not one byte was written there.
+        Assert.IsFalse(
+            Directory.Exists(Path.Combine(_destinationState, "replicas"))
+            && Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Length > 0,
+            "a destination refused for being unprovable must hold nothing");
+
+        // And the human is told, durably, with both ways out named.
+        var notice = Assert.ContainsSingle(NoticeStore.Open(_source.StateDirectory).Unacknowledged);
+        Assert.Contains("cannot answer verification challenges", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("acknowledged-none", notice.Message, StringComparison.Ordinal);
+
+        // Nothing off-domain holds the data, so nothing claims protection.
+        var status = await RunStatusAsync();
+        Assert.AreEqual(0, status.ExitCode, status.Error);
+        Assert.DoesNotContain("Protected", status.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Verified", status.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sync_AnAcknowledgedUnprovableDestination_SyncsButClaimsNothing()
+    {
+        // The escape hatch, and the shape of it: keeping an unprovable
+        // destination takes a word in the configuration that nobody types by
+        // accident. Having typed it, the copy is made and counts as a copy —
+        // but it is never dressed up as proven.
+        _source.WriteSourceFile("notes.txt", "knowingly unprovable");
+        var destinationFingerprint = await StartDestinationAsync(
+            PeerRole.StoresHere, offeredFeatures: FeaturesWithoutVerification);
+        WritePeerConfiguration(destinationFingerprint, VerificationPolicy.AcknowledgedNone);
 
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
@@ -112,29 +161,21 @@ public sealed class DestinationVerificationTests : IDisposable
         Assert.AreEqual(0, sync.ExitCode, sync.Error);
         Assert.Contains("docs -> friend: in sync", sync.Output, StringComparison.Ordinal);
 
-        // The replica really was written — this is a completed sync, not a
-        // silent no-op that would pass the assertions below for free.
+        // A real replica, not a silent no-op that would satisfy the rest for free.
         var replica = Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Single();
         Assert.IsNotEmpty(Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories));
 
         var record = DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend");
         Assert.IsNotNull(record);
         Assert.AreEqual(DestinationSyncState.InSync, record.State, $"state={record.State} error={record.LastError}");
-        Assert.IsGreaterThanOrEqualTo(1UL, record.SyncedSequence, "the sync claims what it delivered");
+        Assert.IsGreaterThanOrEqualTo(1UL, record.SyncedSequence);
 
-        // Nothing verified, and nothing pretended: the stamps stay at their
-        // never-set defaults rather than being filled in by a sync that could
-        // not ask. A peer that cannot answer is not a failure either — no
-        // notice is raised (04 §1: cannot-prove is an answer, not an error).
-        Assert.IsNull(record.VerifiedAt, "a peer that was never challenged must carry no proof date");
+        // Acknowledged means excused from proving, never counted as proven.
+        Assert.IsNull(record.VerifiedAt, "an unchallenged destination must carry no proof date");
         Assert.AreEqual(0UL, record.VerifiedSequence);
         Assert.AreEqual(0, record.VerifiedObjects);
-        Assert.AreEqual(0, record.VerifiedPopulation);
         Assert.IsEmpty(NoticeStore.Open(_source.StateDirectory).Unacknowledged);
 
-        // And the status surface says the honest word: protected by an
-        // off-domain destination, but never `verified`, and never a coverage
-        // clause for a proof that was never asked for (10 §1.2).
         var status = await RunStatusAsync();
         Assert.AreEqual(0, status.ExitCode, status.Error);
         Assert.Contains("Protected", status.Output, StringComparison.Ordinal);
@@ -236,7 +277,14 @@ public sealed class DestinationVerificationTests : IDisposable
     private PeerGrantStore? _destinationGrants;
 
     /// <summary>Declares the running peer as the docs set's one destination.</summary>
-    private void WritePeerConfiguration(string destinationFingerprint) => new ClientConfiguration
+    /// <param name="destinationFingerprint">The peer's pinned fingerprint.</param>
+    /// <param name="verification">
+    /// The destination's verification policy; null leaves the field out of the
+    /// file entirely, which is the default a user gets by not thinking about
+    /// it — and must therefore be the safe one.
+    /// </param>
+    private void WritePeerConfiguration(
+        string destinationFingerprint, VerificationPolicy? verification = null) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -248,6 +296,7 @@ public sealed class DestinationVerificationTests : IDisposable
                 Kind = DestinationKind.Peer,
                 Fingerprint = destinationFingerprint,
                 Endpoint = $"{_endpoint!.Address}:{_endpoint.Port}",
+                Verification = verification,
             },
         ],
         BackupSets =

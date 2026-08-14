@@ -108,7 +108,8 @@ public sealed class RemoteBindingTests : IDisposable
         await using var connection = await PeerTlsConnection.DialAsync(
             remote.Endpoint.Address.ToString(), remote.Endpoint.Port, DateTimeOffset.UtcNow, _timeout.Token);
         var session = await PeerSessionDriver.DialAsync(
-            connection, _console, consoleGrants, serviceKeypair.Identity, "console/test", null, _timeout.Token);
+            connection, _console, consoleGrants, serviceKeypair.Identity, "console/test", null,
+            cancellationToken: _timeout.Token);
 
         // The console reached an open session with the service it dialled.
         Assert.AreEqual(serviceKeypair.Identity, session.Peer.Identity);
@@ -175,7 +176,8 @@ public sealed class RemoteBindingTests : IDisposable
         PeerTlsConnection connection, PeerGrantStore consoleGrants, PeerIdentity serviceIdentity)
     {
         await PeerSessionDriver.DialAsync(
-            connection, _console, consoleGrants, serviceIdentity, "console/test", null, _timeout.Token);
+            connection, _console, consoleGrants, serviceIdentity, "console/test", null,
+            cancellationToken: _timeout.Token);
     }
 
     private async Task WaitForAsync(Func<bool> condition)

@@ -173,7 +173,8 @@ public sealed class PeerWireTests : IDisposable
             await using var connection = await PeerTlsConnection.DialAsync(
                 malloryFrontEndpoint.Address.ToString(), malloryFrontEndpoint.Port, Now, Cancellation);
             return await PeerSessionDriver.DialAsync(
-                connection, _console, consoleStore, _service.Identity, "console/test", null, Cancellation);
+                connection, _console, consoleStore, _service.Identity, "console/test", null,
+                cancellationToken: Cancellation);
         });
 
         // Mallory: accept the console, dial the service, pump bytes both ways.
@@ -363,7 +364,8 @@ public sealed class PeerWireTests : IDisposable
             await using var connection = await PeerTlsConnection.DialAsync(
                 endpoint.Address.ToString(), endpoint.Port, Now, Cancellation);
             return await PeerSessionDriver.DialAsync(
-                connection, _console, consoleStore, consoleExpects, "console/test", null, Cancellation);
+                connection, _console, consoleStore, consoleExpects, "console/test", null,
+                cancellationToken: Cancellation);
         });
 
         // Wait for BOTH sides to settle before deciding what to surface. A

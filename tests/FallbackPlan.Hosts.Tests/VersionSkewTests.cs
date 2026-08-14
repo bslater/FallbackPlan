@@ -47,7 +47,7 @@ public sealed class VersionSkewTests : IDisposable
             DateTimeOffset.UtcNow, CancellationToken.None);
         var session = await PeerSessionDriver.DialAsync(
             connection, sourceKeypair, sourceGrants, destinationIdentity,
-            "fallbackplan-agent/test", terms: null, CancellationToken.None);
+            "fallbackplan-agent/test", terms: null, cancellationToken: CancellationToken.None);
 
         // A future build's repository format, offered to this one: the
         // session opened cleanly, so the refusal must be a stated reason on
@@ -89,7 +89,7 @@ public sealed class VersionSkewTests : IDisposable
             DateTimeOffset.UtcNow, CancellationToken.None);
         var session = await PeerSessionDriver.DialAsync(
             connection, sourceKeypair, sourceGrants, destinationIdentity,
-            "fallbackplan-agent/test", terms: null, CancellationToken.None);
+            "fallbackplan-agent/test", terms: null, cancellationToken: CancellationToken.None);
 
         Assert.IsFalse(
             session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),

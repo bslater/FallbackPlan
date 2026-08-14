@@ -128,6 +128,56 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    public void SaveThenLoad_TheVerificationPolicy_DefaultsToRequiredAndRoundTripsTheAcknowledgement()
+    {
+        // FR-VER-006: the safe answer is the one you get by not thinking
+        // about it, and excusing a destination from proving itself takes a
+        // word nobody types by accident.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Peer("alice")],
+            BackupSets = [Set("docs", Ref("alice"))],
+        }.Save(ConfigPath);
+
+        var byDefault = ClientConfiguration.Load(ConfigPath).FindDestination("alice")!;
+        Assert.IsNull(byDefault.Verification, "an unstated policy stays unstated in the file");
+        Assert.IsTrue(byDefault.RequiresVerification, "and an unstated policy means proof is required");
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Peer("bob", '3') with { Verification = VerificationPolicy.AcknowledgedNone }],
+            BackupSets = [Set("docs", Ref("bob"))],
+        }.Save(ConfigPath);
+
+        var acknowledged = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(VerificationPolicy.AcknowledgedNone, acknowledged.FindDestination("bob")!.Verification);
+        Assert.IsFalse(acknowledged.FindDestination("bob")!.RequiresVerification);
+        Assert.Contains("\"acknowledged-none\"", acknowledged.ExportJson(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Load_AVerificationPolicyOutsideTheVocabulary_IsRefused()
+    {
+        // Notably including the plausible-looking ones: there is no "none",
+        // no "off", no "false" — only the word that carries its own
+        // acknowledgement.
+        foreach (var word in new[] { "none", "off", "optional", "false" })
+        {
+            File.WriteAllText(ConfigPath, $$"""
+                { "schema_version": 2,
+                  "destinations": [ { "id": "{{new string('1', 32)}}", "name": "usb", "kind": "local-path",
+                                      "path": "/mnt/u", "verification": "{{word}}" } ],
+                  "backup_sets": [ { "id": "{{new string('a', 32)}}", "name": "docs", "root": "/d", "destinations": [ "usb" ] } ] }
+                """);
+
+            Assert.ThrowsExactly<ClientStateException>(
+                () => ClientConfiguration.Load(ConfigPath), $"'{word}' must not be accepted");
+        }
+    }
+
+    [TestMethod]
     public void Load_AFailureDomainOutsideTheVocabulary_IsRefused()
     {
         File.WriteAllText(ConfigPath, $$"""

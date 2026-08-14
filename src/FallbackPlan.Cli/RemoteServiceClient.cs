@@ -172,8 +172,11 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
             .ConfigureAwait(false);
         try
         {
+            // A console stores nothing, so it requires nothing: the
+            // verification requirement belongs to replication alone (04 §1).
             var session = await PeerSessionDriver.DialAsync(
-                connection, keypair, grants, expected, "fallbackplan-cli", terms: null, cancellationToken)
+                connection, keypair, grants, expected, "fallbackplan-cli", terms: null,
+                cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return (connection, session);
         }
