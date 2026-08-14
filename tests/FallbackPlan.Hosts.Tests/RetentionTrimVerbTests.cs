@@ -93,12 +93,18 @@ public sealed class RetentionTrimVerbTests : IDisposable
             File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
             await BackUpAsync(Day1.AddDays(2));
 
-            // The peer's ledger claim, as a completed sync would leave it: a
-            // synced sequence past everything published, stamped in the past.
-            DestinationSyncStore.Open(StateDirectory).RecordSuccess(
-                SetId, "friend", 0,
-                (ulong)DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
-                syncedSequence: 1_000_000);
+            // The peer's ledger row, as a completed and PROVEN sync would
+            // leave it: a synced sequence past everything published, and a
+            // challenge answered covering it. Both halves are needed — a bare
+            // claim no longer licenses a delete (FR-VER-006) — and this peer
+            // is deliberately unreachable, so the row is forged rather than
+            // earned. What is under test here is the handler's own mapping of
+            // destination kind to verification basis, not the proof rule.
+            var syncedAt = (ulong)DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds();
+            var ledger = DestinationSyncStore.Open(StateDirectory);
+            ledger.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
+            ledger.RecordVerification(
+                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, syncedAt);
 
             // The verb, end to end: the handler maps vault → store probe and
             // friend → ledger claim itself; both must vouch for both historic

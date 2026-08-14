@@ -257,17 +257,44 @@ public sealed class StagingTrimTests : IDisposable
     }
 
     [TestMethod]
-    public async Task RetentionApply_APeerWithACurrentLedgerClaim_VerifiesWithoutTouchingItsStore()
+    public async Task RetentionApply_APeerThatOnlyCLAIMSToHoldIt_DoesNotLicenseDeletingTheLastCopy()
+    {
+        // The data-loss path this closes (FR-VER-006). A sync ledger records
+        // what we SENT, not what the destination still has; trimming staging
+        // on that basis deletes our last copy of a historic blob because a
+        // peer said so. A claim is not a proof, however current it is.
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        var nowMs = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
+        DestinationSyncStore.Open(StateDirectory).RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1_000_000);
+
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.Ledger,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference { Ref = "friend" });
+
+        Assert.IsFalse(
+            report.Lines.Any(line => line.StartsWith("trimmed:", StringComparison.Ordinal)),
+            "an unproven destination must not license a delete");
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_APeerThatHasPROVENIt_VerifiesWithoutTouchingItsStore()
     {
         await BackUpThreeDaysAsync();
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        // A remote destination is verified through the ledger: a completed
-        // sync at or past the current publication sequence carried everything
-        // the destination keeps — the same trust the replication gate rests
-        // on (FR-GC-009).
+        // The same peer, now having answered a challenge covering the current
+        // sequence: the hub asks its store nothing, because bytes were read
+        // back off it during the sync and the ledger records that they were.
         var nowMs = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
-        DestinationSyncStore.Open(StateDirectory).RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1_000_000);
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        sync.RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1_000_000);
+        sync.RecordVerification(SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, nowMs);
 
         var report = await RunAsync(
             store,
@@ -279,6 +306,35 @@ public sealed class StagingTrimTests : IDisposable
         Assert.Contains(
             line => line.StartsWith("trimmed: 2 historic data blob(s)", StringComparison.Ordinal), report.Lines);
         Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_APeerWhoseLatestSyncWentUnproven_DoesNotLicenseDeletingTheLastCopy()
+    {
+        // Freshness without a new knob: the peer proved itself once, then
+        // synced again and that later sync proved nothing. The stamp is now
+        // older than the state it would vouch for, so it stops counting.
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        var provenAt = (ulong)Day1.AddDays(2).ToUnixTimeMilliseconds();
+        var syncedAt = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        sync.RecordSuccess(SetId, "friend", 0, provenAt, syncedSequence: 1_000_000);
+        sync.RecordVerification(SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, provenAt);
+        sync.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
+
+        var report = await RunAsync(
+            store,
+            name => name == "vault" ? VaultVerification(name) : TrimVerification.Ledger,
+            apply: true,
+            now: Day1.AddDays(2).AddHours(1),
+            extraDestination: new SetDestinationReference { Ref = "friend" });
+
+        Assert.IsFalse(
+            report.Lines.Any(line => line.StartsWith("trimmed:", StringComparison.Ordinal)),
+            "a proof older than the sync it would vouch for is stale, not evidence");
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
     }
 
     [TestMethod]
@@ -384,7 +440,8 @@ public sealed class StagingTrimTests : IDisposable
 
         // Execution re-verifies and refuses: the staging copies are now the
         // only copies, and every one of them stays.
-        var (deleted, _) = await StagingTrim.ExecuteAsync(store, plan, VaultVerification, CancellationToken.None);
+        var (deleted, _) = await StagingTrim.ExecuteAsync(
+            store, plan, VaultVerification, name => sync.Find(SetId, name), CancellationToken.None);
         Assert.AreEqual(0, deleted);
         Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
     }

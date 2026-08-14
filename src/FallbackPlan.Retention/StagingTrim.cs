@@ -54,7 +54,15 @@ public sealed record TrimPlan(
     IReadOnlyList<TrimCandidate> Eligible,
     long EligibleBytes,
     int HeldBack,
-    IReadOnlyList<string> Lines);
+    IReadOnlyList<string> Lines)
+{
+    /// <summary>
+    /// The publication sequence the plan reasoned about, carried so the
+    /// deletion pass can re-demand a proof covering the same ground rather
+    /// than settling for any proof at all.
+    /// </summary>
+    public ulong PublicationSequence { get; init; }
+}
 
 /// <summary>One blob the trim may remove.</summary>
 /// <param name="StoreKey">The staging store key.</param>
@@ -251,17 +259,30 @@ public static class StagingTrim
             foreach (var reference in entitled)
             {
                 var verification = verificationFor(reference.Ref);
+
+                // Deleting the last local copy is licensed by PROOF, never by
+                // a claim (FR-VER-006). Both bases now require a verification
+                // stamp covering this pass's sequence: a destination that has
+                // not read bytes back to us recently does not get to authorise
+                // us forgetting them.
+                var proven = Proves(syncRecordFor(reference.Ref), maxPublicationSequence);
+
                 verified = verification switch
                 {
-                    TrimVerification.StoreProbe probe => await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken)
-                        .ConfigureAwait(false),
+                    // Two different facts, both needed: the probe says this
+                    // exact key is present, the stamp says the destination
+                    // genuinely holds real bytes rather than plausible-looking
+                    // empty files.
+                    TrimVerification.StoreProbe probe => proven
+                        && await HoldsAsync(probe.Replica, blob.StoreKey, cancellationToken).ConfigureAwait(false),
                     // The claim also demands this pass's clock be at or past
                     // the sync it rests on: entitlement here is computed at
                     // `now`, and a pass running BEHIND the last sync could
                     // hold a wider keep-set than the one the destination
                     // actually converged to — vouching for a blob the
                     // destination was instructed to drop.
-                    TrimVerification.LedgerClaim => maxPublicationSequence > 0
+                    TrimVerification.LedgerClaim => proven
+                        && maxPublicationSequence > 0
                         && syncRecordFor(reference.Ref) is { } record
                         && record.SyncedSequence >= maxPublicationSequence
                         && record.LastSuccessAt is { } lastSuccess
@@ -306,7 +327,10 @@ public static class StagingTrim
             lines.Add($"trim: destination '{name}' cannot vouch for its copies right now");
         }
 
-        return new TrimPlan(eligible, eligibleBytes, heldBack, lines);
+        return new TrimPlan(eligible, eligibleBytes, heldBack, lines)
+        {
+            PublicationSequence = maxPublicationSequence,
+        };
     }
 
     /// <summary>Deletes the plan's eligible blobs from staging.</summary>
@@ -315,25 +339,29 @@ public static class StagingTrim
     /// destination whose store can be asked directly: the tombstone and
     /// sweep phases run between planning and this pass, and a replica is a
     /// directory anything may touch — a copy that was there when the plan
-    /// was made and is gone now means the blob stays. A ledger claim needs
-    /// no re-check, because a synced sequence only ever advances; anything
-    /// else answering for a destination now is a change of world, and the
-    /// blob stays for the next pass to re-plan.
+    /// was made and is gone now means the blob stays. The proof stamp is
+    /// re-read too. A synced sequence only ever advances, but a proof does
+    /// not: a verification that failed between planning and here withdraws
+    /// the licence to delete, and the blob stays for the next pass to
+    /// re-plan.
     /// </remarks>
     /// <param name="store">The staging archive's store.</param>
     /// <param name="plan">The plan to execute.</param>
     /// <param name="verificationFor">The same verifications the plan was built from.</param>
+    /// <param name="syncRecordFor">The sync ledger, re-read per candidate so a withdrawn proof is seen.</param>
     /// <param name="cancellationToken">Stops the deletes; a re-run re-plans from scratch.</param>
     /// <returns>What actually went — a blob already gone, or no longer verified, counts nothing.</returns>
     public static async ValueTask<(int Deleted, long Bytes)> ExecuteAsync(
         IObjectStore store,
         TrimPlan plan,
         Func<string, TrimVerification> verificationFor,
+        Func<string, DestinationSyncRecord?> syncRecordFor,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(plan);
         ThrowHelper.ThrowIfNull(verificationFor);
+        ThrowHelper.ThrowIfNull(syncRecordFor);
 
         var deleted = 0;
         var bytes = 0L;
@@ -342,11 +370,13 @@ public static class StagingTrim
             var verified = true;
             foreach (var name in candidate.EntitledDestinations)
             {
+                var proven = Proves(syncRecordFor(name), plan.PublicationSequence);
                 verified = verificationFor(name) switch
                 {
-                    TrimVerification.StoreProbe probe =>
-                        await HoldsAsync(probe.Replica, candidate.StoreKey, cancellationToken).ConfigureAwait(false),
-                    TrimVerification.LedgerClaim => true,
+                    TrimVerification.StoreProbe probe => proven
+                        && await HoldsAsync(probe.Replica, candidate.StoreKey, cancellationToken)
+                            .ConfigureAwait(false),
+                    TrimVerification.LedgerClaim => proven,
                     _ => false,
                 };
 
@@ -385,6 +415,28 @@ public static class StagingTrim
 
         return (deleted, bytes);
     }
+
+    /// <summary>
+    /// Whether a destination has PROVEN, recently enough to matter, that it
+    /// holds real bytes at or beyond this pass's sequence (FR-VER-006).
+    /// </summary>
+    /// <param name="record">The pair's sync ledger row, or null when never attempted.</param>
+    /// <param name="maxPublicationSequence">The sequence the trim is reasoning about.</param>
+    /// <remarks>
+    /// Freshness is expressed without a new configuration knob: the last
+    /// <b>successful</b> sync must itself have proven something. Since every
+    /// sync now verifies, a success recorded without a stamp leaves
+    /// <c>LastSuccessAt</c> ahead of <c>VerifiedAt</c> — and that gap is
+    /// exactly the case where the destination's latest state is unproven, so
+    /// it must not license a delete. A destination excused from proving never
+    /// satisfies this at all: refusing to prove and authorising deletion are
+    /// not both available.
+    /// </remarks>
+    private static bool Proves(DestinationSyncRecord? record, ulong maxPublicationSequence) =>
+        record is { VerifiedAt: { } verifiedAt, LastSuccessAt: { } lastSuccess }
+        && record.VerifiedObjects > 0
+        && record.VerifiedSequence >= maxPublicationSequence
+        && verifiedAt >= lastSuccess;
 
     private static async ValueTask<bool> HoldsAsync(
         IObjectStore replica, ObjectKey key, CancellationToken cancellationToken)
