@@ -1215,7 +1215,7 @@ public static class CliApplication
                             // The matrix beneath the roll-up (ADR-0028 §8):
                             // the detail is what the summary was computed from.
                             output.WriteLine(
-                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
 
@@ -1287,6 +1287,7 @@ public static class CliApplication
                             Kind = declared?.Kind ?? DestinationKind.LocalPath,
                             Sync = sync,
                             Domain = domain,
+                            RequiresVerification = declared?.RequiresVerification ?? true,
                             LastSuccessAt = record?.LastSuccessAt,
                             Detail = record?.LastError,
                             SyncedSequence = record?.SyncedSequence ?? 0,

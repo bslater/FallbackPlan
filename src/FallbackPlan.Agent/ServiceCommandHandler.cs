@@ -1188,7 +1188,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     Detail = "no longer declared",
                 });
                 rows.Add(new DestinationStatusDescriptor(
-                    reference.Ref, "?", "failed", null, "no longer declared", "same-volume"));
+                    reference.Ref, "?", "failed", null, "no longer declared", "same-volume", "unproven"));
                 continue;
             }
 
@@ -1201,12 +1201,13 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             }
 
             var domain = DomainOf(set, destination);
-            inputs.Add(new DestinationStatusInput
+            var input = new DestinationStatusInput
             {
                 Name = destination.Name,
                 Kind = destination.Kind,
                 Sync = sync,
                 Domain = domain,
+                RequiresVerification = destination.RequiresVerification,
                 LastSuccessAt = record?.LastSuccessAt,
                 Detail = record?.LastError,
                 SyncedSequence = record?.SyncedSequence ?? 0,
@@ -1214,10 +1215,13 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 VerifiedSequence = record?.VerifiedSequence ?? 0,
                 VerifiedObjects = record?.VerifiedObjects ?? 0,
                 VerifiedPopulation = record?.VerifiedPopulation ?? 0,
-            });
+            };
+
+            inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(
                 destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt,
-                record?.LastError, StatusDeriver.DomainLabel(domain)));
+                record?.LastError, StatusDeriver.DomainLabel(domain),
+                StatusDeriver.VerificationLabel(input)));
         }
 
         return (inputs, rows);

@@ -188,13 +188,20 @@ public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
 /// <param name="LastSuccessAt">When it last synced, Unix milliseconds; null when never.</param>
 /// <param name="Detail">What the last failure said, or null.</param>
 /// <param name="FailureDomain">Where it sits relative to the source: <c>same-volume</c>, <c>same-machine</c>, <c>same-site</c>, or <c>independent</c> (FR-SNP-007).</param>
+/// <param name="Verification">
+/// Where it stands on proving possession (FR-VER-006): <c>proven</c>,
+/// <c>stale</c> (proven once, but not for what it was last sent),
+/// <c>unproven</c> (no challenge has ever succeeded), or
+/// <c>unprovable (accepted)</c> (knowingly kept without proof).
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
     string State,
     ulong? LastSuccessAt,
     string? Detail,
-    string FailureDomain);
+    string FailureDomain,
+    string Verification);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

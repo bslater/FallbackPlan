@@ -62,6 +62,19 @@ public sealed record DestinationStatusInput
 
     /// <summary>Objects eligible when that sample was drawn — the coverage denominator.</summary>
     public int VerifiedPopulation { get; init; }
+
+    /// <summary>
+    /// Whether this destination is required to prove possession (FR-VER-006),
+    /// or was knowingly excused. It distinguishes the two ways a destination
+    /// can be unproven — "cannot be, and you said so" from "should be, and
+    /// isn't" — which look identical in the stamps alone and call for
+    /// completely different responses from a human.
+    /// </summary>
+    public bool RequiresVerification { get; init; } = true;
+
+    /// <summary>Whether a usable proof covers what this destination was last sent.</summary>
+    public bool IsProvenCurrent =>
+        VerifiedAt is not null && VerifiedObjects > 0 && VerifiedSequence >= SyncedSequence;
 }
 
 /// <summary>
@@ -177,12 +190,26 @@ public static class StatusDeriver
                     // the word must not be reachable from one: the engine
                     // withholds such a stamp, and this refuses to honour one
                     // that reached the ledger by any other route.
-                    if (destination.VerifiedAt is not null
-                        && destination.VerifiedObjects > 0
-                        && destination.VerifiedSequence >= destination.SyncedSequence
+                    if (destination.IsProvenCurrent
                         && (verifiedBy is null || destination.VerifiedAt > verifiedBy.VerifiedAt))
                     {
                         verifiedBy = destination;
+                    }
+                    else if (!destination.RequiresVerification)
+                    {
+                        // Named every time, not once at configuration: this is
+                        // a copy nobody can audit, and the reason it is
+                        // tolerated should stay in front of the person who
+                        // chose to tolerate it (FR-VER-006).
+                        warnings.Add(
+                            $"'{destination.Name}' is in sync but cannot be proven — it was knowingly accepted "
+                            + "unverifiable, so it never counts as verified and never licenses reclaiming local space.");
+                    }
+                    else
+                    {
+                        warnings.Add(
+                            $"'{destination.Name}' is in sync but its copy is not proven"
+                            + $"{(destination.VerifiedAt is null ? " — no challenge has ever succeeded there" : " for what it was last sent")}.");
                     }
 
                     break;
@@ -258,6 +285,29 @@ public static class StatusDeriver
         DestinationSyncState.Failed => "failing",
         _ => state.ToString().ToLowerInvariant(),
     };
+
+    /// <summary>
+    /// Where one destination stands on proving itself, for the status matrix
+    /// (FR-VER-003, FR-VER-006). Four answers, because "not verified" hides
+    /// three different situations calling for three different responses.
+    /// </summary>
+    /// <param name="destination">The destination's observed facts.</param>
+    public static string VerificationLabel(DestinationStatusInput destination)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+
+        if (destination.IsProvenCurrent)
+        {
+            return "proven";
+        }
+
+        return destination switch
+        {
+            { RequiresVerification: false } => "unprovable (accepted)",
+            { VerifiedAt: null } => "unproven",
+            _ => "stale",
+        };
+    }
 
     /// <summary>The configuration's spelling of a domain (FR-SNP-007).</summary>
     public static string DomainLabel(FailureDomain domain) => domain switch

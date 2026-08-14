@@ -377,6 +377,43 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_TheThreeWaysOfBeingUnproven_ReadDifferently()
+    {
+        // "Not verified" hides three situations that call for three different
+        // responses, so the matrix names them apart (FR-VER-006).
+        var never = Destination() with { SyncedSequence = 3 };
+        Assert.AreEqual("unproven", StatusDeriver.VerificationLabel(never));
+
+        var stale = never with { VerifiedAt = 1, VerifiedObjects = 4, VerifiedPopulation = 9, VerifiedSequence = 2 };
+        Assert.AreEqual("stale", StatusDeriver.VerificationLabel(stale));
+
+        var accepted = never with { RequiresVerification = false };
+        Assert.AreEqual("unprovable (accepted)", StatusDeriver.VerificationLabel(accepted));
+
+        var proven = stale with { VerifiedSequence = 3 };
+        Assert.AreEqual("proven", StatusDeriver.VerificationLabel(proven));
+
+        // And each unproven kind explains itself in the warnings, in its own
+        // words — an accepted one names the choice that was made.
+        var acceptedStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [accepted] });
+        Assert.AreEqual(ProtectionState.Protected, acceptedStatus.State);
+        Assert.Contains(
+            warning => warning.Contains("knowingly accepted unverifiable", StringComparison.Ordinal),
+            acceptedStatus.Warnings);
+
+        var neverStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [never] });
+        Assert.Contains(
+            warning => warning.Contains("no challenge has ever succeeded", StringComparison.Ordinal),
+            neverStatus.Warnings);
+
+        // A proven destination says nothing about being unproven.
+        var provenStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [proven] });
+        Assert.AreEqual(ProtectionState.Verified, provenStatus.State);
+        Assert.DoesNotContain(
+            warning => warning.Contains("not proven", StringComparison.Ordinal), provenStatus.Warnings);
+    }
+
+    [TestMethod]
     public void BackupSetStatus_AStampThatProvedNoRanges_IsNotVerification()
     {
         // A run where every sample was skipped counts zero passed and zero
