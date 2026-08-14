@@ -377,6 +377,33 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_AStampThatProvedNoRanges_IsNotVerification()
+    {
+        // A run where every sample was skipped counts zero passed and zero
+        // failed — indistinguishable from a clean sweep unless something
+        // insists on the numerator. The engine now withholds such a stamp;
+        // this refuses to honour one that reached the ledger anyway, so the
+        // word cannot be reached from nothing proven (FR-VER-003).
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 0,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+        Assert.IsNull(status.Verification, "0 of 20 is not a coverage figure, it is an absence of one");
+    }
+
+    [TestMethod]
     public void BackupSetStatus_AVerificationStampOlderThanTheSync_FallsBackToProtected()
     {
         // A later sync ran unverified — an older peer build, say. The stamp

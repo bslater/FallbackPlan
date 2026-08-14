@@ -122,7 +122,7 @@ public static class StatusDeriver
         // that destination is in NOW: a claim is a date and a coverage, and a
         // later failure dates it rather than erases it (FR-VER-003).
         var latestClaim = inputs.Destinations
-            .Where(destination => destination.VerifiedAt is not null)
+            .Where(destination => destination.VerifiedAt is not null && destination.VerifiedObjects > 0)
             .OrderByDescending(destination => destination.VerifiedAt!.Value)
             .Select(DetailOf)
             .FirstOrDefault();
@@ -170,9 +170,15 @@ public static class StatusDeriver
 
                     // Verified current: proven bytes at least as new as the
                     // sync's own claim (peer-protocol 04). A destination whose
-                    // last sync ran unverified — an older peer build, say —
-                    // stays Protected: the stamp goes stale, never wrong.
+                    // last sync proved nothing — one excused from proving, or
+                    // one whose samples could not be read — stays Protected:
+                    // the stamp goes stale, never wrong.
+                    // A stamp that proved no ranges is not a verification, and
+                    // the word must not be reachable from one: the engine
+                    // withholds such a stamp, and this refuses to honour one
+                    // that reached the ledger by any other route.
                     if (destination.VerifiedAt is not null
+                        && destination.VerifiedObjects > 0
                         && destination.VerifiedSequence >= destination.SyncedSequence
                         && (verifiedBy is null || destination.VerifiedAt > verifiedBy.VerifiedAt))
                     {

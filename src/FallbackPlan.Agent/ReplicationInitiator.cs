@@ -145,9 +145,20 @@ internal static class ReplicationInitiator
     public sealed record VerificationSample(string Key, ulong Offset, uint Length);
 
     /// <summary>What one challenge run established.</summary>
-    /// <param name="Passed">Samples the destination proved.</param>
+    /// <param name="Passed">Ranges the destination proved.</param>
     /// <param name="Failed">Keys the destination could not prove, or proved wrongly.</param>
-    public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed);
+    /// <remarks>
+    /// <see cref="Passed"/> is counted rather than inferred from the absence of
+    /// failures, because a sample whose ground truth this side could not read
+    /// is skipped — and a run where every sample skipped would otherwise be
+    /// spelled exactly like a run where every sample passed. Proving nothing
+    /// and proving everything must not look alike (FR-VER-003).
+    /// </remarks>
+    public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed)
+    {
+        /// <summary>Whether this run established anything at all.</summary>
+        public bool ProvedSomething => Passed > 0;
+    }
 
     /// <summary>
     /// Issues keyed random-range challenges after the exchange (peer-protocol

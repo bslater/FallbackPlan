@@ -285,14 +285,22 @@ public static class FanOut
                 }
 
                 ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
-                ledger.RecordVerification(
-                    set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                if (verification.ProvedSomething)
+                {
+                    ledger.RecordVerification(
+                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                }
+
+                // Else: every sample was skipped because staging could not read
+                // its own ground truth — a pass that established nothing. It is
+                // not a destination fault, so the sync stands; but it is not
+                // proof either, so no stamp is written and the trim gate stays
+                // shut until one is.
                 return;
             }
 
-            // Feature absent, or nothing eligible to sample: the sync stands,
-            // unverified by challenge — a stated posture, never an error
-            // (peer-protocol 04 §1).
+            // Excused from proving (04 §1's acknowledged opt-out), or nothing
+            // eligible to sample: the sync stands, unproven, and says so.
             ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         }
         catch (Protocol.PeerProtocolException refusal)
@@ -488,8 +496,12 @@ public static class FanOut
                 }
 
                 ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
-                ledger.RecordVerification(
-                    set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                if (verification.ProvedSomething)
+                {
+                    ledger.RecordVerification(
+                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                }
+
                 return;
             }
 
