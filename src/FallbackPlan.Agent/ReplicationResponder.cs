@@ -242,7 +242,11 @@ internal static class ReplicationResponder
                 $"A verification challenge may not name '{challenge.Key}' — lifecycle keys never replicate (04 §4.1).");
         }
 
-        var bytes = await ReadRangeAsync(replica, challenge, cancellationToken).ConfigureAwait(false);
+        // The exact challenged range, or null for every honest inability
+        // (04 §4.2) — the same reader the source uses on its own bytes, so
+        // the two ends cannot disagree about what "cannot produce it" means.
+        var bytes = await Replication.RangeReader.ReadAsync(
+            replica, challenge.Key, challenge.Offset, challenge.Length, cancellationToken).ConfigureAwait(false);
         if (bytes is null)
         {
             await PeerFrame.WriteAsync(
@@ -256,45 +260,6 @@ internal static class ReplicationResponder
             challenge.Offset, challenge.Length, bytes);
         await PeerFrame.WriteAsync(stream, new VerificationProof(Held: true, proof), cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    /// <summary>The exact challenged range, or null for every honest inability (04 §4.2).</summary>
-    private static async Task<byte[]?> ReadRangeAsync(
-        LocalFileSystemObjectStore replica, VerificationChallenge challenge, CancellationToken cancellationToken)
-    {
-        if (!ObjectKey.TryParse(challenge.Key, out var key))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var read = await replica.OpenReadAsync(
-                key, new ObjectRange((long)challenge.Offset, checked((long)challenge.Length)), cancellationToken)
-                .ConfigureAwait(false);
-            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
-            {
-                return null;
-            }
-
-            var bytes = new byte[challenge.Length];
-            var filled = 0;
-            int got;
-            while (filled < bytes.Length
-                && (got = await read.Content.ReadAsync(bytes.AsMemory(filled), cancellationToken)
-                    .ConfigureAwait(false)) > 0)
-            {
-                filled += got;
-            }
-
-            // A short copy cannot prove the range — which is exactly what
-            // the challenge exists to catch.
-            return filled == bytes.Length ? bytes : null;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            return null;
-        }
     }
 
     /// <summary>

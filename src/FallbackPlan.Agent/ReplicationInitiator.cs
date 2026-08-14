@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Protocol;
+using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Agent;
@@ -138,28 +139,6 @@ internal static class ReplicationInitiator
         }
     }
 
-    /// <summary>One key and range to challenge (peer-protocol 04).</summary>
-    /// <param name="Key">The store key.</param>
-    /// <param name="Offset">The range's byte offset.</param>
-    /// <param name="Length">The range's length.</param>
-    public sealed record VerificationSample(string Key, ulong Offset, uint Length);
-
-    /// <summary>What one challenge run established.</summary>
-    /// <param name="Passed">Ranges the destination proved.</param>
-    /// <param name="Failed">Keys the destination could not prove, or proved wrongly.</param>
-    /// <remarks>
-    /// <see cref="Passed"/> is counted rather than inferred from the absence of
-    /// failures, because a sample whose ground truth this side could not read
-    /// is skipped — and a run where every sample skipped would otherwise be
-    /// spelled exactly like a run where every sample passed. Proving nothing
-    /// and proving everything must not look alike (FR-VER-003).
-    /// </remarks>
-    public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed)
-    {
-        /// <summary>Whether this run established anything at all.</summary>
-        public bool ProvedSomething => Passed > 0;
-    }
-
     /// <summary>
     /// Issues keyed random-range challenges after the exchange (peer-protocol
     /// 04): for each sample, the expected proof is computed from this side's
@@ -187,7 +166,8 @@ internal static class ReplicationInitiator
             var failed = new List<string>();
             foreach (var sample in samples)
             {
-                var expected = await ReadSampleAsync(source, sample, cancellationToken).ConfigureAwait(false);
+                var expected = await RangeReader.ReadAsync(source, sample, cancellationToken)
+                    .ConfigureAwait(false);
                 if (expected is null)
                 {
                     // Staging itself could not read the range — there is no
@@ -234,38 +214,6 @@ internal static class ReplicationInitiator
             }
 
             throw;
-        }
-    }
-
-    private static async Task<byte[]?> ReadSampleAsync(
-        IObjectStore source, VerificationSample sample, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var read = await source.OpenReadAsync(
-                ObjectKey.Parse(sample.Key),
-                new ObjectRange((long)sample.Offset, checked((long)sample.Length)), cancellationToken)
-                .ConfigureAwait(false);
-            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
-            {
-                return null;
-            }
-
-            var bytes = new byte[sample.Length];
-            var filled = 0;
-            int got;
-            while (filled < bytes.Length
-                && (got = await read.Content.ReadAsync(bytes.AsMemory(filled), cancellationToken)
-                    .ConfigureAwait(false)) > 0)
-            {
-                filled += got;
-            }
-
-            return filled == bytes.Length ? bytes : null;
-        }
-        catch (Exception exception) when (exception is IOException or ArgumentException)
-        {
-            return null;
         }
     }
 

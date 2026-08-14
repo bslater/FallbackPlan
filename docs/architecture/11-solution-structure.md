@@ -25,7 +25,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Protocol/                ✓ peer identity, pairing, session, authentication (ADR-0030)
 │   ├── FallbackPlan.Protocol.Grpc/
 │   ├── FallbackPlan.Discovery/
-│   ├── FallbackPlan.Replication/             ✓ store-to-store copier — the fan-out primitive (ADR-0034)
+│   ├── FallbackPlan.Replication/             ✓ store-to-store copier and replica verifier (ADR-0034)
 │   ├── FallbackPlan.Restore/                 ✓ restore planner and executor
 │   ├── FallbackPlan.Retention/               ✓ planner, replication gate, mark, sweep, convergence, staging trim (ADR-0034)
 │   ├── FallbackPlan.Verification/
@@ -53,7 +53,8 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.FuzzTests/    ✓
 │   ├── FallbackPlan.Filesystem.Tests/        ✓
 │   ├── FallbackPlan.Restore.Tests/
-│   ├── FallbackPlan.Retention.Tests/
+│   ├── FallbackPlan.Replication.Tests/       ✓ the shared range reader and replica verifier
+│   ├── FallbackPlan.Retention.Tests/         ✓ planner, replication gate, staging trim
 │   ├── FallbackPlan.Protocol.Tests/          ✓ pairing, grants, framing, negotiation, channel binding
 │   ├── FallbackPlan.Storage.ContractTests/   ✓
 │   ├── FallbackPlan.Import.CrashPlan.Tests/

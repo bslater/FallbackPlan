@@ -487,8 +487,8 @@ public static class FanOut
                 // both destination kinds earn "verified" from bytes read back
                 // off the destination's own disk, never from a copy having
                 // reported success (FR-VER-001).
-                var verification = await VerifyReplicaAsync(archive.Store, replica, plan.Samples, cancellationToken)
-                    .ConfigureAwait(false);
+                var verification = await Replication.ReplicaVerifier.VerifyAsync(
+                    archive.Store, replica, plan.Samples, cancellationToken).ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
                     RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
@@ -515,41 +515,6 @@ public static class FanOut
     }
 
     /// <summary>
-    /// Reads each sampled range back from the replica and compares it to
-    /// staging's bytes. Absent, short, or different answers are findings; a
-    /// range staging itself cannot read proves nothing either way.
-    /// </summary>
-    private static async ValueTask<ReplicationInitiator.VerificationOutcome> VerifyReplicaAsync(
-        Storage.Abstractions.IObjectStore staging, Storage.Abstractions.IObjectStore replica,
-        IReadOnlyList<ReplicationInitiator.VerificationSample> samples, CancellationToken cancellationToken)
-    {
-        var passed = 0;
-        var failed = new List<string>();
-        foreach (var sample in samples)
-        {
-            var expected = await VerificationSampler.ReadRangeAsync(staging, sample, cancellationToken)
-                .ConfigureAwait(false);
-            if (expected is null)
-            {
-                continue;
-            }
-
-            var actual = await VerificationSampler.ReadRangeAsync(replica, sample, cancellationToken)
-                .ConfigureAwait(false);
-            if (actual is not null && expected.AsSpan().SequenceEqual(actual))
-            {
-                passed++;
-            }
-            else
-            {
-                failed.Add(sample.Key);
-            }
-        }
-
-        return new ReplicationInitiator.VerificationOutcome(passed, failed);
-    }
-
-    /// <summary>
     /// A failed proof is a durable finding, never a silent retry (FR-VER-005):
     /// the pair's row goes <see cref="DestinationSyncState.Failed"/> — so the
     /// destination stops counting toward protection and the trim gate — and a
@@ -558,7 +523,7 @@ public static class FanOut
     /// </summary>
     private static void RecordVerificationFailure(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
-        ReplicationInitiator.VerificationOutcome verification, int sampled, ulong nowMs)
+        Replication.VerificationOutcome verification, int sampled, ulong nowMs)
     {
         var summary = $"verification failed: {verification.Failed.Count} of {sampled} sampled range(s) "
             + $"could not be proven, first '{verification.Failed[0]}'";

@@ -39,6 +39,7 @@
     <Project Path="tests/FallbackPlan.InterruptionTests/FallbackPlan.InterruptionTests.csproj" />
     <Project Path="tests/FallbackPlan.PerformanceTests/FallbackPlan.PerformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Protocol.Tests/FallbackPlan.Protocol.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Replication.Tests/FallbackPlan.Replication.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Retention.Tests/FallbackPlan.Retention.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.ConformanceTests/FallbackPlan.Repository.ConformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.FuzzTests/FallbackPlan.Repository.FuzzTests.csproj" />

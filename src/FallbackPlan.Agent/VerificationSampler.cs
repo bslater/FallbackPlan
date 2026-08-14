@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Protocol;
+using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Agent;
@@ -32,7 +33,7 @@ internal static class VerificationSampler
     /// </summary>
     /// <param name="Samples">The keys and ranges to challenge.</param>
     /// <param name="Population">Objects that were eligible when the sample was drawn.</param>
-    public sealed record SamplePlan(IReadOnlyList<ReplicationInitiator.VerificationSample> Samples, int Population);
+    public sealed record SamplePlan(IReadOnlyList<VerificationSample> Samples, int Population);
 
     /// <summary>
     /// Draws up to <paramref name="budget"/> samples from the source listing.
@@ -59,8 +60,8 @@ internal static class VerificationSampler
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfLessThan(budget, 1);
 
-        ReplicationInitiator.VerificationSample? newest = null;
-        var reservoir = new List<ReplicationInitiator.VerificationSample>();
+        VerificationSample? newest = null;
+        var reservoir = new List<VerificationSample>();
         var seen = 0;
 
         await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -106,58 +107,14 @@ internal static class VerificationSampler
     /// <summary>A random range inside an object of the given length.</summary>
     /// <param name="key">The store key.</param>
     /// <param name="objectLength">The object's total length; must be positive.</param>
-    public static ReplicationInitiator.VerificationSample RangeFor(string key, long objectLength)
+    public static VerificationSample RangeFor(string key, long objectLength)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(key);
         ThrowHelper.ThrowIfLessThan(objectLength, 1L);
 
         var length = (uint)Math.Min(Math.Min(objectLength, PreferredLength), VerificationChallenge.MaximumLength);
         var offset = (ulong)Random.Shared.NextInt64(0, objectLength - length + 1);
-        return new ReplicationInitiator.VerificationSample(key, offset, length);
-    }
-
-    /// <summary>
-    /// Reads exactly the sampled range from a store, or null when the store
-    /// cannot produce it — absent key, shorter copy, unreadable disk. For a
-    /// replica that answer <b>is</b> the finding; for staging it means there
-    /// is no ground truth and the sample proves nothing either way.
-    /// </summary>
-    /// <param name="store">The store to read.</param>
-    /// <param name="sample">The key and range.</param>
-    /// <param name="cancellationToken">Cancels the read.</param>
-    public static async Task<byte[]?> ReadRangeAsync(
-        IObjectStore store, ReplicationInitiator.VerificationSample sample, CancellationToken cancellationToken)
-    {
-        ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(sample);
-
-        try
-        {
-            using var read = await store.OpenReadAsync(
-                ObjectKey.Parse(sample.Key),
-                new ObjectRange((long)sample.Offset, checked((long)sample.Length)), cancellationToken)
-                .ConfigureAwait(false);
-            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
-            {
-                return null;
-            }
-
-            var bytes = new byte[sample.Length];
-            var filled = 0;
-            int got;
-            while (filled < bytes.Length
-                && (got = await read.Content.ReadAsync(bytes.AsMemory(filled), cancellationToken)
-                    .ConfigureAwait(false)) > 0)
-            {
-                filled += got;
-            }
-
-            return filled == bytes.Length ? bytes : null;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            return null;
-        }
+        return new VerificationSample(key, offset, length);
     }
 
     private static bool IsStagingOnly(string key) =>
