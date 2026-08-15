@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using FallbackPlan.Agent;
 using FallbackPlan.Application;
 using FallbackPlan.Repository;
@@ -6,6 +7,7 @@ using FallbackPlan.Replication;
 using FallbackPlan.Retention;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -536,6 +538,41 @@ public sealed class DestinationConvergenceTests : IDisposable
         Assert.AreEqual(
             DestinationSyncState.Failed,
             DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!.State);
+    }
+
+    [TestMethod]
+    [UnprivilegedPlatformCondition(TestPlatforms.Posix, "The subject is a directory the process may not write to.")]
+    [UnsupportedOSPlatform("windows")]
+    public async Task VerifyDestinationVerb_Probe_ADirectoryThatWillNotTakeAWrite_IsAFaultRatherThanAnOutage()
+    {
+        // The branch the whole local-path probe exists for, and the one a
+        // stat could not answer: existence is not permission. A destination
+        // directory that refuses writes is present, readable, and fails every
+        // single sync — the failure mode that looks perfectly healthy from
+        // outside until a backup needs to land there.
+        //
+        // Failed rather than Unavailable: a permission is a decision somebody
+        // made, and waiting does not undo it.
+        //
+        // This runs on CI's ubuntu and macos legs, which are unprivileged, and
+        // is skipped in a root container — where permission denial cannot be
+        // observed at all, so a test that "passed" there would have asserted
+        // nothing.
+        File.SetUnixFileMode(WidePath, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var output = await ProbeAsync("wide");
+
+            Assert.Contains("will not accept a write", output, StringComparison.Ordinal);
+            Assert.AreEqual(
+                DestinationSyncState.Failed,
+                DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!.State);
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                WidePath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [TestMethod]

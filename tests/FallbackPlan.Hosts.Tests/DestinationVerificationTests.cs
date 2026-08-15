@@ -312,7 +312,6 @@ public sealed class DestinationVerificationTests : IDisposable
         ],
     }.Save(Path.Combine(_source.StateDirectory, "config.json"));
 
-    /// <summary>Runs the agent `sync` verb against the harness's archives and state.</summary>
     [TestMethod]
     public async Task VerifyDestination_ProbingALivePeer_ReachesItWithoutSendingAnything()
     {
@@ -342,6 +341,65 @@ public sealed class DestinationVerificationTests : IDisposable
             "a probe sends nothing");
     }
 
+    [TestMethod]
+    public async Task VerifyDestination_ProbingAPeerNothingIsListeningFor_IsAnOutageAndNotAFault()
+    {
+        // ADR-0035 §2's distinction, and until now nothing proved it: an
+        // unreachable peer is a gap that closes itself when it returns
+        // (FR-DEST-003), so it must be recorded Unavailable. Spelling it
+        // Failed would send somebody looking for a fault to fix when the
+        // answer is to wait, or to turn the other machine on.
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
+
+        // Stop the listener, keeping the grant and the configuration exactly
+        // as a working destination's would be — the only thing that changes
+        // is that nothing answers on the port.
+        await _stop!.DisposeAsync();
+        _stop = null;
+
+        var probe = await ProbeAsync();
+
+        Assert.AreEqual(0, probe.ExitCode, probe.Error);
+        Assert.Contains("could not reach", probe.Output, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.Unavailable,
+            DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend")!.State);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_ProbingAPeerWithNoGrantPinned_SaysToPairRatherThanToWait()
+    {
+        // The other half of the same distinction. The address is well formed
+        // and the peer is up, so nothing here is transient — there is simply
+        // no pairing, which no amount of retrying produces. The existing
+        // fingerprint test never reaches this: a malformed fingerprint is
+        // caught by the address check before any grant is looked up.
+        await StartDestinationAsync(PeerRole.StoresHere);
+
+        // A well-formed fingerprint of a peer this hub never paired with —
+        // sixteen bytes of base32, so the address check passes it and the
+        // grant lookup is genuinely reached. Deliberately not a revoked
+        // grant: revocation is a different answer ("the peering ended")
+        // that the protocol tells apart from this one on purpose.
+        WritePeerConfiguration("mgr7e7euwdpfkggmp4astkz5ia");
+
+        var probe = await ProbeAsync();
+
+        Assert.AreEqual(0, probe.ExitCode, probe.Error);
+        Assert.Contains("no pairing matches", probe.Output, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.Failed,
+            DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend")!.State,
+            "an unpaired destination is a decision somebody has to make, not an outage that heals");
+    }
+
+    private Task<HostHarness.Invocation> ProbeAsync() => HostHarness.RunAsync(
+        AgentHost.RunAsync,
+        "verify-destination", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+        "--passphrase-env", _source.PassphraseVariable, "--destination", "friend", "--probe");
+
+    /// <summary>Runs the agent `sync` verb against the harness's archives and state.</summary>
     private Task<HostHarness.Invocation> RunSyncAsync() => HostHarness.RunAsync(
         AgentHost.RunAsync,
         "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
