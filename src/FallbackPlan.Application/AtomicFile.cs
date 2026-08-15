@@ -63,7 +63,34 @@ public static class AtomicFile
     /// The number of replace attempts before a contended destination is
     /// reported as a failure rather than retried again.
     /// </summary>
-    private const int ReplaceAttempts = 10;
+    public const int ReplaceAttempts = 10;
+
+    /// <summary>
+    /// Whether a failed replace attempt is contention worth retrying, or a
+    /// defect to report at once.
+    /// </summary>
+    /// <param name="exception">What the replace attempt threw.</param>
+    /// <remarks>
+    /// <para>
+    /// Public because it is the only part of the retry that can be proven. The
+    /// contention itself cannot: <c>rename(2)</c> is atomic and simply wins or
+    /// loses, so no POSIX test can manufacture the <c>ERROR_ACCESS_DENIED</c>
+    /// this absorbs, and a Windows-only integration test would exercise one leg
+    /// of the matrix at a cost out of proportion to what it proves. The
+    /// classification is where a mistake would actually live, and it is
+    /// testable everywhere.
+    /// </para>
+    /// <para>
+    /// The subtlety worth pinning: <see cref="FileNotFoundException"/> and
+    /// <see cref="DirectoryNotFoundException"/> <i>are</i>
+    /// <see cref="IOException"/>s, and they are the two that must not be
+    /// retried. A missing source or directory is not contention — it is a
+    /// defect, and ten sleeps only delay the report of it.
+    /// </para>
+    /// </remarks>
+    public static bool IsReplaceContention(Exception exception) =>
+        exception is UnauthorizedAccessException
+            or (IOException and not (FileNotFoundException or DirectoryNotFoundException));
 
     /// <summary>
     /// Replaces <paramref name="path"/> with <paramref name="temporary"/>,
@@ -92,10 +119,7 @@ public static class AtomicFile
                 File.Move(temporary, path, overwrite: true);
                 return;
             }
-            catch (Exception exception) when (
-                attempt < ReplaceAttempts &&
-                exception is UnauthorizedAccessException
-                    or (IOException and not (FileNotFoundException or DirectoryNotFoundException)))
+            catch (Exception exception) when (attempt < ReplaceAttempts && IsReplaceContention(exception))
             {
                 // A missing source or directory is not contention and is not
                 // retried — it is a defect, and delaying it only hides it.
