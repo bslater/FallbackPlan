@@ -486,6 +486,90 @@ public sealed class DestinationConvergenceTests : IDisposable
         Assert.Contains("nowhere", error.ToString(), StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public async Task VerifyDestinationVerb_Probe_AnswersBeforeAnythingHasEverBeenSentThere()
+    {
+        // The depth that exists because the other two cannot speak yet: with
+        // no backup taken, there are no stored bytes to re-read and no ledger
+        // row to read a history from. "Could this take a backup?" is still
+        // answerable, and is the question worth asking first.
+        var output = await ProbeAsync("wide");
+
+        Assert.Contains(WidePath, output, StringComparison.Ordinal);
+        Assert.Contains("accepts writes", output, StringComparison.Ordinal);
+
+        // A handshake is not a sync. Recording one would move the trim gate
+        // and the scheduler's due-ness on the strength of a directory
+        // existing.
+        Assert.IsNull(
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")?.LastSuccessAt,
+            "a probe never claims the destination holds anything");
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_Probe_ADetachedDriveIsUnavailableRatherThanFailed()
+    {
+        // FR-DEST-003: a removable drive that is out is a gap that closes
+        // itself when it returns. Spelling it Failed would send somebody
+        // looking for a fault that is a plugged-in cable away.
+        Directory.Delete(WidePath, recursive: true);
+
+        var output = await ProbeAsync("wide");
+
+        Assert.Contains("does not exist", output, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.Unavailable,
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!.State);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_Probe_AFileWhereADirectoryWasDeclared_IsAFaultRatherThanAnOutage()
+    {
+        // No amount of waiting turns a file into a directory, so this is the
+        // one local-path condition that must not self-heal into Unavailable.
+        Directory.Delete(WidePath, recursive: true);
+        await File.WriteAllTextAsync(WidePath, "not a directory");
+
+        var output = await ProbeAsync("wide");
+
+        Assert.Contains("is a file, not a directory", output, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.Failed,
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!.State);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_Probe_AFingerprintThatIsNotOne_IsNamedWithoutDialling()
+    {
+        // The declaration is checked before the socket: a fingerprint that no
+        // `Base32.Encode` could produce can never match a grant, so dialling
+        // would only produce "not paired" — true, and the wrong thing to go
+        // and do about it. This fixture's peer also points at a port nothing
+        // listens on, so a probe that dialled anyway would hang or time out
+        // rather than answer.
+        AddPeerDestination();
+
+        var output = await ProbeAsync("friend");
+
+        Assert.Contains("base32", output, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.Failed,
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend")!.State);
+    }
+
+    private async Task<string> ProbeAsync(string destination)
+    {
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
+                "--passphrase-env", PassphraseVariable, "--destination", destination, "--probe"],
+            output, error, CancellationToken.None);
+
+        Assert.AreEqual(0, exit, error.ToString());
+        return output.ToString();
+    }
+
     /// <summary>An environment variable holding this fixture's passphrase, for the agent verbs.</summary>
     private string PassphraseVariable
     {

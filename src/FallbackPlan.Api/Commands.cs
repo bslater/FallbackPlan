@@ -102,23 +102,32 @@ public sealed record RetentionCommand(bool Apply) : ServiceCommand;
 public sealed record SyncCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
 
 /// <summary>
-/// Re-reads a destination's stored objects now, outside the sweep's cadence,
-/// and confirms they still match what was sealed (FR-VER-002, FR-VER-004).
+/// Asks what a destination can still be trusted for, at one of three depths
+/// (FR-DEST-001, FR-VER-002, FR-VER-004).
 /// </summary>
 /// <remarks>
-/// This is the deep setting of verification, aimed at a <i>destination</i>,
-/// where <see cref="VerifyCommand"/> sweeps the hub's own staging archives at a
-/// chosen level. One verb with a depth, rather than two that drift apart.
+/// One verb with a depth, rather than several that drift apart: probe asks
+/// whether the destination could take a backup at all, the default reads one
+/// bounded segment of its stored bytes, and full reads every one of them.
+/// Aimed at a <i>destination</i>, where <see cref="VerifyCommand"/> sweeps the
+/// hub's own staging archives at a chosen level.
 /// </remarks>
 /// <param name="BackupSetName">The set to verify; null takes every configured set.</param>
 /// <param name="DestinationName">The destination to verify; null takes each set's every destination.</param>
 /// <param name="Full">
 /// False reads one bounded segment, as the scheduled sweep does; true keeps
 /// going until the circuit closes, which is what a recovery drill wants
-/// (FR-VER-004).
+/// (FR-VER-004). Ignored when <paramref name="Probe"/> is set.
+/// </param>
+/// <param name="Probe">
+/// Reads nothing: confirms only that the destination could take a backup —
+/// the address is usable, the directory exists and accepts writes, or the peer
+/// is reachable and still honours the grant. The one depth that answers before
+/// the first sync has ever run, which is when a destination is least proven
+/// and most trusted.
 /// </param>
 public sealed record VerifyDestinationCommand(
-    string? BackupSetName, string? DestinationName, bool Full) : ServiceCommand;
+    string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

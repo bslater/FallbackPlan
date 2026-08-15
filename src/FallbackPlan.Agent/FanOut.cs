@@ -23,7 +23,11 @@ namespace FallbackPlan.Agent;
 public static class FanOut
 {
     /// <summary>What a source demands of a destination that must prove itself (FR-VER-006).</summary>
-    private static readonly string[] VerificationRequirement =
+    /// <remarks>
+    /// Shared with the admission probe so the probe cannot report a
+    /// destination as viable that a sync would then refuse at negotiation.
+    /// </remarks>
+    internal static readonly string[] VerificationRequirement =
         [Protocol.PeerSessionNegotiation.DestinationVerificationFeature];
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
@@ -184,32 +188,22 @@ public static class FanOut
     {
         var ledger = runtime.DestinationSync;
 
-        var grants = Protocol.PeerGrantStore.Open(runtime.Options.StateDirectory);
-        var grant = grants.Grants.FirstOrDefault(candidate =>
-            string.Equals(candidate.Identity.Fingerprint, destination.Fingerprint, StringComparison.Ordinal));
-        if (grant is null)
+        // Shared with the admission probe, so "declared but unreachable" is
+        // one judgement worded one way rather than two that drift.
+        if (!PeerAddress.TryResolve(runtime, destination, out var address, out var unreachable))
         {
             ledger.RecordFailure(
-                set.Id, destination.Name, DestinationSyncState.Failed,
-                $"no pairing matches fingerprint '{destination.Fingerprint}' — pair with the peer first", nowMs);
+                set.Id, destination.Name, DestinationSyncState.Failed, unreachable!, nowMs);
             return;
         }
 
-        var endpoint = destination.Endpoint!;
-        var separator = endpoint.LastIndexOf(':');
-        if (separator <= 0 || !int.TryParse(endpoint[(separator + 1)..], out var port))
-        {
-            ledger.RecordFailure(
-                set.Id, destination.Name, DestinationSyncState.Failed,
-                $"endpoint '{endpoint}' is not host:port", nowMs);
-            return;
-        }
+        var (grants, grant, host, port) = address!;
 
         try
         {
             using var keypair = Protocol.PeerKeypairStore.Open(runtime.Options.StateDirectory);
             await using var connection = await Protocol.PeerTlsConnection.DialAsync(
-                endpoint[..separator], port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+                host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
             // A destination that will not prove possession is refused at
             // negotiation, before a byte crosses (04 §1, FR-VER-006): the
             // mitigation T-8 names cannot be one the defended-against party

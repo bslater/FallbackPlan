@@ -953,6 +953,33 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
                 matched = true;
                 var declared = configuration.FindDestination(reference.Ref);
+                if (command.Probe)
+                {
+                    // The shallowest depth: can this destination take a backup
+                    // at all? Answerable before the first sync, which is the
+                    // only moment the deeper settings cannot speak to — there
+                    // are no stored bytes to re-read yet.
+                    if (declared is null)
+                    {
+                        lines.Add($"{set.Name} -> {reference.Ref}: no longer declared");
+                        damaged++;
+                        continue;
+                    }
+
+                    var probe = await DestinationProbe
+                        .ProbeAsync(runtime, set, declared, now, cancellationToken).ConfigureAwait(false);
+                    lines.Add($"{set.Name} -> {reference.Ref}: {probe.Detail}");
+                    if (!probe.Viable)
+                    {
+                        // Counted as damage so the console's exit code carries
+                        // it: a probe that found an unusable destination has
+                        // failed, whatever it says in prose.
+                        damaged++;
+                    }
+
+                    continue;
+                }
+
                 if (declared is null || declared.Kind != DestinationKind.LocalPath)
                 {
                     // Said rather than skipped: a peer replica lives behind the

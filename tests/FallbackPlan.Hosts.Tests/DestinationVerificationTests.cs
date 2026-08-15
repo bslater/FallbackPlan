@@ -313,6 +313,35 @@ public sealed class DestinationVerificationTests : IDisposable
     }.Save(Path.Combine(_source.StateDirectory, "config.json"));
 
     /// <summary>Runs the agent `sync` verb against the harness's archives and state.</summary>
+    [TestMethod]
+    public async Task VerifyDestination_ProbingALivePeer_ReachesItWithoutSendingAnything()
+    {
+        // Admission over the wire (FR-DEST-001): pairing ends at a grant,
+        // which proves a key exchange happened once and says nothing about
+        // whether that peer is reachable now. Before this, the first sync was
+        // the first news — and the first sync is the full copy.
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var probe = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "verify-destination", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--destination", "friend", "--probe");
+
+        Assert.AreEqual(0, probe.ExitCode, probe.Error);
+        Assert.Contains("session established", probe.Output, StringComparison.Ordinal);
+
+        // Reaching a peer is not syncing to it. A row claiming otherwise
+        // would move both the trim gate and the scheduler's due-ness on the
+        // strength of a handshake.
+        Assert.IsNull(
+            DestinationSyncStore.Open(_source.StateDirectory).Find(_source.DocsSetId, "friend")?.LastSuccessAt);
+        Assert.IsFalse(
+            Directory.Exists(Path.Combine(_destinationState, "replicas"))
+            && Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Length > 0,
+            "a probe sends nothing");
+    }
+
     private Task<HostHarness.Invocation> RunSyncAsync() => HostHarness.RunAsync(
         AgentHost.RunAsync,
         "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,

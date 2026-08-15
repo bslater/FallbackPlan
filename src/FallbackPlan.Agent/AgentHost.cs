@@ -63,7 +63,7 @@ public static class AgentHost
                                             [--set <name>] [--destination <name>]
                   fallbackplan-agent verify-destination --archives <root> --state <dir>
                                             [--passphrase-env <VAR>] [--set <name>]
-                                            [--destination <name>] [--full]
+                                            [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
 
@@ -360,14 +360,16 @@ public static class AgentHost
                 result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }
 
-        // `verify-destination [--set] [--destination] [--full]` re-reads a
-        // destination's stored objects and confirms they still match what was
-        // sealed (FR-VER-002, FR-VER-004) — the deep half of verification,
-        // where `verify` sweeps this hub's own staging archives.
+        // `verify-destination [--set] [--destination] [--probe|--full]` asks
+        // what a destination can still be trusted for (FR-DEST-001,
+        // FR-VER-002, FR-VER-004): whether it could take a backup at all, or
+        // whether the bytes it already holds still match what was sealed.
+        // `verify` sweeps this hub's own staging archives instead.
         if (args[0] == "verify-destination")
         {
             return await ServiceVerbAsync(
-                new Api.VerifyDestinationCommand(Get("--set"), Get("--destination"), args.Contains("--full")),
+                new Api.VerifyDestinationCommand(
+                    Get("--set"), Get("--destination"), args.Contains("--full"), args.Contains("--probe")),
                 result => (result as Api.VerifyDestinationResult)?.Lines).ConfigureAwait(false);
         }
 

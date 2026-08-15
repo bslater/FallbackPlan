@@ -1040,19 +1040,28 @@ public static class CliApplication
             {
                 Description = "Read every stored object now, rather than the next bounded segment (FR-VER-004).",
             };
+            var probeOption = new Option<bool>("--probe")
+            {
+                Description =
+                    "Read nothing: confirm only that the destination could take a backup — the address works, "
+                    + "the directory exists and accepts writes, or the peer is reachable and honours the grant.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "verify-destination",
-                "Re-read a destination's stored objects and confirm they still match what was sealed "
-                + "(peer-protocol 04) — the deep half of verification, where `verify` sweeps this hub's own archives."));
+                "Ask what a destination can still be trusted for (peer-protocol 04): --probe confirms it could "
+                + "take a backup, the default re-reads a bounded segment of its stored bytes, --full re-reads "
+                + "every one. `verify` sweeps this hub's own archives instead."));
             command.Options.Add(setOption);
             command.Options.Add(destinationOption);
             command.Options.Add(fullOption);
+            command.Options.Add(probeOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
                 parse,
                 (gateway, token) => gateway.VerifyDestinationAsync(
-                    parse.GetValue(setOption), parse.GetValue(destinationOption), parse.GetValue(fullOption), token),
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), parse.GetValue(fullOption),
+                    parse.GetValue(probeOption), token),
                 cancellationToken)));
         }
 

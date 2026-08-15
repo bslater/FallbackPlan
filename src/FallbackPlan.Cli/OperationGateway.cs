@@ -122,9 +122,13 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="setName">The set to verify; null takes every configured set.</param>
     /// <param name="destinationName">The destination to verify; null takes each set's every destination.</param>
     /// <param name="full">Whether to keep going until every object has been read.</param>
+    /// <param name="probe">
+    /// Whether to read nothing and confirm only that the destination could
+    /// take a backup — the depth that answers before the first sync.
+    /// </param>
     /// <param name="cancellationToken">Cancels the verification.</param>
     ValueTask<OperationReport> VerifyDestinationAsync(
-        string? setName, string? destinationName, bool full, CancellationToken cancellationToken);
+        string? setName, string? destinationName, bool full, bool probe, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -412,10 +416,10 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
 
     /// <inheritdoc/>
     public async ValueTask<OperationReport> VerifyDestinationAsync(
-        string? setName, string? destinationName, bool full, CancellationToken cancellationToken)
+        string? setName, string? destinationName, bool full, bool probe, CancellationToken cancellationToken)
     {
         var result = await SendAsync<VerifyDestinationResult>(
-            new VerifyDestinationCommand(setName, destinationName, full), "a destination verification",
+            new VerifyDestinationCommand(setName, destinationName, full, probe), "a destination verification",
             cancellationToken).ConfigureAwait(false);
 
         // Unlike a sync, this one CAN fail: damaged objects are a finding, and
@@ -792,7 +796,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> VerifyDestinationAsync(
-        string? setName, string? destinationName, bool full, CancellationToken cancellationToken) =>
+        string? setName, string? destinationName, bool full, bool probe, CancellationToken cancellationToken) =>
         // Same reason, plus one of its own: the sweep's cursor and circuit
         // stamp live in the service's ledger, so a direct-mode pass would read
         // the same objects forever and never record that it had.
