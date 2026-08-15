@@ -22,6 +22,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(CheckCommand), "check")]
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
+[JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -99,6 +100,25 @@ public sealed record RetentionCommand(bool Apply) : ServiceCommand;
 /// <param name="BackupSetName">The set to sync; null syncs every configured set.</param>
 /// <param name="DestinationName">The destination to sync; null syncs each set's every destination.</param>
 public sealed record SyncCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
+
+/// <summary>
+/// Re-reads a destination's stored objects now, outside the sweep's cadence,
+/// and confirms they still match what was sealed (FR-VER-002, FR-VER-004).
+/// </summary>
+/// <remarks>
+/// This is the deep setting of verification, aimed at a <i>destination</i>,
+/// where <see cref="VerifyCommand"/> sweeps the hub's own staging archives at a
+/// chosen level. One verb with a depth, rather than two that drift apart.
+/// </remarks>
+/// <param name="BackupSetName">The set to verify; null takes every configured set.</param>
+/// <param name="DestinationName">The destination to verify; null takes each set's every destination.</param>
+/// <param name="Full">
+/// False reads one bounded segment, as the scheduled sweep does; true keeps
+/// going until the circuit closes, which is what a recovery drill wants
+/// (FR-VER-004).
+/// </param>
+public sealed record VerifyDestinationCommand(
+    string? BackupSetName, string? DestinationName, bool Full) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

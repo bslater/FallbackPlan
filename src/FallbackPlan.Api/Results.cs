@@ -50,6 +50,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(CheckResult), "check")]
 [JsonDerivedType(typeof(RetentionResult), "retention")]
 [JsonDerivedType(typeof(SyncResult), "sync")]
+[JsonDerivedType(typeof(VerifyDestinationResult), "verify_destination")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -180,6 +181,16 @@ public sealed record RetentionResult(IReadOnlyList<string> Lines) : ServiceResul
 /// <summary>An on-demand sync's report, one line per (set, destination) pair (FR-DEST-002/004).</summary>
 /// <param name="Lines">Where each pair stands after its sync ran — read from the refreshed ledger.</param>
 public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>
+/// What a deep verification found, one line per (set, destination) pair.
+/// </summary>
+/// <param name="Lines">The per-pair report.</param>
+/// <param name="Damaged">
+/// Objects that no longer match what was sealed, across every pair. Separate
+/// from the lines because an exit code must not be recovered by parsing prose.
+/// </param>
+public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long Damaged) : ServiceResult;
 
 /// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
 /// <param name="Name">The destination's declared name.</param>

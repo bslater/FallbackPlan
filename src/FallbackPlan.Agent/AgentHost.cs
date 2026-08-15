@@ -61,6 +61,9 @@ public static class AgentHost
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent sync   --archives <root> --state <dir> [--passphrase-env <VAR>]
                                             [--set <name>] [--destination <name>]
+                  fallbackplan-agent verify-destination --archives <root> --state <dir>
+                                            [--passphrase-env <VAR>] [--set <name>]
+                                            [--destination <name>] [--full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
 
@@ -126,10 +129,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention"))
+        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -357,6 +360,17 @@ public static class AgentHost
                 result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }
 
+        // `verify-destination [--set] [--destination] [--full]` re-reads a
+        // destination's stored objects and confirms they still match what was
+        // sealed (FR-VER-002, FR-VER-004) — the deep half of verification,
+        // where `verify` sweeps this hub's own staging archives.
+        if (args[0] == "verify-destination")
+        {
+            return await ServiceVerbAsync(
+                new Api.VerifyDestinationCommand(Get("--set"), Get("--destination"), args.Contains("--full")),
+                result => (result as Api.VerifyDestinationResult)?.Lines).ConfigureAwait(false);
+        }
+
         // `sync [--set] [--destination]` converges declared destinations now,
         // through the same command surface a console uses (FR-DEST-002,
         // ADR-0034 §3) — the fan-out runs on the transfer lane and the answer
@@ -366,6 +380,19 @@ public static class AgentHost
             return await ServiceVerbAsync(
                 new Api.SyncCommand(Get("--set"), Get("--destination")),
                 result => (result as Api.SyncResult)?.Lines).ConfigureAwait(false);
+        }
+
+        // Everything below is the `run` verb. Say so, rather than arriving
+        // here by falling off the end of the branches above: a verb added to
+        // the allow-list without its own branch would otherwise start the
+        // service loop and never return, which reads as a hang rather than a
+        // mistake. That happened once while this file was being extended.
+        if (args[0] != "run")
+        {
+            error.WriteLine(
+                $"error: `{args[0]}` is accepted but not implemented in this build — this is a defect, not a usage "
+                + "error. Please report it.");
+            return 70;
         }
 
         // The remote binding is off unless the operator names an interface to

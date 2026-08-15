@@ -314,6 +314,8 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
+        VerifyDestinationCommand deep =>
+            await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
@@ -898,6 +900,105 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     /// fan-out reads staging and runs on the transfer lane; a pair whose
     /// sync is already queued or running is reported, not doubled.
     /// </summary>
+    /// <summary>
+    /// Re-reads the named destinations' stored objects and reports what no
+    /// longer matches its seal (FR-VER-002, FR-VER-004).
+    /// </summary>
+    /// <remarks>
+    /// The same segment engine the scheduler runs, driven on demand — so the
+    /// two cannot disagree about what counts as damage, and a full pass leaves
+    /// the sweep's cursor and circuit stamp exactly where a scheduled one
+    /// would.
+    /// </remarks>
+    private async ValueTask<ServiceResult> VerifyDestinationAsync(
+        VerifyDestinationCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+
+        IReadOnlyList<BackupSetConfiguration> sets;
+        if (command.BackupSetName is null)
+        {
+            sets = configuration.BackupSets;
+        }
+        else if (configuration.FindSet(command.BackupSetName) is { } found)
+        {
+            sets = [found];
+        }
+        else
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.BackupSetName}' is configured.");
+        }
+
+        if (command.DestinationName is not null && configuration.FindDestination(command.DestinationName) is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+        }
+
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var lines = new List<string>();
+        var damaged = 0L;
+        var matched = false;
+
+        foreach (var set in sets)
+        {
+            foreach (var reference in set.Destinations)
+            {
+                if (command.DestinationName is not null
+                    && !string.Equals(reference.Ref, command.DestinationName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matched = true;
+                var declared = configuration.FindDestination(reference.Ref);
+                if (declared is null || declared.Kind != DestinationKind.LocalPath)
+                {
+                    // Said rather than skipped: a peer replica lives behind the
+                    // wire with no store to read, so its bytes are confirmed by
+                    // the range challenge at sync time, not by re-reading here.
+                    lines.Add(
+                        $"{set.Name} -> {reference.Ref}: not deeply verifiable — "
+                        + "only a local path can have its stored bytes re-read");
+                    continue;
+                }
+
+                var (examined, found) = command.Full
+                    ? await ReplicaSweepJob.RunFullAsync(runtime, set, reference.Ref, now, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await Segment(set, reference.Ref).ConfigureAwait(false);
+
+                damaged += found;
+                var record = runtime.DestinationSync.Find(set.Id, reference.Ref);
+                lines.Add(found > 0
+                    ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read"
+                    : $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed"
+                        + (record?.SweepCompletedAt is not null && record.SweepCursor is null
+                            ? " — every stored object has now been checked"
+                            : " — more remain; the sweep resumes next pass"));
+            }
+        }
+
+        if (!matched)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                command.DestinationName is null
+                    ? "No backup set declares a destination."
+                    : $"No matching set declares destination '{command.DestinationName}'.");
+        }
+
+        return new VerifyDestinationResult(lines, damaged);
+
+        async Task<(int Examined, int Damaged)> Segment(BackupSetConfiguration set, string destination)
+        {
+            var outcome = await ReplicaSweepJob
+                .RunAsync(runtime, set, destination, now, cancellationToken).ConfigureAwait(false);
+            return (outcome.Examined, outcome.Damaged);
+        }
+    }
+
     private async ValueTask<ServiceResult> SyncAsync(SyncCommand command, CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;

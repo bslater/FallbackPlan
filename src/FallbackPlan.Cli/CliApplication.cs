@@ -1025,6 +1025,37 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // -------------------------------------------------- verify-destination
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Verify only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Verify only this declared destination; each set's every destination otherwise.",
+            };
+            var fullOption = new Option<bool>("--full")
+            {
+                Description = "Read every stored object now, rather than the next bounded segment (FR-VER-004).",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "verify-destination",
+                "Re-read a destination's stored objects and confirm they still match what was sealed "
+                + "(peer-protocol 04) — the deep half of verification, where `verify` sweeps this hub's own archives."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(fullOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.VerifyDestinationAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), parse.GetValue(fullOption), token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------------ retention
 
         {

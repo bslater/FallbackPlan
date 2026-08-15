@@ -66,8 +66,49 @@ internal static class ReplicaSweepJob
         return queued ? completion.Task : null;
     }
 
+    /// <summary>
+    /// Reads segments until the circuit closes, and reports what it found.
+    /// </summary>
+    /// <remarks>
+    /// The on-demand full pass (FR-VER-004): a recovery drill wants "every
+    /// object, now", not "the next sixty-four". It re-enters the same segment
+    /// logic rather than a second implementation, so the two cannot disagree
+    /// about what counts as damage.
+    /// </remarks>
+    public static async Task<(int Examined, int Damaged)> RunFullAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        CancellationToken cancellationToken)
+    {
+        var examined = 0;
+        var damaged = 0;
+
+        // Bounded by the number of segments a circuit can take, not by trust
+        // that one will close: a cursor that somehow failed to advance must
+        // end the loop rather than spin.
+        string? previousCursor = null;
+        for (var segment = 0; segment < 1_000_000; segment++)
+        {
+            var outcome = await RunAsync(runtime, set, destinationName, nowMs, cancellationToken)
+                .ConfigureAwait(false);
+            examined += outcome.Examined;
+            damaged += outcome.Damaged;
+
+            if (outcome.CompletedCircuit || outcome.Cursor is null || outcome.Cursor == previousCursor)
+            {
+                break;
+            }
+
+            previousCursor = outcome.Cursor;
+        }
+
+        return (examined, damaged);
+    }
+
     /// <summary>Reads the next segment and records what it found.</summary>
-    public static async Task RunAsync(
+    public static async Task<(int Examined, int Damaged, string? Cursor, bool CompletedCircuit)> RunAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
@@ -77,13 +118,13 @@ internal static class ReplicaSweepJob
         if (runtime.Configuration.FindDestination(destinationName) is not
             { Kind: DestinationKind.LocalPath } destination)
         {
-            return;
+            return (0, 0, null, false);
         }
 
         var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
         if (archive is null)
         {
-            return;
+            return (0, 0, null, false);
         }
 
         var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
@@ -92,7 +133,7 @@ internal static class ReplicaSweepJob
             // Unreachable right now. Fan-out owns saying so — its shortfall and
             // availability signals already cover a replica that has gone, and
             // a second voice saying it would be a second notice to acknowledge.
-            return;
+            return (0, 0, null, false);
         }
 
         // The set gate, for the same reason fan-out takes it: a retention apply
@@ -139,7 +180,7 @@ internal static class ReplicaSweepJob
                     + "Those bytes cannot be restored from there — treat this destination as damaged until the "
                     + "objects are re-copied and re-verified.",
                     nowMs);
-                return;
+                return (result.Examined, result.Findings.Count, result.NextCursor, result.CompletedCircuit);
             }
 
             ledger.RecordSweep(
@@ -152,12 +193,15 @@ internal static class ReplicaSweepJob
             {
                 runtime.Notices.Resolve($"deep-verify-failed:{set.Id}:{destinationName}", nowMs);
             }
+
+            return (result.Examined, 0, result.NextCursor, result.CompletedCircuit);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // The disk went away mid-segment. The cursor is not advanced, so
             // the next pass re-reads the same run; fan-out reports the
             // destination's availability.
+            return (0, 0, null, false);
         }
         finally
         {

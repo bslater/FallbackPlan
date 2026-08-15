@@ -114,6 +114,17 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>The report, per set in configuration order.</returns>
     ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Re-reads a destination's stored objects and confirms they still match
+    /// what was sealed (FR-VER-002, FR-VER-004).
+    /// </summary>
+    /// <param name="setName">The set to verify; null takes every configured set.</param>
+    /// <param name="destinationName">The destination to verify; null takes each set's every destination.</param>
+    /// <param name="full">Whether to keep going until every object has been read.</param>
+    /// <param name="cancellationToken">Cancels the verification.</param>
+    ValueTask<OperationReport> VerifyDestinationAsync(
+        string? setName, string? destinationName, bool full, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -400,6 +411,18 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     }
 
     /// <inheritdoc/>
+    public async ValueTask<OperationReport> VerifyDestinationAsync(
+        string? setName, string? destinationName, bool full, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<VerifyDestinationResult>(
+            new VerifyDestinationCommand(setName, destinationName, full), "a destination verification",
+            cancellationToken).ConfigureAwait(false);
+
+        // Unlike a sync, this one CAN fail: damaged objects are a finding, and
+        // the exit code must carry that without anyone parsing the prose.
+        return new OperationReport(result.Damaged == 0, result.Lines);
+    }
+
     public async ValueTask<OperationReport> SyncAsync(
         string? setName, string? destinationName, CancellationToken cancellationToken)
     {
@@ -766,6 +789,14 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // lane, its ledger records the outcome, and its runtime holds every
         // set's staging archive. A direct-mode copy would race all three.
         throw new CliFailureException(Strings.DirectGateway_SyncNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> VerifyDestinationAsync(
+        string? setName, string? destinationName, bool full, CancellationToken cancellationToken) =>
+        // Same reason, plus one of its own: the sweep's cursor and circuit
+        // stamp live in the service's ledger, so a direct-mode pass would read
+        // the same objects forever and never record that it had.
+        throw new CliFailureException(Strings.DirectGateway_VerifyDestinationNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken) =>

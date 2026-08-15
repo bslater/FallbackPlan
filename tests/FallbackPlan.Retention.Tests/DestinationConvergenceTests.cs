@@ -368,6 +368,130 @@ public sealed class DestinationConvergenceTests : IDisposable
         Assert.AreEqual(DestinationSyncState.InSync, record.State);
     }
 
+    [TestMethod]
+    public async Task VerifyDestinationVerb_AFullPass_ConfirmsEveryObjectAndSaysSo()
+    {
+        // FR-VER-004: full verification on demand, and before a recovery
+        // drill. "The next sixty-four objects" is not what someone about to
+        // trust a restore is asking for.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
+                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+            output, error, CancellationToken.None);
+
+        Assert.AreEqual(0, exit, error.ToString());
+        Assert.Contains("object(s) confirmed", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("every stored object has now been checked", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_ADamagedReplica_ReportsItAndExitsNonZero()
+    {
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var victim = Directory
+            .EnumerateFiles(Path.Combine(Directory.GetDirectories(WidePath).Single(), "blobs"), "*",
+                SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .First();
+        var bytes = await File.ReadAllBytesAsync(victim);
+        bytes[bytes.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(victim, bytes);
+
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
+                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+            output, error, CancellationToken.None);
+
+        // The agent verb prints the report and returns 0; the damage is in the
+        // lines and in the ledger. The console's exit code carries it instead,
+        // which is the gateway's job and is covered there.
+        Assert.AreEqual(0, exit, error.ToString());
+        Assert.Contains("damaged object(s)", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_APeerDestination_SaysWhyItCannotRatherThanSkipping()
+    {
+        // A peer replica lives behind the wire with no store to read. Silently
+        // reporting nothing would read as "checked and fine".
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        AddPeerDestination();
+
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
+                "--passphrase-env", PassphraseVariable, "--destination", "friend"],
+            output, error, CancellationToken.None);
+
+        Assert.AreEqual(0, exit, error.ToString());
+        Assert.Contains("not deeply verifiable", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestinationVerb_AnUnknownDestination_IsRefusedRatherThanSilentlyMatchingNothing()
+    {
+        await BackUpAsync(new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
+
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
+                "--passphrase-env", PassphraseVariable, "--destination", "nowhere"],
+            output, error, CancellationToken.None);
+
+        Assert.AreEqual(2, exit);
+        Assert.Contains("nowhere", error.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>An environment variable holding this fixture's passphrase, for the agent verbs.</summary>
+    private string PassphraseVariable
+    {
+        get
+        {
+            var name = "FBP_CONVERGENCE_" + Path.GetFileName(_root).ToUpperInvariant();
+            Environment.SetEnvironmentVariable(name, PassphraseText);
+            return name;
+        }
+    }
+
+    /// <summary>Declares a peer destination on the set, for the not-verifiable case.</summary>
+    private void AddPeerDestination()
+    {
+        var path = Path.Combine(StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        var set = configuration.BackupSets[0];
+        new ClientConfiguration
+        {
+            SchemaVersion = configuration.SchemaVersion,
+            Destinations =
+            [
+                .. configuration.Destinations,
+                new DestinationConfiguration
+                {
+                    Id = new string('3', 32), Name = "friend",
+                    Kind = DestinationKind.Peer,
+                    Fingerprint = new string('b', 64),
+                    Endpoint = "127.0.0.1:9",
+                },
+            ],
+            BackupSets =
+            [
+                set with { Destinations = [.. set.Destinations, new SetDestinationReference { Ref = "friend" }] },
+            ],
+        }.Save(path);
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
