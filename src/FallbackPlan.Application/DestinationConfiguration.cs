@@ -141,6 +141,19 @@ public sealed record DestinationConfiguration
     [JsonPropertyName("verification")]
     public VerificationPolicy? Verification { get; init; }
 
+    /// <summary>
+    /// How often the deep sweep re-reads this destination's stored objects and
+    /// checks them against their seals, in days; absent takes the default.
+    /// </summary>
+    /// <remarks>
+    /// A sweep is bounded per pass and resumes, so this sets how often a
+    /// <i>segment</i> runs, not how long a full circuit takes — a large archive
+    /// on a slow disk takes many segments to come round. Zero or negative is
+    /// refused at load rather than silently meaning "never".
+    /// </remarks>
+    [JsonPropertyName("deep_verify_interval_days")]
+    public int? DeepVerifyIntervalDays { get; init; }
+
     /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
     [JsonIgnore]
     public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;

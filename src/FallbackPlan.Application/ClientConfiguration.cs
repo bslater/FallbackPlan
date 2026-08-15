@@ -228,6 +228,14 @@ public sealed record ClientConfiguration
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationCannotDeclineVerification(destination.Name));
         }
+
+        // Zero would read as "never" to anyone writing it and as "every pass"
+        // to the arithmetic. Refused rather than guessed at.
+        if (destination.DeepVerifyIntervalDays is { } interval && interval <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+        }
     }
 
     private static void ValidateSetDestinations(BackupSetConfiguration set, HashSet<string> destinationNames)

@@ -133,6 +133,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationCannotDeclineVerification, arg0);
 
     /// <summary>
+    /// Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.
+    /// </summary>
+    private static string ClientConfiguration_DestinationIntervalMustBePositive => Get(nameof(ClientConfiguration_DestinationIntervalMustBePositive));
+
+    /// <summary>
+    /// Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationIntervalMustBePositive(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationIntervalMustBePositive, arg0);
+
+    /// <summary>
     /// Destination '{0}': id must be 32 hex digits.
     /// </summary>
     private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));

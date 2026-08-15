@@ -85,6 +85,9 @@
   <data name="ClientConfiguration_DestinationCannotDeclineVerification" xml:space="preserve">
     <value>Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.</value>
   </data>
+  <data name="ClientConfiguration_DestinationIntervalMustBePositive" xml:space="preserve">
+    <value>Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.</value>
+  </data>
   <data name="ClientConfiguration_DestinationIdMustHex" xml:space="preserve">
     <value>Destination '{0}': id must be 32 hex digits.</value>
   </data>

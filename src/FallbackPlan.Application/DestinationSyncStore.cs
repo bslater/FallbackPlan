@@ -95,6 +95,37 @@ public sealed record DestinationSyncRecord
     /// </summary>
     [JsonPropertyName("verified_population")]
     public int VerifiedPopulation { get; init; }
+
+    /// <summary>
+    /// Where the deep sweep resumes — the last blob key it read, or null to
+    /// start from the beginning of the key space.
+    /// </summary>
+    /// <remarks>
+    /// A key, deliberately, never an index: a blob trimmed between segments
+    /// would shift every index after it, silently skipping some objects and
+    /// re-reading others with nothing to say so. A key is only ever compared
+    /// against, so a cursor naming a since-deleted blob still resumes exactly
+    /// where it should.
+    /// </remarks>
+    [JsonPropertyName("sweep_cursor")]
+    public string? SweepCursor { get; init; }
+
+    /// <summary>When the deep sweep last read anything, Unix milliseconds; null when never.</summary>
+    [JsonPropertyName("swept_at")]
+    public ulong? SweptAt { get; init; }
+
+    /// <summary>
+    /// When the sweep last finished a full circuit of the replica's blobs —
+    /// the only fact that supports "every stored object was confirmed as of
+    /// this moment". A count of segments cannot say it, and neither can
+    /// <see cref="SweptAt"/>, which moves on every partial segment.
+    /// </summary>
+    [JsonPropertyName("sweep_completed_at")]
+    public ulong? SweepCompletedAt { get; init; }
+
+    /// <summary>Blobs the sweep has read since the current circuit began.</summary>
+    [JsonPropertyName("swept_this_circuit")]
+    public int SweptThisCircuit { get; init; }
 }
 
 /// <summary>
@@ -283,6 +314,42 @@ public sealed class DestinationSyncStore
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
             VerifiedPopulation = population,
+        });
+    }
+
+    /// <summary>
+    /// Records one segment of a deep sweep: how far it got, and whether that
+    /// closed a full circuit of the replica's stored objects.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately separate from <see cref="RecordVerification"/>. A sweep
+    /// segment that read forty blobs and found nothing wrong is not "forty of
+    /// forty verified" — writing it into the coverage fields would print 100%
+    /// while the sweep was a thousandth of the way round. The two answer
+    /// different questions: the challenge stamps say <i>how much of what we
+    /// last sent has this destination proven</i>, and these say <i>when was
+    /// every stored object last re-read</i>. Only <see cref="DestinationSyncRecord.SweepCompletedAt"/>
+    /// can honestly support the second.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="cursor">Where the next segment resumes; null when the circuit closed.</param>
+    /// <param name="examined">Blobs this segment read.</param>
+    /// <param name="completedCircuit">Whether this segment reached the end of the key space.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordSweep(
+        string setId, string destination, string? cursor, int examined, bool completedCircuit,
+        ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        {
+            SweepCursor = cursor,
+            SweptAt = nowUnixMilliseconds,
+            // The tally resets with the circuit, so it always answers "how far
+            // through the CURRENT pass", never an ever-growing lifetime count
+            // that would imply coverage it does not have.
+            SweptThisCircuit = completedCircuit ? 0 : (previous?.SweptThisCircuit ?? 0) + examined,
+            SweepCompletedAt = completedCircuit ? nowUnixMilliseconds : previous?.SweepCompletedAt,
         });
     }
 

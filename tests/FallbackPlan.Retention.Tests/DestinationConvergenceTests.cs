@@ -315,6 +315,59 @@ public sealed class DestinationConvergenceTests : IDisposable
             entry.Key.StartsWith("destination-shortfall:", StringComparison.Ordinal)));
     }
 
+    [TestMethod]
+    public async Task AgentPass_AReplicaBlobThatRottedSinceTheLastSync_IsFoundByTheSweep()
+    {
+        // The gap this closes. Nothing read these bytes between syncs: the
+        // range challenge samples a handful of objects at sync time and says
+        // nothing afterwards, so rot sat undiscovered until a restore needed
+        // the object — the worst possible moment to learn of it.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var replicaRoot = Directory.GetDirectories(WidePath).Single();
+        var victim = Directory
+            .EnumerateFiles(Path.Combine(replicaRoot, "blobs"), "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .First();
+        var bytes = await File.ReadAllBytesAsync(victim);
+        bytes[bytes.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(victim, bytes);
+
+        // A pass a fortnight later: past the sweep's default cadence, with no
+        // new backup and therefore no sync and no challenge. The sweep is the
+        // only thing that looks.
+        await BackUpAsync(day1.AddDays(14));
+
+        var notice = NoticeStore.Open(StateDirectory).Unacknowledged.SingleOrDefault(entry =>
+            entry.Key.StartsWith("deep-verify-failed:", StringComparison.Ordinal));
+        Assert.IsNotNull(notice, "a rotted replica object must be found without anyone asking");
+        Assert.Contains("no longer match what was sealed", notice.Message, StringComparison.Ordinal);
+
+        var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
+        Assert.AreEqual(DestinationSyncState.Failed, record.State, "a damaged destination stops counting as protection");
+        Assert.IsNotNull(record.SweptAt);
+    }
+
+    [TestMethod]
+    public async Task AgentPass_AnIntactReplica_RecordsACompletedCircuitAndNoFinding()
+    {
+        // The other half: the sweep must be able to say "every stored object
+        // was confirmed, as of this moment" — which is the claim that makes it
+        // worth running at all.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        await BackUpAsync(day1.AddDays(14));
+
+        Assert.IsEmpty(NoticeStore.Open(StateDirectory).Unacknowledged.Where(entry =>
+            entry.Key.StartsWith("deep-verify-failed:", StringComparison.Ordinal)));
+
+        var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
+        Assert.IsNotNull(record.SweepCompletedAt, "a small archive finishes its circuit in one segment");
+        Assert.IsNull(record.SweepCursor, "a closed circuit starts over rather than resuming");
+        Assert.AreEqual(DestinationSyncState.InSync, record.State);
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);

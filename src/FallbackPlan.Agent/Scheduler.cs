@@ -131,7 +131,85 @@ public static class Scheduler
             // destination must never take the scheduler loop down.
         }
 
+        // Phase 3: the deep sweep (FR-VER-002, ADR-0034). Fan-out's challenge
+        // proves what a destination holds at the moment it is asked, for the
+        // objects it sampled; this re-reads stored bytes against their seals
+        // so rot between syncs is found by the product rather than by a
+        // restore. Bounded per pass and resumed from a cursor, so a large
+        // archive comes round over many passes instead of monopolising the
+        // one transfer worker.
+        //
+        // After the fan-out wait, deliberately: a sweep that read a replica
+        // while convergence was putting and deleting in it would manufacture
+        // failures about damage that never existed.
+        var sweeps = new List<Task>();
+        foreach (var set in runtime.Configuration.BackupSets)
+        {
+            if (!runtime.ArchiveExists(set.Id))
+            {
+                continue;
+            }
+
+            foreach (var reference in set.Destinations)
+            {
+                if (ShouldSweep(runtime, set, reference.Ref, now)
+                    && ReplicaSweepJob.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sweep)
+                {
+                    sweeps.Add(sweep);
+                }
+            }
+        }
+
+        try
+        {
+            await Task.WhenAll(sweeps).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled segment simply does not advance its cursor; the next
+            // pass re-reads from where the last completed one left off.
+        }
+        catch (Exception)
+        {
+            // As with fan-out: one destination's sweep faulting past its own
+            // handlers must never take the scheduler loop down.
+        }
+
         return new AgentPassResult(outcomes);
+    }
+
+    /// <summary>
+    /// Whether a (set, destination) pair is due another sweep segment.
+    /// </summary>
+    /// <remarks>
+    /// Only local-path destinations sweep: a peer replica is behind the wire
+    /// with no store to read, so confirming its bytes needs the range
+    /// challenge, not this. Deliberately stated rather than silently skipped.
+    /// </remarks>
+    private static bool ShouldSweep(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
+    {
+        if (runtime.Configuration.FindDestination(destinationName) is not
+            { Kind: DestinationKind.LocalPath } destination)
+        {
+            return false;
+        }
+
+        var record = runtime.DestinationSync.Find(set.Id, destinationName);
+        if (record?.LastSuccessAt is null)
+        {
+            // Nothing has been copied there yet; there is nothing to re-read.
+            return false;
+        }
+
+        if (record.SweptAt is not { } swept)
+        {
+            return true;
+        }
+
+        var interval = (ulong)(destination.DeepVerifyIntervalDays ?? ReplicaSweepJob.DefaultIntervalDays)
+            * 24UL * 3_600_000UL;
+        return (ulong)now.ToUnixTimeMilliseconds() >= swept + interval;
     }
 
     /// <summary>
