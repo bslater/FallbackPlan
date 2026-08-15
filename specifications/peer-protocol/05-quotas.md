@@ -36,6 +36,14 @@ The refusal follows [02 §8](02-session.md#8-errors-and-refusal) in full, includ
 
 A re-run after exhaustion is the ordinary resumption of [03 §5](03-replication.md#5-resumption-and-atomicity): the inventory declares what the destination holds, the source sends the difference, and the same check refuses at the same boundary until the quota rises or retention at the destination frees space. Exhaustion needs no state beyond what the objects themselves record.
 
+### 3.1 Remaining headroom is told, not inferred
+
+A destination under a quota knows `quota − usage` before it sends its inventory, because it needs that number to enforce §3 at all. It reports it there, as [03 §3.2](03-replication.md#32-replicationinventory) key 3, so the source can tell the operator the loan is nearly spent a session *before* a push runs into the boundary.
+
+Absence means **not stated** — no quota in force, or a destination implementing an earlier revision — and a source MUST NOT read it as no room. Zero means no room and MUST be sent rather than omitted.
+
+A source MUST NOT convert a small headroom into a refusal of its own. The boundary stop below is exact, arrives at the exact moment, and preserves everything committed before it; an early refusal would discard that partial progress to say something vaguer, sooner. What headroom buys is warning, not enforcement.
+
 ## 4 Disk trouble is not policy
 
 A destination that cannot **store** — the underlying store refuses a write, the replica directory cannot be created, the disk is full — MUST refuse `storage_exhausted` (code 12, [02 §8](02-session.md#8-errors-and-refusal)), never `terms_refused`: the quota said yes and the hardware said no, and telling the source "policy" would send the human to renegotiate terms when the fix is a disk on the other side of the wire.

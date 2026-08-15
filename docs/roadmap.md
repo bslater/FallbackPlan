@@ -76,6 +76,16 @@ Ordered slices, each shippable, each proven by a failing-test-first suite:
 
 **Exit criteria:** a set with two destinations — one local-path, one peer — and no other local copy backs up on schedule to both when available · the destination that was offline catches up automatically · `status` shows the per-destination matrix and `protected` is earned only by an off-domain in-sync destination · retention ages each destination under its own policy with the spoke's floor honoured · either peer ends the peering and both sides see a durable notice · each destination archive restores independently with the recovery tool.
 
+### The destination-fitness arc — is this destination one a backup can be built on? *(built)*
+
+[ADR-0035](adr/0035-destination-fitness.md) closes the gap the arc above left: the hub could fan out to a destination, age it, trim against it and challenge it — but almost everything it knew about whether that destination was *fit* it learned by trying to use it. Six findings, each verified against the code: a destination that had silently lost data was silently re-seeded; age was invisible, so day 1 and day 400 read identically; an uncomputable convergence filter was discarded without a word; nothing checked capacity anywhere; nothing probed a destination before the first full copy counted on it; and sampling coverage never accumulated, so FR-VER-002's weighting was specified and unimplemented.
+
+Underneath all six sat one structural fact — **verification only ever ran inside a sync, and a sync only ran when the archive moved on** — which is why an idle set froze its own proof with nothing saying so, and why the scheduled sweep had to land before staleness could honestly be complained about.
+
+**Status:** built. Admission (address defects reported, never refused at load; `verify-destination --probe` for both kinds), shortfall detection from what the destination declares holding, named convergence refusals, the scheduled deep sweep on the transfer lane with its on-demand depths, an accumulating sampler rotation, age as a warning that does not move the state, and capacity on both halves — headroom on the replication inventory frame, a free-space floor for a local path ([implementation status](implementation-status.md#0035--a-destination-has-to-earn-being-relied-on)). **Peer-side deep verification is the one piece not built:** a peer replica has no readable store this side of the wire, so re-reading its bytes needs the session-establishment half of the push extracted first — the admission probe took the first half of that extraction.
+
+**Exit criteria:** a destination that quietly deletes objects is named on the next sync rather than silently re-seeded · a destination unproven past its bound is named in status without the protection state becoming ambiguous · a convergence filter that could not be computed says so instead of quietly taking a whole copy · a typo'd endpoint is reported before anything counts on it and a new destination can be probed before the first full copy · a peer push about to run out of room says so a pass early and a local copy that would fill the volume does not start · a replica's stored bytes are re-confirmed against their seals on a schedule, with sampling coverage that provably accumulates.
+
 ---
 
 ## Phase 3 — Cloud object stores

@@ -210,6 +210,26 @@ trim re-verifies each replica-probed copy at the moment of deletion, and both
 convergence drop paths list staging immediately before condemning rather than
 trusting an opening inventory an hours-long push has made stale.
 
+#### Amendment 3 (2026-08): a third scheduler phase, on the transfer lane
+
+The pass had two phases — backups, then fan-out. It gains a third: the deep
+sweep that re-reads a local-path replica's stored objects and checks them
+against their seals ([ADR-0035 §4](0035-destination-fitness.md)). It attaches
+after the fan-out wait, and it runs on the **transfer lane**.
+
+Not the reader lane, which is the lane its work superficially resembles. A
+reader-lane sweep would read the replica while a concurrent convergence is
+putting and deleting in it — the reader lane runs alongside transfer by design
+— and would manufacture failures out of a healthy destination, setting the pair
+failed and raising a notice about damage that never existed. The transfer lane
+is correct by serialisation for exactly the reason §4's fan-out is.
+
+The cost is that the transfer lane still has one worker for the whole process,
+so a long sweep would starve replication. That is why the sweep takes a bounded
+budget per pass and resumes from a persisted cursor rather than running to
+completion. The cursor exists more for this than for the coverage claim it also
+supports.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -376,3 +396,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted | The shape is settled; §6's sequence is under way and its status is recorded above |
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
 | 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
+| 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |

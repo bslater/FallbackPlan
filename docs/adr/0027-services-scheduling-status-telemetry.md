@@ -203,6 +203,33 @@ for a destination that is in sync, outside the machine's failure domain
 covers what its last sync delivered; the claim carries the real coverage
 fraction and its date, never a bare tick, exactly as §4 required.
 
+#### Amendment (2026-08): a warning class that does not move the state
+
+§4 kept the derivation a pure function of observed facts, and deliberately gave
+it no clock. That was right, and it had a consequence nobody had noticed: age
+could not enter the derivation at all, so a destination proved on day 1 and one
+proved on day 400 read identically.
+
+The fix does not give `Derive` a clock. The age arrives as a number on the
+destination row, alongside the per-kind bound it is compared against, computed
+where the row is built ([ADR-0035 §7](0035-destination-fitness.md)) — so the
+derivation stays a function of plain values and gains no new axis of test
+surface on a signature this section makes normative.
+
+What it adds is a **warning class that does not move `ProtectionState`**. An
+overdue proof, an address that cannot work, a convergence filter that could not
+be computed: each is named in the warnings and none of them changes the word. A
+state that means two different things is worse than a warning that means one,
+and an old proof is still a proof.
+
+This also fixes the boundary between the two channels §4 left implicit. A
+condition recomputed on every derivation is a **warning** and therefore
+self-clearing; a finding that must survive being ignored is a **notice** and
+persists until acknowledged. The notice store gained the ability to resolve an
+entry for that rule to be usable — without it, every transient condition became
+a permanent nag — and now refreshes a re-raised notice's message, which it had
+documented and not done.
+
 ## Consequences
 
 ### Amendment (2026-08): the peer-host model is superseded

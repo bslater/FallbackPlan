@@ -56,8 +56,15 @@ Destination → source, one or more pages.
 |-----|------|---------|
 | 1 | `array of text` | Object keys the destination already holds in scope, ≤ 4096 per page, each ≤ 1024 bytes |
 | 2 | `bool` | Whether another page follows |
+| 3 | `u64` | *(optional)* Bytes the destination can still accept under the quota in force ([05 §1](05-quotas.md)) |
 
 The keys are the store's own object keys ([architecture 02](../repository-format/README.md) names them). A destination that holds nothing in scope sends one page with an empty array and `false`. The page cap keeps each frame under the [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own) limit without the source having to trust the destination's framing.
+
+**Key 3 is optional and its absence is not zero.** A destination under no quota omits it, and so does one implementing an earlier revision of this document; both mean *not stated*, which a source MUST NOT read as *no room*. A destination whose quota is fully consumed sends `0`, which is a different statement and MUST be sent rather than omitted. A destination that sends key 3 SHOULD send it on every page of the inventory; a source that sees it more than once takes the last.
+
+The headroom rides here rather than in the hello or the terms, and both alternatives were rejected for reasons worth recording. Terms are persisted in the pairing grant and compared for narrowing ([05 §6](05-quotas.md)), so a per-session number there would announce a reduction on every session. The hello is too early: the destination does not yet know which repository is coming, and computing usage means walking every object it holds — a cost the periodic verification sessions would pay for a number nobody reads. By the inventory the scope is known and the destination has already computed `quota − usage` in order to enforce the boundary stop of [05 §4](05-quotas.md).
+
+A source MUST NOT treat a small headroom as a refusal. The boundary stop already refuses the exact object that would cross the line, with exact numbers, at the exact moment, and preserves everything committed before it; key 3 exists so the operator hears about it a session earlier, not so the source invents an earlier refusal.
 
 ### 3.3 ReplicationObject and ReplicationChunk
 

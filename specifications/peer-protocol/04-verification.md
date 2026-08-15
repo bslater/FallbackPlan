@@ -106,6 +106,60 @@ wire's. The policy requirements (FR-VER-002/003/004):
 - status reported as **coverage and age** — how much was checked and how long
   ago — never as a bare boolean.
 
+### 3.1 The weighting is a rotation, and it needs a cursor
+
+"Longest since their last successful challenge" cannot be answered from a
+uniform sample drawn afresh each session: sixteen objects of ten thousand,
+redrawn every time, in expectation never reach most of them, while every
+session records a stamp saying verification happened. A verifier satisfying
+this requirement therefore keeps a **cursor** — the highest key its last
+*passed* challenge covered — and resumes after it.
+
+Three properties of such a rotation are not optional, because each failure mode
+is invisible from outside: the session still reports a clean result for whatever
+it happened to ask about.
+
+- **Candidates are ordered by key, not by listing order.** Object listing order
+  carries no meaning in this format, so a cursor advanced along it would step
+  past keys that were never challenged — and since the cursor only moves
+  forward, those keys would never be challenged again.
+- **A cursor that has run off the end wraps within the same session.** A
+  rotation that finished a lap and asked nothing would record no proof, and a
+  verifier that gates anything on proof would read that as an unproven
+  destination.
+- **The cursor advances only on a pass that proved something.** A failed or
+  empty pass leaves it where it was, so the next pass re-asks the questions
+  nobody answered rather than walking past them.
+
+A cursor naming a key the destination's retention has since dropped still
+resumes correctly, because it is only ever compared against and never looked up.
+
+### 3.2 A peer keeps an unpredictable share
+
+A rotation is, by construction, predictable. Against a *peer* that is a
+weakness: the destination answers the challenge itself, and one that can
+predict which objects it will be asked for can hold exactly those and discard
+the rest — the T-8 behaviour this document exists to detect. A verifier
+challenging a peer therefore reserves part of its budget for an unpredictable
+draw over the whole eligible population.
+
+A destination whose bytes the verifier reads back itself, off a store it owns,
+has nobody on the other side to game the question, and may give its whole
+budget to the rotation.
+
+### 3.3 Confirmation without a session
+
+Sampling proves what a destination holds *at the moment of a session*, and a
+session only happens when there is something to replicate. A destination
+belonging to a source whose data has stopped changing is therefore never
+re-challenged, and its proof ages indefinitely with nothing saying so.
+
+A verifier SHOULD therefore also re-read a destination's stored objects on a
+**schedule independent of replication**, bounded per run and resuming from its
+own cursor. Where the destination's bytes are readable directly this needs no
+protocol at all; where they are only reachable over this protocol it is the
+same challenge machinery driven by a clock rather than by a push.
+
 ## 4 Messages
 
 This document occupies types 264–265 of the range [02 §7](02-session.md#7-framing) reserves.

@@ -74,11 +74,40 @@ Snapshot protected when:
 Snapshot policy-compliant when:
   - every destination the set's policy requires: durable
 
-Snapshot healthy when (example policy):
+Snapshot healthy when:
   - a local-path destination: verified within 7 days,  and
   - a peer destination:       verified within 30 days, and
-  - a cloud destination:      durable within 24 hours
+  - a cloud destination:      durable within 24 hours (reserved; no cloud kind is served)
 ```
+
+The verification bounds are no longer an illustration. They are the values the
+status derivation compares each destination's proof against
+([ADR-0035 §7](../adr/0035-destination-fitness.md)), and the local bound is
+chosen against the deep sweep's weekly default cadence rather than in the
+abstract — a bound shorter than the cadence meant to satisfy it would be
+permanently unmet.
+
+Passing the bound produces a **warning and no change of state**. An old proof
+is still a proof, and demoting a set over its age would say the data is at risk
+when what is true is that nobody has looked lately. The warning is worth
+reading because it fires only where nothing else is already complaining: an
+unproven, sequence-stale or knowingly-unprovable destination each earns its own
+line naming that situation. It is checked for every destination, including
+those inside the source's failure domain that can never earn `protected` — a
+local path's proof is what licenses the staging trim, so an overdue proof there
+quietly stops space being reclaimed.
+
+Two other fitness facts join the policy at the same place, on the same terms —
+reported, never enforced by refusing a configuration
+([ADR-0035](../adr/0035-destination-fitness.md)):
+
+- **Admission.** A destination's declared address is checked for the defects
+  findable without touching the world, and can be probed on demand to confirm
+  it would accept a backup before one has ever been sent there.
+- **Capacity.** A quota-bound peer reports its remaining headroom, and a source
+  warns below a tenth of the loan. A local copy does not begin when the
+  destination volume is under the floor the hub leaves for the machine that
+  owns it.
 
 Because commit is to staging and replication is per destination, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
 
