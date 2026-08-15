@@ -33,7 +33,13 @@ internal static class ReplicationInitiator
     /// <summary>What one push-and-converge session moved and removed.</summary>
     /// <param name="Committed">Objects the spoke acknowledged committing.</param>
     /// <param name="Deleted">Objects the spoke acknowledged deleting under the retention instruction.</param>
-    public sealed record PushOutcome(long Committed, long Deleted);
+    /// <param name="HeldAtStart">
+    /// How many keys the spoke declared holding before the push — its own
+    /// account of itself, and the only evidence a source gets that a
+    /// destination has quietly lost what it was given. A spoke that answers
+    /// zero here after a recorded success has been emptied.
+    /// </param>
+    public sealed record PushOutcome(long Committed, long Deleted, long HeldAtStart);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -85,9 +91,24 @@ internal static class ReplicationInitiator
             var ack = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, cancellationToken).ConfigureAwait(false);
 
+            // The two counts must agree. A spoke commits each object whole or
+            // refuses (03 §5) — a quota trip throws rather than under-counting
+            // — so a spoke that acknowledges fewer than it was sent, without
+            // refusing, is either buggy or the stream has desynchronised, and
+            // in both cases the objects we believe are there may not be. This
+            // is a hard fault, not a soft warning: a warning here would be
+            // recorded beside a successful sync and learned to be ignored,
+            // while the ledger went on claiming a coverage nobody has.
+            if ((long)ack.Count < sent)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"The destination acknowledged committing {ack.Count} object(s) of the {sent} sent.");
+            }
+
             if (keeps is null)
             {
-                return new PushOutcome((long)ack.Count, 0);
+                return new PushOutcome((long)ack.Count, 0, held.Count);
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
@@ -112,7 +133,7 @@ internal static class ReplicationInitiator
                 .ToList();
             if (drops.Count == 0)
             {
-                return new PushOutcome((long)ack.Count, 0);
+                return new PushOutcome((long)ack.Count, 0, held.Count);
             }
 
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
@@ -126,7 +147,7 @@ internal static class ReplicationInitiator
 
             var retentionAck = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
-            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted);
+            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted, held.Count);
         }
         catch (PeerProtocolException exception)
         {

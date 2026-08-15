@@ -276,9 +276,14 @@ public static class FanOut
                     .ConfigureAwait(false)
                 : new VerificationSampler.SamplePlan([], 0);
 
+            var priorSuccess = ledger.Find(set.Id, destination.Name)?.LastSuccessAt is not null;
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
                 .ConfigureAwait(false);
+
+            ReportShortfall(
+                runtime, set, destination.Name, priorSuccess, replicaRootMissing: false,
+                outcome.HeldAtStart, outcome.Committed, nowMs);
 
             if (plan.Samples.Count > 0)
             {
@@ -444,7 +449,20 @@ public static class FanOut
             // several sets' archives side by side, each independently
             // restorable by pointing the recovery tool at it.
             var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
+
+            // Asked BEFORE the directory is created, which is the only moment
+            // the answer exists. A replica root that has gone since a recorded
+            // success is unambiguous loss — and it catches the case
+            // Directory.Exists on the parent cannot: a different drive mounted
+            // at the same point, where the destination path is present and the
+            // archive under it is somebody else's.
+            var replicaRootMissing = !Directory.Exists(replicaRoot);
             Directory.CreateDirectory(replicaRoot);
+
+            // Read before this pass writes over it: "did we believe this
+            // destination held our data a moment ago" is the question the
+            // shortfall check rests on.
+            var priorSuccess = ledger.Find(set.Id, destination.Name)?.LastSuccessAt is not null;
 
             // The sequence is read BEFORE the copy starts: a success then
             // proves the destination holds everything published at or before
@@ -483,18 +501,24 @@ public static class FanOut
                 .ConfigureAwait(false);
 
             long copied;
+            long alreadyHeld;
             if (keeps is not null)
             {
                 var converged = await StoreToStoreCopier.ConvergeAsync(
                     archive.Store, replica, keeps, cancellationToken).ConfigureAwait(false);
                 copied = converged.Copied;
+                alreadyHeld = converged.AlreadyHeld;
             }
             else
             {
                 var outcome = await StoreToStoreCopier.CopyAsync(
                     archive.Store, replica, cancellationToken).ConfigureAwait(false);
                 copied = outcome.Copied;
+                alreadyHeld = outcome.AlreadyHeld;
             }
+
+            ReportShortfall(
+                runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
 
             if (plan.Samples.Count > 0)
             {
@@ -527,6 +551,62 @@ public static class FanOut
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
         }
+    }
+
+    /// <summary>
+    /// Records that a destination was found empty despite having held this
+    /// set's data before — it lost what it was given, and the sync that just
+    /// ran quietly put it back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the failure fan-out was blind to. A destination declares what
+    /// it holds at the start of every sync, the source pushes the difference,
+    /// and the pass reports success — so a destination that was wiped between
+    /// passes is simply re-seeded, and the ledger's next row looks exactly
+    /// like a healthy one. The evidence was there each time and thrown away:
+    /// the peer's inventory count, and the local copier's already-held tally.
+    /// </para>
+    /// <para>
+    /// The signal is that tally collapsing to zero, not "objects were copied
+    /// while nothing new was published" — which is what it first looks like it
+    /// should be. That version fires on an interrupted sync resuming (the
+    /// failure path records nothing, so the sequence has not moved), on a
+    /// widened keep-set legitimately re-pushing what convergence dropped, and
+    /// on a peer that has just gained the retention feature. All three leave
+    /// already-held LARGE. Only an emptied destination reports zero — and a
+    /// live replica always holds at least <c>repository-format</c> and
+    /// <c>keys/</c>, so zero really does mean nothing is there.
+    /// </para>
+    /// <para>
+    /// The pass is <b>not</b> recorded as a failure. The copy genuinely
+    /// succeeded and the data genuinely is there now; marking it failed would
+    /// start the back-off that delays the next sync, which is the repair. What
+    /// must not be lost is the fact that this destination lost data once —
+    /// which is a finding, so it goes in a notice and is deliberately not
+    /// resolved when the next sync goes well. A destination that eats backups
+    /// does not stop having done so.
+    /// </para>
+    /// </remarks>
+    private static void ReportShortfall(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        bool priorSuccess, bool replicaRootMissing, long heldAtStart, long copied, ulong nowMs)
+    {
+        if (!priorSuccess || (heldAtStart > 0 && !replicaRootMissing) || copied <= 0)
+        {
+            return;
+        }
+
+        var cause = replicaRootMissing
+            ? "its replica directory was gone"
+            : "it declared holding nothing";
+        runtime.Notices.Raise(
+            $"destination-shortfall:{set.Id}:{destinationName}",
+            $"destination '{destinationName}' of set '{set.Name}' had lost this set's data — {cause}, though a "
+            + $"previous sync had succeeded against it. {copied} object(s) were copied back, so the destination is "
+            + "current again, but it discarded a backup once and may do so again: check the device, the filesystem, "
+            + "and anything else that writes there before counting on it.",
+            nowMs);
     }
 
     /// <summary>

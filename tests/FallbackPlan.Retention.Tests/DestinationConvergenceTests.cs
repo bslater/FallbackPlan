@@ -257,6 +257,64 @@ public sealed class DestinationConvergenceTests : IDisposable
             "the notice must not outlive the condition");
     }
 
+    [TestMethod]
+    public async Task FanOut_ADestinationWipedBetweenPasses_IsNamedRatherThanQuietlyReSeeded()
+    {
+        // The failure fan-out was blind to. The destination declares what it
+        // holds, we push the difference, the pass reports success — so a
+        // destination that ate the backup is simply re-filled and its next
+        // ledger row is indistinguishable from a healthy one.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var replicaRoot = Directory.GetDirectories(WidePath).Single();
+        Assert.IsNotEmpty(Directory.GetFileSystemEntries(replicaRoot));
+        Directory.Delete(replicaRoot, recursive: true);
+
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two");
+        await BackUpAsync(day1.AddDays(1));
+
+        var notice = NoticeStore.Open(StateDirectory).Unacknowledged.SingleOrDefault(entry =>
+            entry.Key.StartsWith("destination-shortfall:", StringComparison.Ordinal));
+        Assert.IsNotNull(notice, "a destination that lost the backup must say so");
+        Assert.Contains("wide", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("lost this set's data", notice.Message, StringComparison.Ordinal);
+
+        // Re-seeded, so the copy is current again — the ledger is not marked
+        // failed, because failing it would start the back-off that delays the
+        // very sync that repairs things.
+        var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
+        Assert.AreEqual(DestinationSyncState.InSync, record.State);
+        Assert.AreEqual(0, record.ConsecutiveFailures);
+    }
+
+    [TestMethod]
+    public async Task FanOut_AnOrdinaryIncrementalPass_RaisesNoShortfall()
+    {
+        // The false positive that killed the obvious signal: an ordinary
+        // second pass copies objects while the destination keeps everything it
+        // already had. "Objects copied" is not evidence of loss; "held
+        // nothing" is.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two");
+        await BackUpAsync(day1.AddDays(1));
+
+        Assert.IsEmpty(NoticeStore.Open(StateDirectory).Unacknowledged.Where(entry =>
+            entry.Key.StartsWith("destination-shortfall:", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task FanOut_TheVeryFirstPass_RaisesNoShortfall()
+    {
+        // A destination that has never held anything has lost nothing. The
+        // check rests on there having been a prior success.
+        await BackUpAsync(new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
+
+        Assert.IsEmpty(NoticeStore.Open(StateDirectory).Unacknowledged.Where(entry =>
+            entry.Key.StartsWith("destination-shortfall:", StringComparison.Ordinal)));
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
