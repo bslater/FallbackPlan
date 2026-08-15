@@ -116,14 +116,15 @@ public sealed class DestinationConvergenceTests : IDisposable
         using var passphrase = Passphrase.Create(PassphraseText);
         using var staging = await RepositoryLifecycle.OpenAsync(
             new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
-        var keeps = await DestinationConvergence.ComputeKeepsAsync(
+        var convergence = await DestinationConvergence.ComputeKeepsAsync(
             new LocalFileSystemObjectStore(RepoPath), staging,
             new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
             day1.AddDays(2).AddHours(1), CancellationToken.None);
-        Assert.IsNotNull(keeps);
+        Assert.IsNull(convergence.Refusal);
+        Assert.IsNotNull(convergence.Keeps);
 
         var again = await StoreToStoreCopier.ConvergeAsync(
-            new LocalFileSystemObjectStore(RepoPath), narrow, keeps, CancellationToken.None);
+            new LocalFileSystemObjectStore(RepoPath), narrow, convergence.Keeps, CancellationToken.None);
         Assert.AreEqual(0, again.Copied);
         Assert.AreEqual(0, again.Deleted);
     }
@@ -186,6 +187,74 @@ public sealed class DestinationConvergenceTests : IDisposable
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, unwalkable) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
         Assert.IsEmpty(unwalkable);
+    }
+
+    [TestMethod]
+    public async Task ComputeKeeps_AnUndecodableSnapshot_SaysWhyRatherThanAnsweringNull()
+    {
+        // The whole copy is the right answer here — a keep decision resting on
+        // a graph nobody can walk would drop objects it merely could not see —
+        // but it used to be spelled exactly like "this destination has no
+        // retention rules", so the fault was invisible.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        // Scribble over a snapshot object: present, listed, and undecodable.
+        var snapshot = Directory
+            .EnumerateFiles(Path.Combine(RepoPath, "snapshots"), "*", SearchOption.AllDirectories)
+            .First();
+        await File.WriteAllBytesAsync(snapshot, new byte[64]);
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var staging = await RepositoryLifecycle.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+
+        var convergence = await DestinationConvergence.ComputeKeepsAsync(
+            new LocalFileSystemObjectStore(RepoPath), staging,
+            new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+            day1.AddHours(1), CancellationToken.None);
+
+        Assert.IsNull(convergence.Keeps, "a damaged graph must still take the conservative whole copy");
+        Assert.AreEqual(ConvergenceRefusal.UndecodableSnapshots, convergence.Refusal);
+    }
+
+    [TestMethod]
+    public async Task FanOut_AStagingGraphThatWillNotWalk_NamesTheDestinationAndClearsWhenRepaired()
+    {
+        // The consequence worth telling someone about: the destination's
+        // retention policy silently stops being applied, so it keeps history
+        // it was configured to drop — and keeps keeping it, every pass, until
+        // staging is repaired.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var snapshot = Directory
+            .EnumerateFiles(Path.Combine(RepoPath, "snapshots"), "*", SearchOption.AllDirectories)
+            .First();
+        var original = await File.ReadAllBytesAsync(snapshot);
+        await File.WriteAllBytesAsync(snapshot, new byte[64]);
+
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two");
+        await BackUpAsync(day1.AddDays(1));
+
+        var notices = NoticeStore.Open(StateDirectory);
+        var raised = notices.Unacknowledged.Where(notice =>
+            notice.Key.StartsWith("convergence-unavailable:", StringComparison.Ordinal)).ToList();
+        Assert.IsNotEmpty(raised, "a destination that silently stopped converging must be named");
+        Assert.Contains("narrow", string.Join(" ", raised.Select(notice => notice.Message)), StringComparison.Ordinal);
+        Assert.Contains(
+            "not being applied", string.Join(" ", raised.Select(notice => notice.Message)), StringComparison.Ordinal);
+
+        // Repaired: the next pass converges normally and withdraws the notice
+        // rather than leaving a warning about a problem that has gone.
+        await File.WriteAllBytesAsync(snapshot, original);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three");
+        await BackUpAsync(day1.AddDays(2));
+
+        Assert.IsEmpty(
+            NoticeStore.Open(StateDirectory).Unacknowledged.Where(notice =>
+                notice.Key.StartsWith("convergence-unavailable:", StringComparison.Ordinal)),
+            "the notice must not outlive the condition");
     }
 
     private async Task BackUpAsync(DateTimeOffset now)

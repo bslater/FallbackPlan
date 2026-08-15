@@ -244,17 +244,27 @@ public static class FanOut
             // A peer under a retention policy converges like a local path
             // does (FR-GC-010): the hub computes the keep filter, pushes only
             // what it keeps, and instructs the spoke to drop the rest — when
-            // the spoke offers the feature, and never past its floor. A pass
-            // whose staging graph will not walk cleanly pushes whole.
+            // the spoke offers the feature, and never past its floor.
+            //
+            // Three different situations end in a whole push, and they used to
+            // be spelled identically: no policy is configured, the spoke does
+            // not offer the retention feature, and the staging graph would not
+            // walk. Only the third is a fault, and it is the one that leaves
+            // the spoke holding history it was told to drop until somebody
+            // repairs staging — so it is named.
             var effective = set.Destinations
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
-            var keeps = Retention.DestinationConvergence.HasRules(effective)
-                    && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature)
-                ? await Retention.DestinationConvergence.ComputeKeepsAsync(
+            Func<string, bool>? keeps = null;
+            if (Retention.DestinationConvergence.HasRules(effective)
+                && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature))
+            {
+                var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
-                : null;
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                keeps = convergence.Keeps;
+                ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+            }
 
             // Samples are drawn from the pre-push listing under the set gate:
             // every key listed here is carried by the push that follows, so a
@@ -447,17 +457,22 @@ public static class FanOut
 
             // A destination under a retention policy holds exactly its
             // keep-set's closure, converged in one operation with the copy so
-            // fan-out and retention cannot disagree (FR-GC-010). One without
-            // a policy — and any pass where the staging graph will not walk
-            // cleanly — gets the conservative whole copy.
+            // fan-out and retention cannot disagree (FR-GC-010). One without a
+            // policy gets the conservative whole copy — and so does a pass
+            // whose staging graph will not walk, but that second case is a
+            // fault rather than a choice and now says so.
             var effective = set.Destinations
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
-            var keeps = Retention.DestinationConvergence.HasRules(effective)
-                ? await Retention.DestinationConvergence.ComputeKeepsAsync(
+            Func<string, bool>? keeps = null;
+            if (Retention.DestinationConvergence.HasRules(effective))
+            {
+                var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false)
-                : null;
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                keeps = convergence.Keeps;
+                ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+            }
 
             // Samples come from the pre-copy listing, filtered like the copy
             // itself: everything sampled is carried by the copy below, so a
@@ -512,6 +527,51 @@ public static class FanOut
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
         }
+    }
+
+    /// <summary>
+    /// Says whether this destination's convergence filter could be computed,
+    /// and withdraws the notice once it can be again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A destination whose filter cannot be built receives the whole archive
+    /// instead of its keep-set. That is the safe answer — a keep decision
+    /// resting on a graph nobody can walk would drop objects it merely could
+    /// not see — but it is not the *intended* one, and it silently undoes the
+    /// destination's retention policy: history it was configured to shed keeps
+    /// arriving, and keeps being kept, for as long as staging stays damaged.
+    /// Nothing said so, because the code path is shared with the perfectly
+    /// ordinary "this destination has no retention rules".
+    /// </para>
+    /// <para>
+    /// This is a notice rather than a status warning because it outlives the
+    /// pass that saw it: the next sync may find the graph walking again and
+    /// converge normally, leaving no trace that a whole copy was ever taken.
+    /// It resolves itself the moment a filter computes, so it names a
+    /// condition that is true now, not one that once was (Z0c's rule).
+    /// </para>
+    /// </remarks>
+    private static void ReportConvergence(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        Retention.ConvergenceRefusal? refusal, ulong nowMs)
+    {
+        var key = $"convergence-unavailable:{set.Id}:{destinationName}";
+        if (refusal is not { } reason)
+        {
+            runtime.Notices.Resolve(key, nowMs);
+            return;
+        }
+
+        var cause = reason == Retention.ConvergenceRefusal.UndecodableSnapshots
+            ? "the staging archive holds snapshots it cannot decode"
+            : "the keep-set's closure would not walk cleanly in the staging archive";
+        runtime.Notices.Raise(
+            key,
+            $"destination '{destinationName}' of set '{set.Name}' received a whole copy instead of its "
+            + $"retention keep-set: {cause}. Its policy is not being applied and it will keep history it was "
+            + "configured to drop until staging is repaired — run `check` to find the damage.",
+            nowMs);
     }
 
     /// <summary>
