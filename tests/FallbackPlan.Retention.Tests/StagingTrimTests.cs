@@ -294,7 +294,8 @@ public sealed class StagingTrimTests : IDisposable
         var nowMs = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
         var sync = DestinationSyncStore.Open(StateDirectory);
         sync.RecordSuccess(SetId, "friend", 0, nowMs, syncedSequence: 1_000_000);
-        sync.RecordVerification(SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, nowMs);
+        sync.RecordVerification(
+            SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, sampleCursor: null, nowMs);
 
         var report = await RunAsync(
             store,
@@ -321,7 +322,8 @@ public sealed class StagingTrimTests : IDisposable
         var syncedAt = (ulong)Day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds();
         var sync = DestinationSyncStore.Open(StateDirectory);
         sync.RecordSuccess(SetId, "friend", 0, provenAt, syncedSequence: 1_000_000);
-        sync.RecordVerification(SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, provenAt);
+        sync.RecordVerification(
+            SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, sampleCursor: null, provenAt);
         sync.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
 
         var report = await RunAsync(

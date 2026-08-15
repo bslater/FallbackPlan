@@ -270,13 +270,23 @@ public static class FanOut
             // every key listed here is carried by the push that follows, so a
             // failed proof afterwards can only mean the destination's copy is
             // wrong — never that the sample raced a publication.
+            //
+            // The rotation resumes where the last passed challenge stopped, so
+            // coverage accumulates instead of re-drawing the same objects for
+            // the life of the destination (FR-VER-002). A peer keeps part of
+            // its budget random: it answers the challenge itself, so a wholly
+            // predictable rotation would tell it exactly which objects it can
+            // afford to lose.
+            var previous = ledger.Find(set.Id, destination.Name);
             var plan = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
                 ? await VerificationSampler.SampleAsync(
-                    archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
+                    archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
+                    VerificationSampler.DefaultBudget, VerificationSampler.PeerReservoirShare,
+                    Protocol.VerificationChallenge.MaximumLength, cancellationToken)
                     .ConfigureAwait(false)
-                : new VerificationSampler.SamplePlan([], 0);
+                : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
 
-            var priorSuccess = ledger.Find(set.Id, destination.Name)?.LastSuccessAt is not null;
+            var priorSuccess = previous?.LastSuccessAt is not null;
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
                 .ConfigureAwait(false);
@@ -303,7 +313,8 @@ public static class FanOut
                 if (verification.ProvedSomething)
                 {
                     ledger.RecordVerification(
-                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
+                        plan.NextCursor, nowMs);
                 }
 
                 // Else: every sample was skipped because staging could not read
@@ -461,8 +472,10 @@ public static class FanOut
 
             // Read before this pass writes over it: "did we believe this
             // destination held our data a moment ago" is the question the
-            // shortfall check rests on.
-            var priorSuccess = ledger.Find(set.Id, destination.Name)?.LastSuccessAt is not null;
+            // shortfall check rests on, and the rotation cursor below is the
+            // other half of the same before-picture.
+            var previous = ledger.Find(set.Id, destination.Name);
+            var priorSuccess = previous?.LastSuccessAt is not null;
 
             // The sequence is read BEFORE the copy starts: a success then
             // proves the destination holds everything published at or before
@@ -496,8 +509,16 @@ public static class FanOut
             // itself: everything sampled is carried by the copy below, so a
             // mismatch afterwards is the replica's fault, never a race with a
             // publication that had not crossed yet.
+            //
+            // The rotation resumes after the last passed challenge, so
+            // coverage accumulates across syncs (FR-VER-002). No reservoir
+            // share here: this hub reads the replica's bytes off its own disk,
+            // so there is nobody on the other side who could arrange to hold
+            // only the objects it expects to be asked about.
             var plan = await VerificationSampler.SampleAsync(
-                archive.Store, keeps, newestSnapshot, VerificationSampler.DefaultBudget, cancellationToken)
+                archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
+                VerificationSampler.DefaultBudget, reservoirShare: 0,
+                Protocol.VerificationChallenge.MaximumLength, cancellationToken)
                 .ConfigureAwait(false);
 
             long copied;
@@ -538,7 +559,8 @@ public static class FanOut
                 if (verification.ProvedSomething)
                 {
                     ledger.RecordVerification(
-                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, nowMs);
+                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
+                        plan.NextCursor, nowMs);
                 }
 
                 return;

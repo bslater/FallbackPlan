@@ -369,6 +369,38 @@ public sealed class DestinationConvergenceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Verification_AcrossSyncs_MovesOnRatherThanReAskingTheSameObjects()
+    {
+        // The wiring proof for the rotation cursor (FR-VER-002). The sampler's
+        // own behaviour is pinned in Replication.Tests; what can only be shown
+        // here is that the cursor survives the round trip — written into the
+        // ledger by one sync and read back by the next. A sampler that rotated
+        // perfectly but was handed null every pass would look identical from
+        // inside the sampler and cover the same sixteen objects forever.
+        //
+        // The archive has to be big enough that one budget cannot swallow it,
+        // or every pass would honestly report a closed circuit and the cursor
+        // would never be anything but null.
+        SeedWideArchive(files: 24, bytesEach: 512 * 1024);
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+
+        var first = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
+        Assert.IsNotNull(
+            first.SampleCursor, "an archive larger than one budget leaves the rotation part-way round");
+
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+
+        var second = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
+        Assert.IsNotNull(second.SampleCursor);
+        Assert.IsGreaterThan(
+            0,
+            string.CompareOrdinal(second.SampleCursor, first.SampleCursor),
+            $"the second pass resumed at '{second.SampleCursor}' rather than moving past '{first.SampleCursor}'");
+    }
+
+    [TestMethod]
     public async Task VerifyDestinationVerb_AFullPass_ConfirmsEveryObjectAndSaysSo()
     {
         // FR-VER-004: full verification on demand, and before a recovery
@@ -490,6 +522,23 @@ public sealed class DestinationConvergenceTests : IDisposable
                 set with { Destinations = [.. set.Destinations, new SetDestinationReference { Ref = "friend" }] },
             ],
         }.Save(path);
+    }
+
+    /// <summary>
+    /// Fills the source with incompressible, non-deduplicating content so the
+    /// staging archive holds more objects than one verification budget can
+    /// cover. Random bytes on purpose: anything patterned would chunk and
+    /// dedupe down to a handful of blobs.
+    /// </summary>
+    private void SeedWideArchive(int files, int bytesEach)
+    {
+        var random = new Random(20260815);
+        for (var index = 0; index < files; index++)
+        {
+            var bytes = new byte[bytesEach];
+            random.NextBytes(bytes);
+            File.WriteAllBytes(Path.Combine(SourceRoot, $"bulk-{index:D3}.bin"), bytes);
+        }
     }
 
     private async Task BackUpAsync(DateTimeOffset now)

@@ -97,6 +97,23 @@ public sealed record DestinationSyncRecord
     public int VerifiedPopulation { get; init; }
 
     /// <summary>
+    /// Where the sync-time challenge rotation resumes — the highest key the
+    /// last passed verification asked about, or null to start at the
+    /// beginning of the key space.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes sampling coverage <i>accumulate</i> (FR-VER-002). A
+    /// stateless sample re-asks about the same objects for as long as the
+    /// destination lives: sixteen of ten thousand objects, drawn afresh every
+    /// pass, will in expectation never reach most of them. It advances only on
+    /// a pass that actually proved something — a failed or empty pass leaves
+    /// it where it was, so the next pass re-asks the questions that were not
+    /// answered.
+    /// </remarks>
+    [JsonPropertyName("sample_cursor")]
+    public string? SampleCursor { get; init; }
+
+    /// <summary>
     /// Where the deep sweep resumes — the last blob key it read, or null to
     /// start from the beginning of the key space.
     /// </summary>
@@ -299,21 +316,30 @@ public sealed class DestinationSyncStore
     /// <param name="objects">Ranges the pass proved.</param>
     /// <param name="population">Objects eligible when the sample was drawn — the coverage denominator.</param>
     /// <param name="verifiedSequence">The highest publication sequence the pass's sample covered.</param>
+    /// <param name="sampleCursor">
+    /// Where the next pass's rotation resumes; null when this pass reached the
+    /// end of the key space and the rotation starts over.
+    /// </param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
     public DestinationSyncRecord RecordVerification(
         string setId, string destination, int objects, int population, ulong verifiedSequence,
-        ulong nowUnixMilliseconds)
+        string? sampleCursor, ulong nowUnixMilliseconds)
     {
         // A verification touches only the stamps: the sync half of the row —
         // state, attempt, success, the synced sequence — is carried forward
         // untouched, because proving bytes says nothing about when they
         // arrived.
+        //
+        // The cursor rides with the stamps rather than with the sync, and only
+        // on a pass that passed: advancing it after a failure would walk the
+        // rotation past objects nobody proved anything about.
         return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
         {
             VerifiedAt = nowUnixMilliseconds,
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
             VerifiedPopulation = population,
+            SampleCursor = sampleCursor,
         });
     }
 

@@ -60,7 +60,8 @@ public sealed class DestinationSyncStoreTests
             for (var round = 1; round <= rounds; round++)
             {
                 store.RecordVerification(
-                    SetId, "vault", objects: 4, population: 12, verifiedSequence: (ulong)round, nowUnixMilliseconds: 1_000);
+                    SetId, "vault", objects: 4, population: 12, verifiedSequence: (ulong)round, sampleCursor: null,
+                    nowUnixMilliseconds: 1_000);
             }
         });
 
@@ -80,7 +81,8 @@ public sealed class DestinationSyncStoreTests
         store.RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         store.RecordVerification(
-            SetId, "vault", objects: 4, population: 12, verifiedSequence: 42, nowUnixMilliseconds: 2_000);
+            SetId, "vault", objects: 4, population: 12, verifiedSequence: 42, sampleCursor: null,
+            nowUnixMilliseconds: 2_000);
 
         var record = store.Find(SetId, "vault")!;
         Assert.AreEqual(DestinationSyncState.InSync, record.State);
@@ -98,7 +100,8 @@ public sealed class DestinationSyncStoreTests
         var store = DestinationSyncStore.Open(_state);
         store.RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
         store.RecordVerification(
-            SetId, "vault", objects: 4, population: 12, verifiedSequence: 42, nowUnixMilliseconds: 1_500);
+            SetId, "vault", objects: 4, population: 12, verifiedSequence: 42, sampleCursor: null,
+            nowUnixMilliseconds: 1_500);
 
         store.RecordFailure(SetId, "vault", DestinationSyncState.Unavailable, "the drive is unplugged", 3_000);
 

@@ -104,7 +104,8 @@ public sealed class RetentionTrimVerbTests : IDisposable
             var ledger = DestinationSyncStore.Open(StateDirectory);
             ledger.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
             ledger.RecordVerification(
-                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, syncedAt);
+                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, sampleCursor: null,
+                syncedAt);
 
             // The verb, end to end: the handler maps vault → store probe and
             // friend → ledger claim itself; both must vouch for both historic
@@ -158,7 +159,8 @@ public sealed class RetentionTrimVerbTests : IDisposable
             var ledger = DestinationSyncStore.Open(StateDirectory);
             ledger.RecordSuccess(SetId, "friend", 0, syncedAt, syncedSequence: 1_000_000);
             ledger.RecordVerification(
-                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, syncedAt);
+                SetId, "friend", objects: 4, population: 12, verifiedSequence: 1_000_000, sampleCursor: null,
+                syncedAt);
 
             var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
             var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
