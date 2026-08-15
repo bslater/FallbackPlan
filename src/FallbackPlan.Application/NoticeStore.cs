@@ -113,11 +113,25 @@ public sealed class NoticeStore
 
         lock (_gate)
         {
-            var existing = _notices.FirstOrDefault(notice =>
+            var index = _notices.FindIndex(notice =>
                 notice.AcknowledgedAt is null && string.Equals(notice.Key, key, StringComparison.Ordinal));
-            if (existing is not null)
+            if (index >= 0)
             {
-                return existing;
+                // Refresh the message, keeping the identity and the time it was
+                // FIRST seen. This used to return the existing notice
+                // untouched, which meant a notice carrying numbers — bytes
+                // short, objects unproven — showed the first observation
+                // forever while the real figures moved underneath it. The
+                // original timestamp is the useful one ("since when"), so it
+                // stays; the text is the one that must be current.
+                var refreshed = _notices[index] with { Message = message };
+                if (refreshed != _notices[index])
+                {
+                    _notices[index] = refreshed;
+                    Save();
+                }
+
+                return refreshed;
             }
 
             var notice = new Notice
@@ -130,6 +144,54 @@ public sealed class NoticeStore
             _notices.Add(notice);
             Save();
             return notice;
+        }
+    }
+
+    /// <summary>
+    /// Withdraws the unacknowledged notice under <paramref name="key"/>,
+    /// because the condition it reported has gone.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this, every notice is permanent until a human dismisses it —
+    /// which is right for a finding that must survive being ignored (a failed
+    /// verification, a peering ended) and wrong for a condition that clears on
+    /// its own (a drive that was unplugged and is back, a peer that was full
+    /// and now is not). A backup product that cries wolf gets its warnings
+    /// ignored, which costs more than the warning was worth.
+    /// </para>
+    /// <para>
+    /// The rule this establishes: a <b>transient</b> condition belongs in the
+    /// status derivation, which recomputes from current facts and therefore
+    /// clears itself. A notice is for what must outlive the moment — and when
+    /// even that is genuinely over, it is resolved here rather than left for
+    /// someone to tidy.
+    /// </para>
+    /// <para>
+    /// Resolving marks the notice acknowledged rather than deleting it: it
+    /// stops surfacing but stays on record, the same shape a human
+    /// acknowledgement leaves, so the history of what was once wrong survives.
+    /// </para>
+    /// </remarks>
+    /// <param name="key">The stable machine key the notice was raised under.</param>
+    /// <param name="nowUnixMilliseconds">When the condition was observed to have cleared.</param>
+    /// <returns><see langword="false"/> when nothing was outstanding under that key.</returns>
+    public bool Resolve(string key, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(key);
+
+        lock (_gate)
+        {
+            var index = _notices.FindIndex(notice =>
+                notice.AcknowledgedAt is null && string.Equals(notice.Key, key, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                return false;
+            }
+
+            _notices[index] = _notices[index] with { AcknowledgedAt = nowUnixMilliseconds };
+            Save();
+            return true;
         }
     }
 

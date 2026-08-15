@@ -1255,47 +1255,15 @@ public static class CliApplication
                     var destinations = new List<DestinationStatusInput>();
                     foreach (var reference in set.Destinations)
                     {
-                        var declared = configuration.FindDestination(reference.Ref);
-                        var record = ledger.Find(set.Id, reference.Ref);
-                        var sync = record?.State ?? DestinationSyncState.Behind;
-                        if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompleted)
-                        {
-                            sync = DestinationSyncState.Behind;
-                        }
-
-                        // The declaration wins; the default is derived by
-                        // kind, conservatively (FR-SNP-007, ADR-0018
-                        // Amendment 2) — the same resolution the service
-                        // handler applies.
-                        var domain = declared?.FailureDomain ?? (declared?.Kind ?? DestinationKind.LocalPath) switch
-                        {
-                            DestinationKind.LocalPath =>
-                                set.Root.Length > 0
-                                && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
-                                && declared?.Path is { Length: > 0 }
-                                && FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(declared.Path, out var destinationStat)
-                                && rootStat.Device != destinationStat.Device
-                                    ? FailureDomain.SameMachine
-                                    : FailureDomain.SameVolume,
-                            DestinationKind.Peer => FailureDomain.SameSite,
-                            _ => FailureDomain.Independent,
-                        };
-
-                        destinations.Add(new DestinationStatusInput
-                        {
-                            Name = reference.Ref,
-                            Kind = declared?.Kind ?? DestinationKind.LocalPath,
-                            Sync = sync,
-                            Domain = domain,
-                            RequiresVerification = declared?.RequiresVerification ?? true,
-                            LastSuccessAt = record?.LastSuccessAt,
-                            Detail = record?.LastError,
-                            SyncedSequence = record?.SyncedSequence ?? 0,
-                            VerifiedAt = record?.VerifiedAt,
-                            VerifiedSequence = record?.VerifiedSequence ?? 0,
-                            VerifiedObjects = record?.VerifiedObjects ?? 0,
-                            VerifiedPopulation = record?.VerifiedPopulation ?? 0,
-                        });
+                        destinations.Add(DestinationStatus.Describe(
+                            reference.Ref,
+                            configuration.FindDestination(reference.Ref),
+                            set.Root,
+                            ledger.Find(set.Id, reference.Ref),
+                            lastCompleted,
+                            path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
+                                ? stat.Device
+                                : null));
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs

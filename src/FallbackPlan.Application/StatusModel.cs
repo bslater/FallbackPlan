@@ -4,10 +4,133 @@ using FallbackPlan.Domain.Status;
 namespace FallbackPlan.Application;
 
 /// <summary>
+/// Builds a <see cref="DestinationStatusInput"/> from the three things that
+/// describe a destination: what the configuration declares, what the sync
+/// ledger recorded, and when the set last completed a backup.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This exists because there are two status producers — the service handler
+/// and the console's direct path — and they had drifted into deriving the same
+/// three facts twice: the in-sync-but-behind demotion, the failure domain, and
+/// the row itself. Two copies of a derivation is two places for a rule to
+/// change in one of them, and every field added to
+/// <see cref="DestinationStatusInput"/> doubled the edit.
+/// </para>
+/// <para>
+/// The device comparison arrives as a delegate rather than a call, because the
+/// use-case layer reaches only the domain layer (architecture 11 §2, enforced
+/// by <c>ArchitectureTests</c>) and stating a path's volume is the platform's
+/// job. The <b>policy</b> — what a shared volume means for protection — lives
+/// here, once.
+/// </para>
+/// </remarks>
+public static class DestinationStatus
+{
+    /// <summary>
+    /// Describes one declared destination of one set.
+    /// </summary>
+    /// <param name="reference">The set's reference to the destination, by name.</param>
+    /// <param name="declared">The destination's declaration, or null when the reference dangles.</param>
+    /// <param name="setRoot">The set's capture root, for the failure-domain comparison.</param>
+    /// <param name="record">The pair's sync ledger row, or null when never attempted.</param>
+    /// <param name="lastCompletedAt">When the set last completed a backup, Unix milliseconds; 0 when never.</param>
+    /// <param name="deviceIdOf">
+    /// The volume a path sits on, or null when the platform cannot say — which
+    /// is answered conservatively, as sharing a volume.
+    /// </param>
+    public static DestinationStatusInput Describe(
+        string reference,
+        DestinationConfiguration? declared,
+        string setRoot,
+        DestinationSyncRecord? record,
+        ulong lastCompletedAt,
+        Func<string, ulong?> deviceIdOf)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(reference);
+        ThrowHelper.ThrowIfNull(deviceIdOf);
+
+        if (declared is null)
+        {
+            // Validation refuses dangling references, so this is a
+            // configuration edited mid-flight — reported, never invented
+            // around, and conservative: an undeclarable destination earns
+            // nothing.
+            return new DestinationStatusInput
+            {
+                Name = reference,
+                Kind = DestinationKind.LocalPath,
+                Sync = DestinationSyncState.Failed,
+                Domain = FailureDomain.SameVolume,
+                Detail = "no longer declared",
+            };
+        }
+
+        var sync = record?.State ?? DestinationSyncState.Behind;
+        if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompletedAt)
+        {
+            // In sync as of an older snapshot: the staging archive moved on.
+            sync = DestinationSyncState.Behind;
+        }
+
+        return new DestinationStatusInput
+        {
+            Name = declared.Name,
+            Kind = declared.Kind,
+            Sync = sync,
+            Domain = DomainOf(declared, setRoot, deviceIdOf),
+            RequiresVerification = declared.RequiresVerification,
+            LastSuccessAt = record?.LastSuccessAt,
+            Detail = record?.LastError,
+            SyncedSequence = record?.SyncedSequence ?? 0,
+            VerifiedAt = record?.VerifiedAt,
+            VerifiedSequence = record?.VerifiedSequence ?? 0,
+            VerifiedObjects = record?.VerifiedObjects ?? 0,
+            VerifiedPopulation = record?.VerifiedPopulation ?? 0,
+        };
+    }
+
+    /// <summary>
+    /// The declaration wins; otherwise the domain is derived by kind, always
+    /// conservatively (FR-SNP-007, ADR-0018 Amendment 2).
+    /// </summary>
+    public static FailureDomain DomainOf(
+        DestinationConfiguration destination, string setRoot, Func<string, ulong?> deviceIdOf)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+        ThrowHelper.ThrowIfNull(deviceIdOf);
+
+        if (destination.FailureDomain is { } declared)
+        {
+            return declared;
+        }
+
+        return destination.Kind switch
+        {
+            // A different volume on this machine survives losing the disk and
+            // nothing more. The same volume, or a platform that will not say,
+            // survives nothing.
+            DestinationKind.LocalPath =>
+                setRoot.Length > 0
+                && deviceIdOf(setRoot) is { } rootDevice
+                && destination.Path is { Length: > 0 } path
+                && deviceIdOf(path) is { } destinationDevice
+                && rootDevice != destinationDevice
+                    ? FailureDomain.SameMachine
+                    : FailureDomain.SameVolume,
+            DestinationKind.Peer => FailureDomain.SameSite,
+            _ => FailureDomain.Independent,
+        };
+    }
+}
+
+/// <summary>
 /// One destination's observed facts, as the derivation consumes them
 /// (ADR-0027 amendment): plain values gathered by the host — the sync ledger
 /// supplies the state, the platform supplies the failure-domain comparison,
-/// the configuration supplies the kind.
+/// the configuration supplies the kind. Built by
+/// <see cref="DestinationStatus.Describe"/>, which is the only place those
+/// three sources are combined.
 /// </summary>
 public sealed record DestinationStatusInput
 {

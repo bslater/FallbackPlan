@@ -1186,58 +1186,27 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         foreach (var reference in set.Destinations)
         {
             var destination = configuration.FindDestination(reference.Ref);
-            if (destination is null)
-            {
-                // Validation refuses dangling references, so this is a config
-                // edited mid-flight — reported, never invented around.
-                inputs.Add(new DestinationStatusInput
-                {
-                    Name = reference.Ref,
-                    Kind = DestinationKind.LocalPath,
-                    Sync = DestinationSyncState.Failed,
-                    // Conservative: an undeclarable destination earns nothing.
-                    Domain = FailureDomain.SameVolume,
-                    Detail = "no longer declared",
-                });
-                rows.Add(new DestinationStatusDescriptor(
-                    reference.Ref, "?", "failed", null, "no longer declared", "same-volume", "unproven"));
-                continue;
-            }
-
-            var record = runtime.DestinationSync.Find(set.Id, reference.Ref);
-            var sync = record?.State ?? DestinationSyncState.Behind;
-            if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompleted)
-            {
-                // In sync as of an older snapshot: the staging archive moved on.
-                sync = DestinationSyncState.Behind;
-            }
-
-            var domain = DomainOf(set, destination);
-            var input = new DestinationStatusInput
-            {
-                Name = destination.Name,
-                Kind = destination.Kind,
-                Sync = sync,
-                Domain = domain,
-                RequiresVerification = destination.RequiresVerification,
-                LastSuccessAt = record?.LastSuccessAt,
-                Detail = record?.LastError,
-                SyncedSequence = record?.SyncedSequence ?? 0,
-                VerifiedAt = record?.VerifiedAt,
-                VerifiedSequence = record?.VerifiedSequence ?? 0,
-                VerifiedObjects = record?.VerifiedObjects ?? 0,
-                VerifiedPopulation = record?.VerifiedPopulation ?? 0,
-            };
+            var input = DestinationStatus.Describe(
+                reference.Ref, destination, set.Root, runtime.DestinationSync.Find(set.Id, reference.Ref),
+                lastCompleted, DeviceIdOf);
 
             inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(
-                destination.Name, KindLabel(destination.Kind), StateLabel(sync), record?.LastSuccessAt,
-                record?.LastError, StatusDeriver.DomainLabel(domain),
+                input.Name, destination is null ? "?" : KindLabel(input.Kind), StateLabel(input.Sync),
+                input.LastSuccessAt, input.Detail, StatusDeriver.DomainLabel(input.Domain),
                 StatusDeriver.VerificationLabel(input)));
         }
 
         return (inputs, rows);
     }
+
+    /// <summary>
+    /// The volume a path sits on, or null when the platform will not say —
+    /// the one piece of <see cref="DestinationStatus.Describe"/> that has to
+    /// be supplied from outside the use-case layer (architecture 11 §2).
+    /// </summary>
+    private static ulong? DeviceIdOf(string path) =>
+        Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat) ? stat.Device : null;
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —
@@ -1249,28 +1218,6 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     /// not survive the house fire — and a cloud kind to independent
     /// (ADR-0018 Amendment 2).
     /// </summary>
-    private static FailureDomain DomainOf(BackupSetConfiguration set, DestinationConfiguration destination)
-    {
-        if (destination.FailureDomain is { } declared)
-        {
-            return declared;
-        }
-
-        return destination.Kind switch
-        {
-            DestinationKind.LocalPath =>
-                set.Root.Length > 0
-                && Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat)
-                && destination.Path is { Length: > 0 }
-                && Filesystem.Local.LocalFileSystemSource.TryStat(destination.Path, out var destinationStat)
-                && rootStat.Device != destinationStat.Device
-                    ? FailureDomain.SameMachine
-                    : FailureDomain.SameVolume,
-            DestinationKind.Peer => FailureDomain.SameSite,
-            _ => FailureDomain.Independent,
-        };
-    }
-
     private static string KindLabel(DestinationKind kind) => kind switch
     {
         DestinationKind.LocalPath => "local-path",
