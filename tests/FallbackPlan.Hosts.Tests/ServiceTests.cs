@@ -510,6 +510,127 @@ public sealed class ServiceTests : IDisposable
         _harness.Dispose();
     }
 
+    [TestMethod]
+    public async Task UpsertBackupSet_CreatingAndEditing_IsTheOnlyWayAClientMakesASetAndItWorks()
+    {
+        // The only programmatic route by which a client — a UI, eventually —
+        // creates or edits a backup set. It writes the configuration file the
+        // scheduler then reads, and nothing exercised it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var created = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "photos", _harness.SourceRoot, "every 6h", [], [], ["vault"])),
+            _timeout.Token);
+        Assert.IsInstanceOfType<AcknowledgedResult>(created);
+
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var afterCreate);
+        Assert.HasCount(2, afterCreate.Sets);
+        var photos = afterCreate.Sets.Single(set => set.Name == "photos");
+        Assert.AreEqual("every 6h", photos.Schedule);
+        Assert.AreEqual("vault", photos.Destinations.Single());
+
+        // An edit replaces the row rather than appending a second one with the
+        // same identity, which is what "upsert" has to mean for a file the
+        // scheduler iterates.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "photos", _harness.SourceRoot, "daily at 02:30", ["**/*.jpg"], [], ["vault"])),
+            _timeout.Token));
+
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var afterEdit);
+        Assert.HasCount(2, afterEdit.Sets);
+        var edited = afterEdit.Sets.Single(set => set.Id == new string('b', 32));
+        Assert.AreEqual("daily at 02:30", edited.Schedule);
+        Assert.AreEqual("**/*.jpg", edited.IncludeRules.Single());
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_EditingASetWithRetentionOverrides_KeepsWhatTheCommandCannotCarry()
+    {
+        // The subtle half, and the reason this is worth a test of its own: the
+        // command names destinations as bare strings, so a per-destination
+        // retention override has no field to travel in. An upsert that took
+        // the command at face value would silently widen what that destination
+        // is entitled to keep — and nothing downstream would report it,
+        // because a destination keeping MORE looks healthy.
+        var overridden = new RetentionConfiguration { KeepDaily = 3, MinGenerations = 1 };
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new DestinationConfiguration
+                {
+                    Id = new string('d', 32), Name = "vault",
+                    Kind = DestinationKind.LocalPath, Path = Path.Combine(_harness.StateDirectory, "vault"),
+                },
+            ],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = _harness.DocsSetId,
+                    Name = "docs",
+                    Root = _harness.SourceRoot,
+                    Schedule = "every 1h",
+                    Retention = new RetentionConfiguration { KeepDaily = 7, MinGenerations = 2 },
+                    Destinations = [new SetDestinationReference { Ref = "vault", Retention = overridden }],
+                },
+            ],
+        }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+        await _harness.CreateRepositoryAsync();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 4h", [], [], ["vault"])),
+            _timeout.Token));
+
+        var reloaded = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"));
+        var set = reloaded.FindSet("docs")!;
+        Assert.AreEqual("every 4h", set.Schedule, "what the command did carry is applied");
+        Assert.AreEqual(7, set.Retention?.KeepDaily, "the set's own policy survives an edit that could not name it");
+        Assert.AreEqual(
+            3, set.Destinations.Single().Retention?.KeepDaily,
+            "and so does the per-destination override, matched back by name");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_NamingADestinationNobodyDeclared_IsRefusedWithoutTouchingTheFile()
+    {
+        // Validation runs on save, so a bad set is refused here rather than
+        // discovered by the scheduler at two in the morning (FR-DEST-001). It
+        // must come back as a ServiceError — an exception crossing the command
+        // boundary is not an answer a client can act on — and the file on disk
+        // must be exactly what it was.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var configurationPath = Path.Combine(_harness.StateDirectory, "config.json");
+        var before = await File.ReadAllTextAsync(configurationPath, _timeout.Token);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('c', 32), "elsewhere", _harness.SourceRoot, "every 1h", [], [], ["nowhere"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("nowhere", error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(before, await File.ReadAllTextAsync(configurationPath, _timeout.Token));
+    }
+
     private async Task<ServiceRuntime> StartAsync()
     {
         using var passphrase = Passphrase.Create(
