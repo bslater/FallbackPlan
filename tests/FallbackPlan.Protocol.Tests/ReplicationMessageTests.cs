@@ -36,6 +36,27 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
+    public void Inventory_Headroom_RoundTripsAndStaysAbsentWhenThereIsNoCeiling()
+    {
+        // Key 3 is additive (05 §1): a destination under no quota omits it,
+        // and a destination speaking an older build omits it too. Both must
+        // read back as "not told" — never as zero, which would say the
+        // opposite of what is true.
+        var bounded = new ReplicationInventory(["blobs/data/aaaa/one"], More: false, Headroom: 4_096);
+        Assert.AreEqual(bounded, RoundTrip(bounded, ReplicationInventory.Read));
+        Assert.AreEqual(4_096UL, RoundTrip(bounded, ReplicationInventory.Read).Headroom);
+
+        var unbounded = new ReplicationInventory(["blobs/data/aaaa/one"], More: false);
+        Assert.IsNull(RoundTrip(unbounded, ReplicationInventory.Read).Headroom);
+
+        // A destination with a quota and nothing left says zero, which is a
+        // different statement from saying nothing.
+        Assert.AreEqual(
+            0UL,
+            RoundTrip(new ReplicationInventory([], More: false, Headroom: 0), ReplicationInventory.Read).Headroom);
+    }
+
+    [TestMethod]
     public void RetentionOfferAndAck_RoundTrip()
     {
         // The commander's drop-list and the spoke's answer (peer-protocol 06

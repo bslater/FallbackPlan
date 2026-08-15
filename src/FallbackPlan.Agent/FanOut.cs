@@ -288,6 +288,7 @@ public static class FanOut
             ReportShortfall(
                 runtime, set, destination.Name, priorSuccess, replicaRootMissing: false,
                 outcome.HeldAtStart, outcome.Committed, nowMs);
+            ReportHeadroom(runtime, destination, session.TheirTerms?.QuotaBytes ?? 0, outcome.Headroom, nowMs);
 
             if (plan.Samples.Count > 0)
             {
@@ -480,6 +481,21 @@ public static class FanOut
                 .ConfigureAwait(false);
             var replica = new LocalFileSystemObjectStore(replicaRoot);
 
+            // Filling a destination volume to zero is a harm to the machine,
+            // not just to this backup: logs stop, temp files fail, and on the
+            // source's own volume the next capture cannot even stage. The copy
+            // is held off before it starts rather than after it has taken the
+            // last of the space.
+            if (DestinationCapacity.FloorShortfall(replicaRoot, AvailableBytesOn(replicaRoot)) is { } shortOfSpace)
+            {
+                // Unavailable, not Failed: deleting something frees the space
+                // and the next pass simply succeeds (FR-DEST-003). Nothing
+                // here needs a human's decision, only room.
+                ledger.RecordFailure(
+                    set.Id, destination.Name, DestinationSyncState.Unavailable, shortOfSpace, nowMs);
+                return;
+            }
+
             // A destination under a retention policy holds exactly its
             // keep-set's closure, converged in one operation with the copy so
             // fan-out and retention cannot disagree (FR-GC-010). One without a
@@ -567,6 +583,82 @@ public static class FanOut
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
         }
+    }
+
+    /// <summary>
+    /// What the platform says is free on the volume holding a path, or null
+    /// when it will not say.
+    /// </summary>
+    /// <remarks>
+    /// Only the measurement lives here; what the number means is
+    /// <see cref="DestinationCapacity"/>'s, which is testable without a disk.
+    /// A platform that will not answer answers null, and the policy reads that
+    /// as room — this guard exists to stop a disk being filled, and must never
+    /// be the reason a healthy destination stops receiving backups.
+    /// </remarks>
+    private static long? AvailableBytesOn(string replicaRoot)
+    {
+        try
+        {
+            return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(replicaRoot))!).AvailableFreeSpace;
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException
+            or UnauthorizedAccessException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How little of a peer's loan may be left before the operator is told.
+    /// </summary>
+    /// <remarks>
+    /// A tenth, rather than an absolute number of bytes, because the loan
+    /// itself is whatever two people agreed: a gigabyte left is comfortable
+    /// under a hundred-gigabyte quota and nearly nothing under a hundred
+    /// megabytes.
+    /// </remarks>
+    private const int HeadroomWarningPercent = 10;
+
+    /// <summary>
+    /// Warns when a peer's loan is nearly spent, and takes the warning back
+    /// when it is not (05 §4).
+    /// </summary>
+    /// <remarks>
+    /// A warning rather than a refusal, deliberately. The boundary stop
+    /// already refuses the exact object that would cross the line, with exact
+    /// numbers, at the exact moment — and it preserves everything copied
+    /// before it, which <c>StoreToStoreCopier</c> is built around. Refusing
+    /// the whole session early would throw that partial progress away to say
+    /// something less precise, sooner. What was missing was only that nobody
+    /// heard about it until it happened.
+    /// </remarks>
+    private static void ReportHeadroom(
+        ServiceRuntime runtime, DestinationConfiguration destination, ulong quota, ulong? headroom, ulong nowMs)
+    {
+        var key = $"destination-headroom:{destination.Name}";
+        if (quota == 0 || headroom is not { } free)
+        {
+            // No ceiling, or a destination whose build does not say. Neither
+            // is a finding, and a resolve here clears a warning left by a
+            // quota that has since been lifted.
+            runtime.Notices.Resolve(key, nowMs);
+            return;
+        }
+
+        if (free > quota / HeadroomWarningPercent)
+        {
+            runtime.Notices.Resolve(key, nowMs);
+            return;
+        }
+
+        runtime.Notices.Raise(
+            key,
+            $"Destination '{destination.Name}' has {free} byte(s) left of the {quota} it lends — under "
+            + $"{HeadroomWarningPercent}%. Syncs will keep succeeding until the next object does not fit, "
+            + "and then stop at exactly that object. Free space there, ask for more, or tighten this "
+            + "destination's retention.",
+            nowMs);
     }
 
     /// <summary>

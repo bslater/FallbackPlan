@@ -98,7 +98,22 @@ public sealed record ReplicationOffer(
 /// </summary>
 /// <param name="Keys">The object keys the destination holds, this page.</param>
 /// <param name="More">Whether another page follows.</param>
-public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More) : IPeerMessage
+/// <param name="Headroom">
+/// Bytes this destination can still accept under the peer's quota, as of the
+/// moment the inventory was taken; null when no quota bounds it (05 §1).
+/// </param>
+/// <remarks>
+/// The headroom rides here rather than in the hello or the terms, and the
+/// choice matters. Terms are persisted in the grant and compared for
+/// narrowing, so a per-session number there would raise "your friend reduced
+/// your space" on every single sync. The hello is too early: the destination
+/// does not yet know which repository is coming, and computing usage means
+/// walking every object it holds — a cost the periodic verification sessions
+/// would pay for a number nobody reads. By the inventory the scope is known
+/// and <c>quota − usage</c> is already sitting in a local.
+/// </remarks>
+public sealed record ReplicationInventory(
+    IReadOnlyList<string> Keys, bool More, ulong? Headroom = null) : IPeerMessage
 {
     /// <summary>The most object keys one inventory page may carry (00 §2.3).</summary>
     public const int MaximumKeys = 4096;
@@ -110,7 +125,7 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
     public PeerMessageType Type => PeerMessageType.ReplicationInventory;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 2;
+    public int BodyEntryCount => Headroom is null ? 2 : 3;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -134,6 +149,15 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
         writer.WriteEndArray();
         writer.WriteInt32(2);
         writer.WriteBoolean(More);
+
+        // Written only when there is a ceiling: an absent key means "no quota
+        // bounds this", which is not the same statement as "no room left" and
+        // must not encode as zero.
+        if (Headroom is { } headroom)
+        {
+            writer.WriteInt32(3);
+            writer.WriteUInt64(headroom);
+        }
     }
 
     /// <summary>Reads an inventory page.</summary>
@@ -146,6 +170,7 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
 
         IReadOnlyList<string>? keys = null;
         var more = false;
+        ulong? headroom = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -156,6 +181,9 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
                     break;
                 case 2:
                     more = reader.ReadBoolean();
+                    break;
+                case 3:
+                    headroom = reader.ReadUInt64();
                     break;
                 default:
                     reader.SkipValue();
@@ -169,7 +197,7 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
                 PeerRefusalReason.Malformed, "An inventory page carried no key array.");
         }
 
-        return new ReplicationInventory(keys, more);
+        return new ReplicationInventory(keys, more, headroom);
     }
 
     private static List<string> ReadKeys(CborReader reader)
@@ -201,13 +229,15 @@ public sealed record ReplicationInventory(IReadOnlyList<string> Keys, bool More)
 
     /// <inheritdoc/>
     public bool Equals(ReplicationInventory? other) =>
-        other is not null && More == other.More && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
+        other is not null && More == other.More && Headroom == other.Headroom
+        && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
 
     /// <inheritdoc/>
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(More);
+        hash.Add(Headroom);
         foreach (var objectKey in Keys)
         {
             hash.Add(objectKey, StringComparer.Ordinal);

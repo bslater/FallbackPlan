@@ -116,7 +116,12 @@ internal static class ReplicationResponder
                     .ConfigureAwait(false)
                 : 0UL;
 
-            await SendInventoryAsync(replica, stream, cancellationToken).ConfigureAwait(false);
+            // The same two numbers the boundary stop is enforced from, told
+            // to the source up front so it learns the ceiling is close before
+            // a push runs into it rather than only when one does (05 §4).
+            await SendInventoryAsync(
+                replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null, cancellationToken)
+                .ConfigureAwait(false);
             var committed = await ReceiveAsync(replica, spoolRoot, stream, quota, usage, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -351,7 +356,7 @@ internal static class ReplicationResponder
     }
 
     private static async Task SendInventoryAsync(
-        LocalFileSystemObjectStore replica, Stream stream, CancellationToken cancellationToken)
+        LocalFileSystemObjectStore replica, Stream stream, ulong? headroom, CancellationToken cancellationToken)
     {
         var page = new List<string>(ReplicationInventory.MaximumKeys);
         await foreach (var entry in replica.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -360,14 +365,16 @@ internal static class ReplicationResponder
             page.Add(entry.Key.Value);
             if (page.Count == ReplicationInventory.MaximumKeys)
             {
-                await PeerFrame.WriteAsync(stream, new ReplicationInventory([.. page], More: true), cancellationToken)
+                await PeerFrame.WriteAsync(
+                    stream, new ReplicationInventory([.. page], More: true, headroom), cancellationToken)
                     .ConfigureAwait(false);
                 page.Clear();
             }
         }
 
         // The final (or only) page carries whatever remains and closes the inventory.
-        await PeerFrame.WriteAsync(stream, new ReplicationInventory([.. page], More: false), cancellationToken)
+        await PeerFrame.WriteAsync(
+            stream, new ReplicationInventory([.. page], More: false, headroom), cancellationToken)
             .ConfigureAwait(false);
     }
 

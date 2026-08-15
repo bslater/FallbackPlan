@@ -150,6 +150,60 @@ public sealed class PeerQuotaTests : IDisposable
         Assert.IsEmpty(FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged);
     }
 
+    [TestMethod]
+    public async Task FanOut_ThePeersLoanIsNearlySpent_WarnsBeforeAPushRunsIntoTheCeiling()
+    {
+        // Until now the only news about capacity was the boundary stop
+        // itself: exact, but delivered by the failure it was meant to
+        // anticipate. The destination already had `quota − usage` in a local
+        // one line before it sends the inventory, so it costs nothing to say.
+        _source.WriteSourceFile("notes.txt", "converge me, then leave almost no room");
+
+        var destinationFingerprint = await StartDestinationAsync(
+            destinationTermsForSource: PeerTerms.None, sourceRecordsForDestination: PeerTerms.None);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var first = await RunAgentAsync(
+            "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--once");
+        Assert.AreEqual(0, first.ExitCode, first.Error);
+
+        // No quota, so nothing to be near the end of.
+        Assert.IsEmpty(FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged);
+
+        // The lender now bounds the loan at a hair over what is already
+        // stored. Nothing new needs to cross on the next pass, so the sync
+        // still succeeds — which is exactly the situation worth warning
+        // about, because the next new object will not fit.
+        var used = (ulong)Directory
+            .EnumerateFiles(Path.Combine(_destinationState, "replicas"), "*", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length);
+        Assert.IsGreaterThan(0UL, used, "the first pass must have stored something to be near the ceiling of");
+
+        using (var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory))
+        {
+            _destinationGrants!.Pin(new PeerGrant(
+                sourceKeypair.Identity, "source", PeerRole.StoresHere,
+                new PeerTerms(used + 8, string.Empty, 0), PairedAt));
+        }
+
+        var second = await RunAgentAsync(
+            "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable);
+        Assert.AreEqual(0, second.ExitCode, second.Error);
+
+        var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.AreEqual(
+            FallbackPlan.Application.DestinationSyncState.InSync, record!.State,
+            "a warning, not a refusal: the sync still succeeded");
+
+        var headroom = FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged
+            .SingleOrDefault(notice => notice.Key.StartsWith("destination-headroom:", StringComparison.Ordinal));
+        Assert.IsNotNull(headroom, "the operator is told the loan is nearly spent");
+        Assert.Contains("8 byte(s) left", headroom.Message, StringComparison.Ordinal);
+    }
+
     private IPEndPoint? _endpoint;
     private string DestinationAddress => $"{_endpoint!.Address}:{_endpoint.Port}";
     private Stopper? _stop;

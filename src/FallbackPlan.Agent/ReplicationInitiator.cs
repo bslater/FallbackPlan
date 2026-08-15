@@ -39,7 +39,13 @@ internal static class ReplicationInitiator
     /// destination has quietly lost what it was given. A spoke that answers
     /// zero here after a recorded success has been emptied.
     /// </param>
-    public sealed record PushOutcome(long Committed, long Deleted, long HeldAtStart);
+    /// <param name="Headroom">
+    /// Bytes the spoke could still accept under its quota when the inventory
+    /// was taken, or null when no quota bounds it — or when the spoke speaks
+    /// a build that does not say. Null therefore means "not told", never "no
+    /// room": the two must not be spelled the same.
+    /// </param>
+    public sealed record PushOutcome(long Committed, long Deleted, long HeldAtStart, ulong? Headroom = null);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -68,7 +74,7 @@ internal static class ReplicationInitiator
                 stream, new ReplicationOffer(repositoryId, FormatCapability, "all"), cancellationToken)
                 .ConfigureAwait(false);
 
-            var held = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
+            var (held, headroom) = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
 
             var sent = 0L;
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -108,7 +114,7 @@ internal static class ReplicationInitiator
 
             if (keeps is null)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom);
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
@@ -133,7 +139,7 @@ internal static class ReplicationInitiator
                 .ToList();
             if (drops.Count == 0)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom);
             }
 
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
@@ -147,7 +153,7 @@ internal static class ReplicationInitiator
 
             var retentionAck = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
-            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted, held.Count);
+            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom);
         }
         catch (PeerProtocolException exception)
         {
@@ -252,9 +258,11 @@ internal static class ReplicationInitiator
         : key.StartsWith("blobs/", StringComparison.Ordinal) ? 5
         : 1;
 
-    private static async Task<HashSet<string>> ReadInventoryAsync(Stream stream, CancellationToken cancellationToken)
+    private static async Task<(HashSet<string> Held, ulong? Headroom)> ReadInventoryAsync(
+        Stream stream, CancellationToken cancellationToken)
     {
         var held = new HashSet<string>(StringComparer.Ordinal);
+        ulong? headroom = null;
         while (true)
         {
             var page = await ReplicationWire.ReadAsync(
@@ -266,9 +274,14 @@ internal static class ReplicationInitiator
                 held.Add(objectKey);
             }
 
+            // Every page carries it, and a destination that speaks an older
+            // build carries it on none — so the last one seen wins and null
+            // means "not told", never "no room".
+            headroom = page.Headroom ?? headroom;
+
             if (!page.More)
             {
-                return held;
+                return (held, headroom);
             }
         }
     }
