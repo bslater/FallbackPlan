@@ -41,7 +41,7 @@ public sealed class ClientConfigurationTests
         Id = new string(fill, 32),
         Name = name,
         Kind = DestinationKind.Peer,
-        Fingerprint = "mfzq6ysbmfzq6ysbmfzq6ysbmf",
+        Fingerprint = "mgr7e7euwdpfkggmp4astkz5ia",
         Endpoint = "alice.example.com:7040",
     };
 
@@ -155,6 +155,30 @@ public sealed class ClientConfigurationTests
         Assert.AreEqual(VerificationPolicy.AcknowledgedNone, acknowledged.FindDestination("bob")!.Verification);
         Assert.IsFalse(acknowledged.FindDestination("bob")!.RequiresVerification);
         Assert.Contains("\"acknowledged-none\"", acknowledged.ExportJson(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Load_AMistypedEndpoint_LoadsAnywayAndReportsTheDefect()
+    {
+        // The load path is hot: `ServiceRuntime.Configuration` re-reads and
+        // re-validates this file on every property access, several times per
+        // scheduler pass. Throwing over one destination's typo would stop
+        // every set backing up and stop `status` answering — including for
+        // sets that do not use the destination at all. The defect is a report
+        // instead, and the blast radius stays where it already was: one
+        // (set, destination) pair.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Peer("alice") with { Endpoint = "alice.example.com" }],
+            BackupSets = [Set("docs", Ref("alice"))],
+        }.Save(ConfigPath);
+
+        var loaded = ClientConfiguration.Load(ConfigPath);
+
+        Assert.Contains(
+            "host:port", loaded.FindDestination("alice")!.AddressDefect ?? "", StringComparison.Ordinal);
+        Assert.HasCount(1, loaded.BackupSets, "the rest of the configuration is untouched by one bad address");
     }
 
     [TestMethod]

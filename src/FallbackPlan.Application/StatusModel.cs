@@ -120,6 +120,7 @@ public static class DestinationStatus
             VerifiedPopulation = record?.VerifiedPopulation ?? 0,
             VerificationAgeDays = AgeInDays(record?.VerifiedAt, nowUnixMilliseconds),
             VerificationBoundDays = BoundFor(declared.Kind),
+            AddressDefect = declared.AddressDefect,
         };
     }
 
@@ -250,6 +251,15 @@ public sealed record DestinationStatusInput
     /// completely different responses from a human.
     /// </summary>
     public bool RequiresVerification { get; init; } = true;
+
+    /// <summary>
+    /// What is wrong with this destination's declared address, or null when
+    /// nothing is (FR-DEST-001). Syntax only, gathered at the same moment as
+    /// everything else here — it is a report, never a refusal, because
+    /// refusing a whole configuration over one destination's typo would stop
+    /// every set backing up.
+    /// </summary>
+    public string? AddressDefect { get; init; }
 
     /// <summary>
     /// Whole days since this destination was last proven; null when it never
@@ -395,6 +405,16 @@ public static class StatusDeriver
             // (FR-GC-009, ADR-0009 Amendment 4), so an overdue proof there
             // quietly stops space coming back. Skipping it because the row is
             // below same-site would hide the one consequence it has.
+            if (destination.AddressDefect is { } defect)
+            {
+                // Named before anything has counted on it, rather than at the
+                // first sync — which for a destination no set has synced yet
+                // is never. A typo'd endpoint used to be discovered by the
+                // fan-out, and only for a (set, destination) pair that had
+                // been attempted at least once.
+                warnings.Add($"'{destination.Name}' cannot be reached as declared: {defect}");
+            }
+
             if (destination.VerificationOverdue)
             {
                 warnings.Add(

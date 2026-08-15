@@ -349,6 +349,25 @@ public sealed class ApplicationServiceTests : IDisposable
             status.Warnings);
     }
 
+    [TestMethod]
+    public void BackupSetStatus_ADestinationWhoseAddressCannotWork_IsNamedInTheWarnings()
+    {
+        // Admission, not diagnosis: this says the declaration cannot be acted
+        // on, which is knowable before anything is attempted. A destination no
+        // set has synced yet has no ledger row at all, so the fan-out's own
+        // report of the same fact would never arrive.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination() with { AddressDefect = "endpoint 'friend.example' is not host:port." }],
+        });
+
+        Assert.Contains(
+            warning => warning.Contains("cannot be reached as declared", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.Contains(
+            warning => warning.Contains("not host:port", StringComparison.Ordinal), status.Warnings);
+    }
+
     /// <summary>A destination proven <paramref name="ageDays"/> ago, current for what it was sent.</summary>
     private static DestinationStatusInput Proven(
         string name = "vault", int ageDays = 1, int boundDays = 7) =>

@@ -144,7 +144,7 @@ public sealed class DestinationStatusTests
             Id = new string('2', 32),
             Name = "friend",
             Kind = DestinationKind.Peer,
-            Fingerprint = "mfzq6ysbmfzq6ysbmfzq6ysbmf",
+            Fingerprint = "mgr7e7euwdpfkggmp4astkz5ia",
             Endpoint = "alice.example.com:7040",
         };
 
@@ -258,6 +258,67 @@ public sealed class DestinationStatusTests
         Assert.IsFalse(input.VerificationOverdue);
     }
 
+    /// <summary>Sixteen bytes in lowercase unpadded base32 — the shape a real fingerprint has.</summary>
+    private const string WellFormedFingerprint = "mgr7e7euwdpfkggmp4astkz5ia";
+
+    [TestMethod]
+    public void Describe_AWellFormedAddress_ReportsNoDefect()
+    {
+        Assert.IsNull(
+            DestinationStatus.Describe(
+                "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice)
+                .AddressDefect);
+
+        Assert.IsNull(Peer().AddressDefect);
+    }
+
+    [TestMethod]
+    public void Describe_ARelativeLocalPath_IsNamedRatherThanResolvedAgainstWhereverTheServiceStarted()
+    {
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath("backups/vault"), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
+
+        Assert.IsNotNull(input.AddressDefect);
+        Assert.Contains("absolute", input.AddressDefect, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_AMistypedEndpoint_IsNamedBeforeAnySyncCountsOnIt()
+    {
+        // Today this surfaces in the fan-out, at the first sync — which for a
+        // destination no set has synced yet is never.
+        Assert.Contains(
+            "host:port", Peer(endpoint: "friend.example").AddressDefect ?? "", StringComparison.Ordinal);
+        Assert.Contains(
+            "not a port", Peer(endpoint: "friend.example:70000").AddressDefect ?? "", StringComparison.Ordinal);
+        Assert.Contains(
+            "not a port", Peer(endpoint: "friend.example:0").AddressDefect ?? "", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_AFingerprintThatIsNotOne_SaysWhereToGetTheRealOne()
+    {
+        // A truncated or hex-looking fingerprint can never match a grant, so
+        // every sync would report "not paired" — true, and the wrong thing to
+        // go and do about it.
+        var input = Peer(fingerprint: new string('b', 64));
+
+        Assert.IsNotNull(input.AddressDefect);
+        Assert.Contains("base32", input.AddressDefect, StringComparison.Ordinal);
+        Assert.Contains("pairings", input.AddressDefect, StringComparison.Ordinal);
+    }
+
+    private static DestinationStatusInput Peer(
+        string fingerprint = WellFormedFingerprint, string endpoint = "friend.example:9443") =>
+        DestinationStatus.Describe(
+            "friend",
+            new DestinationConfiguration
+            {
+                Id = new string('2', 32), Name = "friend", Kind = DestinationKind.Peer,
+                Fingerprint = fingerprint, Endpoint = endpoint,
+            },
+            SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
+
     private static ulong Day(int index) => 1_754_000_000_000UL + ((ulong)index * 86_400_000UL);
 
     /// <summary>A destination whose proof covers everything it was sent.</summary>
@@ -268,7 +329,7 @@ public sealed class DestinationStatusTests
             ? new DestinationConfiguration
             {
                 Id = new string('2', 32), Name = "friend", Kind = DestinationKind.Peer,
-                Fingerprint = new string('b', 64), Endpoint = "friend.example:9443",
+                Fingerprint = WellFormedFingerprint, Endpoint = "friend.example:9443",
             }
             : LocalPath();
 

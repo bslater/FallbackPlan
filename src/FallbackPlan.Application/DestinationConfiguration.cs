@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FallbackPlan.Domain;
 
 namespace FallbackPlan.Application;
 
@@ -157,6 +158,81 @@ public sealed record DestinationConfiguration
     /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
     [JsonIgnore]
     public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;
+
+    /// <summary>The peer fingerprint's length: 16 bytes of lowercase unpadded base32.</summary>
+    private static readonly int FingerprintCharacters = Base32.GetEncodedLength(16);
+
+    /// <summary>
+    /// What is wrong with this destination's address, in one sentence, or null
+    /// when nothing is. Syntax only — no name resolution, no disk, no dialling.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately <b>not</b> a validation rule. <c>ServiceRuntime.Configuration</c>
+    /// re-reads and re-validates <c>config.json</c> on every property access,
+    /// several times per scheduler pass, so a throw here would stop every set
+    /// backing up and stop <c>status</c> answering — over one mistyped
+    /// character in one destination that some other set does not even use.
+    /// Today a bad endpoint degrades exactly one <c>(set, destination)</c> pair
+    /// at its first sync. This keeps that blast radius and only moves the
+    /// discovery earlier: the defect is reported wherever the destination is
+    /// reported, before anything has counted on it.
+    /// </para>
+    /// <para>
+    /// Nothing here touches the world, because this is read on the same hot
+    /// path the validation is.
+    /// </para>
+    /// </remarks>
+    [JsonIgnore]
+    public string? AddressDefect => Kind switch
+    {
+        DestinationKind.LocalPath => LocalPathDefect(),
+        DestinationKind.Peer => PeerDefect(),
+        _ => null,
+    };
+
+    private string? LocalPathDefect()
+    {
+        if (Path is not { Length: > 0 } path)
+        {
+            // Validation already refuses this; reaching it means the record was
+            // built in code rather than loaded, and silence would be worse.
+            return "no path is declared.";
+        }
+
+        return System.IO.Path.IsPathRooted(path)
+            ? null
+            // A relative path resolves against whatever directory the service
+            // happens to have been started in, which is not a place anybody
+            // chose to keep backups.
+            : $"path '{path}' is relative; a destination must name an absolute path.";
+    }
+
+    private string? PeerDefect()
+    {
+        if (Fingerprint is not { Length: > 0 } fingerprint || Endpoint is not { Length: > 0 } endpoint)
+        {
+            return "no fingerprint or endpoint is declared.";
+        }
+
+        Span<byte> decoded = stackalloc byte[32];
+        if (fingerprint.Length != FingerprintCharacters
+            || !Base32.TryDecode(fingerprint, decoded, out _))
+        {
+            return $"fingerprint '{fingerprint}' is not {FingerprintCharacters} characters of base32 — "
+                + "copy it from the peer's `pairings` output.";
+        }
+
+        var separator = endpoint.LastIndexOf(':');
+        if (separator <= 0 || !int.TryParse(endpoint[(separator + 1)..], out var port))
+        {
+            return $"endpoint '{endpoint}' is not host:port.";
+        }
+
+        return port is > 0 and <= 65535
+            ? null
+            : $"endpoint '{endpoint}' names port {port}, which is not a port.";
+    }
 }
 
 /// <summary>
