@@ -47,6 +47,15 @@ public sealed class PeerQuotaTests : IDisposable
             .Find(_source.DocsSetId, "friend");
         Assert.IsNotNull(record);
         Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.Failed, record.State);
+
+        // The code, not the prose. Peer-protocol 02 §8 makes the reason code
+        // normative and says the human text is not for parsing — so a test
+        // that asserts only the message pins the half that may change freely
+        // and leaves the half that may not unguarded. Both, then: the code
+        // because it is the contract, the words because an operator reads
+        // them.
+        Assert.Contains(
+            nameof(PeerRefusalReason.TermsRefused), record.LastError!, StringComparison.Ordinal);
         Assert.Contains("quota", record.LastError!, StringComparison.OrdinalIgnoreCase);
 
         var notice = Assert.ContainsSingle(
@@ -143,6 +152,15 @@ public sealed class PeerQuotaTests : IDisposable
         Assert.IsNotNull(record);
         Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.Unavailable, record.State);
         Assert.Contains("cannot store", record.LastError!, StringComparison.Ordinal);
+
+        // The reason code is what tells this apart from a policy refusal, and
+        // the two lead to different people fixing different things (05 §5).
+        // The recorded line does not carry the code on this path — the state
+        // does — so the distinction is asserted where it lives: Unavailable
+        // above, and no notice below, are together the shape of
+        // storage_exhausted rather than terms_refused.
+        Assert.DoesNotContain(
+            nameof(PeerRefusalReason.TermsRefused), record.LastError!, StringComparison.Ordinal);
 
         // No notice: this is the destination's fault to fix, and back-off
         // retries close the gap when it does — the human on this side has no
