@@ -28,6 +28,29 @@ namespace FallbackPlan.Application;
 public static class DestinationStatus
 {
     /// <summary>
+    /// How long a local-path destination's proof stands before it is called
+    /// overdue (architecture 09 §4).
+    /// </summary>
+    /// <remarks>
+    /// The tighter of the two bounds, because a local path is the cheaper
+    /// destination to re-read — the hub owns the disk — and because the deep
+    /// sweep that refreshes it runs weekly by default
+    /// (<c>ReplicaSweepJob.DefaultIntervalDays</c>). A bound shorter than the
+    /// cadence meant to satisfy it would be permanently unmet.
+    /// </remarks>
+    public const int LocalPathVerificationBoundDays = 7;
+
+    /// <summary>
+    /// How long a peer destination's proof stands before it is called overdue
+    /// (architecture 09 §4).
+    /// </summary>
+    /// <remarks>
+    /// Looser than a local path's, because refreshing it costs somebody
+    /// else's bandwidth and availability rather than this hub's own disk.
+    /// </remarks>
+    public const int PeerVerificationBoundDays = 30;
+
+    /// <summary>
     /// Describes one declared destination of one set.
     /// </summary>
     /// <param name="reference">The set's reference to the destination, by name.</param>
@@ -35,6 +58,13 @@ public static class DestinationStatus
     /// <param name="setRoot">The set's capture root, for the failure-domain comparison.</param>
     /// <param name="record">The pair's sync ledger row, or null when never attempted.</param>
     /// <param name="lastCompletedAt">When the set last completed a backup, Unix milliseconds; 0 when never.</param>
+    /// <param name="nowUnixMilliseconds">
+    /// The clock, for the age of the verification stamp. It enters here rather
+    /// than in <see cref="StatusDeriver.Derive"/> because the derivation is
+    /// deliberately a pure function of plain values with no clock of its own,
+    /// and the per-destination bound this is compared against already lives on
+    /// <see cref="DestinationStatusInput"/>.
+    /// </param>
     /// <param name="deviceIdOf">
     /// The volume a path sits on, or null when the platform cannot say — which
     /// is answered conservatively, as sharing a volume.
@@ -45,6 +75,7 @@ public static class DestinationStatus
         string setRoot,
         DestinationSyncRecord? record,
         ulong lastCompletedAt,
+        ulong nowUnixMilliseconds,
         Func<string, ulong?> deviceIdOf)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(reference);
@@ -87,8 +118,33 @@ public static class DestinationStatus
             VerifiedSequence = record?.VerifiedSequence ?? 0,
             VerifiedObjects = record?.VerifiedObjects ?? 0,
             VerifiedPopulation = record?.VerifiedPopulation ?? 0,
+            VerificationAgeDays = AgeInDays(record?.VerifiedAt, nowUnixMilliseconds),
+            VerificationBoundDays = BoundFor(declared.Kind),
         };
     }
+
+    /// <summary>
+    /// Whole days between a stamp and now, or null when there is no stamp or
+    /// the stamp is in the future.
+    /// </summary>
+    /// <remarks>
+    /// A stamp ahead of the clock is a skewed clock, not a fresh proof, and it
+    /// must not be reported as an age of zero — that would read as "verified
+    /// today". Withholding the age instead leaves the destination out of the
+    /// overdue check entirely, which is the conservative direction: it can
+    /// only fail to warn, never warn wrongly.
+    /// </remarks>
+    private static int? AgeInDays(ulong? verifiedAt, ulong nowUnixMilliseconds) =>
+        verifiedAt is { } stamp && stamp <= nowUnixMilliseconds
+            ? (int)((nowUnixMilliseconds - stamp) / 86_400_000)
+            : null;
+
+    /// <summary>How long a destination of this kind may go unproven (architecture 09 §4).</summary>
+    private static int BoundFor(DestinationKind kind) => kind switch
+    {
+        DestinationKind.Peer => PeerVerificationBoundDays,
+        _ => LocalPathVerificationBoundDays,
+    };
 
     /// <summary>
     /// The declaration wins; otherwise the domain is derived by kind, always
@@ -195,9 +251,47 @@ public sealed record DestinationStatusInput
     /// </summary>
     public bool RequiresVerification { get; init; } = true;
 
+    /// <summary>
+    /// Whole days since this destination was last proven; null when it never
+    /// has been, or when the stamp is ahead of the clock.
+    /// </summary>
+    public int? VerificationAgeDays { get; init; }
+
+    /// <summary>
+    /// How long this destination's proof stands before it is called overdue,
+    /// by kind (architecture 09 §4).
+    /// </summary>
+    public int VerificationBoundDays { get; init; } = DestinationStatus.LocalPathVerificationBoundDays;
+
     /// <summary>Whether a usable proof covers what this destination was last sent.</summary>
     public bool IsProvenCurrent =>
         VerifiedAt is not null && VerifiedObjects > 0 && VerifiedSequence >= SyncedSequence;
+
+    /// <summary>
+    /// Whether the proof still covers what was last sent but has gone
+    /// unrefreshed past this destination's bound.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately narrowed to the case where nothing else is already
+    /// complaining. A destination that is unproven, sequence-stale, or
+    /// knowingly unprovable earns its own warning naming that situation; the
+    /// age would be a second line about the same problem. What this catches is
+    /// the case with no other symptom at all — a set that has stopped changing,
+    /// so nothing syncs, so nothing re-verifies, and the row reads
+    /// <c>proven</c> from a stamp that could be a year old. Verification only
+    /// ever ran inside a sync, and a sync only ever ran when the archive moved
+    /// on, so an idle set's proof froze and no existing signal said so.
+    /// </para>
+    /// <para>
+    /// Warning only: <see cref="ProtectionState"/> is untouched
+    /// (ADR-0027 amendment). An old proof is a proof, and demoting the whole
+    /// set over its age would say data is at risk when what is actually true
+    /// is that nobody has looked lately.
+    /// </para>
+    /// </remarks>
+    public bool VerificationOverdue =>
+        RequiresVerification && IsProvenCurrent && VerificationAgeDays > VerificationBoundDays;
 }
 
 /// <summary>
@@ -294,6 +388,22 @@ public static class StatusDeriver
 
         foreach (var destination in inputs.Destinations)
         {
+            // Checked for every destination, not only the ones the protection
+            // question reaches. A local-path replica sits inside the source's
+            // failure domain and so can never earn Protected — but its proof
+            // is exactly what licenses the staging trim to reclaim space
+            // (FR-GC-009, ADR-0009 Amendment 4), so an overdue proof there
+            // quietly stops space coming back. Skipping it because the row is
+            // below same-site would hide the one consequence it has.
+            if (destination.VerificationOverdue)
+            {
+                warnings.Add(
+                    $"'{destination.Name}' was last proven {destination.VerificationAgeDays} days ago, past the "
+                    + $"{destination.VerificationBoundDays}-day bound for a "
+                    + $"{DestinationLabel(destination.Kind)} destination — the proof still covers what was sent, "
+                    + "but nothing has re-read those bytes since.");
+            }
+
             switch (destination.Sync)
             {
                 // Protected asks one question: if this machine is destroyed,
@@ -431,6 +541,14 @@ public static class StatusDeriver
             _ => "stale",
         };
     }
+
+    /// <summary>The configuration's spelling of a destination kind.</summary>
+    private static string DestinationLabel(DestinationKind kind) => kind switch
+    {
+        DestinationKind.LocalPath => "local-path",
+        DestinationKind.Peer => "peer",
+        _ => kind.ToString().ToLowerInvariant(),
+    };
 
     /// <summary>The configuration's spelling of a domain (FR-SNP-007).</summary>
     public static string DomainLabel(FailureDomain domain) => domain switch

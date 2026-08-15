@@ -278,6 +278,92 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_AProofPastItsBound_IsNamedWithoutMovingTheState()
+    {
+        // The gap this closes: an idle set never syncs, verification only ran
+        // inside a sync, so a healthy-looking destination's proof froze and
+        // nothing said so. Day 1 and day 400 read identically.
+        //
+        // Warning only, deliberately (ADR-0027 amendment). An old proof is
+        // still a proof, and demoting the set would say data is at risk when
+        // what is true is that nobody has looked lately.
+        var overdue = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven(ageDays: 40, boundDays: 7)],
+        });
+
+        Assert.AreEqual(ProtectionState.Verified, overdue.State);
+        Assert.Contains(
+            warning => warning.Contains("last proven 40 days ago", StringComparison.Ordinal), overdue.Warnings);
+
+        var fresh = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven(ageDays: 2, boundDays: 7)],
+        });
+        Assert.DoesNotContain(
+            warning => warning.Contains("last proven", StringComparison.Ordinal), fresh.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AnOverdueProofAndAStaleOne_ReadDifferentlyInTheSameList()
+    {
+        // Both sentences are about verification and both appear in one list,
+        // so they have to be tellable apart at a glance: one says the proof
+        // does not cover the latest sync, the other says nothing has re-read
+        // the bytes lately. Same words for both would make the list useless.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Proven("aged", ageDays: 40, boundDays: 7),
+                Proven("superseded", ageDays: 1, boundDays: 7) with { SyncedSequence = 99 },
+            ],
+        });
+
+        Assert.Contains(
+            warning => warning.Contains("'aged' was last proven 40 days ago", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.Contains(
+            warning => warning.Contains("'superseded' is in sync but its copy is not proven", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.DoesNotContain(
+            warning => warning.Contains("'superseded' was last proven", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AnOverdueLocalPathDestination_IsNamedEvenThoughItNeverProtects()
+    {
+        // A local path usually sits inside the source's failure domain, so
+        // the protection question never reaches its verification branch. Its
+        // proof is still what licenses the staging trim to reclaim space
+        // (FR-GC-009), so an overdue proof there stops space coming back —
+        // and that is exactly the consequence a domain-gated check would hide.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven("vault", ageDays: 40, boundDays: 7) with { Domain = FailureDomain.SameVolume }],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
+        Assert.Contains(
+            warning => warning.Contains("'vault' was last proven 40 days ago", StringComparison.Ordinal),
+            status.Warnings);
+    }
+
+    /// <summary>A destination proven <paramref name="ageDays"/> ago, current for what it was sent.</summary>
+    private static DestinationStatusInput Proven(
+        string name = "vault", int ageDays = 1, int boundDays = 7) =>
+        Destination(name) with
+        {
+            SyncedSequence = 42,
+            VerifiedAt = 1_722_600_000_000,
+            VerifiedSequence = 42,
+            VerifiedObjects = 4,
+            VerifiedPopulation = 12,
+            VerificationAgeDays = ageDays,
+            VerificationBoundDays = boundDays,
+        };
+
+    [TestMethod]
     public void BackupSetStatus_AnOffDomainDestinationIsInSync_ProtectsEvenWhileAnotherLags()
     {
         // The matrix rolls up truthfully: one destination behind does not

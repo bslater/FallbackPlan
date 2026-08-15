@@ -1281,6 +1281,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         DescribeDestinations(ClientConfiguration configuration, BackupSetConfiguration set)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var inputs = new List<DestinationStatusInput>();
         var rows = new List<DestinationStatusDescriptor>();
 
@@ -1289,7 +1290,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             var destination = configuration.FindDestination(reference.Ref);
             var input = DestinationStatus.Describe(
                 reference.Ref, destination, set.Root, runtime.DestinationSync.Find(set.Id, reference.Ref),
-                lastCompleted, DeviceIdOf);
+                lastCompleted, nowMs, DeviceIdOf);
 
             inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(

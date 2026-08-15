@@ -33,6 +33,12 @@ public sealed class DestinationStatusTests
             LastSuccessAt = lastSuccessAt,
         };
 
+    /// <summary>
+    /// A fixed clock, well past the ledger stamps the fixtures use, so the
+    /// tests that are not about age are not accidentally about age.
+    /// </summary>
+    private const ulong Now = 100_000_000_000;
+
     /// <summary>Every path on its own volume — nothing shares a device.</summary>
     private static ulong? DistinctDevice(string path) => (ulong)path.Length;
 
@@ -50,7 +56,7 @@ public sealed class DestinationStatusTests
         // snapshot has not crossed is the lie the demotion exists to stop.
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
-            lastCompletedAt: 5_000, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
     }
@@ -60,7 +66,7 @@ public sealed class DestinationStatusTests
     {
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 5_000),
-            lastCompletedAt: 5_000, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice);
 
         Assert.AreEqual(DestinationSyncState.InSync, input.Sync);
     }
@@ -69,7 +75,7 @@ public sealed class DestinationStatusTests
     public void Describe_NeverAttempted_IsBehindRatherThanInvented()
     {
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
         Assert.IsNull(input.LastSuccessAt);
@@ -82,7 +88,7 @@ public sealed class DestinationStatusTests
         // running service. The conservative domain matters: an undeclarable
         // destination must not count toward protection.
         var input = DestinationStatus.Describe(
-            "ghost", declared: null, SetRoot, record: null, lastCompletedAt: 0, DistinctDevice);
+            "ghost", declared: null, SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
 
         Assert.AreEqual("ghost", input.Name);
         Assert.AreEqual(DestinationSyncState.Failed, input.Sync);
@@ -160,12 +166,122 @@ public sealed class DestinationStatusTests
         };
 
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice);
 
         Assert.AreEqual(42UL, input.SyncedSequence);
         Assert.AreEqual(6_000UL, input.VerifiedAt);
         Assert.AreEqual(4, input.VerifiedObjects);
         Assert.AreEqual(12, input.VerifiedPopulation);
         Assert.IsTrue(input.IsProvenCurrent);
+    }
+
+    [TestMethod]
+    public void Describe_TheAgeOfTheProof_IsWhereTheClockEnters()
+    {
+        // Day 1 and day 400 read identically everywhere else: the derivation
+        // is a pure function of plain values and takes no clock, and the
+        // ledger's stamp is a bare instant. This is the only place the two
+        // meet.
+        var input = Proven(verifiedAt: Day(0), now: Day(9));
+
+        Assert.AreEqual(9, input.VerificationAgeDays);
+        Assert.AreEqual(DestinationStatus.LocalPathVerificationBoundDays, input.VerificationBoundDays);
+        Assert.IsTrue(input.VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_EachKind_CarriesItsOwnBound()
+    {
+        // Architecture 09 §4's example policy: seven days for a local path,
+        // thirty for a peer. Nine days is overdue for one and fine for the
+        // other, which is the whole reason the bound travels per-row rather
+        // than as one number in the derivation.
+        var local = Proven(verifiedAt: Day(0), now: Day(9));
+        var peer = Proven(verifiedAt: Day(0), now: Day(9), kind: DestinationKind.Peer);
+
+        Assert.AreEqual(7, local.VerificationBoundDays);
+        Assert.AreEqual(30, peer.VerificationBoundDays);
+        Assert.IsTrue(local.VerificationOverdue);
+        Assert.IsFalse(peer.VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_AProofExactlyOnItsBound_IsNotYetOverdue()
+    {
+        Assert.IsFalse(Proven(verifiedAt: Day(0), now: Day(7)).VerificationOverdue);
+        Assert.IsTrue(Proven(verifiedAt: Day(0), now: Day(8)).VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_AStampAheadOfTheClock_WithholdsTheAgeRatherThanReadingAsFresh()
+    {
+        // A skewed clock, not a fresh proof. Reporting age zero would read as
+        // "verified today" — the one answer that is certainly wrong. No age
+        // means no overdue warning, which can only fail to warn.
+        var input = Proven(verifiedAt: Day(9), now: Day(0));
+
+        Assert.IsNull(input.VerificationAgeDays);
+        Assert.IsFalse(input.VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_ADestinationExcusedFromProving_IsNeverOverdue()
+    {
+        // FR-VER-006: it was knowingly accepted unprovable and already earns
+        // its own warning saying so on every pass. An age complaint on top
+        // would be a second line about a decision somebody already made.
+        var input = Proven(verifiedAt: Day(0), now: Day(400)) with { RequiresVerification = false };
+
+        Assert.IsFalse(input.VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_AProofThatNoLongerCoversWhatWasSent_IsStaleRatherThanOverdue()
+    {
+        // The two must not both fire: sequence-staleness already says the
+        // proof does not cover the latest sync, and that is the actionable
+        // fact. Overdue is for the destination with no other symptom.
+        var input = Proven(verifiedAt: Day(0), now: Day(400)) with { SyncedSequence = 99 };
+
+        Assert.IsFalse(input.IsProvenCurrent);
+        Assert.IsFalse(input.VerificationOverdue);
+    }
+
+    [TestMethod]
+    public void Describe_ADestinationNeverProven_IsUnprovenRatherThanOverdue()
+    {
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
+            lastCompletedAt: 1_000, Day(400), DistinctDevice);
+
+        Assert.IsNull(input.VerificationAgeDays);
+        Assert.IsFalse(input.VerificationOverdue);
+    }
+
+    private static ulong Day(int index) => 1_754_000_000_000UL + ((ulong)index * 86_400_000UL);
+
+    /// <summary>A destination whose proof covers everything it was sent.</summary>
+    private static DestinationStatusInput Proven(
+        ulong verifiedAt, ulong now, DestinationKind kind = DestinationKind.LocalPath)
+    {
+        var declared = kind == DestinationKind.Peer
+            ? new DestinationConfiguration
+            {
+                Id = new string('2', 32), Name = "friend", Kind = DestinationKind.Peer,
+                Fingerprint = new string('b', 64), Endpoint = "friend.example:9443",
+            }
+            : LocalPath();
+
+        var record = Row(DestinationSyncState.InSync, lastSuccessAt: verifiedAt) with
+        {
+            SyncedSequence = 42,
+            VerifiedAt = verifiedAt,
+            VerifiedSequence = 42,
+            VerifiedObjects = 4,
+            VerifiedPopulation = 12,
+        };
+
+        return DestinationStatus.Describe(
+            declared.Name, declared, SetRoot, record, lastCompletedAt: verifiedAt, now, DistinctDevice);
     }
 }

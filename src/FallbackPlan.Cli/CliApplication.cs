@@ -1292,6 +1292,7 @@ public static class CliApplication
                             set.Root,
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
+                            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                             path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
                                 ? stat.Device
                                 : null));
