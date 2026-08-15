@@ -380,9 +380,14 @@ public sealed class StagingTrimTests : IDisposable
         var store = new LocalFileSystemObjectStore(RepoPath);
         var replicaRoot = Directory.GetDirectories(VaultPath).Single();
 
-        foreach (var path in Directory
-            .EnumerateFiles(Path.Combine(replicaRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
-            .Take(1))
+        // Every data blob, not an arbitrary one. Which blob `EnumerateFiles`
+        // returns first is filesystem order, and one of the three belongs to
+        // the newest snapshot's closure — which never trims, so deleting that
+        // one leaves every candidate still held and the line legitimately
+        // absent. Taking them all makes the assertion depend on the behaviour
+        // under test rather than on directory ordering.
+        foreach (var path in Directory.EnumerateFiles(
+            Path.Combine(replicaRoot, "blobs", "data"), "*", SearchOption.AllDirectories))
         {
             File.Delete(path);
         }

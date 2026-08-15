@@ -98,6 +98,28 @@ public sealed record DestinationSyncRecord
 }
 
 /// <summary>
+/// The on-disk shape of <c>destinations.json</c>: a version and the rows.
+/// </summary>
+/// <remarks>
+/// The version exists so a downgrade can recognise a file it does not fully
+/// understand and set it aside instead of silently reading it as defaults. That
+/// matters more as the row grows: losing <c>synced_sequence</c> fails safe (the
+/// trim gate simply refuses), but losing a field that records how far a
+/// long-running sweep has got would fail <i>silently</i> — the sweep would
+/// restart from the beginning and nothing would say so.
+/// </remarks>
+internal sealed record LedgerFile
+{
+    /// <summary>The shape this file was written under.</summary>
+    [JsonPropertyName("schema_version")]
+    public required int SchemaVersion { get; init; }
+
+    /// <summary>One row per <c>(set, destination)</c>.</summary>
+    [JsonPropertyName("destinations")]
+    public required List<DestinationSyncRecord>? Destinations { get; init; }
+}
+
+/// <summary>
 /// The per-<c>(set, destination)</c> sync ledger: <c>destinations.json</c>
 /// beside <c>jobs.json</c> (FR-DEST-004, ADR-0010 Amendment 1). Durable but
 /// sacrificial, like everything beside it: losing this file loses when each
@@ -108,6 +130,9 @@ public sealed record DestinationSyncRecord
 /// </summary>
 public sealed class DestinationSyncStore
 {
+    /// <summary>The shape this build writes.</summary>
+    private const int CurrentSchemaVersion = 1;
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
@@ -148,27 +173,54 @@ public sealed class DestinationSyncStore
             return new DestinationSyncStore(path, []);
         }
 
+        var text = File.ReadAllText(path);
         try
         {
-            var records = JsonSerializer.Deserialize<List<DestinationSyncRecord>>(
-                File.ReadAllText(path), SerializerOptions) ?? [];
-            return new DestinationSyncStore(path, records);
+            var file = JsonSerializer.Deserialize<LedgerFile>(text, SerializerOptions);
+            if (file is not null && file.SchemaVersion <= CurrentSchemaVersion)
+            {
+                return new DestinationSyncStore(path, file.Destinations ?? []);
+            }
+
+            // A file from a newer build. Setting it aside preserves its bytes
+            // rather than overwriting them on the next write, which is the
+            // safest outcome available to a downgrade.
+            return Quarantine(path);
         }
         catch (JsonException)
         {
-            File.Move(path, path + ".corrupt", overwrite: true);
-            return new DestinationSyncStore(path, []);
+            // Pre-versioning shape: a bare array. Migrate rather than
+            // quarantine — the rows are perfectly readable, and discarding
+            // them would silently restart every destination's history.
+            try
+            {
+                var legacy = JsonSerializer.Deserialize<List<DestinationSyncRecord>>(text, SerializerOptions) ?? [];
+                return new DestinationSyncStore(path, legacy);
+            }
+            catch (JsonException)
+            {
+                return Quarantine(path);
+            }
         }
     }
 
+    private static DestinationSyncStore Quarantine(string path)
+    {
+        File.Move(path, path + ".corrupt", overwrite: true);
+        return new DestinationSyncStore(path, []);
+    }
+
     /// <summary>The pair's state, or null when it has never been attempted.</summary>
+    /// <remarks>
+    /// A caller that intends to write back what it reads must use
+    /// <see cref="Mutate"/> instead: this releases the lock before returning,
+    /// so anything built on the answer is already racing.
+    /// </remarks>
     public DestinationSyncRecord? Find(string setId, string destination)
     {
         lock (_gate)
         {
-            return _records.LastOrDefault(record =>
-                string.Equals(record.SetId, setId, StringComparison.Ordinal)
-                && string.Equals(record.Destination, destination, StringComparison.Ordinal));
+            return FindLocked(setId, destination);
         }
     }
 
@@ -185,24 +237,23 @@ public sealed class DestinationSyncStore
     public DestinationSyncRecord RecordSuccess(
         string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedSequence = 0)
     {
-        var previous = Find(setId, destination);
-        return Upsert(new DestinationSyncRecord
+        // Everything not named here is carried forward by `with` — including
+        // the verification stamps, which outlive the sync that earned them:
+        // they say when bytes were last proven, which a newer copy does not
+        // undo.
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
         {
-            SetId = setId,
-            Destination = destination,
             State = DestinationSyncState.InSync,
             LastAttemptAt = nowUnixMilliseconds,
             LastSuccessAt = nowUnixMilliseconds,
             Objects = objects,
             ConsecutiveFailures = 0,
+            // Success clears the last failure's message. Stated, because `with`
+            // would otherwise carry it forward and `status` would repeat a
+            // resolved error verbatim forever.
+            LastError = null,
             // A later sync never un-holds what an earlier one delivered.
             SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
-            // Verification stamps outlive the sync that earned them: they say
-            // when bytes were last proven, which a newer copy does not undo.
-            VerifiedAt = previous?.VerifiedAt,
-            VerifiedSequence = previous?.VerifiedSequence ?? 0,
-            VerifiedObjects = previous?.VerifiedObjects ?? 0,
-            VerifiedPopulation = previous?.VerifiedPopulation ?? 0,
         });
     }
 
@@ -222,18 +273,12 @@ public sealed class DestinationSyncStore
         string setId, string destination, int objects, int population, ulong verifiedSequence,
         ulong nowUnixMilliseconds)
     {
-        var previous = Find(setId, destination);
-        return Upsert(new DestinationSyncRecord
+        // A verification touches only the stamps: the sync half of the row —
+        // state, attempt, success, the synced sequence — is carried forward
+        // untouched, because proving bytes says nothing about when they
+        // arrived.
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
         {
-            SetId = setId,
-            Destination = destination,
-            State = previous?.State ?? DestinationSyncState.InSync,
-            LastAttemptAt = previous?.LastAttemptAt ?? nowUnixMilliseconds,
-            LastSuccessAt = previous?.LastSuccessAt,
-            Objects = previous?.Objects ?? 0,
-            ConsecutiveFailures = previous?.ConsecutiveFailures ?? 0,
-            LastError = previous?.LastError,
-            SyncedSequence = previous?.SyncedSequence ?? 0,
             VerifiedAt = nowUnixMilliseconds,
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
@@ -247,39 +292,77 @@ public sealed class DestinationSyncStore
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(error);
 
-        var previous = Find(setId, destination);
-        return Upsert(new DestinationSyncRecord
+        // The last success and every verification stamp survive a failure:
+        // they record what WAS true, and a failed attempt does not un-prove
+        // bytes that were proven. Only the failure counters move.
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
         {
-            SetId = setId,
-            Destination = destination,
             State = state,
             LastAttemptAt = nowUnixMilliseconds,
-            LastSuccessAt = previous?.LastSuccessAt,
-            Objects = previous?.Objects ?? 0,
             ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
             LastError = error,
-            SyncedSequence = previous?.SyncedSequence ?? 0,
-            VerifiedAt = previous?.VerifiedAt,
-            VerifiedSequence = previous?.VerifiedSequence ?? 0,
-            VerifiedObjects = previous?.VerifiedObjects ?? 0,
-            VerifiedPopulation = previous?.VerifiedPopulation ?? 0,
         });
     }
 
-    private DestinationSyncRecord Upsert(DestinationSyncRecord record)
+    /// <summary>
+    /// The row a transform starts from: the existing one, or a blank for a pair
+    /// never attempted. Every transform then names only the fields it changes
+    /// and `with` carries the rest — which is the point. The three mutators
+    /// used to re-copy all thirteen fields by hand, so a field added here had
+    /// three carry-forward sites and silently reset to its default if any one
+    /// was missed.
+    /// </summary>
+    private static DestinationSyncRecord Seed(
+        DestinationSyncRecord? previous, string setId, string destination, ulong nowUnixMilliseconds) =>
+        previous ?? new DestinationSyncRecord
+        {
+            SetId = setId,
+            Destination = destination,
+            State = DestinationSyncState.InSync,
+            LastAttemptAt = nowUnixMilliseconds,
+        };
+
+    /// <summary>
+    /// Reads the pair's current row, applies <paramref name="transform"/>, and
+    /// writes the result — all under one lock.
+    /// </summary>
+    /// <remarks>
+    /// The read must be inside the lock, not before it. The mutators used to
+    /// call <see cref="Find"/> first and take the lock only to write, which is
+    /// a read-modify-write race: two writers to one row each carry forward the
+    /// fields they read, and the loser's changes vanish. That was survivable
+    /// only while every writer ran on the transfer lane's single worker
+    /// (ADR-0029 §4). A verification pass on any other lane makes it real, and
+    /// the field most likely to be lost is <c>SyncedSequence</c> — the trim
+    /// gate's currency (FR-GC-009).
+    /// </remarks>
+    private DestinationSyncRecord Mutate(
+        string setId, string destination, Func<DestinationSyncRecord?, DestinationSyncRecord> transform)
     {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(record.SetId);
-        ThrowHelper.ThrowIfNullOrWhiteSpace(record.Destination);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destination);
+        ThrowHelper.ThrowIfNull(transform);
 
         lock (_gate)
         {
+            var record = transform(FindLocked(setId, destination));
+
             // One row per (set, destination): current state, not a log.
             _records.RemoveAll(existing =>
-                string.Equals(existing.SetId, record.SetId, StringComparison.Ordinal)
-                && string.Equals(existing.Destination, record.Destination, StringComparison.Ordinal));
+                string.Equals(existing.SetId, setId, StringComparison.Ordinal)
+                && string.Equals(existing.Destination, destination, StringComparison.Ordinal));
             _records.Add(record);
-            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_records, SerializerOptions));
+            AtomicFile.WriteAllText(
+                _path,
+                JsonSerializer.Serialize(
+                    new LedgerFile { SchemaVersion = CurrentSchemaVersion, Destinations = _records },
+                    SerializerOptions));
             return record;
         }
     }
+
+    private DestinationSyncRecord? FindLocked(string setId, string destination) =>
+        _records.LastOrDefault(record =>
+            string.Equals(record.SetId, setId, StringComparison.Ordinal)
+            && string.Equals(record.Destination, destination, StringComparison.Ordinal));
 }
