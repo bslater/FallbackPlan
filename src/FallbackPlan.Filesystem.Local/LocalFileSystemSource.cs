@@ -599,12 +599,40 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             Uid: 0,
             Gid: 0,
             Size: info is FileInfo file && (attributes & FileAttributes.Directory) == 0 ? file.Length : 0,
-            ModifiedAtMs: (ulong)new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
-            CreatedAtMs: (ulong)new DateTimeOffset(info.CreationTimeUtc).ToUnixTimeMilliseconds(),
-            AccessedAtMs: (ulong)new DateTimeOffset(info.LastAccessTimeUtc).ToUnixTimeMilliseconds(),
+            ModifiedAtMs: ToMilliseconds(info.LastWriteTimeUtc),
+            CreatedAtMs: ToMilliseconds(info.CreationTimeUtc),
+            AccessedAtMs: ToMilliseconds(info.LastAccessTimeUtc),
             RdevMajor: 0,
             RdevMinor: 0);
         return true;
+    }
+
+    /// <summary>
+    /// A UTC instant as Unix milliseconds, or <see langword="null"/> when the
+    /// epoch cannot express it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The guard is the whole method. <see cref="StatResult.ModifiedAtMs"/> is
+    /// unsigned, so a pre-1970 timestamp has no representation — and an
+    /// unchecked cast of the negative <see cref="long"/> does not fail, it
+    /// wraps to roughly 1.8 × 10¹⁹ and sorts after every real file. That is
+    /// reachable rather than theoretical: a Windows <c>FILETIME</c> of zero
+    /// reads as 1601, and files off old media or out of old archives carry
+    /// pre-epoch dates routinely.
+    /// </para>
+    /// <para>
+    /// Both POSIX paths have always guarded this
+    /// (<c>seconds &lt; 0 ? null : …</c>); this one did not, so the same file
+    /// described itself differently on two platforms. One helper for all three
+    /// call sites, so they cannot drift apart again.
+    /// </para>
+    /// </remarks>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static ulong? ToMilliseconds(DateTime utc)
+    {
+        var milliseconds = new DateTimeOffset(utc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        return milliseconds < 0 ? null : (ulong)milliseconds;
     }
 
     /// <inheritdoc />

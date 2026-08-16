@@ -109,9 +109,6 @@ public sealed class HostileTimestampTests : IDisposable
     /// </summary>
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "exercises the Windows stat path specifically")]
-    [Ignore("RN-F2: the Windows path casts a negative Unix-millisecond value to ulong unchecked, so a pre-epoch "
-        + "timestamp wraps to roughly 1.8e19 instead of being reported as absent, unlike the POSIX path which "
-        + "guards it. See docs/review/2026-08-duplicati-release-notes.md; remove this attribute when fixed.")]
     public async Task OnWindows_APreEpochModificationTime_IsAlsoReportedAsAbsent()
     {
         Write("pre-epoch.txt", new DateTime(1960, 6, 15, 0, 0, 0, DateTimeKind.Utc));
