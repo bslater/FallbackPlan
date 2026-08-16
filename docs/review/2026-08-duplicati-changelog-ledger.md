@@ -138,6 +138,7 @@ Grouped by disposition. Each cites the release that named it.
 | Case folding under a hostile locale | "locale settings affecting SQL statements" (2025-09-23) | `PathRuleHostileNameTests.CaseInsensitiveMatchingFoldsTheSameWay…` |
 | Scheduler ignoring the scheduled time | "backups could run immediately" (2020-05-11) | `ScheduleClockBoundaryTests.ASetThatJustCompleted_IsNotImmediatelyDueAgain` |
 | A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
+| Shared content freed while still referenced (**O2**, was open — foreclosed, now proven) | "database inconsistency after shared metadata delete" (2026-07-13) | `Retention.Tests/SharedRecordRetentionTests` (5) |
 
 ### Open — applies, and nothing proves it
 
@@ -145,7 +146,6 @@ What is left after the E-C work, ranked by what a defect would cost.
 
 | # | Mechanism | Duplicati | Why it applies here |
 |---|---|---|---|
-| **O2** | Shared metadata deleted while still referenced | "database inconsistency after shared metadata delete" (2026-07-13) | Deduplicated records are shared by construction; the liveness walk must not free one two snapshots need |
 | **O5** | An index naming an object no blob holds | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19); "race condition with index file uploads during backup" (2026-02-20) | `IndexPublisher` and the projector; the dangling-reference case is untested outside forensic rebuild |
 | **O6** | Partial backup interacting with retention | "partial backups could create defect backups when used with retention rules" (2019-12-08) | Compounds RN-F3: a partial snapshot must not be retention's only survivor |
 
@@ -251,6 +251,32 @@ The general lesson, worth more than the fix: **an operation whose failure mode
 is "the count is wrong" cannot be caught by a test that only checks the happy
 path succeeds.** Every one of these paths was covered by a passing test before
 this work, and every one of those tests ran against a store that never refused.
+
+### O2 — shared content freed while still referenced
+
+**Foreclosed by design, and now proven.** No defect. Recording it because "we
+looked and it holds" is a different and weaker claim than "a test fails if
+somebody breaks it", and until this work only the first was true.
+
+The mechanism is foreclosed twice over, independently:
+
+- `StagingMark` walks the protected closure into a `HashSet<ObjectId>`, so a
+  second referrer marking an object again is a no-op rather than a conflict —
+  and the walk's early-return dedups the *visit*, never the protection.
+- `CollectionPlanner` condemns a blob only when **every** record in it is
+  unreachable. One live record makes the whole blob `RetainedPartialBlobs`, the
+  compaction backlog, and it is never a deletion candidate.
+
+`SharedRecordRetentionTests` exercises all three shapes sharing takes here: two
+byte-identical files deduplicating to the same segments, a file untouched
+across runs whose version manifest several snapshots inherit, and a blob mixing
+live and dead records. It ends by restoring the surviving snapshot after a
+sweep that really deleted things and comparing every file byte for byte.
+
+Mutation proof, since a passing invariant admits no red-first run: neutering
+`CollectionPlanner`'s `live > 0` guard fails four of the five; restricting
+`StagingMark.MarkAsync` to the first protected snapshot fails the fifth.
+Both were reverted before the commit.
 
 ## Appendix — reproduction
 
