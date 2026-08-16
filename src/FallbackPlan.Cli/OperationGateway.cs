@@ -365,6 +365,12 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
             report.Add($"detail         {finished.Detail}");
         }
 
+        // Only a clean run is a success, and that follows from the comparison
+        // rather than needing a clause: `CompletedWithFailures` is not
+        // `Complete`, so a backup that could not read every file exits
+        // non-zero. Deliberate — a backup that did not back everything up is
+        // not something a script should read as fine, which is the whole
+        // reason the state exists. Do not widen this to `IsCommitted`.
         return new OperationReport(finished.State == JobState.Complete, report);
     }
 
@@ -465,6 +471,8 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     private static string Describe(JobState state) => state switch
     {
         JobState.Complete => "complete",
+        JobState.CompletedWithFailures =>
+            "PARTIAL — the snapshot is committed, but not everything could be read",
         JobState.Cancelled => "cancelled",
         JobState.Paused => "PAUSED — resumable; the service will not finish it unattended",
         JobState.FailedRecoverable => "FAILED (recoverable) — the service retries on its next pass",
@@ -473,8 +481,14 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     };
 
     /// <summary>Whether a job has stopped moving on its own.</summary>
+    /// <remarks>
+    /// <see cref="JobState.CompletedWithFailures"/> belongs here for the same
+    /// reason <see cref="JobState.Complete"/> does — it is terminal. Omitting
+    /// it would leave <c>AwaitJobAsync</c> polling a job that will never
+    /// transition again.
+    /// </remarks>
     private static bool HasSettled(JobState state) => state is
-        JobState.Complete or JobState.Cancelled or JobState.Paused
+        JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled or JobState.Paused
         or JobState.FailedRecoverable or JobState.FailedPermanent;
 
     private async ValueTask<JobDescriptor> AwaitJobAsync(string jobId, CancellationToken cancellationToken)

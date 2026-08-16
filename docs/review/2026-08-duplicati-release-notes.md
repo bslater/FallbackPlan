@@ -255,24 +255,47 @@ here with the `[Ignore]` removed.
 Three findings, sequenced by severity-over-cost. Each is test-first and each
 is **already red** — the acceptance criterion is deleting an `[Ignore]`.
 
-### F3 first — give a partial capture its own terminal state
+### F3 — **fixed**: a partial capture has its own terminal state
 
-Highest severity and it sets the vocabulary the other two report through.
+`JobState.CompletedWithFailures`, mapped by `BackupRunner` from
+`ErrorManifestObjectId is not null`, with the failure count kept in `Detail`
+as the human half. `ContractVersion` 1.5 → 1.6.
 
-1. Add `JobState.CompletedWithFailures` (name to settle in review; the
-   alternative is a separate `Partial` flag on the job, which avoids widening
-   an enum that crosses the contract).
-2. `BackupRunner` maps `published.ErrorManifestObjectId is not null` to it,
-   keeping the count in `Detail` as the human half.
-3. `ContractVersion` goes to 1.6 — this widens a contract enum, and a client
-   that has not seen the value must be considered.
-4. Status derivation maps it to `degraded`, which NFR-OPS-002 already
-   requires and which nothing currently produces from a capture failure.
-5. Delete the `[Ignore]` on `TheJobVocabulary_HasATerminalStateForAPartialCapture`.
+**The interesting part was not adding the state; it was the three places that
+enumerate terminal states and would each have failed silently.**
 
-*Care:* the enum crosses the service contract, so this is not a local change.
-Check `Results.cs`, the CLI's status rendering, and the peer protocol for
-anything that switches exhaustively on `JobState`.
+- `JobStateStore.LastCompleted` is the **schedule anchor**. Left filtering on
+  `Complete` alone, a set whose backup was partial looks as though it never
+  ran — so it backs up on every scheduler pass, for ever, on a set with one
+  permanently unreadable file. It now rests on a published
+  `IsCommitted` predicate, and its six call sites (three anchors, three
+  "last backed up" timestamps) all get the right answer.
+- `OperationGateway.HasSettled` lists the states at which a job stops moving.
+  Left alone, `AwaitJobAsync` would poll a finished partial backup for ever.
+- `OperationGateway.Describe` needed a case, or the state rendered through the
+  `ToLowerInvariant` fallback as `completedwithfailures`.
+
+**The exit code needed no edit at all**, which is the right outcome:
+`OperationGateway` derives success from `State == JobState.Complete`, and the
+new state is not `Complete`, so a partial backup exits non-zero by
+construction. A comment now says so, because it is exactly the kind of line
+somebody widens to `IsCommitted` while tidying.
+
+**The journal tolerates unknown states.** `JobState` is stored by name, and
+`JobStateStore.Open` answers a `JsonException` by setting the file aside as
+corrupt and starting empty — so a downgraded build would have discarded the
+journal and, with it, every set's anchor, making every set due at once. A
+converter now reads an unrecognised name as `FailedRecoverable`: an unknown
+terminal state read as "retry" costs one redundant run, whereas read as
+"complete" it could anchor a schedule against something that never happened. A
+journal that is not JSON is still sacrificial, and a test says so.
+
+**Deliberately not done, and recorded rather than dropped:** mapping a partial
+capture to `ProtectionState.Degraded`. NFR-OPS-002 does ask status to
+distinguish `degraded`, but `StatusModel` derives it from *destination* inputs
+and not from capture completeness, so this is a new status input — a feature,
+not this fix. It is the natural follow-up and belongs with whoever next opens
+`StatusModel`.
 
 ### F1 second — an occurrence's identity is its wall clock, not its instant
 

@@ -131,13 +131,16 @@ public sealed class PartialBackupHonestyTests : IDisposable
         var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
         Assert.IsNotNull(job.SnapshotId, "the snapshot is still committed — a partial backup is a backup");
 
-        // The finding: `Complete` is the same terminal state a clean backup
-        // reaches, and the only thing separating them is the prose in Detail.
-        // Spec 02 §8 makes exactly that argument about wire refusals — the
-        // code is normative and the message is not for parsing — and the same
-        // reasoning applies to a job an operator or a script reads.
-        Assert.AreEqual(JobState.Complete, job.State);
-        Assert.IsNotNull(job.Detail, "nothing at all distinguished a partial backup from a clean one");
+        // The state carries it, not the prose. Spec 02 §8 makes the same
+        // argument about wire refusals — the code is normative and the message
+        // is not for parsing — and a job state a console or a script reads is
+        // the same kind of surface.
+        Assert.AreEqual(JobState.CompletedWithFailures, job.State);
+
+        // The detail is still there and still says how many, because a count
+        // is the thing a person wants next. It is simply no longer the only
+        // difference between this and a clean run.
+        Assert.IsNotNull(job.Detail);
         Assert.Contains("partial", job.Detail, StringComparison.Ordinal);
     }
 
@@ -170,16 +173,10 @@ public sealed class PartialBackupHonestyTests : IDisposable
     /// deliberately so. The permission-based tests in this class need a
     /// non-root user — root reads a 000 file regardless — so they skip in a
     /// container and prove nothing there. The vocabulary is decidable
-    /// anywhere: <c>BackupRunner</c> maps a capture failure to
-    /// <see cref="JobState.Complete"/> with a prose detail because there is no
-    /// other terminal state to map it to, and that is the finding. It is the
-    /// same argument <c>WireCodeTests</c> makes for refusal codes — the
-    /// machine-readable half must carry the meaning.
+    /// anywhere, which is what let this finding be confirmed and then closed
+    /// on a machine that cannot run the other four.
     /// </remarks>
     [TestMethod]
-    [Ignore("RN-F3: there is no terminal job state for a partial capture — `Complete` covers both a clean backup "
-        + "and one that could not read a file, and only the prose Detail separates them. "
-        + "See docs/review/2026-08-duplicati-release-notes.md; remove this attribute when the finding is fixed.")]
     public void TheJobVocabulary_HasATerminalStateForAPartialCapture()
     {
         var terminal = Enum.GetNames<JobState>();

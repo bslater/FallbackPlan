@@ -122,13 +122,20 @@ public static class BackupRunner
             // compares two different clocks — and the answer is only right while
             // they happen to agree. A caller that injects a clock got a job
             // stamped in its own future and its next run never came due.
+            // A snapshot that could not capture everything committed anyway,
+            // and says so in the state rather than only in the detail. The
+            // detail stays as the human half — the count — but it is no longer
+            // the only thing distinguishing this run from a clean one.
+            var partial = published.ErrorManifestObjectId is not null;
+            var outcome = partial ? JobState.CompletedWithFailures : JobState.Complete;
+
             jobs.Transition(
                 jobId,
-                JobState.Complete,
+                outcome,
                 nowMs,
-                detail: published.ErrorManifestObjectId is null ? null : $"partial: {published.Failures.Count} failure(s)",
+                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
-            progress.Enter(JobState.Complete);
+            progress.Enter(outcome);
 
             return new BackupOutcome(
                 set.Name,
