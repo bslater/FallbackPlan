@@ -97,15 +97,25 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
           path: coverage
-      # The floor sits below today's weakest module on purpose: it is there
-      # to catch a collapse — a project dropping out of the run, a suite
-      # silently not executing — not to police ordinary drift, which a
-      # number nobody can move without a fight only teaches people to game.
+      # Two floors, answering two different questions, and CI wants both.
+      #
+      # The global one sits below today's weakest module on purpose: it is
+      # there to catch a COLLAPSE — a project dropping out of the run, a suite
+      # silently not executing — which a per-module table cannot, because a
+      # table only checks the modules it already knows about.
+      #
+      # The per-module table catches one module regressing, which the global
+      # floor cannot, because a healthy total absorbs it: Keystore could go to
+      # zero and the union would barely move. It also fails on a floor naming
+      # a module that no longer exists, and on a module with no floor — a new
+      # assembly is otherwise unguarded from the moment it is created, which
+      # is exactly when nobody notices it has no tests.
       - name: Merge and report
         shell: bash
         run: |
           set -o pipefail
-          python3 eng/coverage.py --report-only coverage --floor 50 | tee coverage-summary.txt
+          python3 eng/coverage.py --report-only coverage \
+            --floor 50 --floors eng/coverage-floors.toml | tee coverage-summary.txt
           {
             echo '### Coverage (union of ubuntu, windows, macos)'
             echo '```'

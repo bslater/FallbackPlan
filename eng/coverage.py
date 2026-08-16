@@ -33,6 +33,13 @@ Usage:
     eng/coverage.py                     # run the suite, then summarise
     eng/coverage.py --report-only DIR   # summarise reports already collected
     eng/coverage.py --floor 60          # exit non-zero if a module is below 60%
+    eng/coverage.py --floors eng/coverage-floors.toml   # ...or below its own
+
+The two floors answer different questions and CI passes both. The global one
+catches a collapse — a project dropping out of the run, a suite silently not
+executing — which a per-module table cannot, because a table only checks the
+modules it already knows about. The per-module floors catch a single module
+regressing, which the global one cannot, because a healthy total absorbs it.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tomllib
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -99,6 +107,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--report-only", metavar="DIR", help="summarise existing reports instead of running tests")
     parser.add_argument("--floor", type=float, default=None, help="fail if any module is below this percentage")
+    parser.add_argument(
+        "--floors",
+        metavar="FILE",
+        help="fail if a named module is below its own floor (see eng/coverage-floors.toml)",
+    )
     arguments = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as scratch:
@@ -135,15 +148,60 @@ def main() -> int:
         overall = 100 * total_covered / (total_covered + total_missing)
         print(f"\n{'TOTAL (production assemblies)':44} {overall:7.2f}% {total_covered:8} {total_missing:10}")
 
+        failed = False
+
         if arguments.floor is not None:
             below = [(name, percentage) for name, percentage, _, _ in rows if percentage < arguments.floor]
             if below:
                 print(f"\nBelow the {arguments.floor:.0f}% floor:", file=sys.stderr)
                 for name, percentage in below:
                     print(f"  {name}: {percentage:.2f}%", file=sys.stderr)
-                return 1
+                failed = True
 
-    return 0
+        if arguments.floors is not None:
+            failed |= not check_floors(pathlib.Path(arguments.floors), rows)
+
+    return 1 if failed else 0
+
+
+def check_floors(path: pathlib.Path, rows: list[tuple[str, float, int, int]]) -> bool:
+    """Compare each module against its own floor, and report both directions of mismatch.
+
+    A module below its floor fails. So does a floor naming a module that is not
+    in the report, and a module in the report with no floor: the first is a
+    stale entry, and the second is a new assembly that would otherwise be
+    exempt from the moment it was created — which is precisely when nobody
+    notices it has no tests.
+    """
+    with path.open("rb") as handle:
+        floors = tomllib.load(handle)
+
+    measured = {name: percentage for name, percentage, _, _ in rows}
+
+    below = [
+        (name, measured[name], floor)
+        for name, floor in sorted(floors.items())
+        if name in measured and measured[name] < floor
+    ]
+    unknown = sorted(name for name in floors if name not in measured)
+    unpinned = sorted(name for name in measured if name not in floors)
+
+    for name, percentage, floor in below:
+        print(f"\n{name} is at {percentage:.2f}%, below its floor of {floor}%.", file=sys.stderr)
+        print(
+            "  Restore the coverage, or lower the floor in the same commit and say why.",
+            file=sys.stderr,
+        )
+
+    for name in unknown:
+        print(f"\n{path.name} names {name}, which is not in the report.", file=sys.stderr)
+        print("  A renamed or removed assembly leaves a floor nothing can trip.", file=sys.stderr)
+
+    for name in unpinned:
+        print(f"\n{name} has no floor in {path.name}.", file=sys.stderr)
+        print("  A new assembly is unguarded until it has one.", file=sys.stderr)
+
+    return not (below or unknown or unpinned)
 
 
 if __name__ == "__main__":

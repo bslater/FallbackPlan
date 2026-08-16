@@ -163,11 +163,24 @@ Recorded so nobody re-finds them.
 
 ---
 
-## What follows
+## What was done
 
-The gaps above are being closed in order — G1 first, because it is the primitive under every durable state file and the only one where a defect corrupts state silently — and the CI gate is gaining **per-module floors** beside its existing global floor of 50, so that a named module regressing fails the build instead of being absorbed into a healthy total. The global floor stays: it catches a module dropping out of the run entirely, which a per-module table cannot.
+All six gaps were closed in order, G1 first because it is the primitive under every durable state file and the only one where a defect corrupts state silently.
 
-The floors are pinned *after* the gaps close, not before, or they enshrine today's holes.
+| | Was | Now |
+|---|---|---|
+| G1 `AtomicFile` | 52.9% | **87.9%** — the failure paths covered, the retry's classification extracted and tested; the residue is two unreachable catch arms, named in the test class |
+| G2 `UpsertBackupSet` | untested | three tests, including the per-destination retention override the command cannot carry and must not drop |
+| G3 `DestinationProbe` | 72.1% | the outage/fault pair proven, the no-grant refusal covered, the permission branch written and CI-gated |
+| G4 refusal codes | prose only | `WireCodeTests` pins every code and frame type to the specification's tables |
+| G5 `PeerCredentials` | 22.2% | **a defect, now fixed** — see the note above |
+| G6 `AgentHost` | 67.7% | unchanged; ranked last and left, thin glue over tested engines |
+
+The total moved 85.94% → **86.19%**, which is the least interesting sentence here: G5 was a live defect the number merely pointed at, and G4 closed a hole no percentage would ever have shown, because the code it protects was fully covered and simply never checked against the specification.
+
+The CI gate now carries **per-module floors** beside the global floor of 50, pinned about two points under each module's measured figure. The global floor stays — it catches a module dropping out of the run entirely, which a table of known modules cannot. The table catches the opposite: one module regressing into a healthy total. It also fails on a floor naming a module that no longer exists, and on a module with no floor at all, so a new assembly is guarded from the day it appears rather than from the day somebody remembers it.
+
+The floors were pinned *after* the gaps closed, not before, so they do not enshrine the holes this document found.
 
 ---
 
