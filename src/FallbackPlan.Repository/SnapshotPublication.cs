@@ -110,7 +110,8 @@ public sealed record PublishedFileVersion(
     ulong? IdentityFileId = null,
     bool Reused = false,
     FileVersionManifest? Inherited = null,
-    bool HasAlternateStreams = false);
+    bool HasAlternateStreams = false,
+    ReadOnlyMemory<byte>? MetadataDigest = null);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -495,7 +496,8 @@ public sealed partial class PublicationOrchestrator
                 file.ModifiedAt,
                 file.IdentityDevice,
                 file.IdentityFileId,
-                file.HasAlternateStreams);
+                file.HasAlternateStreams,
+                file.MetadataDigest);
 
             if (archive is not null)
             {
@@ -624,11 +626,22 @@ public sealed partial class PublicationOrchestrator
             // short-circuits below and for the ancestry the manifest records.
             var prior = FindPriorVersion(entry);
             var unchanged = IsContentUnchanged(entry, prior);
+            var metadataDigest = FileVersionManifestCodec.MetadataDigest(entry.Metadata);
 
             // The NFR-PERF-003 short-circuit: nothing about the file changed
             // and it is still where it was — re-emit the prior version's
             // reference; the content is never opened.
-            if (unchanged && string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
+            //
+            // "Nothing changed" has to include the metadata, and that is not
+            // implied by the three content signals: POSIX chmod moves ctime
+            // and not mtime, so a file whose permissions were just tightened
+            // presents an identical identity, size and mtime. Re-emitting the
+            // prior version there silently republishes the old mode, owner and
+            // extended attributes — the fidelity loss Duplicati shipped a fix
+            // for, and one that only shows up at restore.
+            if (unchanged &&
+                IsMetadataUnchanged(metadataDigest, prior!) &&
+                string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
@@ -639,16 +652,19 @@ public sealed partial class PublicationOrchestrator
                 return;
             }
 
-            // The same file, moved. Its reference cannot be re-emitted — a
-            // manifest states its own name (06 §4), so a tree entry under the
-            // new name pointing at the old manifest would restore the file
-            // under the name it no longer has. It needs a new manifest, but
-            // not a new read: the bytes are unchanged and already durable, so
-            // the prior manifest is fetched and rewritten with the new name.
+            // The same bytes, but not the same statement about them: the file
+            // moved, or its metadata changed, or both. Its prior reference
+            // cannot be re-emitted — a manifest states its own name (06 §4)
+            // and its own metadata, so re-emitting would restore the file
+            // under a name it no longer has, or with permissions it no longer
+            // has. It needs a new manifest, but not a new read: the bytes are
+            // unchanged and already durable, so the prior manifest is fetched
+            // and rewritten with what actually changed.
             if (unchanged &&
-                await ReadPriorManifestAsync(prior!.ObjectId, cancellationToken).ConfigureAwait(false) is { } moved)
+                await ReadPriorManifestAsync(prior!.ObjectId, cancellationToken).ConfigureAwait(false) is { } inherited)
             {
-                await PublishRenameAsync(entry, prior, moved, cancellationToken).ConfigureAwait(false);
+                await PublishInheritedAsync(entry, prior, inherited, metadataDigest, cancellationToken)
+                    .ConfigureAwait(false);
                 return;
             }
 
@@ -688,7 +704,8 @@ public sealed partial class PublicationOrchestrator
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
-                    HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0));
+                    HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0,
+                    MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata)));
                 RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
@@ -698,6 +715,19 @@ public sealed partial class PublicationOrchestrator
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
         }
+
+        /// <summary>
+        /// Whether the prior version states the same metadata this entry now
+        /// carries.
+        /// </summary>
+        /// <remarks>
+        /// A prior row with no digest is treated as changed. That is the
+        /// conservative direction and it is cheap: the consequence is one
+        /// manifest rewrite with no content read, whereas the other default
+        /// would silently drop a metadata change to save it.
+        /// </remarks>
+        private static bool IsMetadataUnchanged(ReadOnlyMemory<byte> digest, CatalogueTreeEntry prior) =>
+            prior.MetadataDigest is { } recorded && recorded.Span.SequenceEqual(digest.Span);
 
         /// <summary>
         /// Whether <paramref name="entry"/>'s content is provably the same as
@@ -732,42 +762,55 @@ public sealed partial class PublicationOrchestrator
                 : manifests.TryReadFileVersionAsync(objectId, cancellationToken);
 
         /// <summary>
-        /// Publishes a moved file by rewriting its prior manifest under the
-        /// new name, without reading a byte of its content.
+        /// Publishes a file whose bytes did not change but whose name or
+        /// metadata did, by rewriting its prior manifest without reading a
+        /// byte of its content.
         /// </summary>
         /// <remarks>
-        /// Exactly three fields change: the name, its normalisation, and the
-        /// ancestry. Everything else — the segment references, the whole-file
-        /// hash, the length, the sparse extents, the segmentation profile, the
-        /// metadata map, the hardlink group, the capture diagnostics — is
-        /// inherited verbatim, because it describes bytes that were not
-        /// re-examined and must not be re-stated as though they had been. That
-        /// is the same fidelity the unchanged-path short-circuit above already
-        /// gives, which re-emits the prior manifest whole.
+        /// <para>
+        /// Exactly four things change: the name, its normalisation, the
+        /// metadata map, and the ancestry. Everything else — the segment
+        /// references, the whole-file hash, the length, the sparse extents,
+        /// the segmentation profile, the hardlink group, the capture
+        /// diagnostics — is inherited verbatim, because it describes bytes
+        /// that were not re-examined and must not be re-stated as though they
+        /// had been.
+        /// </para>
+        /// <para>
+        /// The metadata comes from the entry rather than from the prior
+        /// manifest, and that is the whole point: it is the half that can have
+        /// changed without a single content signal moving. Taking it from the
+        /// prior manifest is what discarded a <c>chmod</c>.
+        /// </para>
         /// </remarks>
-        private async ValueTask PublishRenameAsync(
+        private async ValueTask PublishInheritedAsync(
             ScanEntry entry,
             CatalogueTreeEntry prior,
             FileVersionManifest priorManifest,
+            ReadOnlyMemory<byte> metadataDigest,
             CancellationToken cancellationToken)
         {
-            var renamed = priorManifest with
+            var moved = !string.Equals(prior.Path, entry.RelativePath, StringComparison.Ordinal);
+            var rewritten = priorManifest with
             {
                 Name = entry.NameBytes,
                 NameNormalisation = entry.NameNormalisation,
+                Metadata = entry.Metadata,
                 ParentVersion = prior.ObjectId,
             };
 
             var objectId = await builder.AppendManifestAsync(
-                ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(renamed), cancellationToken)
+                ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(rewritten), cancellationToken)
                 .ConfigureAwait(false);
 
-            EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "renamed"));
+            EngineDiagnostics.ScanFiles.Add(
+                1, new KeyValuePair<string, object?>("outcome", moved ? "renamed" : "restated"));
             _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, EntryKind.File));
             _files.Add(new PublishedFileVersion(
                 entry.RelativePath, entry.NameBytes, objectId, EntryKind.File, Archive: null,
-                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: renamed,
-                HasAlternateStreams: renamed.Metadata.AlternateStreams.Count > 0));
+                entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: rewritten,
+                HasAlternateStreams: rewritten.Metadata.AlternateStreams.Count > 0,
+                MetadataDigest: metadataDigest));
             RecordSourceIdentity(entry, objectId);
         }
 

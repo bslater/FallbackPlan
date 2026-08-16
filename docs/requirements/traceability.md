@@ -49,7 +49,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 |----|------|-----|------|-------|
 | FR-MAN-001 | [02 §6](../architecture/02-repository-format.md#6-manifests) | — | `Repository.Tests/CatalogueRebuildTests` | 0 |
 | FR-MAN-002 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueTests`, `Repository.Tests/StaleCatalogueTests` *(the cache read adversarially: ahead of the store must not dangle, behind is cost only)* | 0 |
-| FR-MAN-003 | [02 §6.1](../architecture/02-repository-format.md#61-immutable-metadata-objects) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ManifestCodecTests`, `Repository.Tests/ManifestRoundTripTests` | 0 |
+| FR-MAN-003 | [02 §6.1](../architecture/02-repository-format.md#61-immutable-metadata-objects) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ManifestCodecTests`, `Repository.Tests/ManifestRoundTripTests`, `Repository.Tests/MetadataOnlyChangeTests` | 0 |
 | FR-MAN-004 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.Tests/SnapshotPublicationTests` | 1 |
 | FR-MAN-005 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/CatalogueTests` | 1 |
 | FR-MAN-006 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/IncrementalBackupTests`, `Repository.Tests/SecondBackupReuseTests` | 0 |
@@ -146,7 +146,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 
 | ID | Arch | ADR | Test | Phase |
 |----|------|-----|------|-------|
-| NFR-PERF-001..003 | [02 §3.4](../architecture/02-repository-format.md#34-capture-algorithm) | — | `Domain.Tests/CapturePolicyValidationTests`, `Filesystem.Tests/LocalScanTests`, `InterruptionTests/ConcurrentUploadTests` | 0 |
+| NFR-PERF-001..003 | [02 §3.4](../architecture/02-repository-format.md#34-capture-algorithm) | — | `Domain.Tests/CapturePolicyValidationTests`, `Filesystem.Tests/LocalScanTests`, `InterruptionTests/ConcurrentUploadTests`, `Repository.Tests/MetadataOnlyChangeTests` *(the short-circuit's edges: a metadata-only change still costs no payload read, and a moved access time is not a change)* | 0 |
 | NFR-PERF-004, 010, 011 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueRebuildTests`, `Repository.Tests/CatalogueTests` | 0 |
 | NFR-PERF-005 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | — | `Repository.Tests/IncrementalBackupTests` *(metadata records and total store growth both bounded against the first snapshot)* | 1 |
 | NFR-PERF-006, 008 | [05 §5](../architecture/05-storage-providers.md#5-request-economics) | [0012](../adr/0012-storage-provider-contract.md) | — *(untested; phase 3)* | 2 |
