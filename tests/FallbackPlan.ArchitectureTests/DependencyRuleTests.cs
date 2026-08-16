@@ -132,8 +132,8 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
-    /// The CrashPlan importer is optional, separately packaged, and parses hostile
-    /// input. Nothing in the core may reference it: doing so would couple the
+    /// A legacy-format importer is optional, separately packaged, and parses
+    /// hostile input. Nothing in the core may reference one: doing so would couple the
     /// project's licence to the importer's dependencies (ADR-0001, ADR-0015) and
     /// pull a parser for untrusted archives inside the trust boundary (T-15).
     /// </summary>
@@ -145,16 +145,16 @@ public sealed class DependencyRuleTests
             AssertPasses(
                 Types.InAssembly(assembly)
                     .ShouldNot()
-                    .HaveDependencyOn("FallbackPlan.Import.CrashPlan")
+                    .HaveDependencyOn("FallbackPlan.Import.Legacy")
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference any import implementation.");
         }
     }
 
     /// <summary>
-    /// The neutral legacy model exists so that importers for CrashPlan, restic,
-    /// Kopia and others can feed the same pipeline without any of them reaching
-    /// into the core. It must therefore know nothing about the repository engine.
+    /// The neutral legacy model exists so that an importer for any legacy
+    /// archive format can feed the same pipeline without reaching into the
+    /// core. It must therefore know nothing about the repository engine.
     /// </summary>
     [TestMethod]
     public void ImportAbstractions_DependencyClosure_ReachesOnlyDomain()

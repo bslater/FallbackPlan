@@ -148,7 +148,7 @@ narrowed the dialect in both reference implementations at once:
   disagreed — the very thing the dual derivation exists to catch, missed
   because no vector carried a newline.
 
-Both were found by reading Duplicati's release notes, where filename and
+Both were found by reading the surveyed changelog, where filename and
 filter handling is a recurring class of shipped fix, and both are now stated
 normatively in 06 §7.1 with committed vectors. The ADR's own listed
 consequence — "the regex subset must be policed by our own validator" — was

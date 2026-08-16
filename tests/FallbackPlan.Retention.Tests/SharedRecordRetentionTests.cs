@@ -15,8 +15,8 @@ namespace FallbackPlan.Retention.Tests;
 
 /// <summary>
 /// What happens to an object two snapshots share when only one of them expires
-/// (ledger O2; Duplicati "database inconsistency after shared metadata delete",
-/// 2026-07-13).
+/// (ledger O2 — durable state left inconsistent after shared metadata was
+/// deleted).
 /// </summary>
 /// <remarks>
 /// <para>

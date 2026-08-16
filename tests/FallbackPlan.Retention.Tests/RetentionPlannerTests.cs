@@ -103,8 +103,8 @@ public sealed class RetentionPlannerTests
 
     /// <summary>
     /// A partial capture must not be able to satisfy the floor on its own
-    /// (ledger O6; Duplicati "partial backups could create defect backups when
-    /// used with retention rules", 2019-12-08).
+    /// (ledger O6 — a partial backup producing a defective one once retention
+    /// rules apply).
     /// </summary>
     /// <remarks>
     /// This is the shape that costs data. <c>min_generations</c> exists so a

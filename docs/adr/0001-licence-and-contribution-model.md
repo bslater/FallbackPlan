@@ -13,11 +13,11 @@ The proposal describes FallbackPlan as "open source, cross-platform, local-first
 This is not a formality that can be settled later. The choice determines:
 
 1. whether third parties will implement independent readers — the property NFR-COMP-004 exists to guarantee, and the one that makes "your data is not locked in" a true statement rather than a slogan;
-2. whether GPL-licensed prior art could ever be reused in the CrashPlan importer;
+2. whether GPL-licensed prior art could ever be reused in a legacy importer;
 3. whether distributions will package the project;
 4. what external contributors are agreeing to.
 
-Point 2 has a sequencing consequence that makes this urgent: if the answer is a permissive licence, then nobody who intends to write the CrashPlan parser may read GPL-licensed reader source first, because doing so contaminates the clean-room option permanently. The licence decision therefore gates the *order* of work in Phase 5, not just its terms.
+Point 2 has a sequencing consequence that makes this urgent: if the answer is a permissive licence, then nobody who intends to write a legacy-format parser may read GPL-licensed reader source first, because doing so contaminates the clean-room option permanently. The licence decision therefore gates the *order* of work in Phase 5, not just its terms.
 
 ## Decision
 
@@ -30,7 +30,7 @@ The decision keeps what the Apache recommendation was protecting. Its argument w
 Three further consequences of the choice, recorded rather than implied:
 
 1. **The commercial arm requires copyright unity.** Dual licensing works today because the project has a single copyright holder. External code contributions require a CLA preserving the dual-licensing right; until one is published, external contributions remain unmergeable ([`CONTRIBUTING.md`](../../CONTRIBUTING.md) says so plainly). "AGPL-3.0-only" rather than "or-later" is the same instinct: only the copyright holder moves the terms, deliberately.
-2. **The GPL-reuse door opens** (point 2 of the context, reversed): AGPL-3.0 code can incorporate GPL-3.0-compatible prior art, so the CrashPlan importer's clean-room burden may be avoidable — subject entirely to [ADR-0015](0015-crashplan-importer-isolation.md)'s gate, which still requires verifying Plan C's licence before anyone reads its source.
+2. **The GPL-reuse door opens** (point 2 of the context, reversed): AGPL-3.0 code can incorporate GPL-3.0-compatible prior art, so a legacy importer's clean-room burden may be avoidable — subject entirely to [ADR-0015](0015-legacy-importer-isolation.md)'s gate, which still requires verifying any existing reader's licence before anyone reads its source.
 3. **Charging is unaffected.** The AGPL obliges providing source to recipients, not giving everything away: selling binaries, packaged builds, and support for the AGPL edition is permitted alongside the commercial arm, and the project name is not licensed with the code.
 
 Per-file licence headers are deferred to first-public-release preparation; `LICENSE` at the root governs in the meantime.
@@ -46,7 +46,7 @@ Per-file licence headers are deferred to first-public-release preparation; `LICE
 
 ### Recommendation
 
-**Apache-2.0**, with the CrashPlan importer implemented clean-room.
+**Apache-2.0**, with any legacy importer implemented clean-room.
 
 The reasoning is that the project's central promise — that a user can leave, and that their repository is readable by software we did not write — depends on independent implementations actually existing. A permissive licence with a patent grant maximises the chance of that. The importer is already isolated in its own package specifically so that this choice does not have to be made to suit it ([`../architecture/11-solution-structure.md` §4](../architecture/11-solution-structure.md#4-import-isolation)); if a GPL reader turns out to be reusable and valuable, it can be a separately licensed optional package without the core adopting copyleft.
 
@@ -57,8 +57,8 @@ The argument against is real and should be weighed: a permissive licence permits
 **Whatever is chosen:**
 
 - `LICENSE`, `CONTRIBUTING.md` (stating DCO or CLA), and `SECURITY.md` must exist before the first public release.
-- The CrashPlan importer keeps its own licence statement and dependency set, isolated from the core.
-- **No Phase 5 parser work begins before this and [ADR-0015](0015-crashplan-importer-isolation.md) are resolved.** Reading incompatibly licensed source first forecloses the clean-room path.
+- A legacy importer keeps its own licence statement and dependency set, isolated from the core.
+- **No Phase 5 parser work begins before this and [ADR-0015](0015-legacy-importer-isolation.md) are resolved.** Reading incompatibly licensed source first forecloses the clean-room path.
 
 **Now that it is decided:** freeze-gate item 6 is satisfied (`LICENSE` present, [`../roadmap.md`](../roadmap.md#format-v1-freeze-gate)). External contributions remain gated — on the CLA now, not on the licence — and `CONTRIBUTING.md` states the current posture honestly.
 

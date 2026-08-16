@@ -168,11 +168,11 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-GOV-003 **[new]** | A security disclosure policy with a contact and response commitment shall be published before the first beta. | `SECURITY.md` exists. |
 | FR-GOV-004 **[new]** | The repository format specification and conformance fixtures shall be public before format v1 freeze. | Published under `specifications/`. |
 
-## CrashPlan migration
+## Legacy archive import
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| FR-CP-001 | CrashPlan archives shall be opened read-only. | Source bytes are unchanged after any import, verified by digest. |
+| FR-CP-001 | Legacy archives shall be opened read-only. | Source bytes are unchanged after any import, verified by digest. |
 | FR-CP-002 | The importer shall map recoverable file versions into the same native pipeline used by filesystem capture. | Imported versions are indistinguishable in format from natively captured ones. |
 | FR-CP-003 | Conversion shall stream from the archive into native blobs without a complete temporary plaintext restore. | Peak scratch usage stays bounded regardless of archive size. |
 | FR-CP-004 | Import shall be resumable, produce provenance records, and verify imported versions against every hash available from the source archive. | Interrupted import resumes without republishing completed snapshots. |

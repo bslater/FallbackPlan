@@ -104,7 +104,7 @@ A relay cannot decrypt, but it learns which device identities communicate, when,
 **Mitigation:** pinned dependencies with integrity hashes; vulnerability scanning in CI; SBOM per release; signed, reproducible builds; auto-update with signature verification and rollback protection. NFR-SUP-001..004.
 
 ### T-15 Parser attacks through legacy archives
-A crafted CrashPlan archive attacks the importer.
+A crafted legacy archive attacks the importer.
 **Mitigation:** importer isolated in an optional package; read-only source access; bounded allocations; fuzz testing of every parser; path traversal containment. FR-CP-001, FR-CP-006.
 
 ### T-16 Local privilege boundaries

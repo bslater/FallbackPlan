@@ -8,7 +8,7 @@
 
 ## 1. What FallbackPlan is
 
-FallbackPlan is an open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore the capability that made the original free CrashPlan compelling: a user can back up one computer to another computer they control or trust, across a LAN or the internet, without a proprietary cloud service.
+FallbackPlan is an open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore a capability the consumer market has largely withdrawn: a user can back up one computer to another computer they control or trust, across a LAN or the internet, without a proprietary cloud service.
 
 > **Vision.** FallbackPlan gives every computer a safe fallback: encrypted, versioned copies held on computers and storage that the user chooses.
 
@@ -50,51 +50,51 @@ Principle 8 needs one qualification the original proposal did not make. *Caches*
 
 ### 4.1 First production release
 
-Local file and directory selection · scheduled and change-triggered snapshots · versioned point-in-time snapshots · encrypted backup to another FallbackPlan instance · encrypted backup to a local directory or mounted filesystem · repository replication between instances · Azure Blob Storage · Amazon S3 and S3-compatible stores · restore by device, snapshot, date, path, pattern, or selection · configurable retention · integrity verification and repair workflows · bandwidth, CPU, concurrency, and schedule controls · resumable transfers · command-line interface · local web administration · headless service operation · CrashPlan archive assessment and migration for explicitly supported variants · documented recovery kit export.
+Local file and directory selection · scheduled and change-triggered snapshots · versioned point-in-time snapshots · encrypted backup to another FallbackPlan instance · encrypted backup to a local directory or mounted filesystem · repository replication between instances · Azure Blob Storage · Amazon S3 and S3-compatible stores · restore by device, snapshot, date, path, pattern, or selection · configurable retention · integrity verification and repair workflows · bandwidth, CPU, concurrency, and schedule controls · resumable transfers · command-line interface · local web administration · headless service operation · legacy archive assessment and migration for explicitly supported variants · documented recovery kit export.
 
 ### 4.2 Later releases
 
-Backblaze B2, Google Cloud Storage, SFTP, WebDAV, SMB-aware and removable-media providers · peer discovery through optional public infrastructure · relays that cannot decrypt content · multi-user household and small-business administration · mobile restore and photo ingestion · filesystem snapshots via VSS, APFS, Btrfs, ZFS, LVM · database-aware pre/post hooks · mirroring across storage classes and geographies · immutable/WORM targets · object-lock integration · erasure coding for peer sets · public restore links using separately wrapped scoped keys · importers for restic, Kopia, and Duplicati where licensing and format stability permit.
+further S3-compatible and cloud object-store providers, SFTP, WebDAV, SMB-aware and removable-media providers · peer discovery through optional public infrastructure · relays that cannot decrypt content · multi-user household and small-business administration · mobile restore and photo ingestion · filesystem snapshots via VSS, APFS, Btrfs, ZFS, LVM · database-aware pre/post hooks · mirroring across storage classes and geographies · immutable/WORM targets · object-lock integration · erasure coding for peer sets · public restore links using separately wrapped scoped keys · importers for other backup tools' repositories where licensing and format stability permit.
 
 ### 4.3 Explicit non-goals for the first release
 
-Full-disk imaging or bare-metal recovery · operating-system deployment · bidirectional working-folder synchronisation equivalent to Syncthing · collaborative file editing · proprietary cloud hosting operated by the project · ransomware detection as a substitute for endpoint security · automatic deletion of source data after backup · transparent filesystem mounting as the only restore method · guaranteed conversion of every historical CrashPlan variant.
+Full-disk imaging or bare-metal recovery · operating-system deployment · bidirectional working-folder synchronisation · collaborative file editing · proprietary cloud hosting operated by the project · ransomware detection as a substitute for endpoint security · automatic deletion of source data after backup · transparent filesystem mounting as the only restore method · guaranteed conversion of every historical variant of any legacy archive format.
 
 ## 5. Lessons from prior art
 
 The design borrows deliberately. What follows is what we take and what we do differently — the "differently" column is the part that shapes the format.
 
-### 5.1 CrashPlan
+### 5.1 Consumer peer-to-peer backup services
 
-CrashPlan splits files into blocks, deduplicates, compresses, encrypts, and stores them with manifests describing paths and versions. Its consumer appeal came from supporting computer and folder destinations rather than requiring a cloud service.
+The class FallbackPlan most directly replaces splits files into blocks, deduplicates, compresses, encrypts, and stores them with manifests describing paths and versions. Its consumer appeal came from supporting computer and folder destinations rather than requiring a cloud service.
 
 **Adopt:** continuous incremental protection · multiple independent destinations per backup set · computer-to-computer backup · long version retention · restore to a replacement computer · plain consumer language about protection and recovery · source-side encryption · block reuse across versions.
 
-**Improve:** publish the format and migration guarantees · avoid repository-wide monolithic manifests of the `cpfmf`/`cphdf` kind · shard and content-address metadata · ship independent integrity-check and recovery tooling · make key export a first-class workflow · keep the repository usable without authenticating to a vendor · make maintenance online, incremental, bounded, and cancellable · ensure older readers fail safely on newer format features · support migration without restoring the archive to temporary plaintext.
+**Improve:** publish the format and migration guarantees · avoid repository-wide monolithic manifests · shard and content-address metadata · ship independent integrity-check and recovery tooling · make key export a first-class workflow · keep the repository usable without authenticating to a vendor · make maintenance online, incremental, bounded, and cancellable · ensure older readers fail safely on newer format features · support migration without restoring the archive to temporary plaintext.
 
-CrashPlan's own documentation records that large file and history manifests interfere with scanning, synchronisation, backup, restore, and maintenance. That is a primary design constraint here, not a late optimisation — it is the direct motivation for principle 6 and for the sharded index design in [`02-repository-format.md` §7](02-repository-format.md#7-index-architecture).
+That class of product documents, in its own troubleshooting material, that large file and history manifests interfere with scanning, synchronisation, backup, restore, and maintenance. That is a primary design constraint here, not a late optimisation — it is the direct motivation for principle 6 and for the sharded index design in [`02-repository-format.md` §7](02-repository-format.md#7-index-architecture).
 
-### 5.2 Syncthing
+### 5.2 Peer synchronisation protocols
 
 **Adopt:** cryptographic device identities · explicit device approval · direct peer connectivity · LAN discovery · optional global discovery · relay fallback without relay plaintext access · protocol negotiation and capability advertisement · block-level transfer requests · resumable bounded parallel transfers · independent control and data channels · transparent connection-path reporting.
 
-**Do not copy:** FallbackPlan is a backup system, not a global working-tree reconciler. It must never choose a single current global file state and propagate deletions or conflict resolution as its primary model.
+**Do not copy:** a file synchroniser's core model. FallbackPlan is a backup system, not a global working-tree reconciler. It must never choose a single current global file state and propagate deletions or conflict resolution as its primary model.
 
-### 5.3 restic
+### 5.3 Content-addressed snapshot repositories
 
 **Adopt:** immutable snapshots · Merkle-style directory trees · content-defined chunking so inserted bytes do not invalidate later chunks · pack files · documented repository invariants and write ordering · checks that rebuild indexes from packs · append-before-reference semantics · local cache as optimisation only · pruning as a separate concern.
 
-restic's write ordering — durable data first, indexes second, snapshot references last — is the single most valuable rule in the prior art, and [`04-concurrency-and-publication.md`](04-concurrency-and-publication.md) adopts it unchanged.
+This family's write ordering — durable data first, indexes second, snapshot references last — is the single most valuable rule in the prior art, and [`04-concurrency-and-publication.md`](04-concurrency-and-publication.md) adopts it unchanged.
 
 **Improve:** design multi-device writers in from the start rather than treating concurrent maintenance as exceptional · reduce dependence on listing large object namespaces · support event journals and compacted index generations · express recoverability and damage scope in user-facing terms · support background healing from replicas · avoid a global exclusive lock for routine retention.
 
-### 5.4 Kopia
+### 5.4 Layered repositories over a minimal blob store
 
 **Adopt:** a minimal blob-store abstraction · content-addressed encrypted blocks · packs sized for high-latency, request-priced stores · index recovery data embedded in packs · encrypted filenames and metadata · policy inheritance · repository-server mode · caching designed for remote latency · independently configurable chunking, compression, packing, and encryption suites.
 
 **Improve:** minimise repository-wide format configuration that cannot evolve per generation · make the key hierarchy and recovery kit comprehensible to consumers · distinguish password rotation from data-key rotation · establish deterministic conformance fixtures for third-party readers.
 
-### 5.5 Duplicati
+### 5.5 Plugin-oriented clients with an authoritative local database
 
 **Adopt:** browser-based local management · broad provider plugin model · scheduling and notification · include/exclude rules · approachable restore workflows · provider-specific settings behind a common interface.
 
@@ -103,9 +103,9 @@ restic's write ordering — durable data first, indexes second, snapshot referen
 ### 5.6 What the prior art teaches about the service boundary
 
 The sections above take format lessons — chunking, packs, write ordering. The
-**process** shape deserves the same treatment, because CrashPlan and Duplicati
-both arrived at an engine-as-service with thin front ends, and both show where
-that shape goes wrong.
+**process** shape deserves the same treatment, because two of the products
+above independently arrived at an engine-as-service with thin front ends, and
+both show where that shape goes wrong.
 
 **Adopt:** the engine is a service and every UI is a client of it · the service
 keeps working with no UI installed, running, or reachable · one engine
@@ -113,8 +113,8 @@ implementation behind CLI and GUI alike, so automation and the interface cannot
 diverge in behaviour.
 
 **Improve:** both authenticate a local UI to a local engine over a network
-transport — CrashPlan with a token file, Duplicati with a password on
-`localhost:8200` — and both are well known for the resulting failure, a UI
+transport — one with a token file, the other with a password on a fixed
+loopback port — and both are well known for the resulting failure, a UI
 insisting it cannot reach an engine that is running perfectly well. A local
 boundary is not a network boundary, and the operating system already knows who
 is on the other end of a socket. Version skew between service and client is the
@@ -160,7 +160,7 @@ rather than met with a blank window ([ADR-0028](../adr/0028-service-boundary-and
 ### 6.1 Process model
 
 The engine runs as a service; every user interface is a client of it. This is
-the shape CrashPlan and Duplicati use, and the boundary is specified in
+the shape the prior art in §5.6 arrived at, and the boundary is specified in
 [ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md).
 
 | Component | Role |
@@ -217,7 +217,7 @@ The third ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)):
 
 > Declare a set with two destinations and no other local copy → back up on schedule → the hub fans out to both, catches up the one that was offline → retention ages each destination under its own policy → either peer ends the peering and both sides see a durable notice → restore independently from each destination.
 
-Azure, S3, and CrashPlan conversion layer on only after all three are reliable — a cloud bucket enters as one more destination kind behind the same fan-out, not as a separate feature. This ordering makes recoverability — not feature count — the foundation.
+Azure, S3, and the legacy conversion layer on only after all three are reliable — a cloud bucket enters as one more destination kind behind the same fan-out, not as a separate feature. This ordering makes recoverability — not feature count — the foundation.
 
 ---
 

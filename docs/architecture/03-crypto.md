@@ -46,7 +46,7 @@ Requirements:
 - **Password KDF**: Argon2id with parameters recorded in `/repository-format` so a future reader can reproduce them.
 - **Key generations** support cryptographic agility: new generations can be introduced without invalidating old records.
 - **Wrapping-key rotation** (changing the passphrase) rewrites only `/keys/*` — no repository data is touched. This is the common operation and it must be cheap.
-- **Data-key rotation** is a separate, explicitly invoked background rewrite. Conflating the two is a Kopia-derived lesson ([`00-overview.md` §5.4](00-overview.md#54-kopia)); users routinely believe changing a password re-encrypts their data, and the UI must say plainly that it does not.
+- **Data-key rotation** is a separate, explicitly invoked background rewrite. Conflating the two is a lesson from the prior art ([`00-overview.md` §5.4](00-overview.md#54-layered-repositories-over-a-minimal-blob-store)); users routinely believe changing a password re-encrypts their data, and the UI must say plainly that it does not.
 - Unattended agents may protect the KEK with an OS key store.
 
 ## 3. Nonce and key construction
@@ -152,7 +152,7 @@ Restore-time verification (FR-RST-002) catches this at the moment the user needs
 | `repository` | Reuse any member's segments, after **verify-on-reuse**: fetch, decrypt, confirm the content identifier before referencing. | One read per first reuse; still avoids re-upload and re-storage | ✅ |
 | `repository-unverified` | Reuse without verification. | None | Opt-in, requires explicit acknowledgement |
 
-`repository` is the default. In a single-writer repository it **degenerates exactly to `device` behaviour at zero cost**, because there are no other writers' segments to verify — it is free precisely where `device` is free. Where the two differ is the multi-device household backing up four laptops that share an operating system and a music library, and there `device` stores four copies of everything they have in common. That is CrashPlan's classic use case and this project's stated reason for existing, so the default should serve it.
+`repository` is the default. In a single-writer repository it **degenerates exactly to `device` behaviour at zero cost**, because there are no other writers' segments to verify — it is free precisely where `device` is free. Where the two differ is the multi-device household backing up four laptops that share an operating system and a music library, and there `device` stores four copies of everything they have in common. That is the classic consumer use case and this project's stated reason for existing, so the default should serve it.
 
 An earlier draft made `device` the default on the grounds that it "costs nothing in the single-device case". True — and it does not distinguish the two options, because `repository` costs nothing there either. The argument selected between them on a criterion where they are identical ([PT-11](../review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)).
 

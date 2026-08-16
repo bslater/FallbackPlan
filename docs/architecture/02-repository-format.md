@@ -189,7 +189,7 @@ Two mitigations, neither of which reverses the decision:
 
 ### 6.3 Sharding and encoding
 
-Manifests shard naturally through the tree and file-version graph. **No manifest's size grows with the repository or with total snapshot history** — the failure mode CrashPlan documents for its own large manifests, and principle 6 in [`00-overview.md`](00-overview.md#3-core-principles). Small metadata objects are packed into metadata blobs but remain independently addressed and authenticated.
+Manifests shard naturally through the tree and file-version graph. **No manifest's size grows with the repository or with total snapshot history** — the failure mode the consumer prior art documents for its own large manifests, and principle 6 in [`00-overview.md`](00-overview.md#3-core-principles). Small metadata objects are packed into metadata blobs but remain independently addressed and authenticated.
 
 The encoding is deterministic, canonical, versioned, and independently implementable. Canonical CBOR is the candidate, pending the benchmark and cross-language determinism tests in [ADR-0003](../adr/0003-canonical-metadata-encoding.md). Wire protocols may use a different encoding; the two are versioned independently.
 

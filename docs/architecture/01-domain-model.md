@@ -47,16 +47,16 @@ Each of these appears in the prior art and in the original proposal. They are li
 
 | Do not use | Use instead | Where it comes from |
 |------------|-------------|---------------------|
-| chunk | **segment** | restic, Kopia, borg |
-| block | **segment** | CrashPlan, Syncthing |
-| pack, pack file | **blob** | restic, Kopia |
-| volume, dblock | **blob** | Duplicati |
-| local database, local index | **catalogue** | Duplicati, CrashPlan |
-| lock | **lease** (advisory) or **write intent** (correctness) | restic |
+| chunk | **segment** | content-addressed snapshot repositories |
+| block | **segment** | consumer peer backup services; file synchronisers |
+| pack, pack file | **blob** | content-addressed snapshot repositories |
+| volume, data file | **blob** | plugin-oriented backup clients |
+| local database, local index | **catalogue** | products with an authoritative local database |
+| lock | **lease** (advisory) or **write intent** (correctness) | content-addressed snapshot repositories |
 
-Two qualifications. The rule governs **nouns**: *packing* is fine as a verb for the act of assembling records into a blob, and *content-defined chunking* keeps its established name because that is what the algorithm is called everywhere. Sections describing prior art also use each product's own vocabulary, since renaming restic's pack files inside a paragraph about restic would help nobody.
+Two qualifications. The rule governs **nouns**: *packing* is fine as a verb for the act of assembling records into a blob, and *content-defined chunking* keeps its established name because that is what the algorithm is called everywhere. Sections describing prior art may still use the source's own vocabulary where translating it would obscure the point being made — but they name the design, not the product ([naming and attribution](../naming-and-attribution.md)).
 
-Note too that "blob" is overloaded in the wider ecosystem: Azure Blob Storage calls every stored object a blob. Where that ambiguity could bite — chiefly [`05-storage-providers.md`](05-storage-providers.md) — we say **repository blob** for ours and **store object** for the provider's unit of storage.
+Note too that "blob" is overloaded in the wider ecosystem: Azure Blob Storage — an interface this project implements against, so its name stays — calls every stored object a blob. Where that ambiguity could bite — chiefly [`05-storage-providers.md`](05-storage-providers.md) — we say **repository blob** for ours and **store object** for the provider's unit of storage.
 
 ## 3. Object relationships
 

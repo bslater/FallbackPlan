@@ -18,14 +18,14 @@ namespace FallbackPlan.Api.Transport;
 /// no port.
 /// </para>
 /// <para>
-/// Loopback TCP was rejected for the local binding on the prior art. CrashPlan's
-/// desktop client authenticates to its service with a token file, and a stale
-/// one is among that product's most familiar failure modes — the UI insisting
-/// it cannot reach an engine that is running perfectly well. Duplicati listens
-/// on <c>localhost:8200</c> behind a server password, so any local process may
-/// attempt to connect and the user must manage a credential to talk to their
-/// own machine. Both are artefacts of using a network transport for a boundary
-/// that is not a network.
+/// Loopback TCP was rejected for the local binding on the prior art. One
+/// widely-deployed desktop client authenticates to its own service with a
+/// token file, and a stale one is among its most familiar failure modes — the
+/// UI insisting it cannot reach an engine that is running perfectly well.
+/// Another listens on a fixed loopback port behind a server password, so any
+/// local process may attempt to connect and the user must manage a credential
+/// to talk to their own machine. Both are artefacts of using a network
+/// transport for a boundary that is not a network.
 /// </para>
 /// </remarks>
 public static class LocalEndpoint

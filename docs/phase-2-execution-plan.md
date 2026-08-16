@@ -337,7 +337,7 @@ reports rotted citations). What both reviews deliberately left is below.
 1. ✅ **Cancel a live publication** — done
    ([pipeline review Amendment 1](review/2026-08-pipeline-integrity-review.md#amendment-1-2026-08--the-base-hardening-round)):
    all five of
-   [T-2](review/2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
+   [T-2](review/2026-08-prior-art-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
    named tests exist and pass — four in `InterruptionTests/CancellationTests`,
    the `ServiceCommandHandler` positive path in `Hosts.Tests/ServiceTests`.
    The suite caught and fixed the exact defect class T-2 predicted: the

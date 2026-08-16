@@ -5,10 +5,10 @@ namespace FallbackPlan.Domain.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "a case where purging a single file would purge all
-/// <em>other</em> files, if the filesystem is case-sensitive" (2019-10-19) and,
-/// three months later, "fix purge operation with simple filters and
-/// case-sensitive filesystems" (2020-01-18). That is a selection <em>inversion</em>:
+/// The surveyed changelog records a case where purging a single file purged
+/// all <em>other</em> files on a case-sensitive filesystem, and, three months
+/// later, a second fix for the same operation under simple filters on
+/// case-sensitive filesystems. That is a selection <em>inversion</em>:
 /// the rule set was asked which file to act on and answered with its
 /// complement. In a purge it destroys everything the user meant to keep.
 /// </para>
@@ -38,7 +38,7 @@ public sealed class PathRuleSelectionTests
 
     /// <summary>
     /// A rule naming one file excludes that file and leaves every other one
-    /// alone — under both case regimes, because the Duplicati defect appeared
+    /// alone — under both case regimes, because the surveyed defect appeared
     /// only on case-sensitive filesystems.
     /// </summary>
     [TestMethod]
@@ -98,9 +98,9 @@ public sealed class PathRuleSelectionTests
     }
 
     /// <summary>
-    /// Two overlapping includes are a union, not an intersection. Duplicati's
-    /// "a folder and a subfolder leads to all files being excluded" is what an
-    /// intersection produces.
+    /// Two overlapping includes are a union, not an intersection. The surveyed
+    /// defect — a folder and a subfolder together excluding every file — is
+    /// what an intersection produces.
     /// </summary>
     [TestMethod]
     public void TwoIncludesWhereOneContainsTheOther_CaptureTheirUnion()

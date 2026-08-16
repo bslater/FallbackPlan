@@ -13,7 +13,7 @@ FallbackPlan's committed shape is a headless engine with thin front ends —
 `00-overview.md` §4.1 lists "command-line interface · local web administration ·
 headless service operation" as first-release scope, and §6.1 describes Desktop as
 "connecting to the local Agent" and Web as "hosted by the Agent". That is the
-same shape CrashPlan and Duplicati use, and it is the shape the product needs.
+same shape the consumer prior art arrived at, and it is the shape the product needs.
 
 It has never been designed. The whole of it is §6.1's eight-row table, carried
 verbatim from the superseded original proposal, plus two cells in `11 §5` naming
@@ -176,13 +176,13 @@ operating system's: filesystem permissions decide who may connect, and the
 service reads peer credentials to identify the caller. No password, no token
 file, no port. Topologies 1 and 2 use nothing else.
 
-Loopback TCP is rejected *for the local binding*, on the prior art. CrashPlan's
-desktop client authenticates to its service with a token file, and a stale or
-unreadable token is one of that product's most familiar failure modes — the UI
-insisting it cannot reach an engine that is running perfectly well. Duplicati
-listens on `localhost:8200` behind a server password, so any local process may
-attempt to connect and the user must manage a credential to talk to their own
-machine. Both are artefacts of using a network transport for a boundary that
+Loopback TCP is rejected *for the local binding*, on the prior art. One
+widely-deployed desktop client authenticates to its own service with a token
+file, and a stale or unreadable token is among its most familiar failure modes
+— the UI insisting it cannot reach an engine that is running perfectly well.
+Another listens on a fixed loopback port behind a server password, so any local
+process may attempt to connect and the user must manage a credential to talk to
+their own machine. Both are artefacts of using a network transport for a boundary that
 is not a network; a socket with OS permissions has neither problem, because the
 authentication is the same mechanism already protecting the state directory.
 
@@ -248,7 +248,7 @@ not in terms of a transport binding:
   to populate it.
 
 A client and service at incompatible versions must **refuse to proceed with a
-clear message naming both versions** — the failure CrashPlan users met as an
+clear message naming both versions** — the failure users of a legacy service met as an
 unexplained blank window. This matters more in topology 3 than anywhere else,
 because a console will routinely meet services at several versions at once, and
 must degrade per service rather than refusing to start.
@@ -345,8 +345,8 @@ rollback detection (04 §2, 03 §6); minting one per process would multiply
 identities on every machine, inflate the index's per-writer chains, and make
 "which writer wrote this" meaningless as an audit answer.
 
-**Loopback TCP with a token file, for the local binding.** The Duplicati and
-CrashPlan choice. Rejected for the reasons in §5 — a credential to talk to your
+**Loopback TCP with a token file, for the local binding.** What both consumer
+products in §5 chose. Rejected for the reasons given there — a credential to talk to your
 own machine, a port any local process may reach, and a well-attested support
 burden — none of which buys anything a socket does not provide locally. Note the
 rejection is scoped: a network transport is right for the *remote* binding and

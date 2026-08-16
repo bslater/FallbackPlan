@@ -28,7 +28,7 @@ Two invariants govern everything below:
 >
 > **I2.** Published objects are immutable. Correction is by publishing new objects, never by rewriting old ones.
 
-I1 is restic's write-ordering rule and it is the most valuable single import from the prior art.
+I1 is the write-ordering rule of the content-addressed repositories in [`00-overview.md` §5.3](00-overview.md#53-content-addressed-snapshot-repositories), and it is the most valuable single import from the prior art.
 
 ## 4. Write intent
 
@@ -200,7 +200,7 @@ Maintenance operations (compaction, garbage collection, healing) take advisory l
 - **Blob compaction** — republishes index entries only; manifests are untouched, so two compactors converge ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 - **Garbage collection** — bounded by generation cut-off, intent coverage, and grace periods, all of which are evaluated independently by each collector ([`07-retention-and-gc.md` §3](07-retention-and-gc.md#3-garbage-collection)).
 
-No routine operation requires a global exclusive lock. That was an explicit improvement target over restic ([`00-overview.md` §5.3](00-overview.md#53-restic)) and the mechanisms above are what deliver it.
+No routine operation requires a global exclusive lock. That was an explicit improvement target over the prior art ([`00-overview.md` §5.3](00-overview.md#53-content-addressed-snapshot-repositories)) and the mechanisms above are what deliver it.
 
 ## 9. Two different concurrencies, and why conflating them is dangerous
 

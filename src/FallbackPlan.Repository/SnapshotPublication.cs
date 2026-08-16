@@ -637,8 +637,8 @@ public sealed partial class PublicationOrchestrator
             // and not mtime, so a file whose permissions were just tightened
             // presents an identical identity, size and mtime. Re-emitting the
             // prior version there silently republishes the old mode, owner and
-            // extended attributes — the fidelity loss Duplicati shipped a fix
-            // for, and one that only shows up at restore.
+            // extended attributes — a fidelity loss the surveyed changelog
+            // records as a shipped fix, and one that only shows up at restore.
             if (unchanged &&
                 IsMetadataUnchanged(metadataDigest, prior!) &&
                 string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))

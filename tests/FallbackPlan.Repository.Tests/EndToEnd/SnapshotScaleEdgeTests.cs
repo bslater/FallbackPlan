@@ -15,13 +15,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Two Duplicati fixes sit at these ends. "Fixed issue with empty filesets
-/// being created" (v2.1.0.119) is the zero end — a backup that captured
-/// nothing still wrote a version, and versions that describe nothing
-/// accumulate and confuse restore. "Fixed an issue with queries that need
-/// more than 128 parameters" (v2.1.0.116) is the many end: a query built by
-/// pasting one placeholder per item works beautifully until the item count
-/// crosses a limit nobody remembered was there.
+/// Two shipped fixes from the surveyed changelog sit at these ends. Empty
+/// snapshots being created is the zero end — a backup that captured nothing
+/// still wrote a version, and versions that describe nothing accumulate and
+/// confuse restore. A query needing more than 128 parameters is the many end:
+/// a query built by pasting one placeholder per item works beautifully until
+/// the item count crosses a limit nobody remembered was there.
 /// </para>
 /// <para>
 /// FallbackPlan has no dynamic parameter lists — every catalogue query takes
@@ -39,7 +38,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
     /// <summary>
     /// Comfortably past SQLite's 999-parameter default and past the 128 the
-    /// Duplicati note names, while still running in a second or two.
+    /// surveyed note names, while still running in a second or two.
     /// </summary>
     private const int Many = 2_500;
 
@@ -72,7 +71,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
     /// </summary>
     /// <remarks>
     /// Publishing the empty snapshot is the right behaviour and is not the
-    /// thing Duplicati fixed: "there were no files on this date" is a true and
+    /// thing the surveyed product fixed: "there were no files on this date" is a true and
     /// useful statement, and suppressing it would leave a gap in the history
     /// indistinguishable from the agent not having run. What must not happen
     /// is a crash, or a snapshot that claims content it does not have.

@@ -13,8 +13,8 @@ namespace FallbackPlan.Retention.Tests;
 
 /// <summary>
 /// That the index never names an object no blob holds — for the objects it
-/// matters for (ledger O5; Duplicati "`dindex`-files would reference
-/// non-existing `dblock` files", 2019-10-19).
+/// matters for (ledger O5 — index objects referencing data blobs that no
+/// longer exist).
 /// </summary>
 /// <remarks>
 /// <para>

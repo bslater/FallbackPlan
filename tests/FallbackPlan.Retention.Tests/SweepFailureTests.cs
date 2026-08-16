@@ -10,8 +10,8 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Retention.Tests;
 
 /// <summary>
-/// What the sweep does when a delete will not happen (ledger O1; Duplicati
-/// "failed delete causing database inconsistency", 2026-02-06).
+/// What the sweep does when a delete will not happen (ledger O1 — a failed
+/// delete leaving durable state inconsistent).
 /// </summary>
 /// <remarks>
 /// <para>

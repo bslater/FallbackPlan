@@ -14,10 +14,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "a case where restoring files could fail if the
-/// containing folder was not restored" (v2.0.5.108) and, four years later,
-/// "issue with new restore not auto-creating missing folder structure"
-/// (v2.1.0.105) — the same defect, twice, either side of a rewrite.
+/// The surveyed changelog records a restore failing when the containing
+/// folder had not itself been restored and, four years later, a rewritten
+/// restore path not creating a missing folder structure — the same defect,
+/// twice, either side of a rewrite.
 /// </para>
 /// <para>
 /// It recurs because the happy path hides it. A restore to the original

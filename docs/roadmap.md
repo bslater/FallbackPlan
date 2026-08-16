@@ -26,7 +26,7 @@ Architecture decision records and threat model · versioned configuration schema
 - Garbage collection concurrent with an in-flight backup deletes none of its intent-covered blobs.
 - **A synthetic legacy source adapter feeds an arbitrary byte stream plus a provenance record through the same pipeline**, demonstrating the ingest path is not coupled to the filesystem scanner.
 
-> **Two criteria moved.** The original Phase 0 required "one representative CrashPlan file version can be streamed into this pipeline" — which needs the Phase 5 reader, itself contingent on a legal review and an archive corpus we do not have — and "an independently written reader can parse public fixtures", which needs a second implementation to exist before the format is drafted. The first is replaced by the synthetic adapter above, which proves the same property. The second moves to the format freeze gate, where it is both achievable and genuinely valuable ([H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0)).
+> **Two criteria moved.** The original Phase 0 required one representative legacy file version to be streamable into this pipeline — which needs the Phase 5 reader, itself contingent on a legal review and an archive corpus we do not have — and "an independently written reader can parse public fixtures", which needs a second implementation to exist before the format is drafted. The first is replaced by the synthetic adapter above, which proves the same property. The second moves to the format freeze gate, where it is both achievable and genuinely valuable ([H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0)).
 
 ---
 
@@ -42,7 +42,7 @@ Filesystem capture, immutable tree and snapshot manifests, reliable local restor
 
 ## Phase 2 — Peer-to-peer backup, and the service boundary
 
-Restore CrashPlan-style computer-to-computer backup, and make the engine a service that front ends talk to ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)).
+Restore computer-to-computer backup, and make the engine a service that front ends talk to ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)).
 
 **Features:** device identity and pairing · peer store · direct TLS/QUIC transfer · LAN discovery · **resumable replication** · destination quotas and retention floors · per-destination replication state · keyed random-range verification challenges · dedup trust domains · **command surface and both transport bindings** · **CLI becomes a client, with direct mode** · **writer-role exclusion on the state directory** · **keystore unlock** · **per-job progress events** · local web UI · **multi-instance console** · **service installation** · bandwidth schedules · protocol version negotiation.
 
@@ -106,7 +106,7 @@ Largely absorbed by the hub-and-spoke arc, which builds the retention engine, ma
 
 **Exit criteria:** interruption at every GC step preserves published snapshots · GC concurrent with backup never deletes in-flight blobs · compaction modifies no manifest · deleted content retained per policy · corruption healed from another replica · clock skew of ±24 h changes no GC outcome · **and the twelve compaction criteria of [ADR-0025 Amendment 2](adr/0025-compaction-reseals-records.md#amendment-2-2026-08--the-twelve-things-compaction-is-known-to-get-wrong)**, each with a test.
 
-Those twelve are not padding. Compaction is the densest cluster of shipped fixes in Duplicati's entire fifteen-year changelog — 29 of 805 distinct entries, more than any other mechanism, recurring every year from 2016 to 2026 ([ledger](review/2026-08-duplicati-changelog-ledger.md)). They are written down now, while nothing is built, because that is the only moment the list is free.
+Those twelve are not padding. Compaction is the densest cluster of shipped fixes in the surveyed product's entire fifteen-year changelog — 29 of 805 distinct entries, more than any other mechanism, recurring every year from 2016 to 2026 ([ledger](review/2026-08-prior-art-changelog-ledger.md)). They are written down now, while nothing is built, because that is the only moment the list is free.
 
 ---
 
@@ -127,9 +127,9 @@ Two decisions the gate forced rather than measured are written up in [freeze-gat
 
 ---
 
-## Phase 5 — CrashPlan migration preview
+## Phase 5 — Legacy archive import preview
 
-Controlled read-only import for validated archive variants. Gated on the legal review in [ADR-0015](adr/0015-crashplan-importer-isolation.md) — **no parser work begins before that gate passes**.
+Controlled read-only import for validated archive variants. Gated on the legal review in [ADR-0015](adr/0015-legacy-importer-isolation.md) — **no parser work begins before that gate passes**.
 
 **Features:** archive inspector and variant detection · key-source adapters · latest-state import · selected historical import · resumable checkpoints · provenance and migration reporting · source/destination hash comparison · opaque archive-preservation option.
 
@@ -189,7 +189,7 @@ Provider capability contract · Azure Blob · S3 · emulator integration tests �
 
 Retention engine · generation GC · compaction · tombstones and grace periods · dry-run reporting · replica healing · clock-skew testing.
 
-### P5 — CrashPlan research
+### P5 — Legacy format research
 
 **Legal and licence review gate first.** Then: archive corpus and variant catalogue · read-only inspector · key-material adapters · manifest and history parser prototypes · block decrypt/decompress pipeline · neutral legacy model · single-version streaming import proof · historical state reconstruction · comparison and reporting.
 
@@ -213,4 +213,4 @@ Retention engine · generation GC · compaction · tombstones and grace periods 
 - User documentation explains what is and is not protected.
 - External security and format reviews are complete.
 - The format v1 freeze gate has passed.
-- CrashPlan import is released with a narrow verified compatibility matrix, or clearly retained as preview — never broadly claimed.
+- Legacy import is released with a narrow verified compatibility matrix, or clearly retained as preview — never broadly claimed.

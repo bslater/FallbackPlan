@@ -8,9 +8,9 @@ namespace FallbackPlan.Application.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "issue with DST changes causing schedule time-of-day to
-/// change" (v2.1.0.100) and, separately, "a case where backups could run
-/// immediately and ignore the scheduled time" (v2.0.5.106). Both are the same
+/// The surveyed changelog records two shipped fixes here — a daylight-saving
+/// change moving a schedule's time of day, and, separately, backups running
+/// immediately instead of at the scheduled time. Both are the same
 /// underlying difficulty: a daily schedule is stated in wall-clock terms, and
 /// wall clocks are not monotonic. Twice a year an hour does not exist, and
 /// twice a year an hour happens twice.
@@ -265,8 +265,8 @@ public sealed class ScheduleClockBoundaryTests
     /// and no exception.
     /// </summary>
     /// <remarks>
-    /// Duplicati shipped "a crash that happened in the scheduler if the clock
-    /// was changed with more than 3 months" (2017-08-30). A machine whose CMOS
+    /// The surveyed changelog records a scheduler crash when the clock moved
+    /// by more than three months. A machine whose CMOS
     /// battery died boots in 1970 or 2000 and is corrected by NTP a minute
     /// later, so the jump is not a contrived input — it is what an old laptop
     /// does every time it is switched on.

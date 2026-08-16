@@ -5,7 +5,8 @@ namespace FallbackPlan.Api.Tests;
 
 /// <summary>
 /// Version negotiation (FR-SVC-007). The failure this prevents has a name: an
-/// unexplained blank window, which is how CrashPlan users met a version skew.
+/// unexplained blank window, which is how users of a legacy backup service met
+/// a version skew.
 /// </summary>
 [TestClass]
 public sealed class ContractVersionTests : IDisposable

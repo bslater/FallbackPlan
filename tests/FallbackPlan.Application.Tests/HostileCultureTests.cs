@@ -8,9 +8,9 @@ namespace FallbackPlan.Application.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped locale fixes repeatedly and in every direction: a
-/// "locale-sensitive parsing bug for fr-CA", "invariant formatting causing
-/// crashes during backup", date handling under a non-Gregorian calendar,
+/// The surveyed changelog carries locale fixes repeatedly and in every
+/// direction: locale-sensitive parsing for one region, invariant formatting
+/// crashing a backup, date handling under a non-Gregorian calendar,
 /// culture-dependent sorting. None of those is exotic — they are what happens
 /// when a program writes a number one way and reads it another, and the two
 /// ways are chosen by a setting the program never looks at.

@@ -84,7 +84,7 @@ There are three restore paths and only one was the designed one. `RestoreExecuto
 
 **Held by** `RestorePlanTests.RestoreExecution_Cancelled_ReportsCancelledWithAReceiptRatherThanThrowing`.
 
-> **Resolved (2026-08).** The loop breaks cooperatively instead of throwing, so a cancelled restore still produces a receipt and `Aggregate` reports `Cancelled`. Stopping between items means every item already restored is whole — a cancelled restore leaves the same class of state a completed prefix would, which is the cancellation-equals-a-clean-prefix property [T-2](2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts) asks for on the restore side. The backup-side T-2 suite remains owed (it needs cancellation plumbed through the publication orchestrator) and stays on the pickup list.
+> **Resolved (2026-08).** The loop breaks cooperatively instead of throwing, so a cancelled restore still produces a receipt and `Aggregate` reports `Cancelled`. Stopping between items means every item already restored is whole — a cancelled restore leaves the same class of state a completed prefix would, which is the cancellation-equals-a-clean-prefix property [T-2](2026-08-prior-art-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts) asks for on the restore side. The backup-side T-2 suite remains owed (it needs cancellation plumbed through the publication orchestrator) and stays on the pickup list.
 
 ### RR-6 — Alternate data streams are captured and never restored
 
@@ -158,4 +158,4 @@ The suite's own stated limit — every kill a clean exception, no torn writes, n
 
 ---
 
-**See also:** [pipeline integrity review](2026-08-pipeline-integrity-review.md) — the backup-path pass this continues · [phase-2 plan — where to pick up](../phase-2-execution-plan.md#where-to-pick-up) · [Q22](../open-questions.md#q22--sparse-restore-materialises-zeroes) · [Duplicati learnings T-2](2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)
+**See also:** [pipeline integrity review](2026-08-pipeline-integrity-review.md) — the backup-path pass this continues · [phase-2 plan — where to pick up](../phase-2-execution-plan.md#where-to-pick-up) · [Q22](../open-questions.md#q22--sparse-restore-materialises-zeroes) · [prior-art learnings T-2](2026-08-prior-art-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)

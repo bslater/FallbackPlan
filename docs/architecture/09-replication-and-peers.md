@@ -8,7 +8,7 @@
 
 ## 1. What replication moves
 
-Peers exchange immutable repository objects — blobs, manifests, snapshots, and index generations. They never reconcile live folders, and there is no notion of a single "current" global file state. This is the distinction from Syncthing set out in [`00-overview.md` §5.2](00-overview.md#52-syncthing).
+Peers exchange immutable repository objects — blobs, manifests, snapshots, and index generations. They never reconcile live folders, and there is no notion of a single "current" global file state. This is the distinction from a file synchroniser set out in [`00-overview.md` §5.2](00-overview.md#52-peer-synchronisation-protocols).
 
 Exchange sequence:
 

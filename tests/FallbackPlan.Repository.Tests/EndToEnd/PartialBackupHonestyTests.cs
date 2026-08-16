@@ -14,11 +14,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "an issue where some operations would report success even
-/// if failed" (v2.1.0.123), "an incorrect error masking another error in
-/// backups" (v2.0.9.109) and "fixed hiding compression errors" (v2.0.5.109).
-/// Three releases, one subject: the engine knew something went wrong and the
-/// operator did not.
+/// The surveyed changelog records three separate shipped fixes here: an
+/// operation reporting success although it failed, one error masking another
+/// during a backup, and compression errors being hidden. Three releases, one
+/// subject: the engine knew something went wrong and the operator did not.
 /// </para>
 /// <para>
 /// This is the worst class of backup defect, worse than a crash, because a

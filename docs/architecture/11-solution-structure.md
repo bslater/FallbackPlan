@@ -32,7 +32,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
 │   ├── FallbackPlan.Storage.{Local ✓,Peer,AzureBlob,S3}/
 │   ├── FallbackPlan.Import.Abstractions/     ✓ neutral legacy model
-│   ├── FallbackPlan.Import.CrashPlan/        optional, separately licensed
+│   ├── FallbackPlan.Import.Legacy/           optional, separately licensed
 │   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028)
 │   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
@@ -57,7 +57,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Retention.Tests/         ✓ planner, replication gate, staging trim
 │   ├── FallbackPlan.Protocol.Tests/          ✓ pairing, grants, framing, negotiation, channel binding
 │   ├── FallbackPlan.Storage.ContractTests/   ✓
-│   ├── FallbackPlan.Import.CrashPlan.Tests/
+│   ├── FallbackPlan.Import.Legacy.Tests/
 │   ├── FallbackPlan.ArchitectureTests/       ✓ enforces §2
 │   ├── FallbackPlan.InterruptionTests/       ✓
 │   ├── FallbackPlan.PerformanceTests/        ✓
@@ -88,7 +88,7 @@ That policy needs the map to say which half is which, and for a while it did not
 - `Repository.Format` has no UI, host, or provider dependencies. It must be usable by the standalone recovery tool.
 - `Protocol` does not depend on `Desktop` or `Web`.
 - **`Replication` may reference `Protocol`; storage providers still may not.** Fan-out serves two transport shapes — plain store-to-store copy for `local-path` and cloud kinds, the peer protocol for `peer` — and the second must live somewhere. It lives in `Replication`, so a provider stays a dumb byte store and the "providers depend only on `Storage.Abstractions` and their SDK" rule above survives hub-and-spoke intact ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md), [ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)).
-- `Import.CrashPlan` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
+- `Import.Legacy` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
 - **Third-party cryptography lives only where it is named.** The primitives .NET does not supply do not inherit the platform's audit posture, so each is confined rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §3 and Amendment 2): Argon2id and XChaCha20-Poly1305 to `Repository.Crypto`, where a defect is already in the user's stored bytes; Ed25519 and X25519 to `Protocol`, where a defect costs a re-pairing. The allowlist is two projects by name, not a tier — widening it should take an argument.
@@ -184,14 +184,14 @@ Hub-and-spoke adds two journal-shaped files **beside** the durable state, delibe
 
 ## 4. Import isolation
 
-`Import.CrashPlan` is a separately packaged optional component:
+`Import.Legacy` — a placeholder name for any per-format importer, none of which exists yet — is a separately packaged optional component:
 
 - the core never references it — dependency direction is enforced by `ArchitectureTests`;
 - it depends on `Import.Abstractions`, which defines a neutral legacy model independent of any specific legacy format;
-- its own dependencies and licence obligations stay contained within it, which matters because the licence question is open ([ADR-0001](../adr/0001-licence-and-contribution-model.md), [ADR-0015](../adr/0015-crashplan-importer-isolation.md));
+- its own dependencies and licence obligations stay contained within it, which matters because the licence question is open ([ADR-0001](../adr/0001-licence-and-contribution-model.md), [ADR-0015](../adr/0015-legacy-importer-isolation.md));
 - it opens legacy archives **read-only** and never mutates a source.
 
-The neutral model exists so that the same import pipeline serves restic, Kopia, and Duplicati importers later without any of them reaching into the core.
+The neutral model exists so that the same import pipeline serves an importer for any legacy archive format later without that importer reaching into the core.
 
 ## 5. Technology
 

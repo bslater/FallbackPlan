@@ -18,8 +18,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped this exact defect as a fix — "updated timestamps
-/// discarded if no data was changed" — and it is a fidelity bug of the worst
+/// The surveyed changelog records this exact defect as a shipped fix —
+/// updated timestamps discarded when no data changed — and it is a fidelity
+/// bug of the worst
 /// shape, because the backup reports success and the loss appears only at
 /// restore. The reuse short-circuit is keyed on identity, size and
 /// modification time, and none of those moves when a file is chmodded: POSIX

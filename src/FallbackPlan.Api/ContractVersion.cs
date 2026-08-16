@@ -16,7 +16,8 @@ namespace FallbackPlan.Api;
 /// <para>
 /// Compatibility is by <b>major</b>. A client and service that disagree on the
 /// major version must refuse to proceed with both versions named (FR-SVC-007),
-/// because the failure CrashPlan users met was an unexplained blank window. A
+/// because the failure users of a legacy backup service met was an
+/// unexplained blank window. A
 /// console in topology 3 routinely meets services at several versions at once,
 /// so the refusal is per service and never stops the console starting.
 /// </para>

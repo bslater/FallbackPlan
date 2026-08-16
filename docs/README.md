@@ -51,7 +51,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 Status per record. **Twenty-five of the thirty are Accepted.** 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); and, at the freeze-gate pass, 0003, 0010, 0013 and 0030 (0030 amended once when RFC 7250 proved unreachable on the platform).
 
-**Five remain `Proposed`, each for a stated reason rather than by neglect:** 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--plan-c-licence-and-reuse-posture).
+**Five remain `Proposed`, each for a stated reason rather than by neglect:** 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture).
 
 **A decision's status is not its implementation state**, and the two are tracked separately on purpose: `Status:` says whether the decision was accepted, and [implementation status](implementation-status.md) says whether the code does it. The two can differ in both directions, and do: three of the five records still marked `Proposed` are built and tested, and 0030 is Accepted while the transport that would carry it does not exist.
 
@@ -75,7 +75,7 @@ Status per record. **Twenty-five of the thirty are Accepted.** 0005, 0006, 0008,
 | [0012](adr/0012-storage-provider-contract.md) | Storage provider contract |
 | [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 stability |
-| [0015](adr/0015-crashplan-importer-isolation.md) | CrashPlan importer isolation and licensing gate |
+| [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation and licensing gate |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated, not content-derived |
 | [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence |
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains |
@@ -108,12 +108,12 @@ Architecture documents explain *why*; the specification says *what bytes*. Where
 
 - [Architecture review, August 2026](review/2026-08-architecture-review.md) — 6 critical, 7 high, 8 medium findings against the original proposal
 - [Pressure test, August 2026](review/2026-08-fix-pressure-test.md) — the six fixes read back as an implementation contract: 3 critical, 7 high, 5 medium. No fix reversed; two were unsound as written
-- [Duplicati learnings, August 2026](review/2026-08-duplicati-learnings.md) — another engine's fifteen years of field defects read as a test-design input: 14 themes, 22 tests to add, one gap serious enough to fix before Phase 2 closes
-- [Duplicati release notes, August 2026](review/2026-08-duplicati-release-notes.md) — the same engine's *shipped fixes* rather than its bug reports, which is a verdict rather than a report: 11 classes, of which 4 were live defects here — a portless IPv6 endpoint accepted, a newline in a filename escaping an exclude rule, a metadata-only change discarded, and the locale nothing was keeping invariant
-- [Duplicati changelog ledger, August 2026](review/2026-08-duplicati-changelog-ledger.md) — the corpus drained properly: all 805 distinct fix entries from `changelog.txt`, Nov 2015 to Aug 2026, dispositioned. Supersedes the release-notes review's claim to completeness, which had read 12 of ~28 pages and cited 21 notes — 2.6%. 34 engine mechanisms; 21 proven, 10 open, a 29-entry compaction cluster deferred to phase 4
+- [Prior-art learnings, August 2026](review/2026-08-prior-art-learnings.md) — another engine's fifteen years of field defects read as a test-design input: 14 themes, 22 tests to add, one gap serious enough to fix before Phase 2 closes
+- [Prior-art release notes, August 2026](review/2026-08-prior-art-release-notes.md) — the same engine's *shipped fixes* rather than its bug reports, which is a verdict rather than a report: 11 classes, of which 4 were live defects here — a portless IPv6 endpoint accepted, a newline in a filename escaping an exclude rule, a metadata-only change discarded, and the locale nothing was keeping invariant
+- [Prior-art changelog ledger, August 2026](review/2026-08-prior-art-changelog-ledger.md) — the corpus drained properly: all 805 distinct fix entries from `changelog.txt`, Nov 2015 to Aug 2026, dispositioned. Supersedes the release-notes review's claim to completeness, which had read 12 of ~28 pages and cited 21 notes — 2.6%. 34 engine mechanisms; 21 proven, 10 open, a 29-entry compaction cluster deferred to phase 4
 - [Pipeline integrity review, August 2026](review/2026-08-pipeline-integrity-review.md) — the first pass to read the built pipeline rather than its documents: 1 critical, 2 high, 4 medium, every graded finding fixed test-first in the same pass; 5 candidates cleared and recorded; the test infrastructure it did not invent is itemised in the [phase-2 pickup list](phase-2-execution-plan.md#where-to-pick-up)
 - [Restore pipeline review, August 2026](review/2026-08-restore-pipeline-review.md) — the same treatment for the read path: 1 critical (the CLI's uncontained restore), 3 high, 3 medium, all fixed test-first, plus a repair to the coverage audit that had been blind since the MSTest move and a sparse-restore [open question](open-questions.md#q22--sparse-restore-materialises-zeroes)
-- [Original proposal](review/2026-08-original-proposal.md) — preserved verbatim, superseded
+- [Original proposal](review/2026-08-original-proposal.md) — superseded; preserved in substance, with third-party product names generalised per [naming and attribution](naming-and-attribution.md)
 
 ---
 
@@ -146,7 +146,8 @@ Plus seven high and five medium findings, and one decision reopened for the main
 
 ## Conventions
 
-- **Normative terminology** is defined in [01 — Domain model](architecture/01-domain-model.md). The nouns are *segment* and *blob* — never *chunk*, *block*, or *pack*. *Packing* remains fine as a verb, and prior-art sections describe other products in their own vocabulary.
+- **Normative terminology** is defined in [01 — Domain model](architecture/01-domain-model.md). The nouns are *segment* and *blob* — never *chunk*, *block*, or *pack*. *Packing* remains fine as a verb.
+- **No third-party product is named** anywhere in this repository — see [naming and attribution](naming-and-attribution.md) for the vocabulary used instead, and for why an argument that rests on a mechanism beats one that rests on a brand.
 - **Requirement IDs** are stable. Changed and new requirements are marked, and original wording is quoted in the review.
 - **ADR status** is `Proposed` until explicitly accepted. "Accepted (amended)" means the decision stands and the amendment is already applied — not that it is pending.
 - Documents cross-reference by relative link; every link resolves.

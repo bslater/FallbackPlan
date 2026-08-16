@@ -8,7 +8,7 @@
 
 ## Why this pass exists
 
-The [architecture review](2026-08-architecture-review.md) read the original proposal against itself. The [pressure test](2026-08-fix-pressure-test.md) read the fixes against each other. The [Duplicati review](2026-08-duplicati-learnings.md) read another engine's field history against this design. All three were document passes: the code either did not exist yet or was taken at its documentation's word.
+The [architecture review](2026-08-architecture-review.md) read the original proposal against itself. The [pressure test](2026-08-fix-pressure-test.md) read the fixes against each other. The [prior-art review](2026-08-prior-art-learnings.md) read another engine's field history against this design. All three were document passes: the code either did not exist yet or was taken at its documentation's word.
 
 This pass takes nothing at its word. Each candidate finding was re-derived from the source, then attacked three ways — is the invariant enforced somewhere else, does an existing test catch it, was it deliberately dispositioned — and only what survived is graded here. Twelve candidates went in; seven survived as findings, five are recorded under [Checked and cleared](#checked-and-cleared) so nobody re-finds them.
 
@@ -163,7 +163,7 @@ The suite deleted local state (catalogue, state directory) and proved recovery, 
 
 Each of these needs test infrastructure or a maintainer decision this pass does not own, and each is now a named item in the [phase-2 plan's pickup list](../phase-2-execution-plan.md#where-to-pick-up):
 
-- **Cancellation of a live publication** — [T-2](2026-08-duplicati-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s five tests, already owed before Phase 2 closes and reaffirmed here as the top test debt. This pass hardened the crash paths; cancellation is a different code path and stays unproven.
+- **Cancellation of a live publication** — [T-2](2026-08-prior-art-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s five tests, already owed before Phase 2 closes and reaffirmed here as the top test debt. This pass hardened the crash paths; cancellation is a different code path and stays unproven.
 - **Torn and vanishing store writes.** Every kill in the suite is a clean exception with orderly unwinding (`InterruptionHarness` says so itself). The documented power-loss window in `Storage.Local` — contents fsynced, directory entry best-effort, so an acknowledged object can vanish — has no test, and simulating it needs a fault-injecting provider the suite does not have.
 - **Kill points inside steps**, and the four step boundaries the matrix omits.
 - **An interrupted restore** — no test kills a restore and inspects the destination.
@@ -272,4 +272,4 @@ Resolved on the restore review (its Amendment note carries the record): catalogu
 
 ---
 
-**See also:** [implementation status](../implementation-status.md) · [phase-2 plan — where to pick up](../phase-2-execution-plan.md#where-to-pick-up) · the prior passes: [architecture review](2026-08-architecture-review.md), [pressure test](2026-08-fix-pressure-test.md), [Duplicati learnings](2026-08-duplicati-learnings.md)
+**See also:** [implementation status](../implementation-status.md) · [phase-2 plan — where to pick up](../phase-2-execution-plan.md#where-to-pick-up) · the prior passes: [architecture review](2026-08-architecture-review.md), [pressure test](2026-08-fix-pressure-test.md), [prior-art learnings](2026-08-prior-art-learnings.md)

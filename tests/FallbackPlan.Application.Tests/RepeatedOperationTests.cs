@@ -5,8 +5,8 @@ namespace FallbackPlan.Application.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "fixed issue with transactions being double comitted"
-/// (2025-05-29), and NFR-REL-005 already asks for the property in the
+/// The surveyed changelog records a shipped fix for transactions being
+/// committed twice, and NFR-REL-005 already asks for the property in the
 /// abstract: maintenance operations shall be "idempotent where practical, and
 /// safe to repeat". Repetition is not hypothetical here — a sync that
 /// completes and then loses its acknowledgement is retried, a crash between

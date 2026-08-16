@@ -1,18 +1,18 @@
-# What Duplicati's bug history says we should be testing
+# What a mature product's bug history says we should be testing
 
-**Subject:** [duplicati/duplicati](https://github.com/duplicati/duplicati) at `a4780b3` — its 162-file unit suite, and its issue tracker (636 open, thousands closed)
+**Subject:** the surveyed product's source at a fixed commit — its 162-file unit suite, and its issue tracker (636 open, thousands closed)
 **Purpose:** treat fifteen years of another backup engine's field failures as a test-design input, rather than rediscovering them
 **Outcome:** 14 structural themes. **9 are already foreclosed by FallbackPlan's design and 7 of those are proven by a test.** 5 name real gaps, of which **one is serious enough to fix before Phase 2 closes**: nothing in the suite cancels a running publication.
 
 ---
 
-## Why Duplicati is the right corpus
+## Why this is the right corpus
 
 It is the closest thing to a control group this project has. Same problem — chunked, deduplicated, encrypted, incremental backup to a dumb remote store. Same language and runtime. Same solo-maintainer-plus-community shape. It has been in production since 2012 with a large installed base, which means its issue tracker is not a list of things that *could* go wrong; it is a list of things that *did*, to real people, with their data.
 
-The point of reading it is not to copy its tests. Its design differs from ours in ways that matter — most of all in that Duplicati's local SQLite database is **authoritative** and the remote store is a projection of it, whereas in FallbackPlan the store is authoritative and the [catalogue is a disposable cache](../architecture/02-repository-format.md). A large fraction of Duplicati's worst bugs live exactly in that difference, and reading them is the cheapest available confirmation that the difference was worth paying for.
+The point of reading it is not to copy its tests. Its design differs from ours in ways that matter — most of all in that its local SQLite database is **authoritative** and the remote store is a projection of it, whereas in FallbackPlan the store is authoritative and the [catalogue is a disposable cache](../architecture/02-repository-format.md). A large fraction of its worst bugs live exactly in that difference, and reading them is the cheapest available confirmation that the difference was worth paying for.
 
-The other point is less comfortable. Where a theme applies to us *anyway*, Duplicati has usually paid to find out that it does, and we get to skip the tuition.
+The other point is less comfortable. Where a theme applies to us *anyway*, the surveyed product has usually paid to find out that it does, and we get to skip the tuition.
 
 ---
 
@@ -20,11 +20,11 @@ The other point is less comfortable. Where a theme applies to us *anyway*, Dupli
 
 Three things stand out from the file listing alone.
 
-**Fifty of its ~162 test files are named `IssueNNNN.cs`.** Not `CompactTests.cs` with a case inside — a whole file per field defect, named after the bug report, containing the reproduction. `Issue1570`, `Issue4485`, `Issue5862`, `Issue6688`, `Issue6820`… That is roughly a third of the suite, and it is a third that exists because something shipped broken.
+**Fifty of its ~162 test files are named after a bug report** — not a behaviour-named file with a case inside, but a whole file per field defect, containing the reproduction. That is roughly a third of the suite, and it is a third that exists because something shipped broken.
 
 The lesson is not "we should name tests after issues" — we deliberately [keep requirement and issue identifiers out of test names](../adr/0032-mstest-as-the-test-framework.md). It is that **a mature backup engine's regression corpus is dominated by field defects, not by design-time cases**, and that ratio only ever moves in one direction. Our suite is currently 966 tests and ~0% field defects, because there is no field. The useful move now is to mine somebody else's field.
 
-**Almost every one of those regressions is a state-machine defect, not an algorithm defect.** There is no `Issue*.cs` about a wrong hash, a broken cipher, or a mis-encoded integer. They are all about *sequence*: a thing was uploaded but not recorded, recorded but not uploaded, deleted from one place and not the other, interrupted between two writes that had to be atomic together. Duplicati's crypto and compression are fine. Its bookkeeping is where fifteen years of pain lives.
+**Almost every one of those regressions is a state-machine defect, not an algorithm defect.** Not one of those files is about a wrong hash, a broken cipher, or a mis-encoded integer. They are all about *sequence*: a thing was uploaded but not recorded, recorded but not uploaded, deleted from one place and not the other, interrupted between two writes that had to be atomic together. Its crypto and compression are fine. Its bookkeeping is where fifteen years of pain lives.
 
 That is a direct argument for where the marginal test should go in FallbackPlan too, and it is worth noticing that our own suite is weighted the other way: 361 of 966 tests are in `FallbackPlan.Repository.Tests`, and a large share of those are codec, CBOR and crypto round-trips. Those are the tests that are easy to write and that almost never fail after the first day.
 
@@ -49,7 +49,7 @@ Each theme names the mechanism, the evidence, where FallbackPlan stands, and wha
 
 **Mechanism.** A volume is PUT to the destination; the process dies before the local database records it. Next run, the destination holds a file the database has never heard of, and the engine refuses to proceed: *"Found 1 remote files that are not recorded in local storage."*
 
-**Evidence.** [#4485](https://github.com/duplicati/duplicati/issues/4485) is the canonical report and has a dedicated regression test. [#1570](https://github.com/duplicati/duplicati/issues/1570) is the same window costing a full re-upload on resume. `Issue5862` (`TestUploadFailureWithResumeAsync`), `Issue6820` (a stuck state with *two* `Temporary` dlist rows), and the whole `DisruptionTests` family are variations. The recovery is `repair`, which is itself a source of issues ([#4631](https://github.com/duplicati/duplicati/issues/4631) — repair deadlocks on the database it is repairing).
+**Evidence.** One canonical report has a dedicated regression test; a second is the same window costing a full re-upload on resume. Two further regression files — an upload failure with resume, and a stuck state carrying *two* temporary snapshot-list rows — plus the whole disruption-test family are variations. The recovery is the product's `repair` verb, which is itself a source of issues: one report has repair deadlocking on the database it is repairing.
 
 **Where we stand.** This is the exact failure the write-intent journal exists to prevent ([ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md), [specification 08](../../specifications/repository-format/08-journal.md)): the intent covering a blob is durable at the destination *before* the blob's PUT, so a blob without a covering intent is a defect rather than a surprise, and an intent without its blob is ordinary. There is no local record that can disagree with the store, because the store is the record.
 
@@ -65,18 +65,18 @@ Each theme names the mechanism, the evidence, where FallbackPlan stands, and wha
 
 **Evidence.** This is the single most productive bug source in the tracker.
 
-- [#4037](https://github.com/duplicati/duplicati/issues/4037) — *"Stop now results in 'Detected non-empty blocksets with no associated blocks!'"* — cancellation produces a database referring to content it never stored.
-- [#3982](https://github.com/duplicati/duplicati/issues/3982) — *"'Stop after current file' has various problems with partial backups."*
-- [#3644](https://github.com/duplicati/duplicati/issues/3644) — the flagship symptom, *"Unexpected difference in fileset version X: found Y entries, but expected Z."* The reporter's sequence is precise and damning: *stop after upload failed to halt, so they used stop now, and the job database was left inconsistent.* The only recoveries offered are deleting the backup set or rebuilding the database.
-- [#6051](https://github.com/duplicati/duplicati/issues/6051), [#5131](https://github.com/duplicati/duplicati/issues/5131) — still open, same symptom.
+- Cancelling produces a database referring to content it never stored — reported as *"detected non-empty blocksets with no associated blocks"*.
+- Stop-after-current-file *"has various problems with partial backups"*.
+- The flagship symptom: an unexpected difference in a snapshot version, *found Y entries, but expected Z*. The reporter's sequence is precise and damning: *stop after upload failed to halt, so they used stop now, and the job database was left inconsistent.* The only recoveries offered are deleting the backup set or rebuilding the database.
+- Two further reports, still open, same symptom.
 
-Duplicati has `DisruptionTests.StopAfterCurrentFileAsync` and `StopNowAsync` because it learned this the hard way, and it still has open issues here.
+The surveyed product has dedicated stop-after-current-file and stop-now tests because it learned this the hard way, and it still has open issues here.
 
 **Where we stand.** `CancelJobCommand` exists, is routed through `ServiceCommandHandler.CancelJob`, and cancels the queued or running job. Cancellation tokens are threaded correctly — `ContractOperations_EveryMethod_IsAsynchronousAndCancellable` enforces that architecturally.
 
 **The only test of it is `Cancel_WhenTheJobIsNotRunning_SaysSoRatherThanPretending`** — the not-found case. Nothing anywhere in 966 tests cancels a publication that is *actually running* and then inspects the repository.
 
-Our interruption suite kills processes. It never cancels one. Those are different code paths, and Duplicati's history says the one we do not test is the one that breaks.
+Our interruption suite kills processes. It never cancels one. Those are different code paths, and the surveyed history says the one we do not test is the one that breaks.
 
 The design position is defensible — a snapshot object is only written at the end, so a cancelled publication should leave an unretired intent and some orphan blobs, which is the same state a crash leaves, and the next run should treat it identically. But *should* is doing the work in that sentence, and nothing checks it.
 
@@ -89,7 +89,7 @@ The design position is defensible — a snapshot object is only written at the e
 | `Publish_CancelledMidUpload_LeavesTheSameStateAsAKillAtThatPoint` | Cancel during blob upload; compare the resulting store listing and journal to the `PublicationStep.UploadBlobs` kill case. They must be the same *class* of state — unretired intent, no snapshot object, no orphan the collector cannot classify. |
 | `Publish_CancelledMidUpload_LeavesEveryEarlierSnapshotRestorable` | The [T-1](#t-1--the-upload-succeeded-and-the-bookkeeping-did-not) invariant, but reached by cancellation. |
 | `Publish_CancelledThenRerun_CompletesWithoutRepairOrOperatorAction` | The point of #3644: recovery must not require a repair verb. |
-| `Publish_CancelledDuringTheSnapshotWrite_PublishesNoSnapshotOrACompleteOne` | The narrow window where a partial fileset is conceivable. |
+| `Publish_CancelledDuringTheSnapshotWrite_PublishesNoSnapshotOrACompleteOne` | The narrow window where a partial snapshot is conceivable. |
 | `CancelJob_JobIsRunning_StopsItAndReportsTheCancelledState` | The `ServiceCommandHandler` path end to end, which currently has no positive case at all. |
 
 > **Resolved (2026-08).** All five exist verbatim-named and pass — four in `InterruptionTests/CancellationTests`, the service path in `Hosts.Tests/ServiceTests`. The design position held, with one pinned nuance: a cancel drains the in-flight upload queue through disposal, writing intent-covered blobs after the request, which is state-class-equivalent to a kill and bounded by the queue. And this finding's thesis was vindicated precisely — the suite caught a cancel landing inside `BlobWriter.SealAsync` throwing `ObjectDisposedException` over the cancellation during the unwind, so a cancelled job would have reported a failure instead of `Cancelled`. Fixed test-first; the rerun's obligation discharge is held by `SequenceAccountingTests`. Full record: [pipeline review, Amendment 1](2026-08-pipeline-integrity-review.md#amendment-1-2026-08--the-base-hardening-round).
@@ -100,7 +100,7 @@ The design position is defensible — a snapshot object is only written at the e
 
 **Mechanism.** When the local database is lost or inconsistent, the engine rebuilds it from the destination. That path is exercised rarely, so it rots; it is also the path a user reaches *only* when already in trouble.
 
-**Evidence.** [#4041](https://github.com/duplicati/duplicati/issues/4041), open since 2020, titled *"Database recreate desperately needs improvement"* — 930+ index files downloaded sequentially, 287 GB over ten days, and then it failed with `Missing block for blocklisthash`. [#2302](https://github.com/duplicati/duplicati/issues/2302), [#1391](https://github.com/duplicati/duplicati/issues/1391) are the same complaint years earlier. [#6205](https://github.com/duplicati/duplicati/issues/6205) is the sharpest: a *failed* recreate left a partial database on disk, which then blocked every subsequent operation — including retrying the recreate, and including starting fresh. [#6688](https://github.com/duplicati/duplicati/issues/6688) is worse still: a recreate that reports success and produces a database with invalid references.
+**Evidence.** A report open since 2020, titled *"database recreate desperately needs improvement"* — 930+ index files downloaded sequentially, 287 GB over ten days, and then a failure for a missing block. Two earlier reports are the same complaint years before. A fourth is the sharpest: a *failed* recreate left a partial database on disk, which then blocked every subsequent operation — including retrying the recreate, and including starting fresh. A fifth is worse still: a recreate that reports success and produces a database with invalid references.
 
 **Where we stand.** Strong, and by design. `Catalogue_DeletedOutright_RebuildsFromTheIndexAndStillRestores` covers the ordinary rebuild; `ForensicRebuild_EveryIndexObjectDeleted_StillRestoresTheSnapshot` covers the case where the index plane is gone too; `ForensicRebuild_TargetedAtOneSnapshot_StopsBeforeScanningEveryDataBlob` is the direct answer to #4041's cost complaint, and it is asserted rather than asserted-about. `RecoveryDrill_AKitAndItsPassphraseAlone_RestoreEverythingWithNoLocalState` closes the loop.
 
@@ -125,15 +125,15 @@ Two gaps, both taught by #6205 and #6688 rather than by #4041:
 
 **Mechanism.** Reclaiming space means deleting objects the index says are dead. Every bug in that judgement is unrecoverable data loss, and every interruption leaves a partially-reclaimed store.
 
-**Evidence.** A dense cluster. [#4129](https://github.com/duplicati/duplicati/issues/4129) — *"Error during compact forgot a dindex file deletion, getting Missing file error next run."* [#4693](https://github.com/duplicati/duplicati/issues/4693) — compact produced extra hashes. [#6254](https://github.com/duplicati/duplicati/issues/6254), [#6296](https://github.com/duplicati/duplicati/issues/6296), [#6504](https://github.com/duplicati/duplicati/issues/6504), [#6200](https://github.com/duplicati/duplicati/issues/6200) are all compaction-versus-index defects from the last year. [#5023](https://github.com/duplicati/duplicati/issues/5023) — recreate fails after *interrupted backup then compact*, a two-fault sequence.
+**Evidence.** A dense cluster. One report has compaction forgetting an index-object deletion, producing a missing-file error on the next run. Another has compaction producing extra hashes. Four more from the last year alone are compaction-versus-index defects. A seventh has recreate failing after an *interrupted backup then compact* — a two-fault sequence.
 
-The test file to note is `CompactDisruptionTests`, whose four cases are `InterruptedCompact`, `InterruptedCompactPlusNormalCompact`, **`DoubleInterruptedCompact`**, and `RestoreAfterDoubleInterruptedCompact`. Duplicati wrote a *double* interruption test because a single one was not enough to find the bug.
+The test file to note is its compaction-disruption suite, whose four cases are interrupted compact, interrupted compact plus normal compact`, **`DoubleInterruptedCompact`**, and `RestoreAfterDoubleInterruptedCompact`. The surveyed product wrote a *double* interruption test because a single one was not enough to find the bug.
 
 **Where we stand.** Not built — [Phase 4](../roadmap.md#phase-4--retention-pruning-and-healing). The existing exit criteria are already good and already name interruption at every GC step, concurrency with backup, and clock skew. `ConcurrentCollectionTests` proves the reachability discipline early (`GarbageCollection_RunsWhileABackupIsInFlight_DeletesNothing`, `GarbageCollection_AnIntentCannotBeParsed_ProtectsEverythingItMightCover`).
 
-Three things Duplicati's history says those criteria are missing:
+Three things the surveyed history says those criteria are missing:
 
-1. **Double interruption.** One kill, partial recovery, second kill, then recovery. Duplicati needed it.
+1. **Double interruption.** One kill, partial recovery, second kill, then recovery. The surveyed product needed it.
 2. **Restore *after* the double interruption**, not merely "snapshots preserved" — the reader is the thing that finds out.
 3. **Byte-identity across compaction.** Compaction is a physical rearrangement; the strongest possible statement is that a restore of snapshot *S* before compaction and after compaction produce identical bytes. That is cheap to assert and impossible to fudge.
 
@@ -151,7 +151,7 @@ Three things Duplicati's history says those criteria are missing:
 
 **Mechanism.** Corruption tests usually flip bits, which produces *malformed* input. The harder case is input that is perfectly well-formed, passes every structural and cryptographic check, and is simply **wrong** — an index entry pointing at a location that holds a different, equally valid record.
 
-**Evidence.** [#4988](https://github.com/duplicati/duplicati/issues/4988) (`TestManualDindexTamperAndRecreateAsync`), [#5066](https://github.com/duplicati/duplicati/issues/5066) and [#5845](https://github.com/duplicati/duplicati/issues/5845) (duplicated blocklists, duplicated blocks in an orphan index), [#6892](https://github.com/duplicati/duplicati/issues/6892) (six cases of structurally odd but parseable index files), [#6688](https://github.com/duplicati/duplicati/issues/6688) (a dindex referencing a dblock that is not there).
+**Evidence.** A tampered index object followed by a recreate; two reports of duplicated blocklists and duplicated blocks in an orphan index; a report covering six cases of structurally odd but parseable index files; and a report of an index object referencing a data blob that is not there.
 
 **Where we stand.** Partly. `ForensicRebuild_ADataBlobIsDeleted_SurfacesAMissingBlobFinding` covers the index naming something absent. `CorruptionHarnessTests` covers malformed bytes at four layers. `Restore_SegmentsAreAssembledWrongThoughEveryTagPasses_IsCaughtByTheWholeFileHash` is the closest thing we have to the theme and is the right idea — every record authenticated, whole-file hash still catches it.
 
@@ -171,9 +171,9 @@ What is missing is the *index-side* version of that test: an index delta that is
 
 ### T-6 — Two names for one thing, in one snapshot
 
-**Mechanism.** A fileset containing the same path twice. Duplicati has a whole test file for it and a repair path for fixing filesets that already have it.
+**Mechanism.** A snapshot containing the same path twice. The surveyed product has a whole test file for it and a repair path for fixing filesets that already have it.
 
-**Evidence.** `DuplicatePathTests` — four cases, including `TestRepairFixesDuplicatesAcrossMultipleFilesetsAsync`. [#6529](https://github.com/duplicati/duplicati/issues/6529) — `--changed-files`/`--deleted-files` producing a fileset mismatch, with three regression tests. [#4951](https://github.com/duplicati/duplicati/issues/4951) — `RenameCaseChangeUSNAsync`, a rename that changes only case.
+**Evidence.** A four-case duplicate-path suite, including repair fixing duplicates across several snapshots. One report has changed-file and deleted-file options producing a snapshot mismatch, with three regression tests. Another covers a rename that changes only case.
 
 **Where we stand.** Partly, and the interesting part is unproven. `RestorePlan_CaseCollisionsAndDegradations_AreSurfacedBeforeAnyByteMoves` handles collisions at *restore* — a snapshot from a case-sensitive source restored to a case-insensitive volume. `Scan_TwoNamesShareAnInode_ReportTheSameIdentityAndLinkCount` captures hardlink identity.
 
@@ -195,9 +195,9 @@ Two gaps sit on the *capture* side:
 
 **Mechanism.** Path separators, reserved names, case rules, length limits and legal characters differ by platform. A snapshot is portable; a filesystem is not.
 
-**Evidence.** [#6705](https://github.com/duplicati/duplicati/issues/6705) — the new restore flow crashed with an index-out-of-bounds on cross-OS restore, diagnosed by the maintainer as *"likely a `/` vs `\` issue"* — in 2026, in a fifteen-year-old product, with a dedicated `RestoreAcrossOperatingSystemsAsync` test now guarding it. `ProblematicPathTests` covers wildcards in directory names, long paths, and problematic suffixes.
+**Evidence.** A report where a rewritten restore flow crashed with an index-out-of-bounds on a cross-operating-system restore, diagnosed by the maintainer as *"likely a `/` vs `\` issue"* — in 2026, in a fifteen-year-old product, with a dedicated cross-OS restore test now guarding it. A separate suite covers wildcards in directory names, long paths, and problematic suffixes.
 
-**Where we stand.** Structurally better than Duplicati: names are captured as [bytes, not decoded strings](../architecture/06-filesystem-capture.md), paths are plain components with no separator in the format, and `RestorePlan_APathIsNotPlainComponents_IsRefused` enforces that. `RestorePlan_CaseCollisionsAndDegradations_AreSurfacedBeforeAnyByteMoves` is the right shape for the degradation report.
+**Where we stand.** Structurally better than the surveyed product: names are captured as [bytes, not decoded strings](../architecture/06-filesystem-capture.md), paths are plain components with no separator in the format, and `RestorePlan_APathIsNotPlainComponents_IsRefused` enforces that. `RestorePlan_CaseCollisionsAndDegradations_AreSurfacedBeforeAnyByteMoves` is the right shape for the degradation report.
 
 The gap is that no test *takes a snapshot captured under POSIX rules and plans a restore under Windows rules*. Every restore test plans on the platform that captured. The degradations that matter — a name containing `:` or `*`, a component named `CON`, a name ending in a space or period, a component over 255 UTF-16 units, two names differing only in case — are exactly the ones that only appear when the two platforms differ, and they must be surfaced in the plan **before any byte moves**, which is a promise our restore plan already makes for a different reason.
 
@@ -234,7 +234,7 @@ The gap is that no test *takes a snapshot captured under POSIX rules and plans a
 
 **Mechanism.** A backup reads a filesystem that other software is writing. Between enumeration and read a file can be deleted, replaced, truncated, extended, or locked.
 
-**Evidence.** `MissingSourceTest` (four cases, including "all sources missing" as distinct from "one source missing"), [#6909](https://github.com/duplicati/duplicati/issues/6909) (an excluded folder still probed for metadata, producing a permission warning), [#3536](https://github.com/duplicati/duplicati/issues/3536) (recursive folders via symlinks), `RestoreOtherProcessIsUsingFileAsync`.
+**Evidence.** A four-case missing-source suite, treating "all sources missing" as distinct from "one source missing"; a report of an excluded folder still probed for metadata, producing a permission warning; a report of recursive folders via symlinks; and a restore test for a file another process holds open.
 
 **Where we stand.** The handle-relative walk forecloses the nastiest member of this family and it is proven: `Scan_NameIsRepointedAfterClassification_ReadsContentFromTheOpenHandle`. `Scan_ADirectoryIsUnreadable_RaisesAFailureEventAndKeepsScanning` and `AgentPass_AMissingRootAndABadSchedule_AreClassifiedRecoverableAndPermanent` cover the coarse cases.
 
@@ -254,9 +254,9 @@ What is untested is the file **changing during the read** — grown or truncated
 
 **Mechanism.** Incremental backup skips a file when its metadata says it has not changed. Everything downstream of that decision is silently wrong if the metadata lies, and metadata lies routinely: archive extraction, `rsync -t`, restores, clock corrections, and deliberate tampering all reset mtime.
 
-**Evidence.** [#4312](https://github.com/duplicati/duplicati/issues/4312) — `ChangeTimestampShouldCreateExtraBackupAsync` plus `BackupFromRecreatedDatabaseShouldUpdateMetadataAsync`. `BorderTests.RunQuickTimestampsAsync`. `TimeZoneHelperTests` carries `CheckRepeatScheduleIsStableOverDSTForward` and `…Backward` — Duplicati has been bitten by daylight saving in its scheduler and now guards both directions.
+**Evidence.** A report paired with two regression tests — a changed timestamp creating an extra backup, and a backup from a recreated database updating metadata — plus a quick-timestamp border case. The product's time-zone helper tests guard a repeating schedule's stability across daylight saving in **both** directions: it has been bitten by it and now checks forward and backward.
 
-**Where we stand.** Our short-circuit is stricter than Duplicati's — `IsContentUnchanged` requires mtime **and** logical length **and** device **and** inode to match, so a same-size same-mtime edit still has to defeat inode identity to slip through, and on most editors it does not (write-to-temp-and-rename changes the inode). But an in-place write that preserves size and restores mtime is defeated by nothing, and that is a real pattern.
+**Where we stand.** Our short-circuit is stricter than the surveyed one — `IsContentUnchanged` requires mtime **and** logical length **and** device **and** inode to match, so a same-size same-mtime edit still has to defeat inode identity to slip through, and on most editors it does not (write-to-temp-and-rename changes the inode). But an in-place write that preserves size and restores mtime is defeated by nothing, and that is a real pattern.
 
 This is a *documented accepted risk*, not a defect — every mtime-based engine has it, and the escape is a full re-read. What we lack is (a) a test that pins the behaviour so a future change to `IsContentUnchanged` cannot silently widen the hole, and (b) any assertion that a full re-read actually rescues it.
 
@@ -278,9 +278,9 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Mechanism.** Retention is a parser driving a destructive operation. A misparse deletes the wrong thing.
 
-**Evidence.** `RetentionPolicyParsingTests`, [#6127](https://github.com/duplicati/duplicati/issues/6127) (multiple retention options interacting), [#5131](https://github.com/duplicati/duplicati/issues/5131) (versions that cannot be deleted at all), `DisruptionTests.KeepTimeRetentionAsync` / `KeepVersionsRetentionAsync` / `RetentionPolicyRetentionAsync`.
+**Evidence.** A retention-policy parsing suite; a report of multiple retention options interacting; a report of versions that cannot be deleted at all; and three disruption cases covering keep-time, keep-versions and full retention-policy paths.
 
-**Where we stand.** Phase 4. The roadmap already promises retention floors, mandatory dry-run reports and destructive-action auditing, which is the right posture — Duplicati's retention bugs are largely *silent* deletion.
+**Where we stand.** Phase 4. The roadmap already promises retention floors, mandatory dry-run reports and destructive-action auditing, which is the right posture — the surveyed retention bugs are largely *silent* deletion.
 
 **Verdict: Deferred.** One criterion to add, from #6127: *two retention rules that disagree must resolve to the more conservative outcome, and the dry-run must say which rule bound.*
 
@@ -290,9 +290,9 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Mechanism.** The recommended ransomware defence is an immutable or object-locked bucket. That makes deletion conditional, delayed, or impossible — so compaction, retention and repair must all degrade rather than fail.
 
-**Evidence.** `LockingDeleteAndCompactTests` (`DeleteSkipsLockedRemoteFilesetVolumeAsync`, `CompactDetectsAndAvoidsLockedCompactableVolumeAsync`) and `SoftDeleteTests` (eight cases, including a backend that cannot rename). This is recent work in Duplicati and it is a retrofit.
+**Evidence.** A locking suite covering delete and compact — a delete skipping a locked remote snapshot volume, and compaction detecting and avoiding a locked compactable volume — and a soft-delete suite `SoftDeleteTests` (eight cases, including a backend that cannot rename). This is recent work in the surveyed product and it is a retrofit.
 
-**Where we stand.** Phase 3/4, and better placed than Duplicati was: blob immutability is already a [format invariant](../../specifications/repository-format/) and [ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md)'s intent discipline never rewrites an object. Our exposure is confined to the collector.
+**Where we stand.** Phase 3/4, and better placed than the surveyed product was: blob immutability is already a [format invariant](../../specifications/repository-format/) and [ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md)'s intent discipline never rewrites an object. Our exposure is confined to the collector.
 
 **Verdict: Deferred.** Criterion to add: *a destination that refuses deletes must leave the collector reporting unreclaimed space, never failing the run and never leaving a partially-applied reclamation.*
 
@@ -302,7 +302,7 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Mechanism.** Backup software's logs are made almost entirely of file paths, and file paths are user data.
 
-**Evidence.** `SensitiveDataFilterTests` — twelve cases, six of which are *false-positive* guards (do not redact URLs, dates, division). [#6426](https://github.com/duplicati/duplicati/issues/6426) — known path warnings must not carry the exception, because the stack traces bloated logs.
+**Evidence.** A twelve-case sensitive-data filter suite, six of whose cases are *false-positive* guards — do not redact URLs, dates, division. One report requires that known path warnings not carry the exception, because the stack traces bloated logs.
 
 **Where we stand.** `TelemetryPrivacyTests` covers this and the [threat model](../threat-model.md) names it.
 
@@ -320,7 +320,7 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 
 **Evidence.** `DatabaseUpgraderTests` — five cases, including `UpgradeScriptsMatchSchemaVersion`, a consistency check between the migration scripts and the declared version.
 
-**Where we stand.** Our catalogue is at `CatalogueSchema.Version = 4` and is disposable, so the correct behaviour is to discard and rebuild rather than migrate — which is strictly simpler and strictly safer than Duplicati's position. Nothing tests it. An older catalogue file that is *opened* rather than discarded would read wrong columns and answer wrongly, and the rest of the system trusts those answers.
+**Where we stand.** Our catalogue is at `CatalogueSchema.Version = 4` and is disposable, so the correct behaviour is to discard and rebuild rather than migrate — which is strictly simpler and strictly safer than the surveyed product's position. Nothing tests it. An older catalogue file that is *opened* rather than discarded would read wrong columns and answer wrongly, and the rest of the system trusts those answers.
 
 **Verdict: Foreclosed, unproven.**
 
@@ -355,13 +355,13 @@ That is **22 tests before Phase 4**, against a current 966. The suite grows abou
 
 ---
 
-## Part 4 — What Duplicati does that we should not copy
+## Part 4 — What the surveyed product does that we should not copy
 
 Worth stating, so the absence is a decision rather than an oversight.
 
-**A file per issue.** Their `IssueNNNN.cs` convention makes the corpus navigable by bug report and unnavigable by behaviour — `Issue5066.cs` tells a reader nothing, and two files can hold the same case under different numbers. [ADR-0032](../adr/0032-mstest-as-the-test-framework.md)'s naming rule already forbids identifiers in names; requirement and issue traceability lives in metadata. Where a Duplicati issue motivates one of our tests, the number belongs in a comment explaining *why the case exists*, which is exactly what those comments are for.
+**A file per issue.** Naming a test file after a bug report makes the corpus navigable by report number and unnavigable by behaviour — a file named for a report number tells a reader nothing, and two files can hold the same case under different numbers. [ADR-0032](../adr/0032-mstest-as-the-test-framework.md)'s naming rule already forbids identifiers in names; requirement and issue traceability lives in metadata. Where a report from the corpus motivates one of our tests, the reference belongs in a comment explaining *why the case exists*, which is exactly what those comments are for.
 
-**`repair` as the recovery story.** A substantial share of Duplicati's issues end with "run repair", and a further share are *about* repair failing ([#4631](https://github.com/duplicati/duplicati/issues/4631), [#6205](https://github.com/duplicati/duplicati/issues/6205), [#6235](https://github.com/duplicati/duplicati/issues/6235), [#6296](https://github.com/duplicati/duplicati/issues/6296), [#6339](https://github.com/duplicati/duplicati/issues/6339)). A repair verb is what a system needs when its two sources of truth can disagree. Ours cannot, and adding a repair verb would be a signal that we had stopped believing that. Rebuild-from-store is not repair; it is re-derivation, and the distinction is the whole architecture.
+**`repair` as the recovery story.** A substantial share of the surveyed issues end with "run repair", and a further share are *about* repair failing — at least five separate reports. A repair verb is what a system needs when its two sources of truth can disagree. Ours cannot, and adding a repair verb would be a signal that we had stopped believing that. Rebuild-from-store is not repair; it is re-derivation, and the distinction is the whole architecture.
 
 **Testing through the CLI.** `CommandLineOperationsTests`, `GeneralBlackBoxTesting` and `SVNCheckoutsTest` drive the product as a subprocess against real archives. It buys realism at the cost of diagnosis — a failure tells you the backup did not round-trip, not which layer lost the bytes. Our [command-surface tests](../adr/0028-service-boundary-and-deployment-topologies.md) go through the contract instead, which is the same realism with a stack trace.
 
@@ -371,9 +371,9 @@ Worth stating, so the absence is a decision rather than an oversight.
 
 | | |
 |---|---|
-| Repository | `duplicati/duplicati` at `a4780b3`, shallow clone |
-| Unit suite | `Duplicati/UnitTest` — 162 files, 44 701 lines, NUnit |
-| Of which regression files | ~50 (`IssueNNNN.cs`), plus `IssueTests.cs` holding six more |
-| Other suites | `Duplicati.Browser.Test` (Playwright), `LiveTests/Duplicati.Backend.Tests` (real backends), `Duplicati.CommandLine.BackendTester` |
+| Repository | the surveyed product's source at a fixed commit, shallow clone |
+| Unit suite | its unit-test project — 162 files, 44 701 lines, NUnit |
+| Of which regression files | ~50 named after a bug report, plus one shared file holding six more |
+| Other suites | a browser suite (Playwright), a live-backend suite against real providers, and a command-line backend tester |
 | Issues read | 636 open; sampled by label (`backup corruption`, `core logic`, `local database issue`, `bug`), by comment count, and by symptom string |
 | Issues cited | 30 |

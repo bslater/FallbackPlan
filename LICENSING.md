@@ -8,7 +8,7 @@ FallbackPlan is **dual-licensed** ([ADR-0001](docs/adr/0001-licence-and-contribu
 |------|---------|-----|
 | All source code, tests, tooling, and documentation in this repository (default) | **AGPL-3.0-only** ([`LICENSE`](LICENSE)) | Every derivative — distributed *or offered as a network service* — must remain open. For a backup product, trust is the currency; the copyleft guarantee is deliberate. |
 | Everything under [`specifications/`](specifications/) — the repository-format specification, the conformance generator, vectors, and fixture repositories | **Apache-2.0** ([`specifications/LICENSE`](specifications/LICENSE)) | Independent readers are the format's "your data is not locked in" promise (NFR-COMP-004). Anyone may implement a reader from the specification and conformance suite under **any licence they choose**, owing this project nothing. The permissive carve-out exists precisely so the copyleft on the code never deters an independent implementation. |
-| The future CrashPlan importer (`FallbackPlan.Import.CrashPlan`, not yet written) | Its own statement, decided at [ADR-0015](docs/adr/0015-crashplan-importer-isolation.md)'s gate | Isolated so its legal posture never couples to the core. |
+| A future legacy-archive importer (`FallbackPlan.Import.<Format>`, none yet written) | Its own statement, decided at [ADR-0015](docs/adr/0015-legacy-importer-isolation.md)'s gate | Isolated so its legal posture never couples to the core. |
 
 ## What "dual" means
 

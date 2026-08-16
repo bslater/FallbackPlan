@@ -138,10 +138,10 @@ once in staging rather than once per copy.
 
 ## Amendment 2 (2026-08) — the twelve things compaction is known to get wrong
 
-Compaction is the single densest cluster of shipped fixes in Duplicati's
+Compaction is the single densest cluster of shipped fixes in the surveyed
 fifteen-year changelog: **29 of its 805 distinct fix entries**, spread across
 every year from 2016 to 2026, and more than any other mechanism
-([ledger](../review/2026-08-duplicati-changelog-ledger.md)). Nothing here is
+([ledger](../review/2026-08-prior-art-changelog-ledger.md)). Nothing here is
 built yet, so nothing can be tested — which makes this the one moment when the
 list is free to write down.
 
@@ -154,7 +154,7 @@ each has a test. Each cites the release that earned it, verbatim.
 2. **No blocklist appears twice in a produced index.** — "index files would
    contain replicated blocklists" (2025-01-11).
 3. **A produced index is complete enough that a restore needs no extra
-   fetch.** — "`dindex` files would be missing a blocklist, causing extra
+   fetch.** — an index object missing a blocklist, causing extra
    download on restores" (2024-11-06).
 4. **A compaction interrupted at any step leaves a repository that
    verifies.** — "verification errors if the compact was interrupted"
@@ -176,8 +176,8 @@ each has a test. Each cites the release that earned it, verbatim.
 11. **Concurrent index generation shares no mutable buffer.** — "shared
     buffers causing validation errors when running multiple index file
     generators" (2018-06-17).
-12. **An index never names an object no blob holds.** — "`dindex`-files would
-    reference non-existing `dblock` files" (2019-10-19); "race condition with
+12. **An index never names an object no blob holds.** — index objects
+    referencing data blobs that no longer exist (2019-10-19); a race condition with
     index file uploads during backup" (2026-02-20). This one is **not
     compaction-only** and is already open against the built engine.
 
@@ -200,4 +200,4 @@ never a manifest one.
 |------|--------|------|
 | 2026-08 | Accepted | Resolves Q15 with no format change; 04 §4 rewritten to match; compaction defined as a re-sealing operation for Phase 4 |
 | 2026-08 | Accepted (amended) | Amendment 1: compaction is a staging-archive operation whose output replicates; destinations never re-seal ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
-| 2026-08 | Accepted (amended) | Amendment 2: twelve named exit criteria drawn from the 29 compaction fixes in Duplicati's changelog ([ledger](../review/2026-08-duplicati-changelog-ledger.md)). |
+| 2026-08 | Accepted (amended) | Amendment 2: twelve named exit criteria drawn from the 29 compaction fixes in the surveyed changelog ([ledger](../review/2026-08-prior-art-changelog-ledger.md)). |

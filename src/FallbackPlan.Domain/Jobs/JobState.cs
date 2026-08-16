@@ -73,12 +73,11 @@ public enum JobState
     /// everything it was asked to.
     /// </para>
     /// <para>
-    /// Duplicati shipped three separate fixes for the absence of this
-    /// distinction — "some operations would report success even if failed"
-    /// (2025-07-09), "an incorrect error masking another error in backups"
-    /// (2024-09-11) and "hiding compression errors" (2020-08-07) — which is
-    /// what makes it the worst class of backup defect: nothing is reported
-    /// wrong until somebody restores.
+    /// The surveyed changelog carries three separate fixes for the absence of
+    /// this distinction — an operation reporting success although it failed,
+    /// one error masking another, and compression errors being hidden — spread
+    /// over five years, which is what makes it the worst class of backup
+    /// defect: nothing is reported wrong until somebody restores.
     /// </para>
     /// </remarks>
     CompletedWithFailures = 14,

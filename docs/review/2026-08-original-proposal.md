@@ -12,21 +12,21 @@ Status: Initial product and technical architecture proposal
 Target platform: .NET 10 LTS
 Project model: Open source, cross-platform, local-first
 Primary use case: Continuous, encrypted, versioned backup from one computer to another, with optional replication to local and cloud object stores
-Compatibility objective: Read and migrate eligible locally held CrashPlan archives into the native FallbackPlan repository format
+Compatibility objective: Read and migrate eligible locally held legacy archives into the native FallbackPlan repository format
 
 ────────
 
 ## 1. Executive summary
 
-FallbackPlan will be an open-source backup and archival platform for Windows, macOS, and Linux. Its initial purpose is to restore the capability that made the original free CrashPlan compelling: a user can back up one computer to another computer they control or trust, across a LAN or the internet, without requiring a proprietary cloud service.
+FallbackPlan will be an open-source backup and archival platform for Windows, macOS, and Linux. Its initial purpose is to restore a capability the consumer market has largely withdrawn: a user can back up one computer to another computer they control or trust, across a LAN or the internet, without requiring a proprietary cloud service.
 
 FallbackPlan will combine selected strengths of:
 
-• CrashPlan: simple computer-to-computer backup, continuous protection, historical versions, flexible retention, destination independence, and a consumer-friendly operating model.
-• Syncthing: peer identity, direct encrypted device communication, discovery, relay-assisted connectivity, efficient block transfer, and resilient distributed operation.
-• restic: immutable snapshots, content-defined chunking, content-addressed storage, simple repository backends, explicit consistency invariants, and repairability.
-• Kopia: layered repository architecture, encrypted metadata, pluggable blob stores, packing, caching, policy-based snapshots, and scalable content indexing.
-• Duplicati: broad storage-provider support, scheduling, web-based administration, and approachable configuration for home and small-business users.
+• Consumer peer backup services: simple computer-to-computer backup, continuous protection, historical versions, flexible retention, destination independence, and a consumer-friendly operating model.
+• Peer synchronisation protocols: peer identity, direct encrypted device communication, discovery, relay-assisted connectivity, efficient block transfer, and resilient distributed operation.
+• Content-addressed snapshot repositories: immutable snapshots, content-defined chunking, content-addressed storage, simple repository backends, explicit consistency invariants, and repairability.
+• Layered blob-store repositories: layered repository architecture, encrypted metadata, pluggable blob stores, packing, caching, policy-based snapshots, and scalable content indexing.
+• Plugin-oriented backup clients: broad storage-provider support, scheduling, web-based administration, and approachable configuration for home and small-business users.
 
 FallbackPlan must not merely reproduce these products. It should deliberately address their recurring weaknesses:
 
@@ -44,7 +44,7 @@ FallbackPlan must not merely reproduce these products. It should deliberately ad
 
 The first architectural centre of FallbackPlan will be a streaming archive engine that divides files into configured-size segments, hashes and compares them by version, encrypts changed segments independently, and packs them into configured-size immutable blobs. This engine will underpin the broader versioned, encrypted, content-addressed repository. A repository is replicated between FallbackPlan instances and storage providers; live folders are not treated as bidirectional synchronisation roots. Each source device publishes immutable snapshots. A destination may hold snapshots for multiple source devices. Deletions create new snapshot state and do not immediately delete historical content.
 
-CrashPlan migration will be implemented as a separate, read-only compatibility subsystem. It will inspect and restore supported CrashPlan archives, map their file/version history into a neutral import model, and write equivalent FallbackPlan snapshots. The native repository will never depend on CrashPlan structures.
+Legacy archive migration will be implemented as a separate, read-only compatibility subsystem. It will inspect and restore supported legacy archives, map their file/version history into a neutral import model, and write equivalent FallbackPlan snapshots. The native repository will never depend on legacy structures.
 
 ────────
 
@@ -102,14 +102,14 @@ The first production-capable release will support:
 • a command-line interface;
 • a local web administration interface;
 • headless service operation;
-• CrashPlan archive assessment and migration for explicitly supported archive variants;
+• legacy archive assessment and migration for explicitly supported archive variants;
 • export of repository metadata and recovery keys in a documented recovery kit.
 
 ### 3.2 Subsequent scope
 
 Later releases may add:
 
-• Backblaze B2, Google Cloud Storage, SFTP, WebDAV, SMB-aware and removable-media providers;
+• further S3-compatible and cloud object-store providers, SFTP, WebDAV, SMB-aware and removable-media providers;
 • peer discovery through optional public infrastructure;
 • relay services that cannot decrypt content;
 • multi-user household and small-business administration;
@@ -121,19 +121,19 @@ Later releases may add:
 • object-lock integration;
 • erasure coding for peer sets;
 • public restore links using separately wrapped, scoped keys;
-• importers for restic, Kopia, and Duplicati repositories where licensing and format stability permit.
+• importers for other backup tools' repositories where licensing and format stability permit.
 
 ### 3.3 Explicit non-goals for the initial release
 
 • full-disk imaging or bare-metal recovery;
 • operating-system deployment;
-• bidirectional working-folder synchronisation equivalent to Syncthing;
+• bidirectional working-folder synchronisation;
 • collaborative file editing;
 • proprietary cloud hosting operated by the project;
 • ransomware detection as a substitute for endpoint security;
 • automatic deletion of source data after backup;
 • transparent filesystem mounting as the only restore method;
-• guaranteed conversion of every historical CrashPlan variant.
+• guaranteed conversion of every historical legacy variant.
 
 ### 3.4 Functional requirements
 
@@ -181,12 +181,12 @@ The initial solution must meet the following functional requirements. Requiremen
 • FR-REP-002: Azure Blob Storage and Amazon S3/S3-compatible stores shall be supported through the common object-store abstraction.
 • FR-REP-003: Transfer shall resume at verified blob or range boundaries and shall never expose a partially written blob as committed.
 
-**CrashPlan migration**
+**Legacy archive import**
 
-• FR-CP-001: CrashPlan archives shall be opened read-only.
-• FR-CP-002: The importer shall map recoverable CrashPlan file versions into the same native segment, blob, manifest, and snapshot pipeline used by filesystem capture.
-• FR-CP-003: Conversion shall stream data directly from the CrashPlan archive into native blobs without requiring a complete temporary plaintext restore.
-• FR-CP-004: Import shall be resumable, produce provenance records, and verify imported file versions against all source hashes or checksums available from the CrashPlan archive.
+• FR-CP-001: legacy archives shall be opened read-only.
+• FR-CP-002: The importer shall map recoverable legacy file versions into the same native segment, blob, manifest, and snapshot pipeline used by filesystem capture.
+• FR-CP-003: Conversion shall stream data directly from the legacy archive into native blobs without requiring a complete temporary plaintext restore.
+• FR-CP-004: Import shall be resumable, produce provenance records, and verify imported file versions against all source hashes or checksums available from the legacy archive.
 • FR-CP-005: Unsupported archive versions, encryption schemes, or damaged records shall be identified before destructive or high-volume processing and shall never modify the source archive.
 
 ### 3.5 Non-functional requirements
@@ -248,9 +248,9 @@ The solution must meet the following quality and operational requirements.
 
 ## 4. Lessons adopted from existing products
 
-### 4.1 CrashPlan
+### 4.1 Consumer peer-to-peer backup services
 
-CrashPlan's archive model splits files into blocks, deduplicates, compresses, encrypts, and stores them with metadata describing file paths and versions. Its original consumer appeal came from supporting computer and folder destinations rather than requiring a cloud service.
+The legacy archive model splits files into blocks, deduplicates, compresses, encrypts, and stores them with metadata describing file paths and versions. Its original consumer appeal came from supporting computer and folder destinations rather than requiring a cloud service.
 
 **Adopt**
 
@@ -266,7 +266,7 @@ CrashPlan's archive model splits files into blocks, deduplicates, compresses, en
 **Improve**
 
 • publish the repository format and migration guarantees;
-• avoid repository-wide cpfmf/cphdf-style monolithic manifests;
+• avoid repository-wide monolithic manifests;
 • shard and content-address metadata;
 • provide independent integrity-check and recovery tooling;
 • make encryption-key export a first-class workflow;
@@ -275,11 +275,11 @@ CrashPlan's archive model splits files into blocks, deduplicates, compresses, en
 • ensure older readers fail safely when encountering newer format features;
 • support archive migration without restoring the full archive to temporary plaintext storage.
 
-CrashPlan documents that large file and history manifests can interfere with scanning, synchronisation, backup, restore, and maintenance. FallbackPlan must treat this as a primary design constraint, not a late optimisation.
+That class of product documents that large file and history manifests can interfere with scanning, synchronisation, backup, restore, and maintenance. FallbackPlan must treat this as a primary design constraint, not a late optimisation.
 
-### 4.2 Syncthing
+### 4.2 Peer synchronisation protocols
 
-Syncthing demonstrates strong peer-to-peer identity and transport architecture. Its Block Exchange Protocol exchanges file metadata and missing blocks between authenticated devices, while discovery and relay protocols solve connectivity problems.
+Peer synchronisers demonstrate strong peer-to-peer identity and transport architecture. Its Block Exchange Protocol exchanges file metadata and missing blocks between authenticated devices, while discovery and relay protocols solve connectivity problems.
 
 **Adopt**
 
@@ -299,9 +299,9 @@ Syncthing demonstrates strong peer-to-peer identity and transport architecture. 
 
 FallbackPlan is a backup system, not a global working-tree reconciler. It must not choose a single current global file state and propagate deletion or conflict resolution as its primary model. A source device publishes snapshots; destinations preserve them according to retention policy.
 
-### 4.3 restic
+### 4.3 Content-addressed snapshot repositories
 
-restic demonstrates a compact repository architecture based on snapshots, tree objects, data blobs, pack files, indexes, locks, and content-defined chunking. Its documented write ordering provides an important durability rule: durable data first, indexes second, snapshot references last.
+This family demonstrates a compact repository architecture based on snapshots, tree objects, data blobs, pack files, indexes, locks, and content-defined chunking. Its documented write ordering provides an important durability rule: durable data first, indexes second, snapshot references last.
 
 **Adopt**
 
@@ -325,9 +325,9 @@ restic demonstrates a compact repository architecture based on snapshots, tree o
 • support background healing from replicas;
 • avoid requiring a single global exclusive operation for routine retention where generation-based collection can be used.
 
-### 4.4 Kopia
+### 4.4 Layered repositories over a minimal blob store
 
-Kopia's repository layers simple blob storage beneath content-addressed blocks, encrypted metadata, indexes, caching, packing, and snapshot policies.
+This family's repository layers simple blob storage beneath content-addressed blocks, encrypted metadata, indexes, caching, packing, and snapshot policies.
 
 **Adopt**
 
@@ -348,9 +348,9 @@ Kopia's repository layers simple blob storage beneath content-addressed blocks, 
 • distinguish clearly between repository password rotation and data-key rotation;
 • establish deterministic compatibility and conformance fixtures for third-party readers.
 
-### 4.5 Duplicati
+### 4.5 Plugin-oriented clients with an authoritative local database
 
-Duplicati demonstrates the value of a web interface, broad backend support, schedules, filters, and accessible configuration.
+This family demonstrates the value of a web interface, broad backend support, schedules, filters, and accessible configuration.
 
 **Adopt**
 
@@ -551,7 +551,7 @@ Initial configuration envelope to benchmark:
 • the pipeline must not load a complete large file into memory;
 • segment hashing should be pipelined with reading and use hardware acceleration where available.
 
-Fixed segmentation makes positional comparison, random restore, deterministic testing, and CrashPlan migration straightforward. It is less tolerant than content-defined chunking when bytes are inserted near the beginning of a file, because subsequent fixed segment boundaries shift. The format shall therefore identify the segmentation profile per file version and leave room for a later content-defined profile without changing existing records or manifests.
+Fixed segmentation makes positional comparison, random restore, deterministic testing, and legacy archive migration straightforward. It is less tolerant than content-defined chunking when bytes are inserted near the beginning of a file, because subsequent fixed segment boundaries shift. The format shall therefore identify the segmentation profile per file version and leave room for a later content-defined profile without changing existing records or manifests.
 
 ### 7.5 Compression
 
@@ -1027,13 +1027,13 @@ Publish source and reproducible release artifacts for this tool.
 
 ────────
 
-## 13. CrashPlan archive conversion
+## 13. Legacy archive conversion
 
 ### 13.1 Objective
 
-Allow users who possess a local CrashPlan archive and the required decryption material to migrate file history into FallbackPlan without first restoring every version into a plaintext directory tree.
+Allow users who possess a local legacy archive and the required decryption material to migrate file history into FallbackPlan without first restoring every version into a plaintext directory tree.
 
-CrashPlan describes its archive as proprietary, with files split into blocks, deduplicated, compressed, encrypted, and tracked through manifests. Public community work such as Plan C demonstrates that some CrashPlan Home and Small Business archives can be read and restored, but coverage varies by archive version and destination type.
+Such archives are described by their vendors as proprietary, with files split into blocks, deduplicated, compressed, encrypted, and tracked through manifests. Public community reader projects demonstrate that some consumer and small-business archives can be read and restored, but coverage varies by archive version and destination type.
 
 ### 13.2 Compatibility boundaries
 
@@ -1041,7 +1041,7 @@ The importer must begin with an explicit compatibility matrix:
 
 |Dimension|Examples|
 |---------|--------|
-|CrashPlan product|Home, Small Business, enterprise/classic endpoint|
+|Product line|Consumer, small-business, and enterprise endpoint variants|
 |Client/archive version|Known tested versions and format variants|
 |Destination|Local folder, external disk, computer, friend destination, cloud export|
 |Key source|ADB, `cp.properties`, user-held custom key, passphrase-derived key|
@@ -1057,29 +1057,29 @@ Unsupported variants must be detected and reported before migration begins.
 Before implementation:
 
 • obtain legal review of interoperability-focused reverse engineering in target jurisdictions;
-• do not use CrashPlan trademarks in a way that implies affiliation;
+• do not use another vendor's trademarks in a way that implies affiliation;
 • document that users must have lawful access to their archives and keys;
-• review the licence of Plan C and every dependency before reusing code;
+• review the licence of any existing reader implementation and every dependency before reusing code;
 • prefer clean-room documentation and independently written parsers where licence compatibility or provenance is uncertain;
 • retain test fixtures only where redistribution is permitted;
-• do not bypass authentication to remote CrashPlan services or access data not supplied by the user.
+• do not bypass authentication to the vendor's remote services or access data not supplied by the user.
 
 The importer should be a separately packaged optional component so its dependencies and licensing remain isolated from the core.
 
 ### 13.4 Import architecture
 
 ```text
-CrashPlan archive + key material
+Legacy archive + key material
               |
               v
 +-------------------------------+
-| CrashPlan Archive Inspector   |
+| Legacy Archive Inspector      |
 | variant detection / health    |
 +---------------+---------------+
                 |
                 v
 +-------------------------------+
-| Read-only CrashPlan Reader    |
+| Read-only Legacy Reader       |
 | manifests / history / blocks  |
 +---------------+---------------+
                 |
@@ -1131,7 +1131,7 @@ Imports only the newest recoverable version of each path. Fastest and least cost
 
 **Historical migration**
 
-Creates FallbackPlan snapshots that preserve historical states at selected points. Because CrashPlan stores versions per file rather than necessarily materialised whole-tree snapshots, the importer must reconstruct consistent logical states at chosen timestamps.
+Creates FallbackPlan snapshots that preserve historical states at selected points. Because the legacy format stores versions per file rather than necessarily materialised whole-tree snapshots, the importer must reconstruct consistent logical states at chosen timestamps.
 
 **Full-fidelity version migration**
 
@@ -1139,31 +1139,31 @@ Preserves each distinct file-version event and deleted-file history. This may cr
 
 **Archive-preservation mode**
 
-Stores the original CrashPlan archive as opaque protected data in addition to converted snapshots. This provides evidentiary rollback if the importer later improves.
+Stores the original legacy archive as opaque protected data in addition to converted snapshots. This provides evidentiary rollback if the importer later improves.
 
 ### 13.6 Migration process
 
-1. Require the user to make a read-only copy or snapshot of the CrashPlan archive and key database.
+1. Require the user to make a read-only copy or snapshot of the legacy archive and key database.
 2. Detect archive variant and generate an assessment report.
 3. Recover or accept decryption material without persisting plaintext keys unless explicitly requested.
 4. Enumerate manifests and history records.
 5. Validate block availability and sample decrypt/decompress operations.
 6. Estimate logical data, unique readable data, versions, files, and target storage.
 7. Select import mode and timestamp coalescing.
-8. Stream CrashPlan file versions into the native segmentation and blob pipeline.
+8. Stream legacy file versions into the native segmentation and blob pipeline.
 9. Deduplicate naturally against already imported content.
 10. Publish FallbackPlan snapshots incrementally.
 11. Persist resumable import checkpoints outside the source archive.
-12. Verify imported snapshots independently from the CrashPlan reader.
+12. Verify imported snapshots independently from the legacy reader.
 13. Produce a signed migration report listing successes, omissions, damaged versions, unsupported metadata, and mappings.
 14. Keep source archive untouched.
 
 ### 13.7 Import correctness requirements
 
 • importer opens source files read-only;
-• no repair or mutation of the CrashPlan archive by default;
+• no repair or mutation of the legacy archive by default;
 • every imported file version records source provenance;
-• content hash is calculated after CrashPlan decryption/decompression and before FallbackPlan encryption;
+• content hash is calculated after legacy-format decryption/decompression and before FallbackPlan encryption;
 • comparison mode can restore both source and destination streams and compare hashes;
 • malformed records are isolated rather than aborting all import where safe;
 • missing blocks produce explicit incomplete-version records;
@@ -1178,8 +1178,8 @@ Before committing the migration feature to a release, complete a dedicated spike
 
 • collect user-owned sample archives for each intended variant;
 • document archive directory layout and file signatures;
-• map cpfmf, cphdf, block manifests, block files, compression, encryption, and key sources;
-• reproduce Plan C's supported operations independently;
+• map the file and history manifests, block manifests, block files, compression, encryption, and key sources;
+• reproduce an existing reader's supported operations independently;
 • determine licence-compatible reuse opportunities;
 • create sanitised or synthetic conformance fixtures;
 • prove latest-version and historical-version extraction;
@@ -1187,7 +1187,7 @@ Before committing the migration feature to a release, complete a dedicated spike
 • identify metadata that cannot be recovered;
 • publish the compatibility matrix.
 
-The release plan must treat CrashPlan conversion as experimental until validated against diverse real archives.
+The release plan must treat legacy conversion as experimental until validated against diverse real archives.
 
 ────────
 
@@ -1267,7 +1267,7 @@ FallbackPlan.slnx
 |   +-- FallbackPlan.Storage.AzureBlob/
 |   +-- FallbackPlan.Storage.S3/
 |   +-- FallbackPlan.Import.Abstractions/
-|   +-- FallbackPlan.Import.CrashPlan/
+|   +-- FallbackPlan.Import.Legacy/
 |   +-- FallbackPlan.Agent/
 |   +-- FallbackPlan.Api/
 |   +-- FallbackPlan.Web/
@@ -1285,7 +1285,7 @@ FallbackPlan.slnx
 |   +-- FallbackPlan.Repository.FuzzTests/
 |   +-- FallbackPlan.Protocol.Tests/
 |   +-- FallbackPlan.Storage.ContractTests/
-|   +-- FallbackPlan.Import.CrashPlan.Tests/
+|   +-- FallbackPlan.Import.Legacy.Tests/
 |   +-- FallbackPlan.IntegrationTests/
 |   +-- FallbackPlan.InterruptionTests/
 |   +-- FallbackPlan.PerformanceTests/
@@ -1323,7 +1323,7 @@ FallbackPlan.slnx
 • storage providers depend only on storage abstractions and provider SDKs.
 • repository format has no UI, host, or provider dependencies.
 • peer protocol does not depend on desktop or web projects.
-• CrashPlan importer depends on import abstractions and may feed application services, but the core never references it.
+• The legacy importer depends on import abstractions and may feed application services, but the core never references it.
 • platform-specific filesystem projects implement shared filesystem contracts.
 • tests enforce architecture boundaries.
 
@@ -1471,7 +1471,7 @@ Terminate the process or connection after every meaningful persistence step:
 • during blob compaction;
 • during tombstone publication;
 • during restore;
-• during CrashPlan import.
+• during legacy archive import.
 
 After restart, all published snapshots must remain readable and operations must resume or roll forward safely.
 
@@ -1551,7 +1551,7 @@ Version independently:
 • peer protocol;
 • recovery-kit format;
 • local configuration schema;
-• CrashPlan importer compatibility.
+• Legacy importer compatibility.
 
 Rules:
 
@@ -1600,7 +1600,7 @@ Exit criteria:
 • the local catalogue can be deleted and rebuilt from checkpoint/deltas;
 • a forensic rebuild succeeds using blob recovery footers and manifests after all global index objects are removed;
 • an independently written reader can parse public fixtures; and
-• one representative CrashPlan file version can be streamed into this same archive pipeline.
+• one representative legacy file version can be streamed into this same archive pipeline.
 
 ### Phase 1 — Snapshot and local repository MVP
 
@@ -1630,7 +1630,7 @@ Exit criteria:
 
 ### Phase 2 — Peer-to-peer backup
 
-Goal: Restore early CrashPlan-style computer-to-computer backup.
+Goal: Restore computer-to-computer backup.
 
 Features:
 
@@ -1694,7 +1694,7 @@ Exit criteria:
 • deleted content is retained according to policy;
 • repository can heal tested corruption from another replica.
 
-### Phase 5 — CrashPlan migration preview
+### Phase 5 — legacy archive migration preview
 
 Goal: Controlled read-only import for validated archive variants.
 
@@ -1791,7 +1791,7 @@ These are conceptual starting points. Public abstractions should remain minimal 
 |Unsafe pruning|Permanent data loss|Generation cut-offs, grace periods, tombstones, dry runs, interruption tests.|
 |Key loss|Repository permanently unreadable|Mandatory recovery-kit workflow and recovery drill.|
 |Key compromise|Data disclosure or deletion|Key hierarchy, scoped grants, destination retention floors, rotation.|
-|CrashPlan format variation|Failed or inaccurate imports|Inspector, compatibility matrix, provenance, no silent fallback.|
+|Legacy format variation|Failed or inaccurate imports|Inspector, compatibility matrix, provenance, no silent fallback.|
 |Importer licensing/provenance|Project legal exposure|Isolated package, legal review, clean-room implementation where required.|
 |Filesystem semantic differences|Restore collisions or lost metadata|Capability records, collision planning, explicit degradation reports.|
 |Public relay/discovery abuse|Cost and service disruption|Optional self-hosting, quotas, rate limits, minimal retained metadata.|
@@ -1817,7 +1817,7 @@ FallbackPlan 1.0 should not be declared complete until:
 • signed release artifacts and a standalone recovery tool are available;
 • user documentation explains what is and is not protected;
 • external security and format reviews have been completed;
-• CrashPlan import is either released with a narrow verified compatibility matrix or clearly retained as preview—not broadly claimed.
+• Legacy import is either released with a narrow verified compatibility matrix or clearly retained as preview—not broadly claimed.
 
 ────────
 
@@ -1883,7 +1883,7 @@ FallbackPlan 1.0 should not be declared complete until:
 7. Credential rotation and expiry behaviour.
 8. Request/cost telemetry.
 
-**P4 — CrashPlan research**
+**P4 — Legacy format research**
 
 1. Archive corpus and variant catalogue.
 2. Read-only inspector.
@@ -1902,15 +1902,13 @@ FallbackPlan 1.0 should not be declared complete until:
 
 The design should continue to be validated against primary documentation and source repositories. Initial references include:
 
-1. CrashPlan, Introduction to CrashPlan archives — https://support.crashplan.com/hc/en-us/articles/8855240024973-Introduction-to-CrashPlan-archives
-2. CrashPlan, Resolve extreme scale from large manifest files — https://support.crashplan.com/hc/en-us/articles/8636549819789-Resolve-extreme-scale-from-large-manifest-files
-3. Syncthing, Block Exchange Protocol v1 — https://docs.syncthing.net/specs/bep-v1.html
-4. Syncthing, Protocol specifications — https://docs.syncthing.net/specs/index.html
-5. restic, Repository format and design references — https://restic.readthedocs.io/en/stable/100_references.html
-6. Kopia, Architecture — https://kopia.io/docs/advanced/architecture/
-7. Kopia, Encryption — https://kopia.io/docs/advanced/encryption/
-8. Duplicati documentation — https://docs.duplicati.com/
-9. Plan C, Open-source CrashPlan archive restore research — https://github.com/thenickdude/PlanC
+
+
+
+
+
+
+
 10. Microsoft, .NET releases and support — https://learn.microsoft.com/dotnet/core/releases-and-support
 11. Microsoft, Azure Blob Storage client library for .NET — https://learn.microsoft.com/azure/storage/blobs/storage-quickstart-blobs-dotnet
 12. AWS, AWS SDK for .NET documentation — https://docs.aws.amazon.com/sdk-for-net/
@@ -1929,4 +1927,4 @@ The second vertical slice should be:
 
 > Pair two computers → transfer the repository snapshot to the destination → destroy the source installation → restore solely from the destination and recovery kit.
 
-Only after these are reliable should Azure, S3, retention pruning, and CrashPlan conversion be layered on. This sequence makes recoverability—not feature count—the foundation of the project.
+Only after these are reliable should Azure, S3, retention pruning, and legacy conversion be layered on. This sequence makes recoverability—not feature count—the foundation of the project.

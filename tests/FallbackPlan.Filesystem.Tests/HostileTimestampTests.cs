@@ -11,9 +11,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "issue where invalid timestamps would prevent files from
-/// being backed up" (v2.0.6.103) and, separately, "an issue where timestamps
-/// could drift and cause validation errors" (v2.1.0.119). A timestamp is
+/// The surveyed changelog records invalid timestamps preventing files from
+/// being backed up at all and, separately, timestamps drifting far enough to
+/// fail validation. A timestamp is
 /// attacker-influenced and accident-influenced input: `touch -t` sets any
 /// value a user likes, archive extraction restores whatever the archive said,
 /// a dead CMOS battery writes 1970, and a Windows FILETIME of zero reads as
@@ -22,8 +22,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// <para>
 /// The requirement is narrow and absolute: <b>a strange timestamp may cost
 /// fidelity in that one field and must never cost the file</b>. Refusing to
-/// back up a file because its date looks wrong is the failure Duplicati
-/// shipped a fix for, and it is worse than recording no date at all.
+/// back up a file because its date looks wrong is the failure the surveyed
+/// product shipped a fix for, and it is worse than recording no date at all.
 /// </para>
 /// </remarks>
 [TestClass]

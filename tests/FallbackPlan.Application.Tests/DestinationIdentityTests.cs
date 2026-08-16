@@ -6,9 +6,9 @@ namespace FallbackPlan.Application.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Duplicati shipped "fixed the hostname check to be case-insensitive"
-/// (v2.0.5.106) and "fixed avoiding colon for default port on destination url"
-/// (v2.1.0.119). Both are the same underlying hazard in different clothes: an
+/// The surveyed changelog records two shipped fixes here — a hostname check
+/// made case-insensitive, and a default port no longer rendered with a
+/// pointless colon. Both are the same underlying hazard in different clothes: an
 /// address or a name is compared one way in one place and another way
 /// somewhere else, or is re-rendered into a form that no longer matches what
 /// was stored.

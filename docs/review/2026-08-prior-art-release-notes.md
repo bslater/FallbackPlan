@@ -1,6 +1,6 @@
-# What Duplicati's release notes say we should be testing
+# What a mature product's release notes say we should be testing
 
-**Subject:** the published release notes at [duplicati/duplicati/releases](https://github.com/duplicati/duplicati/releases) — the *shipped fixes*, as a corpus distinct from the issue tracker
+**Subject:** the surveyed product's published release notes — the *shipped fixes*, as a corpus distinct from the issue tracker
 **Purpose:** read what a comparable engine actually had to correct, and turn each class of correction into a test against FallbackPlan
 **Outcome:** 11 classes of shipped fix. **Four turned out to be live defects here and are fixed in this arc**; four were already foreclosed but unproven and are now proven; three are foreclosed by architecture and stay that way.
 
@@ -8,7 +8,7 @@
 
 ## Why the release notes are a different corpus from the issue tracker
 
-[The earlier pass](2026-08-duplicati-learnings.md) read Duplicati's unit suite and its issue tracker. This one reads its release notes, and they are not the same evidence.
+[The earlier pass](2026-08-prior-art-learnings.md) read the same product's unit suite and its issue tracker. This one reads its release notes, and they are not the same evidence.
 
 An issue is a report: somebody thinks something is wrong. A release note is a **verdict**: a maintainer agreed, found the cause, wrote a fix, and shipped it. The tracker tells you what users notice; the notes tell you what was actually broken. The tracker is also survivorship-biased towards the dramatic — corruption, data loss, hangs — while the notes carry the long tail of small, boring, repeated corrections that never generate a thread but do generate a fix. That long tail is the interesting part, because it is where a class of defect reveals itself by *recurring*.
 
@@ -42,7 +42,7 @@ Those three classes account for a large share of the small fixes, and none of th
 
 ### D-1 — Address parsing disagrees with itself · **Was broken**
 
-Duplicati's four separate URL-parser fixes name the mechanism: two code paths take an address apart, and they drift.
+Four separate URL-parser fixes in the corpus name the mechanism: two code paths take an address apart, and they drift.
 
 FallbackPlan had exactly that. `DestinationConfiguration.AddressDefect` and `PeerAddress.TryResolve` each split a peer endpoint on its last colon, so `fe80::1` parsed as host `fe80:` on port `1` — an address a person plainly meant as portless, called well formed by the admission check, reported as fine by status, and then dialled at a host that cannot exist. Checking an address before the first sync exists to catch precisely that.
 
@@ -60,7 +60,7 @@ The Python reference implementation had the `.` bug too and, using `fullmatch`, 
 
 ### D-3 — A metadata-only change is discarded · **Was broken**
 
-Duplicati v2.1.0.109: "updated timestamps discarded if no data was changed."
+From the corpus: updated timestamps discarded when no data changed.
 
 FallbackPlan's reuse short-circuit is keyed on identity, size and modification time, which answers *did the content change*. That is not *did anything about this file change*, and POSIX `chmod` is the counter-example: it moves ctime, not mtime. A file whose permissions were just tightened presented identical signals, the prior version was re-emitted whole, and the new mode, owner, group and extended attributes were discarded. The backup reported success; the loss appeared only at restore.
 
@@ -78,7 +78,7 @@ Nothing was keeping that true, so `53a297f` closes two blind spots. A whole-suit
 
 ### D-5 — Retry hides a permanent failure · **Foreclosed, now proven**
 
-Duplicati ships retry-behaviour fixes repeatedly, and the failure mode is always the same shape: a retry loop treats a permanent error as transient and burns the window, or treats a transient error as permanent and fails a backup that would have succeeded.
+The corpus carries retry-behaviour fixes repeatedly, and the failure mode is always the same shape: a retry loop treats a permanent error as transient and burns the window, or treats a transient error as permanent and fails a backup that would have succeeded.
 
 FallbackPlan distinguishes these at the type level rather than by attempt count — a fault is not an outage, which is the distinction ADR-0035 §2 rests on and which the admission probe reports as `Failed` versus `Unavailable`. Both paths gained tests in the C arc (`b6fff8b`), which is what moved this from foreclosed-and-unproven to proven.
 
@@ -90,25 +90,25 @@ This is the Y arc's whole subject and it is settled by construction: no verifica
 
 ### D-7 — Refusal reasons parsed from prose · **Foreclosed, now proven**
 
-Not a Duplicati note as such, but the class it belongs to — a caller depending on the half of a response that may change freely. `f2fe90e` pins all 12 `PeerRefusalReason` codes and 10 `PeerMessageType` codes to spec 02 §7/§8. The finding that motivated it: renumbering the whole refusal enum passed all 114 existing Protocol tests, because no test anywhere compared a refusal code to a number.
+Not a note in the corpus as such, but the class it belongs to — a caller depending on the half of a response that may change freely. `f2fe90e` pins all 12 `PeerRefusalReason` codes and 10 `PeerMessageType` codes to spec 02 §7/§8. The finding that motivated it: renumbering the whole refusal enum passed all 114 existing Protocol tests, because no test anywhere compared a refusal code to a number.
 
 ### D-8 — Atomic replace loses the file · **Foreclosed, now proven**
 
-Duplicati has shipped fixes for interrupted writes to its local database. FallbackPlan writes durable state through one `AtomicFile` primitive, and the C arc (`92d547f`) covered its failure and retry paths, taking it from 52.9% to 87.9%. The contention branch cannot be manufactured on POSIX — `rename` over an open file succeeds — so its *policy* is a tested predicate and the test says outright that the branch itself is unreachable here.
+The surveyed product has shipped fixes for interrupted writes to its local database. FallbackPlan writes durable state through one `AtomicFile` primitive, and the C arc (`92d547f`) covered its failure and retry paths, taking it from 52.9% to 87.9%. The contention branch cannot be manufactured on POSIX — `rename` over an open file succeeds — so its *policy* is a tested predicate and the test says outright that the branch itself is unreachable here.
 
 ### D-9 — Two sources of truth diverge · **Foreclosed by architecture**
 
-The single largest class in Duplicati's history, and the one that does not transfer. Its local SQLite database is authoritative and the remote store is a projection; a large share of its worst defects live in that gap, and `repair` exists to close it.
+The single largest class in the corpus, and the one that does not transfer. Its local SQLite database is authoritative and the remote store is a projection; a large share of its worst defects live in that gap, and `repair` exists to close it.
 
 Here the store is authoritative and the catalogue is a disposable cache. There is nothing for the two to disagree *about*: a catalogue that is wrong is deleted and re-derived. This is worth restating each time the corpus is read, because it is the single most expensive architectural decision the project made and the notes are its ongoing justification.
 
 ### D-10 — Compaction deletes something still referenced · **Foreclosed by architecture**
 
-Duplicati's compaction defects come from deciding reachability against the local database. FallbackPlan's retention decides against proven state — the Y3 rule that trim takes proof rather than claim — and refuses to proceed when it cannot establish it, naming the blocker (D2, `cab8bda`).
+The surveyed compaction defects come from deciding reachability against a local database. FallbackPlan's retention decides against proven state — the Y3 rule that trim takes proof rather than claim — and refuses to proceed when it cannot establish it, naming the blocker (D2, `cab8bda`).
 
 ### D-11 — An upgrade cannot read what the last version wrote · **Foreclosed by architecture**
 
-Format v1 is frozen behind conformance vectors, the catalogue is a cache that rebuilds on any schema mismatch (which is exactly why v6 in D-3 needed no migration), and the peer protocol negotiates features rather than assuming them (W arc). The failure mode Duplicati pays for at every database-version bump is structurally absent.
+Format v1 is frozen behind conformance vectors, the catalogue is a cache that rebuilds on any schema mismatch (which is exactly why v6 in D-3 needed no migration), and the peer protocol negotiates features rather than assuming them (W arc). The failure mode the surveyed product pays for at every database-version bump is structurally absent.
 
 ---
 
@@ -222,12 +222,12 @@ reasoning applies to a job state a console or a script reads.
 The repository half is honest: every failure reaches the error manifest and
 `capture_status` goes to 2. It is the operator-facing half that flattens.
 
-**Severity: high.** This is the class Duplicati shipped three separate fixes
+**Severity: high.** This is the class the surveyed product shipped three separate fixes
 for, and the one whose consequence is discovered at restore.
 
 ### What was not built, and why
 
-**RN-5 (retention losing a version)** — no new test. The Duplicati fix is
+**RN-5 (retention losing a version)** — no new test. The surveyed fix is
 about a *purge* interacting with retention, and FallbackPlan has no purge
 verb: retention is the only deletion path. Its planner is already covered by
 `RetentionPlannerTests`, whose `MinGenerations_IsTheFloorTheOtherRulesCannotOverride`
@@ -380,7 +380,7 @@ not in code that stores.
 
 | | |
 |---|---|
-| Source | Public release listing at `github.com/duplicati/duplicati/releases` |
+| Source | The surveyed product's public release listing |
 | Pages read | 1–12, complete: the 2.1.x line, the 2.0.9.x and 2.0.6.x canaries, back to v2.0.4.38 (December 2019) |
 | Method | HTML pages; the GitHub API and `gh` were unavailable to this session, whose repository scope is `bslater/fallbackplan` |
 | Not read | Releases before v2.0.4.38. Recurrence counts are lower bounds for that reason alone |

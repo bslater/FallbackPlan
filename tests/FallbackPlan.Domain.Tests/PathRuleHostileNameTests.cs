@@ -8,10 +8,10 @@ namespace FallbackPlan.Domain.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This class exists because of Duplicati's release notes. "Fixed an issue
-/// with filenames containing a dollar sign" is a shipped fix there, and it
-/// shipped <em>twice</em> — once in a canary, again in a later stable — as are
-/// separate fixes for filter handling and for path comparison. A backup tool's
+/// This class exists because of the surveyed changelog. A filename containing
+/// a dollar sign is a shipped fix there, and it shipped <em>twice</em> — once
+/// in a pre-release, again in a later stable — as are separate fixes for
+/// filter handling and for path comparison. A backup tool's
 /// exclude list is a promise, and a filename is attacker-influenced input in
 /// any shared directory; a name that slips past an exclude rule is a file
 /// copied off the machine that the operator said never to copy.
@@ -75,7 +75,7 @@ public sealed class PathRuleHostileNameTests
 
     /// <summary>
     /// The dollar sign specifically, in both directions and through the set —
-    /// the name Duplicati shipped a fix for twice. A trailing dollar is the
+    /// the name the surveyed product shipped a fix for twice. A trailing dollar is the
     /// interesting placement: as a regex it is the end anchor.
     /// </summary>
     [TestMethod]

@@ -9,7 +9,7 @@
 
 ## Context
 
-Publication order — blobs, then index deltas, then snapshot — is correct and is the most valuable rule inherited from restic. It also creates a window: between the first blob upload and the delta publication, potentially hours on an initial backup, a writer's blobs are durable and referenced by nothing. A mark-and-sweep collector cannot distinguish them from garbage.
+Publication order — blobs, then index deltas, then snapshot — is correct and is the most valuable rule inherited from the prior art. It also creates a window: between the first blob upload and the delta publication, potentially hours on an initial backup, a writer's blobs are durable and referenced by nothing. A mark-and-sweep collector cannot distinguish them from garbage.
 
 The proposal closed this with "account for active writer leases and grace periods". A lease cannot carry that weight:
 

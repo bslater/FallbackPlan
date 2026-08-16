@@ -1,6 +1,6 @@
-# Duplicati's complete changelog, dispositioned
+# A mature backup product's complete changelog, dispositioned
 
-**Subject:** every fix entry in `duplicati/duplicati`'s `changelog.txt`, November 2015 → August 2026
+**Subject:** every fix entry in the surveyed product's `changelog.txt`, November 2015 → August 2026
 **Purpose:** replace a themed essay with a countable ledger, so "have we covered this corpus" has an answer rather than an impression
 **Outcome:** 4,742 bullets → 2,502 distinct → **805 distinct fix entries**. 183 dispositioned by rule, 622 clustered and read, **34 engine mechanisms** extracted and reasoned individually: 21 proven, 10 open, and a 29-entry compaction cluster deferred to phase 4.
 
@@ -8,7 +8,7 @@
 
 ## Why this supersedes the earlier reading
 
-[The release-notes review](2026-08-duplicati-release-notes.md) claimed to have
+[The release-notes review](2026-08-prior-art-release-notes.md) claimed to have
 read "fifteen years of release notes". It had read **12 of ~28 paginated HTML
 pages**, through a summarising model, and cited **21 notes**. Against the 805
 fix entries that actually exist, that is **2.6%**.
@@ -40,9 +40,9 @@ history. Four revisions, fetched verbatim, cover it with deliberate overlap:
 Union: **2015-11-18 → 2026-08-14, no gap.** The overlaps are the cross-check
 that rotation dropped nothing.
 
-```
-curl -sS https://raw.githubusercontent.com/duplicati/duplicati/<tag>/changelog.txt
-```
+The corpus was read from the product's own source repository at each of those
+tags — its `changelog.txt`, fetched verbatim rather than scraped from rendered
+release pages, which is the whole reason the count is trustworthy.
 
 ## Counts, and how to reproduce them
 
@@ -73,7 +73,7 @@ absent* only when neither its surface nor its mechanism has an analogue:
 | Rule | Count | What it matches |
 |---|---:|---|
 | Web UI | 84 | ngax, ngclient, TrayIcon, dialogs, themes, Kestrel, translations |
-| Storage backend | 68 | S3, Azure, B2, FTP, WebDAV, Dropbox, rclone, pCloud, and ~25 more |
+| Storage backend | 68 | roughly thirty provider integrations — object stores, FTP, WebDAV, and consumer file-sync services |
 | Runtime and packaging | 17 | Mono, .NET 4/8, Docker, Synology, installers, the updater |
 | Notification channels | 14 | usage reporter, email, HTTP report, run-script |
 
@@ -84,7 +84,7 @@ absent. That is why "FTP backend not unescaping special characters" is not in
 the 68.
 
 **Stage 2 — 622 clustered by mechanism and read.** Cluster sizes, which is the
-real map of where Duplicati bled:
+real map of where the surveyed product bled:
 
 | Cluster | n | | Cluster | n |
 |---|---:|---|---|---:|
@@ -104,7 +104,7 @@ individually is the set of distinct *mechanisms* that survive deduplication
 across releases: **34**, listed below with a disposition each — 21 proven, 7
 open, 3 open-but-low-priority, and one deferred cluster of 29 entries.
 
-The N/A share is large and that is the honest shape of this corpus: Duplicati
+The N/A share is large and that is the honest shape of this corpus: the surveyed product
 supports thirty-odd storage backends and a web UI, and they dominate the bullet
 count. **The engine-level minority is the point.**
 
@@ -114,12 +114,12 @@ Grouped by disposition. Each cites the release that named it.
 
 ### Proven — a test fails if this is reintroduced
 
-| Mechanism | Duplicati | Evidence |
+| Mechanism | The surveyed fix | Evidence |
 |---|---|---|
 | Restore escaping its target directory | "Prevent restore outside of designated target folder" (2026-02-06) | `RestorePlanTests.RestorePlan_APathIsNotPlainComponents_IsRefused`, `…APreSeededSymlinkPointsOutsideTheRoot_IsNotWrittenThrough` |
 | Restore not creating missing structure | 2020-07-09, 2025-01-07 | `RestoreIntoMissingStructureTests` (4) |
 | SQLite host-parameter limit | "exceeding the number of parameters supported by SQLite" (2019-09-02) | `SnapshotScaleEdgeTests` — 2,500 entries; no dynamic parameter lists exist |
-| Empty filesets | "empty filesets being created" (2025-05-29) | `SnapshotScaleEdgeTests` (3) |
+| Empty snapshots | a snapshot created holding nothing (2025-05-29) | `SnapshotScaleEdgeTests` (3) |
 | Metadata-only change discarded | "updated timestamps were discarded if no data was changed" (2025-02-11) | `MetadataOnlyChangeTests` (6) — was a live defect, fixed `b2c018c` |
 | Locale-sensitive parsing | fr-CA (2025-04-11), invariant formatting (2025-09-25) | `HostileCultureTests` (21), CI tr-TR leg |
 | Filename metacharacters and filters | dollar-sign ×2, "various bugs with backup filters" (2023-12-27) | `PathRuleHostileNameTests` (24) — was a live defect, fixed `51b503a` |
@@ -139,7 +139,7 @@ Grouped by disposition. Each cites the release that named it.
 | Scheduler ignoring the scheduled time | "backups could run immediately" (2020-05-11) | `ScheduleClockBoundaryTests.ASetThatJustCompleted_IsNotImmediatelyDueAgain` |
 | A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
 | Shared content freed while still referenced (**O2**, was open — foreclosed, now proven) | "database inconsistency after shared metadata delete" (2026-07-13) | `Retention.Tests/SharedRecordRetentionTests` (5) |
-| An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired) | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (4) |
+| An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired) | index objects referencing data blobs that no longer exist (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (4) |
 | A partial backup satisfying a retention rule (**O6**, was open — a real defect, now fixed) | "partial backups could create defect backups when used with retention rules" (2019-12-08) | `Retention.Tests/RetentionPlannerTests` (5 new), `Retention.Tests/PartialCaptureRetentionTests` (4) |
 
 ### Open — applies, and nothing proves it
@@ -181,7 +181,7 @@ rather than tests, because the API they would test has not been designed.
 
 The list, verbatim, is the criteria: compact writing blocklists into index
 files (2025-05-29); index files containing replicated blocklists (2025-01-11);
-`dindex` missing a blocklist causing extra restore downloads (2024-11-06);
+an index object missing a blocklist, causing extra restore downloads (2024-11-06);
 verification errors if compact was interrupted (2024-11-06); leftover index
 files (2024-11-06); almost-identical files producing broken index files
 (2024-09-11); data corruption caused by compacting (2019-06-30); compacted
@@ -192,7 +192,7 @@ validation errors across concurrent index generators (2018-06-17).
 
 ### N/A — architecture, worth restating
 
-61 entries reduce to one sentence: Duplicati's local SQLite database is
+61 entries reduce to one sentence: the surveyed product's local SQLite database is
 authoritative and the remote store is its projection, so the two can disagree,
 and `repair` exists to reconcile them. Here the store is authoritative and the
 catalogue is a disposable cache — a wrong catalogue is deleted and re-derived.
@@ -244,7 +244,7 @@ running collector — escaped the loop, aborted the whole retention pass through
 `RetentionRunner`, lost the counters and findings, and left every object
 sorting after it uncollected for as long as the fault lasted.
 
-The quiet head is the one that matches Duplicati's note most exactly, and the
+The quiet head is the one that matches the surveyed note most exactly, and the
 one a passing test suite would never have shown. A store answering
 `DeleteOutcome.NotFound` for an object still present incremented `Deleted`
 anyway. Measured on the red run: **the report claimed five deletions against a
@@ -297,7 +297,7 @@ Publication order puts blobs durable in step 4 before the index entries naming
 them in step 6, and retention condemns only blobs holding nothing reachable.
 `RetentionIndexIntegrityTests` asserts it directly after a pass that really
 removed blobs. The mutation proof is worth quoting because it produces
-precisely Duplicati's symptom: with `CollectionPlanner`'s `live > 0` guard
+precisely the surveyed symptom: with `CollectionPlanner`'s `live > 0` guard
 neutered, the closure walk reports objects it cannot reach and the reader
 answers *"No loaded blob carries a record for object 94b6c351…"* — an index
 naming an object no blob holds.
@@ -335,7 +335,7 @@ entries is compaction's job
 a set is never left with nothing usable. With a partial capture as the newest
 snapshot and a floor of one, the partial filled the floor and every complete
 backup expired — leaving the set holding exactly one snapshot, with a hole in
-it. That is Duplicati 2019-12-08, and it compounds RN-F3: before that fix
+it. That is the surveyed fix of 2019-12-08, and it compounds RN-F3: before that fix
 nothing above the manifest could even tell the two apart.
 
 The information was never missing. `SnapshotManifest.CaptureStatus` has
@@ -370,15 +370,16 @@ three of the four end-to-end tests, with the report naming the partial
 
 ## Appendix — reproduction
 
-```bash
-# corpus
-for tag in master \
-           v2.1.0.5-2.1.0.5_stable_2025-03-04 \
-           v2.0.8.1-2.0.8.1_beta_2024-05-07 \
-           v2.0.4.5-2.0.4.5_beta_2018-11-28; do
-  curl -sS "https://raw.githubusercontent.com/duplicati/duplicati/$tag/changelog.txt"
-done
-```
+Fetch `changelog.txt` from the product's source repository at each of the four
+tags listed in [The corpus](#the-corpus) — `master` plus the three rotated
+release tags — and concatenate them.
+
+**A stated limit of de-branding this document** ([naming and
+attribution](../naming-and-attribution.md)): the product is not named here, so
+this recipe is a method rather than a command anyone can paste. The counts
+below are reproducible by whoever knows which corpus was read; for everyone
+else they are testimony. That is a real cost of the convention, accepted
+deliberately and recorded rather than hidden.
 
 Release blocks are `YYYY-MM-DD - <version>` underlined with `====`; entries are
 `- ` bullets. Dedup by lowercasing, stripping inline code spans, issue numbers

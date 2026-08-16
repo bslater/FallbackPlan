@@ -12,9 +12,8 @@ using FallbackPlan.Storage.Local;
 namespace FallbackPlan.Retention.Tests;
 
 /// <summary>
-/// That a partial capture reaches retention as a partial capture (ledger O6;
-/// Duplicati "partial backups could create defect backups when used with
-/// retention rules", 2019-12-08).
+/// That a partial capture reaches retention as a partial capture (ledger O6 —
+/// a partial backup producing a defective one once retention rules apply).
 /// </summary>
 /// <remarks>
 /// <para>

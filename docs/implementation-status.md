@@ -39,7 +39,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local` · `Storage.ContractTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
 | [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Built** | `FallbackPlan.Recovery`, [`specifications/recovery-kit/`](../specifications/recovery-kit/README.md) · `Repository.ConformanceTests/RecoveryKitConformanceTests` |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture | **Built** | `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests` |
-| [0015](adr/0015-crashplan-importer-isolation.md) | CrashPlan importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
+| [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated | **Built** | `Domain/Identifiers/BlobId`, `Domain/IBlobCounterAllocator` · `InterruptionTests/SequenceRollbackTests` holds the refusal when an identifier is ever reused |
 | [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence | **Built** | `Repository.Index/IndexEntry`, `Repository.Index/IndexLoader` · `Repository.Tests/Index/IndexPrecedenceTests` |
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains | **Built** | `Application/StatusModel` · `Repository.Tests/EndToEnd/ApplicationServiceTests` · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
@@ -107,9 +107,9 @@ It is still one provider. A contract with a single implementation has not yet be
 
 ### 0015 — the seam is the decision, and the seam is built
 
-ADR-0015's decision was to isolate a CrashPlan importer behind a boundary, not to write one. `FallbackPlan.Import.Abstractions` is that boundary, and phase 0's exit criteria proved it with a synthetic adapter feeding an arbitrary byte stream through the same pipeline ([roadmap](roadmap.md#phase-0--archive-engine-vertical-slice)).
+ADR-0015's decision was to isolate a legacy importer behind a boundary, not to write one. `FallbackPlan.Import.Abstractions` is that boundary, and phase 0's exit criteria proved it with a synthetic adapter feeding an arbitrary byte stream through the same pipeline ([roadmap](roadmap.md#phase-0--archive-engine-vertical-slice)).
 
-No CrashPlan reader exists and none should yet: it is phase 5 and gated on a legal review that has not happened. The row reads "partly built" rather than "built" so that nobody reads the seam's existence as the feature's.
+No legacy reader exists and none should yet: it is phase 5 and gated on a legal review that has not happened. The row reads "partly built" rather than "built" so that nobody reads the seam's existence as the feature's.
 
 ### 0025 — nothing compacts yet, so nothing re-seals yet
 
@@ -191,7 +191,7 @@ Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no 
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
 | 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
-| 5 — CrashPlan import | Not started, gated on legal review |
+| 5 — Legacy archive import | Not started, gated on legal review |
 
 ---
 

@@ -8,10 +8,10 @@ namespace FallbackPlan.Application.Tests;
 /// <remarks>
 /// <para>
 /// This class exists because of a defect found by reading fifteen years of
-/// Duplicati's release notes, where "the URL parser returned different results
-/// for similar inputs", "a leading slash could be stripped from the path or a
-/// URL", "scheme detection on short paths" and "better detection of valid S3
-/// hostnames" are separate shipped fixes across separate releases. Address
+/// another backup product's release notes, where a URL parser returning
+/// different results for similar inputs, a leading slash stripped from a path,
+/// scheme detection on short paths, and hostname validation for S3 endpoints
+/// are separate shipped fixes across separate releases. Address
 /// parsing is not a solved problem you inherit for free; it is a place every
 /// backup tool bleeds.
 /// </para>
@@ -77,10 +77,9 @@ public sealed class PeerEndpointTests
     {
         // Parsed invariantly and with no NumberStyles allowed, so a group
         // separator, a sign or surrounding whitespace cannot be read one way
-        // by the check and another by the dialler. Duplicati shipped
-        // "locale-sensitive parsing bug for fr-CA" and "invariant formatting
-        // causing crashes during backup" as separate fixes; a port is digits
-        // in every language.
+        // by the check and another by the dialler. The surveyed changelog
+        // carries locale-sensitive parsing and invariant-formatting crashes as
+        // separate shipped fixes; a port is digits in every language.
         Assert.IsFalse(PeerEndpoint.TryParse("host:9 443", out _, out _, out _));
         Assert.IsFalse(PeerEndpoint.TryParse("host:9,443", out _, out _, out _));
         Assert.IsFalse(PeerEndpoint.TryParse("host: 9443", out _, out _, out _));

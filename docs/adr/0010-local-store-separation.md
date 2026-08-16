@@ -11,7 +11,7 @@
 
 The proposal specified "SQLite for disposable local cache, job state, and UI configuration — not repository authority", and NFR-REL-002 stated that "deleting or corrupting it shall not cause repository data loss".
 
-The catalogue genuinely is disposable, and insisting on that is right — it is the direct answer to the Duplicati failure mode the proposal identifies. But three things were placed in one sentence and one database, and they do not share the property:
+The catalogue genuinely is disposable, and insisting on that is right — it is the direct answer to the surveyed product's failure mode the proposal identifies. But three things were placed in one sentence and one database, and they do not share the property:
 
 - The **device private key** is not rebuildable from the repository. Losing it means the device loses its identity, and every pairing must be re-approved by hand at the other end.
 - **Pairing grants and destination authorisations** are likewise not derivable from repository contents.
