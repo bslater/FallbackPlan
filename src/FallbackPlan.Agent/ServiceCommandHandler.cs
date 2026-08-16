@@ -1286,9 +1286,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             string? nextRun = null;
             if (!string.IsNullOrWhiteSpace(set.Schedule) && Schedule.TryParse(set.Schedule, out var schedule, out _))
             {
-                var anchor = runtime.Jobs.LastCompleted(set.Id) is { } completed
-                    ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
-                    : (DateTimeOffset?)null;
+                var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
                 nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now).ToString("u");
             }
 

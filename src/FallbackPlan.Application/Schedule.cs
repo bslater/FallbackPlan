@@ -115,10 +115,17 @@ public sealed class Schedule
     /// <summary>
     /// Whether a run is due at <paramref name="now"/>, given the last
     /// COMPLETED run. Null <paramref name="lastCompleted"/> means the set
-    /// has never run — always due. Times are compared in the offset the
-    /// caller supplies; a wrong clock mis-times a backup, never corrupts
-    /// one.
+    /// has never run — always due. A wrong clock mis-times a backup, never
+    /// corrupts one.
     /// </summary>
+    /// <remarks>
+    /// <b>Both arguments must be in the operator's wall-clock frame</b> —
+    /// <see cref="DateTimeOffset.Now"/> and
+    /// <see cref="JobStateStore.ScheduleAnchor"/>, not a UTC instant. Nothing
+    /// in the signature can enforce that, and the daily branch below reads the
+    /// wall clock rather than the instant, so an anchor carrying a <c>+00:00</c>
+    /// offset would be compared against a local time and answer nonsense.
+    /// </remarks>
     public bool IsDue(DateTimeOffset? lastCompleted, DateTimeOffset now)
     {
         if (lastCompleted is null)
@@ -129,13 +136,36 @@ public sealed class Schedule
         // Due when a scheduled occurrence has passed that the last completed
         // run predates. Because the answer is that single comparison, missed
         // occurrences coalesce: five slept-through times owe exactly one run.
+        //
+        // An interval is absolute by construction — "every 12h" means twelve
+        // elapsed hours, not a position on a clock face — so it compares
+        // instants and is unaffected by an offset change.
         if (_interval is { } interval)
         {
             return interval.GetPreviousOccurrence(lastCompleted.Value, now, inclusive: true) is not null;
         }
 
         var occurrence = _daily!.GetPreviousOccurrence(now, inclusive: true);
-        return occurrence is not null && lastCompleted.Value < occurrence.Value;
+        if (occurrence is null)
+        {
+            return false;
+        }
+
+        // A daily occurrence is identified by its WALL CLOCK, not by its
+        // instant, and the difference is the whole of this branch.
+        //
+        // On the night an offset goes back, one wall-clock occurrence has two
+        // instants. Sydney, 5 April 2026, `daily at 02:30`: the run fires at
+        // 02:30 +11:00 (15:30Z), and an hour later the occurrence recomputes
+        // in the new offset as 02:30 +10:00 (16:30Z). Comparing instants,
+        // 15:30Z precedes 16:30Z, so the run that already discharged this
+        // occurrence looks as though it predates a fresh one — and the backup
+        // fires twice. Comparing wall clocks, 02:30 does not precede 02:30,
+        // and it fires once.
+        //
+        // Spring forward is unharmed: yesterday's 02:30 precedes today's
+        // whatever the offsets did in between, so the day still gets its run.
+        return lastCompleted.Value.DateTime < occurrence.Value.DateTime;
     }
 
     /// <summary>The next scheduled run after <paramref name="now"/> — the status display's "next run".</summary>

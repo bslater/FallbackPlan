@@ -69,9 +69,7 @@ public static class Scheduler
                 continue;
             }
 
-            var anchor = runtime.Jobs.LastCompleted(set.Id) is { } completed
-                ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
-                : (DateTimeOffset?)null;
+            var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
 
             if (!schedule!.IsDue(anchor, now))
             {

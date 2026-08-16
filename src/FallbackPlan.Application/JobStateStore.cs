@@ -226,6 +226,33 @@ public sealed class JobStateStore
     public static bool IsCommitted(JobState state) =>
         state is JobState.Complete or JobState.CompletedWithFailures;
 
+    /// <summary>
+    /// The schedule anchor for a set, in the operator's wall-clock frame —
+    /// what <see cref="Schedule.IsDue"/> and <see cref="Schedule.NextRun"/>
+    /// want, or <see langword="null"/> when the set has never completed a run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists to be the only place this conversion happens. The same five
+    /// lines used to appear in the scheduler, the CLI and the command handler,
+    /// and they were wrong in all three the same way: they built the anchor
+    /// with <see cref="DateTimeOffset.FromUnixTimeMilliseconds(long)"/>, which
+    /// carries offset <c>+00:00</c>, and handed it to a comparison whose other
+    /// side came from <see cref="DateTimeOffset.Now"/>. Three copies of a
+    /// conversion is how the same defect gets fixed twice and missed once.
+    /// </para>
+    /// <para>
+    /// <c>ToLocalTime</c> is what makes the frame right, and it is right per
+    /// instant rather than per process: it resolves the offset that was in
+    /// effect when the run completed, which is exactly what a daily schedule
+    /// needs on the night an offset changes.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset? ScheduleAnchor(string backupSetId) =>
+        LastCompleted(backupSetId) is { } completed
+            ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt).ToLocalTime()
+            : null;
+
     /// <summary>Jobs the Agent retries on its next pass — recoverable failures only (10 §3).</summary>
     public IReadOnlyList<JobRecord> RecoverableFailures(string backupSetId)
     {

@@ -101,6 +101,48 @@ public sealed class PartialCaptureJournalTests
     }
 
     /// <summary>
+    /// The anchor comes back in the operator's wall-clock frame, which is what
+    /// <see cref="Schedule.IsDue"/> requires and what nothing in its signature
+    /// can enforce.
+    /// </summary>
+    /// <remarks>
+    /// The stored value is Unix milliseconds — an instant with no frame. Every
+    /// caller used to convert it with
+    /// <c>DateTimeOffset.FromUnixTimeMilliseconds</c>, which carries offset
+    /// <c>+00:00</c>, and hand it to a comparison whose other side came from
+    /// <c>DateTimeOffset.Now</c>. That mismatch is RN-F1.
+    /// </remarks>
+    [TestMethod]
+    public void TheScheduleAnchor_ComesBackInTheLocalFrame()
+    {
+        const ulong At = 1_755_000_000_000;
+        var store = JobStateStore.Open(_directory);
+        Finish(store, JobState.Complete, At);
+
+        var anchor = store.ScheduleAnchor("set-1");
+
+        Assert.IsNotNull(anchor);
+
+        // Same instant, expressed in the frame the scheduler compares against.
+        Assert.AreEqual(At, (ulong)anchor.Value.ToUnixTimeMilliseconds());
+        Assert.AreEqual(
+            TimeZoneInfo.Local.GetUtcOffset(anchor.Value),
+            anchor.Value.Offset,
+            "the anchor is not in the operator's frame, so a daily comparison would read the wrong wall clock");
+    }
+
+    /// <summary>A set that has never completed a run has no anchor.</summary>
+    [TestMethod]
+    public void ASetThatHasNeverCompleted_HasNoAnchor()
+    {
+        var store = JobStateStore.Open(_directory);
+        Finish(store, JobState.FailedPermanent, 1_755_000_000_000);
+
+        Assert.IsNull(store.ScheduleAnchor("set-1"));
+        Assert.IsNull(store.ScheduleAnchor("no-such-set"));
+    }
+
+    /// <summary>
     /// A journal naming a state this build does not know loads anyway, with
     /// the unknown run read as recoverable. Without this a downgrade discards
     /// the whole journal — and with it every set's anchor, so every set

@@ -61,6 +61,13 @@ public sealed class ScheduleClockBoundaryTests
     {
         var fired = new List<DateTimeOffset>();
 
+        // The seed anchor arrives from the caller as a plain UTC instant, and
+        // `IsDue` requires the operator's wall-clock frame. Normalised here
+        // rather than at each caller because getting this wrong is silent —
+        // writing this class, a UTC-framed seed produced one spurious firing
+        // at the very start of the window and nothing said why.
+        anchor = anchor is { } seed ? WallClock(zone, seed) : null;
+
         for (var minute = 0; minute < hours * 60; minute++)
         {
             var instant = fromUtc.AddMinutes(minute);
@@ -74,10 +81,11 @@ public sealed class ScheduleClockBoundaryTests
             fired.Add(now);
 
             // The agent records completion as Unix milliseconds and reads it
-            // back through FromUnixTimeMilliseconds, which yields a UTC
-            // offset. The anchor is reconstructed the same way here so the
-            // test carries that detail rather than papering over it.
-            anchor = DateTimeOffset.FromUnixTimeMilliseconds(instant.ToUnixTimeMilliseconds());
+            // back through `JobStateStore.ScheduleAnchor`, which converts to
+            // the operator's wall-clock frame — the frame `IsDue` requires.
+            // Reconstructed the same way here, in the zone under test rather
+            // than the container's, which is UTC and would exercise nothing.
+            anchor = WallClock(zone, instant);
         }
 
         return fired;
@@ -104,8 +112,6 @@ public sealed class ScheduleClockBoundaryTests
     /// produce one backup, not two.
     /// </summary>
     [TestMethod]
-    [Ignore("RN-F1: fires twice on the fall-back night. See docs/review/2026-08-duplicati-release-notes.md; "
-        + "remove this attribute when the finding is fixed.")]
     public void ADailySchedule_OnTheNightAnHourRepeats_FiresOnce()
     {
         // Sydney leaves daylight saving at 03:00 AEDT on 5 April 2026, so
@@ -168,8 +174,6 @@ public sealed class ScheduleClockBoundaryTests
     /// its own case so the fix is shown to work in both hemispheres.
     /// </summary>
     [TestMethod]
-    [Ignore("RN-F1: fires five times over four days across the fall-back, including a spurious 01:00 firing. "
-        + "See docs/review/2026-08-duplicati-release-notes.md; remove this attribute when the finding is fixed.")]
     public void ADailySchedule_AcrossTheNorthernFallBack_FiresEveryDay()
     {
         // New York falls back on 1 November 2026.
@@ -254,6 +258,37 @@ public sealed class ScheduleClockBoundaryTests
 
         // One run discharges the whole backlog.
         Assert.IsFalse(schedule.IsDue(backAgain, backAgain.AddMinutes(1)));
+    }
+
+    /// <summary>
+    /// A clock corrected by months, in either direction, must produce one run
+    /// and no exception.
+    /// </summary>
+    /// <remarks>
+    /// Duplicati shipped "a crash that happened in the scheduler if the clock
+    /// was changed with more than 3 months" (2017-08-30). A machine whose CMOS
+    /// battery died boots in 1970 or 2000 and is corrected by NTP a minute
+    /// later, so the jump is not a contrived input — it is what an old laptop
+    /// does every time it is switched on.
+    /// </remarks>
+    [TestMethod]
+    [DataRow("daily at 07:05")]
+    [DataRow("every 12h")]
+    [DataRow("every 7d")]
+    public void TheClockJumpsByMonths_TheScheduleFiresOnceAndDoesNotThrow(string text)
+    {
+        var schedule = Parse(text);
+        var completed = new DateTimeOffset(2026, 6, 10, 7, 5, 0, TimeSpan.FromHours(10));
+
+        // Forwards: months of missed occurrences coalesce into one run.
+        var jumpedForward = completed.AddMonths(4);
+        Assert.IsTrue(schedule.IsDue(completed, jumpedForward));
+        Assert.IsFalse(schedule.IsDue(jumpedForward, jumpedForward.AddMinutes(1)), "the backlog did not discharge");
+
+        // Backwards: nothing is due, and nothing throws computing the next run.
+        var jumpedBack = completed.AddMonths(-4);
+        Assert.IsFalse(schedule.IsDue(completed, jumpedBack), "a months-backwards clock made the schedule storm");
+        _ = schedule.NextRun(completed, jumpedBack);
     }
 
     /// <summary>

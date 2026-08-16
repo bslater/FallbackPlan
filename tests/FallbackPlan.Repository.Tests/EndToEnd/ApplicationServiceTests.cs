@@ -121,11 +121,22 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.AreEqual(Local(4, 2, 30), schedule.NextRun(Local(3, 2, 45), Local(4, 1)));
         Assert.AreEqual(Local(5, 2, 30), schedule.NextRun(Local(4, 3, 10), Local(4, 9)));
 
-        // Mixed offsets: the anchor arrives in UTC, as a journal timestamp
-        // does, while now carries the Agent's local offset. The comparison
-        // must be by instant, not by the digits on either clock.
-        Assert.IsFalse(schedule.IsDue(Local(4, 3, 10).ToUniversalTime(), Local(4, 9)));
-        Assert.IsTrue(schedule.IsDue(Local(3, 2, 45).ToUniversalTime(), Local(4, 3)));
+        // This case used to assert the opposite, and it was wrong: it passed a
+        // UTC-framed anchor against a local `now` and required the comparison
+        // to be "by instant, not by the digits on either clock". That is
+        // exactly what let a daily schedule fire twice on the night an offset
+        // goes back, because one wall-clock occurrence has two instants then
+        // and the second looks new (RN-F1).
+        //
+        // `IsDue` now requires both arguments in the operator's wall-clock
+        // frame, and `JobStateStore.ScheduleAnchor` is what guarantees it —
+        // no production caller passes a raw journal timestamp any more.
+        // Mixing frames is therefore not a case to tolerate but one that
+        // cannot arise; asserting it here would re-pin the defect.
+        // `Application.Tests/ScheduleClockBoundaryTests` holds the boundary
+        // behaviour, and `PartialCaptureJournalTests` holds the conversion.
+        Assert.IsFalse(schedule.IsDue(Local(4, 3, 10), Local(4, 9)));
+        Assert.IsTrue(schedule.IsDue(Local(3, 2, 45), Local(4, 3)));
     }
 
     [TestMethod]

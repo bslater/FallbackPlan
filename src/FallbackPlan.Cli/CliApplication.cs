@@ -1325,9 +1325,7 @@ public static class CliApplication
                     if (!string.IsNullOrWhiteSpace(set.Schedule) &&
                         FallbackPlan.Application.Schedule.TryParse(set.Schedule!, out var schedule, out _))
                     {
-                        var anchor = jobs.LastCompleted(set.Id) is { } completed
-                            ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
-                            : (DateTimeOffset?)null;
+                        var anchor = jobs.ScheduleAnchor(set.Id);
                         nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now)
                             .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
                     }

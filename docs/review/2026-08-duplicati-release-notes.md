@@ -319,30 +319,43 @@ So the identity of a daily occurrence must be its **wall clock**, and the
 comparison must be `lastCompleted.DateTime < occurrence.DateTime` — 02:30
 against 02:30, which is not less than, so it does not fire.
 
-**That change alone is not enough, and this is the part that makes F1 bigger
-than it looks.** `Scheduler` builds the anchor with
+**That change alone would have been worse than the bug**, and this is what made
+F1 bigger than it looked. `Scheduler` built the anchor with
 `DateTimeOffset.FromUnixTimeMilliseconds(...)`, which carries offset `+00:00`,
-so `lastCompleted.DateTime` is a UTC wall clock while `occurrence.DateTime` is
-a local one. Comparing them would be worse than the bug. The fix therefore has
-two halves:
+so `lastCompleted.DateTime` was a UTC wall clock and `occurrence.DateTime` a
+local one. The fix therefore had two halves.
 
-1. **Make the contract explicit.** `IsDue` and `NextRun` require both
-   arguments in the operator's wall-clock frame. Say so in the doc comment,
-   because nothing in the signature enforces it.
-2. **Honour it at all three call sites** — `Scheduler`, `CliApplication`,
-   `ServiceCommandHandler` — by converting the stored Unix-millisecond anchor
-   into the local frame before passing it. `.ToLocalTime()` is right for the
-   agent; the tests supply the frame explicitly, via tzdata, because the
-   container's zone is UTC and would prove nothing.
-3. Then the daily branch compares wall clocks, and the interval branch is left
-   alone — an interval is genuinely absolute and its test pins the twelve-hour
-   spacing across the same transition.
-4. Delete both `[Ignore]`s in `ScheduleClockBoundaryTests`.
+`IsDue` and `NextRun` now **require both arguments in the operator's wall-clock
+frame**, stated in the doc comment because nothing in the signature enforces
+it, and `JobStateStore.ScheduleAnchor` supplies it — one conversion, using
+`ToLocalTime`, which resolves the offset in effect *at the instant the run
+completed* rather than the one in effect now. That is exactly what a daily
+schedule needs on the night an offset changes.
 
-*Care, restated because it is the trap:* the fix must not trade the double
-firing for a skipped spring-forward day. Both directions are already pinned —
-`…OnTheNightAnHourDoesNotExist_StillFiresThatDay` and
-`…TheWeekAroundASpringForward_FiresEveryDay` pass today and must still pass.
+The same five lines had been copied into `Scheduler`, `CliApplication` and
+`ServiceCommandHandler` — the same triplication that produced DR-3's endpoint
+defect, wrong in all three the same way. All three are now one line.
+
+**Three things this turned up that the analysis had not predicted.**
+
+- An existing test, `ApplicationServiceTests.DailySchedule_AnyMachineTimezone_…`,
+  explicitly asserted the old contract: it passed a UTC anchor against a local
+  `now` and required the comparison to be "by instant, not by the digits on
+  either clock". It was pinning the defect. Mixing frames is now not a case to
+  tolerate but one that cannot arise, and the test says so.
+- The test harness's own seed anchor was UTC-framed, which produced one
+  spurious firing at the very start of the window and said nothing about why.
+  `Firings` now normalises the seed in one place. Getting the frame wrong is
+  silent, which is the argument for centralising the conversion rather than
+  documenting it.
+- The interval branch is untouched — an interval is genuinely absolute — and
+  its twelve-hour spacing across the same transition is pinned.
+
+*The trap held:* the fix did not trade the double firing for a skipped
+spring-forward day. `…OnTheNightAnHourDoesNotExist_StillFiresThatDay` and
+`…TheWeekAroundASpringForward_FiresEveryDay` both still pass, along with a new
+case for a clock corrected by months in either direction ("a crash in the
+scheduler if the clock was changed with more than 3 months", 2017-08-30).
 
 ### F2 third — guard the Windows conversion the way POSIX already does
 
