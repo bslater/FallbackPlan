@@ -137,20 +137,24 @@ Grouped by disposition. Each cites the release that named it.
 | Retention losing a version | "min_generations" analogue | `RetentionPlannerTests.Select_MinGenerations_IsTheFloorTheOtherRulesCannotOverride` |
 | Case folding under a hostile locale | "locale settings affecting SQL statements" (2025-09-23) | `PathRuleHostileNameTests.CaseInsensitiveMatchingFoldsTheSameWay…` |
 | Scheduler ignoring the scheduled time | "backups could run immediately" (2020-05-11) | `ScheduleClockBoundaryTests.ASetThatJustCompleted_IsNotImmediatelyDueAgain` |
+| A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
 
 ### Open — applies, and nothing proves it
 
-These become the E-C work. Ranked by what a defect would cost.
+What is left after the E-C work, ranked by what a defect would cost.
 
 | # | Mechanism | Duplicati | Why it applies here |
 |---|---|---|---|
-| **O1** | A failed delete leaves durable state inconsistent | "failed delete causing database inconsistency" (2026-02-06) | `StagingSweep` deletes then records; a `DeleteAsync` that throws mid-list must not leave the ledger claiming work it did not do |
 | **O2** | Shared metadata deleted while still referenced | "database inconsistency after shared metadata delete" (2026-07-13) | Deduplicated records are shared by construction; the liveness walk must not free one two snapshots need |
-| **O3** | Case sensitivity inverting a selection | "purging a single file would purge all *other* files, if the filesystem is case-sensitive" (2019-10-19); "purge with simple filters and case-sensitive filesystems" (2020-01-18) | `PathRuleSet` takes `caseSensitive`; one test uses it. An inverted selection is catastrophic and untested |
-| **O4** | Overlapping source roots excluding everything | "backing up a folder and a subfolder would lead to all files being excluded" (2016-10-27) | No test declares two roots where one contains the other |
 | **O5** | An index naming an object no blob holds | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19); "race condition with index file uploads during backup" (2026-02-20) | `IndexPublisher` and the projector; the dangling-reference case is untested outside forensic rebuild |
 | **O6** | Partial backup interacting with retention | "partial backups could create defect backups when used with retention rules" (2019-12-08) | Compounds RN-F3: a partial snapshot must not be retention's only survivor |
-| **O7** | An operation applied twice | "transactions being double comitted" (2025-05-29) | `AtomicFile` and the sync ledger's `Mutate`; idempotency is assumed, not asserted |
+
+O3, O4 and O7 were closed by the E-C work — `Domain.Tests/PathRuleSelectionTests`
+(11) for the case-sensitivity and overlapping-root pair, and
+`Application.Tests/RepeatedOperationTests` (7) for the twice-applied operation.
+O1 is closed above. Their rows are struck from this table rather than left
+standing, because a list of open items that includes closed ones stops being
+read.
 
 Also open but deliberately low priority, recorded so they are not rediscovered:
 environment-variable expansion in roots and rules (2016-10-27, 2026-08-14) —
@@ -212,6 +216,41 @@ Two honest limits:
   on the bullet count.
 
 ---
+
+## What the Open items turned out to be
+
+Recorded as they close, because "this mechanism applies here" and "this
+mechanism has already bitten here" are different claims and the ledger should
+not blur them.
+
+### O1 — a failed delete leaves durable state inconsistent
+
+**A real defect, and a two-headed one.** `StagingSweep.SweepAsync` carried the
+sentence "every refusal is a finding" in its own documentation while its four
+`DeleteAsync` calls had no `try`/`catch` and discarded the returned
+`DeleteOutcome`.
+
+The loud head: the sweep walks tombstones in ordinal key order, so one
+`IOException` — a sharing violation on Windows, a permission changed under a
+running collector — escaped the loop, aborted the whole retention pass through
+`RetentionRunner`, lost the counters and findings, and left every object
+sorting after it uncollected for as long as the fault lasted.
+
+The quiet head is the one that matches Duplicati's note most exactly, and the
+one a passing test suite would never have shown. A store answering
+`DeleteOutcome.NotFound` for an object still present incremented `Deleted`
+anyway. Measured on the red run: **the report claimed five deletions against a
+store that performed none.** That is precisely a ledger claiming work nobody
+did.
+
+`StagingTrim.ExecuteAsync` already caught both exception types — but swallowed
+them silently, so a trim that deferred every candidate produced a report
+indistinguishable from one that had nothing to do. It now names them.
+
+The general lesson, worth more than the fix: **an operation whose failure mode
+is "the count is wrong" cannot be caught by a test that only checks the happy
+path succeeds.** Every one of these paths was covered by a passing test before
+this work, and every one of those tests ran against a store that never refused.
 
 ## Appendix — reproduction
 

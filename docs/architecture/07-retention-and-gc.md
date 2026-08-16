@@ -73,6 +73,8 @@ A **dry-run report is mandatory** before any destructive pass, and it states wha
 
 Interruption at any step leaves every published snapshot recoverable. Steps 6–13 are individually resumable and idempotent; re-running a partially completed pass converges rather than compounding.
 
+Step 13 is bounded in a second sense: **one object's refusal defers that object and nothing else.** The sweep walks tombstones in key order, so a store that throws — a sharing violation on Windows, a permission changed under a running collector — must not be allowed to escape the loop, because doing so abandons every object sorting after it and discards the pass's counters and findings along with the frame. A refused delete leaves its tombstone standing, its grace clock running, and a named finding in the report; the next pass re-plans and tries again. For the same reason the counters count only what the store confirmed: a delete reporting nothing to delete, or refusing a precondition, has reclaimed no space, and a report that says otherwise is worse than no report.
+
 ### 3.0 The collector is a writer
 
 Steps 6 and 9 exist because the collector creates blobs, and **any component that creates a blob publishes an intent first — with no exception for maintenance.**

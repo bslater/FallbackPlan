@@ -376,8 +376,11 @@ public static class StagingTrim
     /// <param name="verificationFor">The same verifications the plan was built from.</param>
     /// <param name="syncRecordFor">The sync ledger, re-read per candidate so a withdrawn proof is seen.</param>
     /// <param name="cancellationToken">Stops the deletes; a re-run re-plans from scratch.</param>
-    /// <returns>What actually went — a blob already gone, or no longer verified, counts nothing.</returns>
-    public static async ValueTask<(int Deleted, long Bytes)> ExecuteAsync(
+    /// <returns>
+    /// What actually went — a blob already gone, or no longer verified, counts
+    /// nothing — and, named, whatever the store refused to release.
+    /// </returns>
+    public static async ValueTask<(int Deleted, long Bytes, IReadOnlyList<string> Findings)> ExecuteAsync(
         IObjectStore store,
         TrimPlan plan,
         Func<string, TrimVerification> verificationFor,
@@ -391,6 +394,7 @@ public static class StagingTrim
 
         var deleted = 0;
         var bytes = 0L;
+        var findings = new List<string>();
         foreach (var candidate in plan.Eligible)
         {
             var verified = true;
@@ -428,7 +432,12 @@ public static class StagingTrim
                 // A file the platform will not release right now — Windows
                 // holds a sharing violation over a blob mid-read — stays for
                 // the next pass; one stubborn file must not abort the trim,
-                // let alone the sets still waiting behind this one.
+                // let alone the sets still waiting behind this one. Deferring
+                // is correct; deferring silently is not, because the report
+                // would then be indistinguishable from one where the trim had
+                // nothing to do.
+                findings.Add(
+                    $"deferred: historic blob {candidate.StoreKey} could not be trimmed — {exception.Message}");
                 continue;
             }
 
@@ -437,9 +446,14 @@ public static class StagingTrim
                 deleted++;
                 bytes += candidate.Length;
             }
+            else if (outcome.Outcome != DeleteOutcome.NotFound)
+            {
+                findings.Add(
+                    $"deferred: historic blob {candidate.StoreKey} was refused by the store ({outcome.Outcome})");
+            }
         }
 
-        return (deleted, bytes);
+        return (deleted, bytes, findings);
     }
 
     /// <summary>Why one destination stalled the trim.</summary>

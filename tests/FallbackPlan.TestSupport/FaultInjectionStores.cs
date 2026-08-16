@@ -393,3 +393,81 @@ public sealed class ReadFaultingObjectStore(IObjectStore inner) : IObjectStore
     public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
         inner.DeleteAsync(key, conditions, cancellationToken);
 }
+
+/// <summary>
+/// Deletes normally until armed, then refuses matching keys — either by
+/// throwing an <see cref="IOException"/> or by reporting
+/// <see cref="DeleteOutcome.NotFound"/> without removing anything.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Deletion is the one operation whose failure is invisible from its own
+/// result unless the caller looks: a store that reports "not found" for an
+/// object that is still there, and a caller that counts every call as a
+/// removal, together produce a ledger claiming work nobody did. The two arming
+/// modes are the two halves of that — the loud failure and the quiet one.
+/// </para>
+/// <para>
+/// A sharing violation on Windows and a permission change under a running
+/// collector both reach a caller as one of these; neither is a reason to
+/// abandon the objects behind the failure in listing order.
+/// </para>
+/// </remarks>
+public sealed class DeleteFaultingObjectStore(IObjectStore inner) : IObjectStore
+{
+    private volatile Func<string, bool>? _throwing;
+    private volatile Func<string, bool>? _lying;
+
+    /// <summary>Starts throwing on deletes of keys matching <paramref name="keyFilter"/> (all when null).</summary>
+    public void ArmThrow(Func<string, bool>? keyFilter = null) => _throwing = keyFilter ?? (_ => true);
+
+    /// <summary>
+    /// Starts reporting <see cref="DeleteOutcome.NotFound"/> for matching keys
+    /// while leaving the object in place — the delete that says it had nothing
+    /// to do and is believed.
+    /// </summary>
+    public void ArmNotFound(Func<string, bool>? keyFilter = null) => _lying = keyFilter ?? (_ => true);
+
+    /// <summary>Stops both faults — the outage clears.</summary>
+    public void Heal()
+    {
+        _throwing = null;
+        _lying = null;
+    }
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => inner.Capabilities;
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+        inner.OpenReadAsync(key, range, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken) =>
+        inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
+    {
+        if (_throwing is { } throwing && throwing(key.ToString()))
+        {
+            throw new IOException($"Injected fault: the delete of '{key}' failed.");
+        }
+
+        return _lying is { } lying && lying(key.ToString())
+            ? ValueTask.FromResult(new DeleteResult(DeleteOutcome.NotFound))
+            : inner.DeleteAsync(key, conditions, cancellationToken);
+    }
+}

@@ -15,9 +15,16 @@ namespace FallbackPlan.Retention;
 /// <param name="NotYetEligible">Tombstones whose grace generation has not arrived.</param>
 /// <param name="TombstonesCleared">Tombstones removed one generation after their object went.</param>
 /// <param name="Findings">
-/// Security and damage findings: a signature that failed, a tombstone for an
-/// object revalidation still reaches. Each one names why nothing was deleted.
+/// Security, damage and deferral findings: a signature that failed, a
+/// tombstone for an object revalidation still reaches, a store that would not
+/// release a file. Each one names why nothing was deleted.
 /// </param>
+/// <remarks>
+/// The counters count what the store confirmed. A delete that threw, that
+/// reported nothing to delete, or that was refused increments none of them and
+/// leaves a finding instead — a report claiming reclaimed space is worth
+/// nothing if a failed delete can produce one.
+/// </remarks>
 public sealed record SweepOutcome(
     int Deleted, int NotYetEligible, int TombstonesCleared, IReadOnlyList<string> Findings);
 
@@ -105,7 +112,11 @@ public static class StagingSweep
     /// The delete gate, run per tombstone (spec 11 §3.2): the signature
     /// verifies, the generation has arrived, and the object is revalidated as
     /// still condemned against the fresh plan the caller computed <b>after</b>
-    /// this pass began. Deletes in bounded order; every refusal is a finding.
+    /// this pass began. Deletes in bounded order; every refusal is a finding,
+    /// including one the store itself raises — a single object the platform
+    /// will not release defers that object and nothing else, because the walk
+    /// is in key order and abandoning it would abandon everything sorting
+    /// after it too.
     /// </summary>
     /// <param name="store">The staging archive's store.</param>
     /// <param name="repository">The opened archive.</param>
@@ -172,9 +183,11 @@ public static class StagingSweep
                     // The object is gone; the tombstone outlives it one
                     // generation so a reader can tell a completed collection
                     // from a missing object (11 §3.2).
-                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1)
+                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
+                        && await TryDeleteAsync(
+                            store, entry.Key, $"tombstone {entry.Key}", findings, cancellationToken)
+                            .ConfigureAwait(false))
                     {
-                        await store.DeleteAsync(entry.Key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
                         cleared++;
                     }
 
@@ -191,8 +204,12 @@ public static class StagingSweep
                     continue;
                 }
 
-                await store.DeleteAsync(present.Value, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
-                deleted++;
+                if (await TryDeleteAsync(store, present.Value, $"blob {blobId}", findings, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    deleted++;
+                }
+
                 continue;
             }
 
@@ -201,9 +218,11 @@ public static class StagingSweep
                 var objectId = ObjectId.FromBytes(tombstone.Value.ObjectId.Span);
                 if (!snapshotsByObjectId.TryGetValue(objectId, out var snapshot))
                 {
-                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1)
+                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
+                        && await TryDeleteAsync(
+                            store, entry.Key, $"tombstone {entry.Key}", findings, cancellationToken)
+                            .ConfigureAwait(false))
                     {
-                        await store.DeleteAsync(entry.Key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
                         cleared++;
                     }
 
@@ -217,8 +236,13 @@ public static class StagingSweep
                     continue;
                 }
 
-                await store.DeleteAsync(snapshot.StoreKey, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
-                deleted++;
+                if (await TryDeleteAsync(
+                    store, snapshot.StoreKey, $"snapshot {snapshot.Fact.SnapshotId[..12]}…", findings, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    deleted++;
+                }
+
                 continue;
             }
 
@@ -226,6 +250,65 @@ public static class StagingSweep
         }
 
         return new SweepOutcome(deleted, notYet, cleared, findings);
+    }
+
+    /// <summary>
+    /// Deletes one object, reporting rather than propagating whatever stops
+    /// it, and returning true only when the store says the object went.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two failures hide here and neither is exotic. A store that throws —
+    /// Windows holding a sharing violation over a blob something is reading,
+    /// a permission changed under a running collector — would otherwise
+    /// abandon every object sorting after this one in the listing, and take
+    /// the pass's counters and findings with it. And a store answering
+    /// <see cref="DeleteOutcome.NotFound"/> or
+    /// <see cref="DeleteOutcome.PreconditionFailed"/> has not deleted
+    /// anything, so counting the call as a deletion produces a report that
+    /// claims space nobody reclaimed.
+    /// </para>
+    /// <para>
+    /// A refusal is a deferral, never a withdrawal: the tombstone stands, its
+    /// grace clock keeps running, and the next pass re-plans and tries again.
+    /// Cancellation is deliberately <em>not</em> absorbed — a stop request
+    /// must not read as a completed pass.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<bool> TryDeleteAsync(
+        IObjectStore store,
+        ObjectKey key,
+        string what,
+        List<string> findings,
+        CancellationToken cancellationToken)
+    {
+        DeleteResult result;
+        try
+        {
+            result = await store.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            findings.Add(
+                $"deferred: {what} could not be deleted — {exception.Message}; the tombstone stands for the next pass");
+            return false;
+        }
+
+        switch (result.Outcome)
+        {
+            case DeleteOutcome.Deleted:
+                return true;
+
+            case DeleteOutcome.NotFound:
+                // Already gone is the goal, and a concurrent pass or an
+                // interrupted earlier one reaches here honestly. Nothing was
+                // deleted by this call, so nothing is counted.
+                return false;
+
+            default:
+                findings.Add($"deferred: {what} was refused by the store ({result.Outcome}); not deleted");
+                return false;
+        }
     }
 
     private static async ValueTask<bool> ExistsAsync(

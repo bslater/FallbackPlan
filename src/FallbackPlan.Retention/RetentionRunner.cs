@@ -167,10 +167,11 @@ public static class RetentionRunner
         // sweep already removed counts nothing here.
         if (trim.Eligible.Count > 0)
         {
-            var (trimmed, bytes) = await StagingTrim.ExecuteAsync(
+            var (trimmed, bytes, refused) = await StagingTrim.ExecuteAsync(
                 store, trim, trimVerificationFor, syncRecordFor, cancellationToken)
                 .ConfigureAwait(false);
             lines.Add($"trimmed: {trimmed} historic data blob(s), {bytes} byte(s)");
+            lines.AddRange(refused);
         }
 
         return new RetentionReport(lines, gate.Held, written, swept);

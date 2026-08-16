@@ -482,7 +482,7 @@ public sealed class StagingTrimTests : IDisposable
 
         // Execution re-verifies and refuses: the staging copies are now the
         // only copies, and every one of them stays.
-        var (deleted, _) = await StagingTrim.ExecuteAsync(
+        var (deleted, _, _) = await StagingTrim.ExecuteAsync(
             store, plan, VaultVerification, name => sync.Find(SetId, name), CancellationToken.None);
         Assert.AreEqual(0, deleted);
         Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
