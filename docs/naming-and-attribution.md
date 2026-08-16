@@ -88,7 +88,17 @@ There is no checker for this. A grep before a documentation commit is the
 whole of it:
 
 ```
-git grep -I -i -E "\b(duplicati|crashplan|restic|kopia|borg|backblaze|rclone|duplicity)\b"
+git grep -I -i -E "\b(duplicati|crashplan|restic|kopia|borg|backblaze|rclone|duplicity)\b" \
+  -- . ':!docs/naming-and-attribution.md'
 ```
 
-Zero hits is the expected result.
+Zero hits is the expected result. **This page excludes itself**, because the
+table above has to spell the words out to translate them — a check that always
+reports its own dictionary is a check nobody runs twice.
+
+A term list only finds what somebody thought to name, which is its weakness.
+The sweep that produced this convention searched by *shape* as well: every
+external URL host, capitalised tokens ranked by rarity, and every backtick-quoted
+identifier in a document cross-checked against whether it exists in this tree —
+anything that does not is somebody else's. That last one found nineteen foreign
+test names carrying no brand at all.

@@ -28,7 +28,7 @@ The lesson is not "we should name tests after issues" — we deliberately [keep 
 
 That is a direct argument for where the marginal test should go in FallbackPlan too, and it is worth noticing that our own suite is weighted the other way: 361 of 966 tests are in `FallbackPlan.Repository.Tests`, and a large share of those are codec, CBOR and crypto round-trips. Those are the tests that are easy to write and that almost never fail after the first day.
 
-**The suite is stratified by *disruption*, not by layer.** `DisruptionTests`, `CompactDisruptionTests`, `SyntheticFilelistMetadataTests`, `RepairHandlerTests`, `RepairWithMissingRemoteFiles` — the top-level organising idea is "something went wrong partway; what is the state now, and can the user get out of it?" Our `FallbackPlan.InterruptionTests` project is the same instinct and it is the right one. It is also, at 44 tests, the smallest substantive project we have.
+**The suite is stratified by *disruption*, not by layer.** Its top-level files are named for disruption, compaction under disruption, synthetic file-list metadata, repair handling and repair with missing remote files — the top-level organising idea is "something went wrong partway; what is the state now, and can the user get out of it?" Our `FallbackPlan.InterruptionTests` project is the same instinct and it is the right one. It is also, at 44 tests, the smallest substantive project we have.
 
 ---
 
@@ -127,7 +127,7 @@ Two gaps, both taught by #6205 and #6688 rather than by #4041:
 
 **Evidence.** A dense cluster. One report has compaction forgetting an index-object deletion, producing a missing-file error on the next run. Another has compaction producing extra hashes. Four more from the last year alone are compaction-versus-index defects. A seventh has recreate failing after an *interrupted backup then compact* — a two-fault sequence.
 
-The test file to note is its compaction-disruption suite, whose four cases are interrupted compact, interrupted compact plus normal compact`, **`DoubleInterruptedCompact`**, and `RestoreAfterDoubleInterruptedCompact`. The surveyed product wrote a *double* interruption test because a single one was not enough to find the bug.
+The test file to note is its compaction-disruption suite, whose four cases are interrupted compact, interrupted compact followed by a normal one, **double interrupted compact**, and restore after a double interrupted compact. The surveyed product wrote a *double* interruption test because a single one was not enough to find the bug.
 
 **Where we stand.** Not built — [Phase 4](../roadmap.md#phase-4--retention-pruning-and-healing). The existing exit criteria are already good and already name interruption at every GC step, concurrency with backup, and clock skew. `ConcurrentCollectionTests` proves the reachability discipline early (`GarbageCollection_RunsWhileABackupIsInFlight_DeletesNothing`, `GarbageCollection_AnIntentCannotBeParsed_ProtectsEverythingItMightCover`).
 
@@ -217,7 +217,7 @@ The gap is that no test *takes a snapshot captured under POSIX rules and plans a
 
 **Mechanism.** A file with no content has no blocks, so every code path keyed on "look up its blocks" has a special case, and every special case is a place to get it wrong — most visibly when the database is rebuilt and there are no blocks to rebuild *from*.
 
-**Evidence.** `EmptyFileTests` has four cases, three of which are about surviving a database recreate, including `OnlyEmptyFileAfterDatabaseRecreateAsync` — a backup consisting of nothing but empty files. `EmptyMetadataTests`, `RepairReplacesZeroLengthMetadataAsync`, and `PreventEmptySourceTest` are the same instinct.
+**Evidence.** A four-case empty-file suite, three of whose cases are about surviving a database recreate — including a backup consisting of nothing but empty files. An empty-metadata suite, a repair that replaces zero-length metadata, and a guard against an empty source are the same instinct.
 
 **Where we stand.** `Backup_TheFileIsEmpty_ProducesNoSegmentsRecordsOrBlobs` covers capture. Nothing covers an empty file across a rebuild, and nothing covers a snapshot whose data plane is empty — a tree of empty files and directories, where the index has entries and no blob exists at all.
 
@@ -260,7 +260,7 @@ What is untested is the file **changing during the read** — grown or truncated
 
 This is a *documented accepted risk*, not a defect — every mtime-based engine has it, and the escape is a full re-read. What we lack is (a) a test that pins the behaviour so a future change to `IsContentUnchanged` cannot silently widen the hole, and (b) any assertion that a full re-read actually rescues it.
 
-The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSkipsItOnTheNextPass` uses `TimeSpan.Zero` offsets throughout, so the DST transitions that produced `CheckRepeatScheduleIsStableOverDSTForward` have never been exercised here.
+The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSkipsItOnTheNextPass` uses `TimeSpan.Zero` offsets throughout, so the daylight-saving transitions that produced the surveyed product's forward- and backward-stability checks have never been exercised here.
 
 **Verdict: Open.**
 
@@ -290,7 +290,7 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Mechanism.** The recommended ransomware defence is an immutable or object-locked bucket. That makes deletion conditional, delayed, or impossible — so compaction, retention and repair must all degrade rather than fail.
 
-**Evidence.** A locking suite covering delete and compact — a delete skipping a locked remote snapshot volume, and compaction detecting and avoiding a locked compactable volume — and a soft-delete suite `SoftDeleteTests` (eight cases, including a backend that cannot rename). This is recent work in the surveyed product and it is a retrofit.
+**Evidence.** A locking suite covering delete and compact — a delete skipping a locked remote snapshot volume, and compaction detecting and avoiding a locked compactable volume — and an eight-case soft-delete suite, including a backend that cannot rename. This is recent work in the surveyed product and it is a retrofit.
 
 **Where we stand.** Phase 3/4, and better placed than the surveyed product was: blob immutability is already a [format invariant](../../specifications/repository-format/) and [ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md)'s intent discipline never rewrites an object. Our exposure is confined to the collector.
 
@@ -318,7 +318,7 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 
 **Mechanism.** The cache has a schema; the schema changes; an old file meets new code.
 
-**Evidence.** `DatabaseUpgraderTests` — five cases, including `UpgradeScriptsMatchSchemaVersion`, a consistency check between the migration scripts and the declared version.
+**Evidence.** A five-case database-upgrader suite, one of which checks the migration scripts against the declared schema version.
 
 **Where we stand.** Our catalogue is at `CatalogueSchema.Version = 4` and is disposable, so the correct behaviour is to discard and rebuild rather than migrate — which is strictly simpler and strictly safer than the surveyed product's position. Nothing tests it. An older catalogue file that is *opened* rather than discarded would read wrong columns and answer wrongly, and the rest of the system trusts those answers.
 
@@ -363,7 +363,7 @@ Worth stating, so the absence is a decision rather than an oversight.
 
 **`repair` as the recovery story.** A substantial share of the surveyed issues end with "run repair", and a further share are *about* repair failing — at least five separate reports. A repair verb is what a system needs when its two sources of truth can disagree. Ours cannot, and adding a repair verb would be a signal that we had stopped believing that. Rebuild-from-store is not repair; it is re-derivation, and the distinction is the whole architecture.
 
-**Testing through the CLI.** `CommandLineOperationsTests`, `GeneralBlackBoxTesting` and `SVNCheckoutsTest` drive the product as a subprocess against real archives. It buys realism at the cost of diagnosis — a failure tells you the backup did not round-trip, not which layer lost the bytes. Our [command-surface tests](../adr/0028-service-boundary-and-deployment-topologies.md) go through the contract instead, which is the same realism with a stack trace.
+**Testing through the CLI.** Three of its suites — command-line operations, general black-box testing, and a real-world checkout corpus — drive the product as a subprocess against real archives. It buys realism at the cost of diagnosis — a failure tells you the backup did not round-trip, not which layer lost the bytes. Our [command-surface tests](../adr/0028-service-boundary-and-deployment-topologies.md) go through the contract instead, which is the same realism with a stack trace.
 
 ---
 
