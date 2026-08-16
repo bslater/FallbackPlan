@@ -48,16 +48,16 @@ internal static class PeerAddress
             return false;
         }
 
-        var endpoint = destination.Endpoint!;
-        var separator = endpoint.LastIndexOf(':');
-        if (separator <= 0 || !int.TryParse(endpoint[(separator + 1)..], out var port))
+        if (!PeerEndpoint.TryParse(destination.Endpoint!, out var host, out var port, out var malformed))
         {
-            refusal = $"endpoint '{endpoint}' is not host:port";
+            // The same parse the admission check uses, so an endpoint status
+            // calls well-formed is one this can actually dial.
+            refusal = malformed!;
             return false;
         }
 
         refusal = null;
-        resolved = new Resolved(grants, grant, endpoint[..separator], port);
+        resolved = new Resolved(grants, grant, host, port);
         return true;
     }
 }

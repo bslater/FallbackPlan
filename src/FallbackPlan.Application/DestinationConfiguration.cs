@@ -223,15 +223,10 @@ public sealed record DestinationConfiguration
                 + "copy it from the peer's `pairings` output.";
         }
 
-        var separator = endpoint.LastIndexOf(':');
-        if (separator <= 0 || !int.TryParse(endpoint[(separator + 1)..], out var port))
-        {
-            return $"endpoint '{endpoint}' is not host:port.";
-        }
-
-        return port is > 0 and <= 65535
-            ? null
-            : $"endpoint '{endpoint}' names port {port}, which is not a port.";
+        // Shared with the dialling path so the two cannot disagree about what
+        // a valid endpoint is — they once both accepted `fe80::1` as host
+        // `fe80:` on port 1.
+        return PeerEndpoint.TryParse(endpoint, out _, out _, out var defect) ? null : defect;
     }
 }
 
