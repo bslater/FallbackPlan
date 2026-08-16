@@ -1,3 +1,5 @@
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.Domain.Tests;
 
 /// <summary>
@@ -150,5 +152,35 @@ public sealed class PathRuleHostileNameTests
 
         Assert.IsTrue(rules.IsCaptured("work/report.txt"));
         Assert.IsFalse(rules.IsCaptured("work/report.txt\n"));
+    }
+
+    /// <summary>
+    /// Case-insensitive matching is Unicode simple case folding (06 §7.1),
+    /// which is a fixed mapping — not the operator's locale. In Turkish
+    /// <c>I</c> lowercases to the dotless <c>ı</c>, so a locale-sensitive fold
+    /// would stop an exclude reaching a file on a Turkish machine and start it
+    /// reaching a different one. The rule set is compiled once and shared, so
+    /// which machine ran it must not be part of the answer.
+    /// </summary>
+    [TestMethod]
+    public void CaseInsensitiveMatchingFoldsTheSameWay_WhateverTheOperatorsLocale()
+    {
+        foreach (var culture in CultureScope.Hostile)
+        {
+            using var scope = new CultureScope(culture);
+
+            Assert.IsTrue(
+                PathRule.TryCreate("INFO.LOG", caseSensitive: false, out var rule, out var defect), defect);
+
+            Assert.IsTrue(rule!.Matches("info.log"), $"ASCII case folding broke under {culture}");
+            Assert.IsTrue(rule.Matches("InFo.LoG"), culture);
+
+            // The dotless ı is a different letter, not a lowercase I. Only a
+            // Turkish fold would call these the same file.
+            Assert.IsFalse(rule.Matches("ınfo.log"), $"a Turkish fold leaked in under {culture}");
+
+            // And the dotted capital İ likewise.
+            Assert.IsFalse(rule.Matches("İnfo.log"), $"a Turkish fold leaked in under {culture}");
+        }
     }
 }

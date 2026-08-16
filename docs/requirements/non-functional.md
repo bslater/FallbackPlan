@@ -107,7 +107,7 @@ Unless a requirement says otherwise, targets are measured on:
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| NFR-PORT-001 | Core processing shall run on supported Windows, macOS, and Linux without a platform-specific database engine. | CI runs the full suite on all three. |
+| NFR-PORT-001 **[amended]** | Core processing shall run on supported Windows, macOS, and Linux without a platform-specific database engine, and shall behave identically whatever locale the host is configured for. Durable state written under one locale shall read back unchanged under any other. | CI runs the full suite on all three platforms, and again under a hostile locale (`tr-TR`). Configuration and the sync ledger survive a write under one culture and a read under another. |
 | NFR-PORT-002 | Storage, cryptography, compression, segmentation, catalogue, and legacy import shall be separated behind tested interfaces. | Architecture tests enforce [`../architecture/11-solution-structure.md` §2](../architecture/11-solution-structure.md#2-dependency-rules). |
 | NFR-PORT-003 | Deterministic fixtures and property-based tests shall cover all repository encodings and state transitions. | Every encoding has a round-trip property test. |
 | NFR-PORT-004 | Public APIs shall use asynchronous streaming, cancellation, bounded concurrency, and explicit result types. | Expected outcomes are results, not exceptions ([`../architecture/05-storage-providers.md` §2.2](../architecture/05-storage-providers.md#22-results-not-exceptions)). |
