@@ -21,6 +21,10 @@ namespace FallbackPlan.Api.Transport;
 /// </remarks>
 public static partial class PeerCredentials
 {
+    /// <summary>Linux's <c>SOL_SOCKET</c>, the native level SO_PEERCRED lives under.</summary>
+    private const int SolSocketLinux = 1;
+
+    /// <summary>Linux's <c>SO_PEERCRED</c>.</summary>
     private const int SoPeerCredLinux = 17;
 
     /// <summary>Reads the caller's identity from a connected socket.</summary>
@@ -64,12 +68,26 @@ public static partial class PeerCredentials
     private static PeerIdentity ReadLinux(Socket socket)
     {
         // struct ucred { pid_t pid; uid_t uid; gid_t gid; } — three 32-bit
-        // fields, read through the raw option accessor because .NET names no
+        // fields, read through the RAW option accessor because .NET names no
         // SocketOptionName for SO_PEERCRED.
+        //
+        // `GetSocketOption` is the wrong door and fails silently through it:
+        // it translates .NET's portable option names to native ones, so a raw
+        // native number handed to it is rejected as "operation not supported"
+        // before any syscall happens. This read therefore returned Unknown for
+        // every local connection ever accepted, on the one platform whose
+        // branch it is. `GetRawSocketOption` takes the native level and name
+        // and passes them through, which is what the comment above always
+        // meant.
         var buffer = new byte[12];
         try
         {
-            socket.GetSocketOption(SocketOptionLevel.Socket, (SocketOptionName)SoPeerCredLinux, buffer);
+            if (socket.GetRawSocketOption(SolSocketLinux, SoPeerCredLinux, buffer) < buffer.Length)
+            {
+                // A short answer is not a credential. Reading a partly-filled
+                // buffer would invent a pid and a uid out of zeroes.
+                return PeerIdentity.Unknown;
+            }
         }
         catch (SocketException)
         {

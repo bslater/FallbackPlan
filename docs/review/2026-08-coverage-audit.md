@@ -135,7 +135,11 @@ The same holds one layer up: of the seven `ServiceErrorReason` values, only `Not
 
 Most of the file is the Windows named-pipe and macOS `getpeereid` paths, which are unreachable here. What is odd is that the *Linux* branch is entered — the dispatch line is covered — while neither outcome of `ReadLinux` is: not the `SO_PEERCRED` success that builds the identity, nor the `SocketException` fallback to `Unknown`.
 
-Severity is low today: the identity is informational until [Q19](../open-questions.md#q19--console-identity-and-multi-operator-access) settles console identity, and nothing gates on it. It is listed because the discrepancy wants one look **before** it becomes an authorization input rather than after.
+Severity looked low: the identity is informational until [Q19](../open-questions.md#q19--console-identity-and-multi-operator-access) settles console identity, and nothing gates on it. It was listed because the discrepancy wanted one look **before** it became an authorization input rather than after.
+
+> **Resolved (2026-08) — and it was a defect, not a gap.** The look found that `ReadLinux` returned `Unknown` for *every* local connection ever accepted. It called `Socket.GetSocketOption`, which translates .NET's portable option names into native ones and therefore rejects a raw native number as "operation not supported" before any syscall happens. `GetRawSocketOption` is the accessor that passes the native level and name through — which is what the method's own comment ("read through the raw option accessor because .NET names no SocketOptionName for SO_PEERCRED") always meant. The intent was right and the call was wrong, and nothing noticed because nothing read the answer.
+>
+> T-16's mitigation says the service "reads peer credentials to identify them". The authenticating half was never affected — filesystem permissions decide who may connect — but the identifying half did not work on Linux. It does now, proven over a real Unix socket pair. This is the one finding in this document that the coverage number found rather than merely measured.
 
 ### G6 — `Agent/AgentHost.cs`, 67.7% — 149 lines, the largest single-file gap
 
