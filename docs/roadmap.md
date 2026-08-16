@@ -104,7 +104,9 @@ Largely absorbed by the hub-and-spoke arc, which builds the retention engine, ma
 
 **Features:** ~~retention engine · generation-based mark and sweep · write-intent-aware reachability~~ *(arc)* · blob compaction via index republication · tombstone grace periods · mandatory dry-run reports · replica healing · damaged-snapshot scoping · ~~retention floors~~ *(arc)* and destructive-action auditing.
 
-**Exit criteria:** interruption at every GC step preserves published snapshots · GC concurrent with backup never deletes in-flight blobs · compaction modifies no manifest · deleted content retained per policy · corruption healed from another replica · clock skew of ±24 h changes no GC outcome.
+**Exit criteria:** interruption at every GC step preserves published snapshots · GC concurrent with backup never deletes in-flight blobs · compaction modifies no manifest · deleted content retained per policy · corruption healed from another replica · clock skew of ±24 h changes no GC outcome · **and the twelve compaction criteria of [ADR-0025 Amendment 2](adr/0025-compaction-reseals-records.md#amendment-2-2026-08--the-twelve-things-compaction-is-known-to-get-wrong)**, each with a test.
+
+Those twelve are not padding. Compaction is the densest cluster of shipped fixes in Duplicati's entire fifteen-year changelog — 29 of 805 distinct entries, more than any other mechanism, recurring every year from 2016 to 2026 ([ledger](review/2026-08-duplicati-changelog-ledger.md)). They are written down now, while nothing is built, because that is the only moment the list is free.
 
 ---
 
