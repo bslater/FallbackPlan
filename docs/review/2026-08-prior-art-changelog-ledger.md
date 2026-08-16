@@ -120,10 +120,10 @@ Grouped by disposition. Each cites the release that named it.
 | Restore not creating missing structure | 2020-07-09, 2025-01-07 | `RestoreIntoMissingStructureTests` (4) |
 | SQLite host-parameter limit | "exceeding the number of parameters supported by SQLite" (2019-09-02) | `SnapshotScaleEdgeTests` — 2,500 entries; no dynamic parameter lists exist |
 | Empty snapshots | a snapshot created holding nothing (2025-05-29) | `SnapshotScaleEdgeTests` (3) |
-| Metadata-only change discarded | "updated timestamps were discarded if no data was changed" (2025-02-11) | `MetadataOnlyChangeTests` (6) — was a live defect, fixed `b2c018c` |
+| Metadata-only change discarded | "updated timestamps were discarded if no data was changed" (2025-02-11) | `MetadataOnlyChangeTests` (6) — was a live defect, fixed `c4d2727` |
 | Locale-sensitive parsing | fr-CA (2025-04-11), invariant formatting (2025-09-25) | `HostileCultureTests` (21), CI tr-TR leg |
-| Filename metacharacters and filters | dollar-sign ×2, "various bugs with backup filters" (2023-12-27) | `PathRuleHostileNameTests` (24) — was a live defect, fixed `51b503a` |
-| URL parser inconsistency | "different results for similar inputs" (2025-03-26) | `PeerEndpointTests` (19) — was a live defect, fixed `34e511b` |
+| Filename metacharacters and filters | dollar-sign ×2, "various bugs with backup filters" (2023-12-27) | `PathRuleHostileNameTests` (24) — was a live defect, fixed `6bc1069` |
+| URL parser inconsistency | "different results for similar inputs" (2025-03-26) | `PeerEndpointTests` (19) — was a live defect, fixed `f9ce192` |
 | Default-port / URL rendering | "avoiding colon for default port" (2025-05-29) | `DestinationIdentityTests` (7) |
 | Invalid timestamps blocking capture | "invalid timestamps would prevent files from being backed up" (2022-06-12) | `HostileTimestampTests` (6) |
 | Interrupted backup corrupting state | 2020-03-25 | `InterruptionTests` (100) |

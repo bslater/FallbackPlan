@@ -1,6 +1,6 @@
 # Coverage audit — is the test coverage real?
 
-**Subject:** the test suite as it stands at `9761508`, measured rather than estimated — `eng/coverage.py` over coverlet reports from all fifteen MSTest projects, plus a per-file parse of the Cobertura output, plus the structural checks that decide whether a coverage number means anything
+**Subject:** the test suite as it stands at `7cfee8f`, measured rather than estimated — `eng/coverage.py` over coverlet reports from all fifteen MSTest projects, plus a per-file parse of the Cobertura output, plus the structural checks that decide whether a coverage number means anything
 **Purpose:** answer whether the coverage behind the [destination-fitness arc](../adr/0035-destination-fitness.md) and everything before it is genuine, and name what it does not reach
 **Outcome:** **85.94%** line coverage over 23 production assemblies, from 1 300 passing tests and 4 skipped. The number is trustworthy — traceability has zero drift, no test passes without asserting, and a test that does not run is recorded as skipped rather than green. Two low modules are single-OS measurement artefacts, not defects. Six real gaps are named and ranked; the worst of them is the primitive every durable state file writes through.
 

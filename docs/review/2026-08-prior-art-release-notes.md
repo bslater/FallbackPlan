@@ -46,7 +46,7 @@ Four separate URL-parser fixes in the corpus name the mechanism: two code paths 
 
 FallbackPlan had exactly that. `DestinationConfiguration.AddressDefect` and `PeerAddress.TryResolve` each split a peer endpoint on its last colon, so `fe80::1` parsed as host `fe80:` on port `1` — an address a person plainly meant as portless, called well formed by the admission check, reported as fine by status, and then dialled at a host that cannot exist. Checking an address before the first sync exists to catch precisely that.
 
-Fixed in `34e511b`: one `PeerEndpoint.TryParse` in Application, called by both. Bracketed IPv6 accepted, unbracketed multi-colon refused rather than guessed at, port parsed with `NumberStyles.None` under the invariant culture. **Proof:** with the multi-colon refusal removed, all three rows of the portless-IPv6 test fail.
+Fixed in `f9ce192`: one `PeerEndpoint.TryParse` in Application, called by both. Bracketed IPv6 accepted, unbracketed multi-colon refused rather than guessed at, port parsed with `NumberStyles.None` under the invariant culture. **Proof:** with the multi-colon refusal removed, all three rows of the portless-IPv6 test fail.
 
 ### D-2 — A filename escapes a filter · **Was broken**
 
@@ -54,7 +54,7 @@ The dollar-sign fixes, twice. An exclude list is a promise, and a filename is at
 
 Metacharacters as literals were already correct here — `Regex.Escape` per glob character holds — and that is now pinned rather than assumed. Two *engine defaults* were not, and both were exclusion bypasses. A newline is legal in a POSIX filename; .NET's `.` excludes it, so a trailing `/**` compiled to `.+` did not reach `secrets/ssh⏎key`. And `$` matches immediately before a final newline, so the rule `keep.txt` also matched the different file `keep.txt⏎`.
 
-Fixed in `51b503a` with `RegexOptions.Singleline` and `\A`…`\z`. Both were conformance violations against spec 06 §7.1 as already written, which says `.` is "any character" and that rules are implicitly anchored over the whole path; §7.1 now states the engine options normatively, because a portable dialect has to pin how accepted constructs *execute*, not only which are accepted ([ADR-0024](../adr/0024-include-exclude-rule-dialect.md) Amendment 1).
+Fixed in `6bc1069` with `RegexOptions.Singleline` and `\A`…`\z`. Both were conformance violations against spec 06 §7.1 as already written, which says `.` is "any character" and that rules are implicitly anchored over the whole path; §7.1 now states the engine options normatively, because a portable dialect has to pin how accepted constructs *execute*, not only which are accepted ([ADR-0024](../adr/0024-include-exclude-rule-dialect.md) Amendment 1).
 
 The Python reference implementation had the `.` bug too and, using `fullmatch`, not the anchor bug — so the two implementations silently disagreed on `keep.txt⏎`. The dual derivation exists to catch that and missed it because no committed vector carried a newline. Twenty-two vectors now do.
 
@@ -64,7 +64,7 @@ From the corpus: updated timestamps discarded when no data changed.
 
 FallbackPlan's reuse short-circuit is keyed on identity, size and modification time, which answers *did the content change*. That is not *did anything about this file change*, and POSIX `chmod` is the counter-example: it moves ctime, not mtime. A file whose permissions were just tightened presented identical signals, the prior version was re-emitted whole, and the new mode, owner, group and extended attributes were discarded. The backup reported success; the loss appeared only at restore.
 
-Fixed in `b2c018c`: catalogue v6 carries a metadata digest, the short-circuit requires content *and* digest agreement, and a metadata-only change takes the inherited-manifest path a rename already took — new version, real ancestry, no payload read.
+Fixed in `c4d2727`: catalogue v6 carries a metadata digest, the short-circuit requires content *and* digest agreement, and a metadata-only change takes the inherited-manifest path a rename already took — new version, real ancestry, no payload read.
 
 **The interesting part is what the fix's first version cost.** Including access time in the digest turned an agent's second pass from "2 unchanged" into "0 unchanged", because reading a file moves its atime and the backup's own read is a read. Atime is captured and restored but is not evidence of change: it says something about the observer rather than about the file. That is now its own test.
 
@@ -72,7 +72,7 @@ Fixed in `b2c018c`: catalogue v6 carries a metadata digest, the short-circuit re
 
 Six-plus locale fixes in eighteen months made this the class most worth checking, and FallbackPlan came out clean: the full suite passes unchanged under `tr-TR` and under `ar-SA`, with the culture verified to actually reach the test host rather than the run being vacuous. CA1304 and CA1311 are build errors solution-wide, so a culture-sensitive case change cannot compile.
 
-Nothing was keeping that true, so `53a297f` closes two blind spots. A whole-suite sweep under one culture cannot catch the **asymmetric** defect — state written under one culture and read under another — because a writer and a reader wrong in the same direction agree with each other, and disagree only for somebody who changed their locale or carried a state directory between devices. `HostileCultureTests` crosses cultures deliberately for that. The opposite blind spot is the code nobody thought to write a culture test for, and a CI leg now runs the whole suite under `tr-TR`; every runner in the build matrix is an English dot-decimal machine, so the matrix proved nothing about locale before.
+Nothing was keeping that true, so `43126c8` closes two blind spots. A whole-suite sweep under one culture cannot catch the **asymmetric** defect — state written under one culture and read under another — because a writer and a reader wrong in the same direction agree with each other, and disagree only for somebody who changed their locale or carried a state directory between devices. `HostileCultureTests` crosses cultures deliberately for that. The opposite blind spot is the code nobody thought to write a culture test for, and a CI leg now runs the whole suite under `tr-TR`; every runner in the build matrix is an English dot-decimal machine, so the matrix proved nothing about locale before.
 
 **Proof:** swapping the invariant parses in `Schedule` and `PeerEndpoint` for current-culture ones fails 3 of the 21 culture tests; removing `RegexOptions.CultureInvariant` from the rule compiler makes `INFO.LOG` stop matching `info.log` under `tr-TR`.
 
@@ -80,21 +80,21 @@ Nothing was keeping that true, so `53a297f` closes two blind spots. A whole-suit
 
 The corpus carries retry-behaviour fixes repeatedly, and the failure mode is always the same shape: a retry loop treats a permanent error as transient and burns the window, or treats a transient error as permanent and fails a backup that would have succeeded.
 
-FallbackPlan distinguishes these at the type level rather than by attempt count — a fault is not an outage, which is the distinction ADR-0035 §2 rests on and which the admission probe reports as `Failed` versus `Unavailable`. Both paths gained tests in the C arc (`b6fff8b`), which is what moved this from foreclosed-and-unproven to proven.
+FallbackPlan distinguishes these at the type level rather than by attempt count — a fault is not an outage, which is the distinction ADR-0035 §2 rests on and which the admission probe reports as `Failed` versus `Unavailable`. Both paths gained tests in the C arc (`cd3e8f1`), which is what moved this from foreclosed-and-unproven to proven.
 
 ### D-6 — Status claims more than it knows · **Foreclosed, now proven**
 
 A recurring class in the notes is the UI reporting success, or a count, that the engine could not actually support.
 
-This is the Y arc's whole subject and it is settled by construction: no verification stamp without proof (`0fd3653`), trim takes proof rather than claim (`962f7d6`), and the four-value vocabulary `proven` / `stale` / `unproven` / `unprovable (accepted)` (`c72eff9`). The Z arc added age as a status input, so a proof old enough to be meaningless says so.
+This is the Y arc's whole subject and it is settled by construction: no verification stamp without proof (`63e94e2`), trim takes proof rather than claim (`8cc85e6`), and the four-value vocabulary `proven` / `stale` / `unproven` / `unprovable (accepted)` (`22851f8`). The Z arc added age as a status input, so a proof old enough to be meaningless says so.
 
 ### D-7 — Refusal reasons parsed from prose · **Foreclosed, now proven**
 
-Not a note in the corpus as such, but the class it belongs to — a caller depending on the half of a response that may change freely. `f2fe90e` pins all 12 `PeerRefusalReason` codes and 10 `PeerMessageType` codes to spec 02 §7/§8. The finding that motivated it: renumbering the whole refusal enum passed all 114 existing Protocol tests, because no test anywhere compared a refusal code to a number.
+Not a note in the corpus as such, but the class it belongs to — a caller depending on the half of a response that may change freely. `9146a51` pins all 12 `PeerRefusalReason` codes and 10 `PeerMessageType` codes to spec 02 §7/§8. The finding that motivated it: renumbering the whole refusal enum passed all 114 existing Protocol tests, because no test anywhere compared a refusal code to a number.
 
 ### D-8 — Atomic replace loses the file · **Foreclosed, now proven**
 
-The surveyed product has shipped fixes for interrupted writes to its local database. FallbackPlan writes durable state through one `AtomicFile` primitive, and the C arc (`92d547f`) covered its failure and retry paths, taking it from 52.9% to 87.9%. The contention branch cannot be manufactured on POSIX — `rename` over an open file succeeds — so its *policy* is a tested predicate and the test says outright that the branch itself is unreachable here.
+The surveyed product has shipped fixes for interrupted writes to its local database. FallbackPlan writes durable state through one `AtomicFile` primitive, and the C arc (`ed9a8ff`) covered its failure and retry paths, taking it from 52.9% to 87.9%. The contention branch cannot be manufactured on POSIX — `rename` over an open file succeeds — so its *policy* is a tested predicate and the test says outright that the branch itself is unreachable here.
 
 ### D-9 — Two sources of truth diverge · **Foreclosed by architecture**
 
@@ -104,7 +104,7 @@ Here the store is authoritative and the catalogue is a disposable cache. There i
 
 ### D-10 — Compaction deletes something still referenced · **Foreclosed by architecture**
 
-The surveyed compaction defects come from deciding reachability against a local database. FallbackPlan's retention decides against proven state — the Y3 rule that trim takes proof rather than claim — and refuses to proceed when it cannot establish it, naming the blocker (D2, `cab8bda`).
+The surveyed compaction defects come from deciding reachability against a local database. FallbackPlan's retention decides against proven state — the Y3 rule that trim takes proof rather than claim — and refuses to proceed when it cannot establish it, naming the blocker (D2, `5cf4a60`).
 
 ### D-11 — An upgrade cannot read what the last version wrote · **Foreclosed by architecture**
 
@@ -387,6 +387,6 @@ not in code that stores.
 | Recurring classes counted | address and URL parsing ≥ 8 releases; locale and encoding ≥ 6; filename, filter and path handling ≥ 7; index/blocklist completeness ≥ 6; retry and timeout behaviour ≥ 5 |
 | Named notes cited | 21, each quoted verbatim where it is used |
 
-**Commits:** `34e511b` (D-1), `51b503a` (D-2), `b2c018c` (D-3), `53a297f`
+**Commits:** `f9ce192` (D-1), `6bc1069` (D-2), `c4d2727` (D-3), `43126c8`
 (D-4) fixed the first pass's findings. This pass adds the ten test classes
 above and records RN-F1, RN-F2 and RN-F3 as open.
