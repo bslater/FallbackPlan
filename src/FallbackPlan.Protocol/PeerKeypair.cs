@@ -10,7 +10,7 @@ namespace FallbackPlan.Protocol;
 /// <remarks>
 /// <para>
 /// Generated on first use and stored in durable local state, which
-/// <see href="https://github.com/">NFR-REL-007</see> already named as holding a
+/// NFR-REL-007 already named as holding a
 /// "device keypair": not rebuildable from the repository, and therefore kept
 /// apart from the disposable catalogue. Losing it loses every pairing this
 /// device held, which is why it lives beside the device identity rather than
