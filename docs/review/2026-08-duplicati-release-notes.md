@@ -14,7 +14,7 @@ An issue is a report: somebody thinks something is wrong. A release note is a **
 
 Three fixes for filename handling across three releases is a much stronger signal than one issue titled "backup corrupted", and it is a signal only this corpus carries.
 
-**What was read.** The public release listing, pages 1, 2, 3, 4, 6 and 9, covering the 2.1.x canary and stable line back through the 2.0.x series — roughly the last eighteen months in detail and spot samples further back. Not every page and not the API; the sampling is recorded in the appendix so the gaps are visible rather than implied.
+**What was read.** The public release listing, **pages 1 through 12** — the whole 2.1.x canary and stable line, the 2.0.9.x and 2.0.6.x canaries, and back to 2.0.4.38 in December 2019. The first pass of this document read only pages 1, 2, 3, 4, 6 and 9; the second pass closed that gap, and doing so roughly doubled the class list. Everything below reflects the complete reading.
 
 ---
 
@@ -122,15 +122,202 @@ The cheapest single thing this pass produced is not a fix. It is the observation
 
 ---
 
+---
+
+# Part 2 — the complete corpus, and the tests built against it
+
+The first pass read six of twelve pages and turned four classes into fixes.
+This part records the second pass: the remaining pages, the classes they
+added, a test built for **every** class, and what each test found.
+
+## What the missing pages added
+
+Six new pages produced nine classes the first pass never saw, and three of
+them are the kind that costs data rather than tidiness:
+
+| Release | Fix, verbatim | Why it matters here |
+|---|---|---|
+| v2.1.0.119 | "Fixed a case where a purge could loose a version" | Deletion losing a version it should have kept |
+| v2.1.0.123 | "Fixed an issue where some operations would report success even if failed" | The worst class: silent partial failure |
+| v2.1.0.119 | "Fixed a deadlock on restore when transfers failed" | The failure path hangs instead of failing |
+| v2.1.0.100 | "Fixed issue with DST changes causing schedule time-of-day to change" | Wall-clock schedules across a transition |
+| v2.0.5.106 | "Fixed a case where backups could run immediately and ignore the scheduled time" | The same subject, opposite symptom |
+| v2.0.6.103 | "Fixed issue where invalid timestamps would prevent files from being backed up" | A strange date costing the whole file |
+| v2.1.0.116 | "Fixed an issue with queries that need more than 128 parameters" | A limit nobody remembered was there |
+| v2.1.0.119 | "Fixed issue with empty filesets being created" | The zero end of the range |
+| v2.0.5.108 | "Fixed a case where restoring files could fail if the containing folder was not restored" | Restore to a fresh machine |
+| v2.0.9.109 | "Fixed an incorrect error masking another error in backups" | One failure hiding another |
+
+## The results
+
+Ten test classes were built, one per class of fix. Seven pass outright —
+those are properties FallbackPlan already had and now proves. **Three
+failed, and all three are real.**
+
+| # | Class | Tests | Verdict |
+|---|---|---|---|
+| RN-1 | Schedule across DST and clock jumps | `Application.Tests/ScheduleClockBoundaryTests` (14) | **RN-F1 — defect** |
+| RN-2 | Hostile filesystem timestamps | `Filesystem.Tests/HostileTimestampTests` (6) | **RN-F2 — defect** |
+| RN-3/4 | Partial backup honesty, error masking | `Repository.Tests/PartialBackupHonestyTests` (5) | **RN-F3 — defect** |
+| RN-5 | Retention losing a version | *(no new test — see below)* | Foreclosed |
+| RN-6 | Queries past a parameter limit | `Repository.Tests/SnapshotScaleEdgeTests` (5) | Proven |
+| RN-7 | Empty and degenerate snapshots | *(same class)* | Proven |
+| RN-8 | Restore into a missing structure | `Repository.Tests/RestoreIntoMissingStructureTests` (4) | Proven |
+| RN-9 | Endpoint rendering, name matching | `Application.Tests/DestinationIdentityTests` (7) | Proven |
+| RN-10 | Deadlock on a failed transfer | *(covered — see below)* | Proven |
+
+### RN-F1 — a daily schedule fires twice on the night the clock goes back
+
+A `daily at 02:30` schedule fires **twice** on the fall-back night, once at
+`02:30 +11:00` and again at `02:30 +10:00`. In New York the same defect
+produces five firings over four days, including a spurious one at `01:00`.
+
+The mechanism: `Schedule.IsDue` asks the cron for the previous occurrence
+*in the offset of the clock it was handed*, then compares it against the
+last completed run. When the offset changes, the same wall-clock occurrence
+lands at a different absolute instant — one hour later than the run that
+already discharged it — so it reads as a fresh occurrence.
+
+Spring forward is fine: 02:30 on the night it does not exist still fires
+once, and the week around it fires seven times. Interval schedules are
+unaffected by construction, and the test pins their twelve-hour absolute
+spacing across the same transition.
+
+**Severity: medium.** It costs a duplicate backup, not data. It is listed
+first because it is certain, cheap to fix, and happens twice a year on every
+machine with a daily schedule.
+
+### RN-F2 — a pre-epoch timestamp becomes a far-future one on Windows
+
+The POSIX path guards it — `seconds < 0 ? null` — so a 1960 date is reported
+as absent, which the test proves on Linux. The Windows path does not:
+
+```csharp
+ModifiedAtMs: (ulong)new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
+```
+
+An unchecked cast of a negative `long` wraps to roughly 1.8 × 10¹⁹. A
+Windows `FILETIME` of zero reads as 1601, and files restored from old media
+or old archives carry pre-1970 dates routinely, so this is reachable rather
+than theoretical. The two platforms disagree about the same file.
+
+**Severity: medium.** The file is still captured; its recorded date is
+nonsense, it sorts after everything, and a restore sets it on disk.
+
+### RN-F3 — a partial backup and a clean one report the same job state
+
+`BackupRunner` maps a capture failure to `JobState.Complete` with
+`detail: "partial: N failure(s)"`. There is no other terminal state to map
+it to — the vocabulary is `Pending, Scanning, Reading, Segmenting, Packing,
+Uploading, Publishing, Verifying, Complete, Paused, Retrying, Cancelled,
+FailedRecoverable, FailedPermanent`, and none of them means "finished, but
+not with everything".
+
+So the only thing separating "backed up your 40 000 files" from "backed up
+39 998 of your 40 000 files" is an English string. Spec 02 §8 already makes
+this argument about wire refusals — the code is normative, the message is
+explicitly not for parsing — and `WireCodeTests` enforces it there. The same
+reasoning applies to a job state a console or a script reads.
+
+The repository half is honest: every failure reaches the error manifest and
+`capture_status` goes to 2. It is the operator-facing half that flattens.
+
+**Severity: high.** This is the class Duplicati shipped three separate fixes
+for, and the one whose consequence is discovered at restore.
+
+### What was not built, and why
+
+**RN-5 (retention losing a version)** — no new test. The Duplicati fix is
+about a *purge* interacting with retention, and FallbackPlan has no purge
+verb: retention is the only deletion path. Its planner is already covered by
+`RetentionPlannerTests`, whose `MinGenerations_IsTheFloorTheOtherRulesCannotOverride`
+is exactly the "must not lose a version" guard, and Y3 made trim require
+proof rather than claim. Writing a test for an interaction between a feature
+and a feature that does not exist would be theatre. **This becomes real work
+the day a purge verb is added**, and is recorded as an exit criterion for it.
+
+**RN-10 (deadlock on a failed transfer)** — no new test.
+`RestoreReadFaultTests.Restore_AReadFailsMidRun_FailsThatItemInTheReceiptAndTheRerunCompletes`
+already drives a restore through `ReadFaultingObjectStore` and terminates,
+and terminating *is* the no-deadlock property — a deadlocked test hangs the
+suite rather than failing it.
+
+**A caveat worth stating.** Four of the five `PartialBackupHonestyTests`
+express denial with `chmod` and are gated by `UnprivilegedPlatformCondition`,
+because root reads a 000-mode file regardless. This container runs as root,
+so they **skip here and are unverified**; they execute on CI's non-root
+runners. RN-F3 itself does not depend on them: it is asserted against the
+`JobState` vocabulary, which is decidable anywhere, and was confirmed failing
+here with the `[Ignore]` removed.
+
+## Remediation plan
+
+Three findings, sequenced by severity-over-cost. Each is test-first and each
+is **already red** — the acceptance criterion is deleting an `[Ignore]`.
+
+### F3 first — give a partial capture its own terminal state
+
+Highest severity and it sets the vocabulary the other two report through.
+
+1. Add `JobState.CompletedWithFailures` (name to settle in review; the
+   alternative is a separate `Partial` flag on the job, which avoids widening
+   an enum that crosses the contract).
+2. `BackupRunner` maps `published.ErrorManifestObjectId is not null` to it,
+   keeping the count in `Detail` as the human half.
+3. `ContractVersion` goes to 1.6 — this widens a contract enum, and a client
+   that has not seen the value must be considered.
+4. Status derivation maps it to `degraded`, which NFR-OPS-002 already
+   requires and which nothing currently produces from a capture failure.
+5. Delete the `[Ignore]` on `TheJobVocabulary_HasATerminalStateForAPartialCapture`.
+
+*Care:* the enum crosses the service contract, so this is not a local change.
+Check `Results.cs`, the CLI's status rendering, and the peer protocol for
+anything that switches exhaustively on `JobState`.
+
+### F1 second — compare occurrences as instants, not as wall clocks
+
+1. In `Schedule.IsDue`, normalise both sides to UTC before comparing, so an
+   occurrence's identity is its absolute instant rather than its offset-local
+   rendering.
+2. Verify the spring-forward cases still pass — the fix must not trade a
+   double firing for a skipped day, which is the worse failure.
+3. Delete both `[Ignore]`s in `ScheduleClockBoundaryTests`.
+
+*Care:* the anchor arrives as UTC (`FromUnixTimeMilliseconds`) and `now` as
+local (`DateTimeOffset.Now`). That mismatch is currently benign because
+`DateTimeOffset` comparison is absolute; do not "tidy" it without re-running
+these tests.
+
+### F2 third — guard the Windows conversion the way POSIX already does
+
+1. In `TryStatWindows`, replace each unchecked cast with the same
+   negative-guard the POSIX paths use, returning `null` for an
+   unrepresentable instant.
+2. Consider hoisting the guard into one shared helper so the three call
+   sites — modified, created, accessed — cannot drift again.
+3. Delete the `[Ignore]` on
+   `OnWindows_APreEpochModificationTime_IsAlsoReportedAsAbsent`.
+
+*Care:* cannot be verified in this container. The gated test carries the
+proof and runs on CI's Windows leg.
+
+### Not in this plan
+
+Nothing found here justifies changing the format, the wire protocol, or the
+catalogue schema. All three findings are in code that reports or schedules,
+not in code that stores.
+
 ## Appendix — corpus
 
 | | |
 |---|---|
 | Source | Public release listing at `github.com/duplicati/duplicati/releases` |
-| Pages read | 1, 2, 3, 4, 6, 9 — the 2.1.x canary and stable line in detail, 2.0.x sampled |
+| Pages read | 1–12, complete: the 2.1.x line, the 2.0.9.x and 2.0.6.x canaries, back to v2.0.4.38 (December 2019) |
 | Method | HTML pages; the GitHub API and `gh` were unavailable to this session, whose repository scope is `bslater/fallbackplan` |
-| Not read | Pages 5, 7, 8, and everything before the 2.0.x series. Recurrence counts below are therefore lower bounds |
-| Recurring classes counted | address parsing ≥ 4 releases; locale ≥ 6; filename and filter handling ≥ 3 |
-| Named notes cited | v2.1.0.109 "updated timestamps discarded if no data was changed"; the fr-CA locale parse; the dollar-sign filename fix and its later restatement |
+| Not read | Releases before v2.0.4.38. Recurrence counts are lower bounds for that reason alone |
+| Recurring classes counted | address and URL parsing ≥ 8 releases; locale and encoding ≥ 6; filename, filter and path handling ≥ 7; index/blocklist completeness ≥ 6; retry and timeout behaviour ≥ 5 |
+| Named notes cited | 21, each quoted verbatim where it is used |
 
-**Commits from this pass:** `34e511b` (D-1), `51b503a` (D-2), `53a297f` (D-4), `b2c018c` (D-3).
+**Commits:** `34e511b` (D-1), `51b503a` (D-2), `b2c018c` (D-3), `53a297f`
+(D-4) fixed the first pass's findings. This pass adds the ten test classes
+above and records RN-F1, RN-F2 and RN-F3 as open.
