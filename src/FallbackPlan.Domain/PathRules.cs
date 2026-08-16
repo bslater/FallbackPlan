@@ -46,12 +46,22 @@ public sealed class PathRule
         // NonBacktracking gives linear-time matching and structurally rejects
         // everything outside the subset (backreferences, lookaround) that a
         // hand validator might one day miss.
-        var options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant
+        //
+        // Singleline is not a stylistic choice. A newline is a legal character
+        // in a POSIX filename and 06 §7.1 says `.` is "any character" — but
+        // .NET's default `.` stops at one, so a trailing `**` compiled to `.+`
+        // silently failed to reach `secrets/ssh\nkey`. An exclude rule that
+        // does not reach a file copies it.
+        var options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant | RegexOptions.Singleline
             | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
 
         try
         {
-            compiled = new PathRule(rule, new Regex($"^(?:{pattern})$", options));
+            // `\A`/`\z` rather than `^`/`$`: 06 §7.1 requires the whole
+            // relative path to match, and `$` also matches immediately before
+            // a final newline — so `keep.txt` matched the different file
+            // `keep.txt\n`.
+            compiled = new PathRule(rule, new Regex($@"\A(?:{pattern})\z", options));
         }
         catch (ArgumentException exception)
         {

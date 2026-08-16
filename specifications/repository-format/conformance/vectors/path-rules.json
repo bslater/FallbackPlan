@@ -232,6 +232,96 @@
       "path": "docs/deep/tree/file",
       "case_sensitive": true,
       "matches": true
+    },
+    {
+      "rule": "secrets/**",
+      "path": "secrets/ssh\nkey",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "secrets/**",
+      "path": "secrets/two\nline\nname",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "*.key",
+      "path": "host\nname.key",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "keep.txt",
+      "path": "keep.txt\n",
+      "case_sensitive": true,
+      "matches": false
+    },
+    {
+      "rule": "docs/keep.txt",
+      "path": "docs/keep.txt\n",
+      "case_sensitive": true,
+      "matches": false
+    },
+    {
+      "rule": "re:docs/.*",
+      "path": "docs/we\nird",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "a$b.txt",
+      "path": "a$b.txt",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "a$b.txt",
+      "path": "ab.txt",
+      "case_sensitive": true,
+      "matches": false
+    },
+    {
+      "rule": "v1.0",
+      "path": "v1.0",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "v1.0",
+      "path": "v1x0",
+      "case_sensitive": true,
+      "matches": false
+    },
+    {
+      "rule": "(draft)",
+      "path": "notes/(draft)",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "a+b",
+      "path": "a+b",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "a+b",
+      "path": "aab",
+      "case_sensitive": true,
+      "matches": false
+    },
+    {
+      "rule": "a|b",
+      "path": "a|b",
+      "case_sensitive": true,
+      "matches": true
+    },
+    {
+      "rule": "a|b",
+      "path": "a",
+      "case_sensitive": true,
+      "matches": false
     }
   ],
   "invalid_cases": [
@@ -448,6 +538,53 @@
         },
         {
           "path": "notes.bakx",
+          "excluded": false,
+          "captured": true
+        }
+      ]
+    },
+    {
+      "name": "hostile_names_do_not_escape_exclusion",
+      "includes": [],
+      "excludes": [
+        "secrets/**",
+        "*.key",
+        "*$"
+      ],
+      "case_sensitive": true,
+      "paths": [
+        {
+          "path": "secrets/ssh\nkey",
+          "excluded": true,
+          "captured": false
+        },
+        {
+          "path": "secrets/inner/ssh\nkey",
+          "excluded": true,
+          "captured": false
+        },
+        {
+          "path": "secrets/trailing\n",
+          "excluded": true,
+          "captured": false
+        },
+        {
+          "path": "home/host\nname.key",
+          "excluded": true,
+          "captured": false
+        },
+        {
+          "path": "home/notes$",
+          "excluded": true,
+          "captured": false
+        },
+        {
+          "path": "home/notes",
+          "excluded": false,
+          "captured": true
+        },
+        {
+          "path": "home/keys",
           "excluded": false,
           "captured": true
         }
