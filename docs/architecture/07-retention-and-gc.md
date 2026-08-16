@@ -39,6 +39,8 @@ Composable rules, evaluated against snapshot capture times:
 
 The last rule is a floor that the others cannot override. It exists so that a misconfigured schedule, a clock problem, or a long offline period cannot leave a backup set with nothing.
 
+**The floor counts complete captures**, and every bucket rule keeps its newest complete capture alongside its representative when that representative is partial. A snapshot committed by a run that could not read everything it was asked for (manifest `capture_status` 2) is a real backup and is never deleted by these rules — but it cannot *stand in* for one. A floor filled by partial captures is the appearance of the guarantee rather than the guarantee, and the failure it produces is the worst one available: the set holds exactly *N* snapshots, every one of them with a hole, and the complete backups that would have covered those holes expired for being older. Both rules are strictly additive; a history containing no partial capture selects exactly as it did before they existed, and a history containing nothing else falls back to the plain newest-*N*, because there is nothing to reach for and refusing would strand the set.
+
 ### 2.1 Retention must not outrun replication
 
 Retention operates per-replica, and so does commit. Left uncoordinated, the two combine to erase history that no replica ever held.

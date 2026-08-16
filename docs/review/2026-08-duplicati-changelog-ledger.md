@@ -140,21 +140,29 @@ Grouped by disposition. Each cites the release that named it.
 | A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
 | Shared content freed while still referenced (**O2**, was open — foreclosed, now proven) | "database inconsistency after shared metadata delete" (2026-07-13) | `Retention.Tests/SharedRecordRetentionTests` (5) |
 | An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired) | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (4) |
+| A partial backup satisfying a retention rule (**O6**, was open — a real defect, now fixed) | "partial backups could create defect backups when used with retention rules" (2019-12-08) | `Retention.Tests/RetentionPlannerTests` (5 new), `Retention.Tests/PartialCaptureRetentionTests` (4) |
 
 ### Open — applies, and nothing proves it
 
-What is left after the E-C work, ranked by what a defect would cost.
+**Empty.** All seven are closed, and their rows moved into the proven table
+above rather than being left standing here, because a list of open items that
+includes closed ones stops being read.
 
-| # | Mechanism | Duplicati | Why it applies here |
-|---|---|---|---|
-| **O6** | Partial backup interacting with retention | "partial backups could create defect backups when used with retention rules" (2019-12-08) | Compounds RN-F3: a partial snapshot must not be retention's only survivor |
+- **O3, O4, O7** — closed by the E-C work: `Domain.Tests/PathRuleSelectionTests`
+  (11) for the case-sensitivity and overlapping-root pair, and
+  `Application.Tests/RepeatedOperationTests` (7) for the twice-applied
+  operation.
+- **O1, O2, O5, O6** — closed by the work recorded in
+  [What the Open items turned out to be](#what-the-open-items-turned-out-to-be).
+  Three of the four were real defects; O2 was foreclosed and is now proven.
 
-O3, O4 and O7 were closed by the E-C work — `Domain.Tests/PathRuleSelectionTests`
-(11) for the case-sensitivity and overlapping-root pair, and
-`Application.Tests/RepeatedOperationTests` (7) for the twice-applied operation.
-O1 is closed above. Their rows are struck from this table rather than left
-standing, because a list of open items that includes closed ones stops being
-read.
+The three defects have a shape in common worth naming, because it is the shape
+that survives a green suite: in each case the *information* was present and the
+*consumer* silently did without it. `DeleteOutcome` was returned and discarded;
+`BlobState` was accepted as a parameter and passed `null`; `capture_status` was
+decoded and dropped between the manifest and the fact. None of these is a
+missing feature. Each is a wire left unconnected behind a component that reads
+as complete.
 
 Also open but deliberately low priority, recorded so they are not rediscovered:
 environment-variable expansion in roots and rules (2016-10-27, 2026-08-14) —
@@ -320,6 +328,45 @@ unlisted. Those entries name *garbage* — no reachable object is among them,
 which is the invariant proven above — so a restore is unaffected. Removing the
 entries is compaction's job
 ([ADR-0025](../adr/0025-compaction-reseals-records.md), phase 4).
+
+### O6 — a partial backup satisfying a retention rule
+
+**A real defect, and the one that costs the most.** `min_generations` exists so
+a set is never left with nothing usable. With a partial capture as the newest
+snapshot and a floor of one, the partial filled the floor and every complete
+backup expired — leaving the set holding exactly one snapshot, with a hole in
+it. That is Duplicati 2019-12-08, and it compounds RN-F3: before that fix
+nothing above the manifest could even tell the two apart.
+
+The information was never missing. `SnapshotManifest.CaptureStatus` has
+recorded "1 complete, 2 partial" since the format was written;
+`OperationGateway` sets it from the presence of an error manifest; the CLI
+renders it. But `StagingMark.SurveyAsync` did not copy it into `SnapshotFact`,
+so every snapshot arrived at the planner looking complete and no rule could
+have acted on it if one had existed.
+
+Two rules now, both strictly additive — a partial capture is still a backup and
+neither rule deletes one:
+
+1. **The floor counts complete captures.** The window reaches down to the
+   oldest snapshot needed to find `min_generations` complete ones, and keeps
+   everything above it, partials included. With no complete capture anywhere it
+   falls back to the plain newest-N, because inventing a refusal there would
+   strand the set.
+2. **A bucket represented only by a partial also keeps its newest complete
+   capture**, with reason `"{bucket} (complete)"` so the dry-run report says
+   why. Otherwise a day whose last backup hit an unreadable file is represented
+   in the archive only by the backup with the hole, and the complete one taken
+   four hours earlier expires for being older.
+
+Both flow into per-destination keep-sets for free, since FR-GC-010 evaluates
+the same `Select`.
+
+Red proof in two stages, because the field and the rules are separable: adding
+`CaptureStatus` to `SnapshotFact` without the rules fails three of the five new
+planner tests; removing the one line in `SurveyAsync` that propagates it fails
+three of the four end-to-end tests, with the report naming the partial
+`5a5a5a5a…` as the survivor and condemning the complete snapshot.
 
 ## Appendix — reproduction
 

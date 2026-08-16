@@ -12,8 +12,22 @@ namespace FallbackPlan.Retention;
 /// staging archive has. The replication gate compares it to each
 /// destination's synced sequence, never a clock (FR-GC-009).
 /// </param>
+/// <param name="CaptureStatus">
+/// The manifest's <c>capture_status</c>: 1 complete, 2 partial. A partial
+/// capture committed a snapshot that does not hold everything asked for, and
+/// retention has to know, because a rule satisfied by one is not the guarantee
+/// the operator configured. Defaulted to complete so a caller that cannot say
+/// gets the reading that keeps more rather than less.
+/// </param>
 public sealed record SnapshotFact(
-    string SnapshotId, ulong CapturedAtUnixMilliseconds, ulong PublicationSequence = 0);
+    string SnapshotId,
+    ulong CapturedAtUnixMilliseconds,
+    ulong PublicationSequence = 0,
+    byte CaptureStatus = 1)
+{
+    /// <summary>Whether the capture holds everything it was asked for.</summary>
+    public bool IsComplete => CaptureStatus != 2;
+}
 
 /// <summary>A kept snapshot and every rule that keeps it — the dry-run report's vocabulary (FR-GC-005).</summary>
 /// <param name="Snapshot">The snapshot.</param>
@@ -91,7 +105,22 @@ public static class RetentionPlanner
             // The floor the other rules cannot override (architecture 07 §2):
             // the newest N stay whatever their age, so a stalled schedule or a
             // long offline period cannot leave a set with nothing.
-            foreach (var snapshot in ordered.Take(floor))
+            //
+            // The N are counted in COMPLETE captures. A floor filled by
+            // backups that did not back everything up is the appearance of the
+            // guarantee rather than the guarantee, and it is how a set ends up
+            // holding one snapshot with a hole in it and every complete one
+            // expired. Reaching past a partial keeps it too — the window is
+            // everything down to the oldest snapshot the floor needs, so this
+            // rule only ever keeps more.
+            var boundary = ordered.Where(snapshot => snapshot.IsComplete).Take(floor).LastOrDefault();
+
+            // With no complete capture anywhere there is nothing to reach for,
+            // and inventing a refusal would strand the set: fall back to the
+            // plain newest-N.
+            var window = boundary is null ? floor : ordered.IndexOf(boundary) + 1;
+
+            foreach (var snapshot in ordered.Take(window))
             {
                 reasons[snapshot].Add("min-generations");
             }
@@ -116,8 +145,17 @@ public static class RetentionPlanner
 
     /// <summary>
     /// Keeps the newest snapshot of each bucket (day, week, month) whose
-    /// capture time falls inside the window.
+    /// capture time falls inside the window — and, when that newest one is a
+    /// partial capture, the bucket's newest complete capture as well.
     /// </summary>
+    /// <remarks>
+    /// Without the second half, a day whose last backup hit an unreadable file
+    /// is represented in the archive only by a backup with a hole in it, and
+    /// the complete one taken four hours earlier is expired for being older.
+    /// The fallback is additive: the bucket's representative is unchanged, one
+    /// more snapshot survives, and the extra keep carries its own reason so
+    /// the dry-run report explains itself.
+    /// </remarks>
     private static void KeepNewestPerBucket(
         List<SnapshotFact> newestFirst,
         Dictionary<SnapshotFact, List<string>> reasons,
@@ -125,6 +163,7 @@ public static class RetentionPlanner
         Func<DateTimeOffset, string> bucketOf)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var completeSeen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var snapshot in newestFirst)
         {
             var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAtUnixMilliseconds);
@@ -134,9 +173,18 @@ public static class RetentionPlanner
             }
 
             var bucket = bucketOf(capturedAt);
-            if (seen.Add(bucket))
+            var representative = seen.Add(bucket);
+            if (representative)
             {
                 reasons[snapshot].Add(bucket);
+            }
+
+            // The fallback fires only when the representative was partial: a
+            // complete representative marks the bucket on its own way past,
+            // so nothing further in it qualifies.
+            if (snapshot.IsComplete && completeSeen.Add(bucket) && !representative)
+            {
+                reasons[snapshot].Add($"{bucket} (complete)");
             }
         }
     }

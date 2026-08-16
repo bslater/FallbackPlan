@@ -88,7 +88,8 @@ public static class StagingMark
                         new SnapshotFact(
                             Convert.ToHexStringLower(decoded.Manifest.SnapshotId.Span),
                             decoded.Manifest.CaptureCompletedAt,
-                            publicationSequence),
+                            publicationSequence,
+                            decoded.Manifest.CaptureStatus),
                         decoded.Manifest,
                         entry.Key,
                         deriver.Derive(

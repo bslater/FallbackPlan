@@ -101,9 +101,150 @@ public sealed class RetentionPlannerTests
             Assert.ContainsSingle(two.Keep).Snapshot);
     }
 
+    /// <summary>
+    /// A partial capture must not be able to satisfy the floor on its own
+    /// (ledger O6; Duplicati "partial backups could create defect backups when
+    /// used with retention rules", 2019-12-08).
+    /// </summary>
+    /// <remarks>
+    /// This is the shape that costs data. <c>min_generations</c> exists so a
+    /// set is never left with nothing usable; a floor filled by a backup that
+    /// did not back everything up is not that guarantee, it is the appearance
+    /// of it. Compounded with RN-F3 — before which nothing above the manifest
+    /// could even tell the two apart — the set is left holding one snapshot
+    /// with a hole in it and every complete one expired.
+    /// </remarks>
+    [TestMethod]
+    public void Select_MinGenerations_CountsCompleteCapturesOnly()
+    {
+        var complete = At(Now.AddDays(-200));
+        var partial = Partial(Now.AddDays(-1));
+
+        var selection = RetentionPlanner.Select(
+            [complete, partial],
+            new RetentionConfiguration { MinGenerations = 1 },
+            Now);
+
+        Assert.Contains(
+            keep => keep.Snapshot == complete,
+            selection.Keep,
+            "the only complete backup expired because a partial one filled the floor");
+
+        // The partial is kept too. It holds most of the data and deleting it
+        // would be a second wrong; the rule only ever keeps more.
+        Assert.Contains(keep => keep.Snapshot == partial, selection.Keep);
+        Assert.IsEmpty(selection.Expire);
+    }
+
+    /// <summary>A floor of two means the two newest complete captures, whatever sits between them.</summary>
+    [TestMethod]
+    public void Select_MinGenerations_ReachesPastPartialsToFillTheFloor()
+    {
+        var oldest = At(Now.AddDays(-400));
+        var olderComplete = At(Now.AddDays(-300));
+        var newerComplete = At(Now.AddDays(-200));
+        var partial = Partial(Now.AddDays(-100));
+
+        var selection = RetentionPlanner.Select(
+            [oldest, olderComplete, newerComplete, partial],
+            new RetentionConfiguration { MinGenerations = 2 },
+            Now);
+
+        Assert.Contains(keep => keep.Snapshot == newerComplete, selection.Keep);
+        Assert.Contains(keep => keep.Snapshot == olderComplete, selection.Keep);
+        Assert.Contains(keep => keep.Snapshot == partial, selection.Keep, "the partial was discarded");
+        Assert.AreEqual(oldest, Assert.ContainsSingle(selection.Expire));
+    }
+
+    /// <summary>
+    /// A bucket whose newest snapshot is partial also keeps that bucket's
+    /// newest complete one, so no day, week or month is represented only by a
+    /// backup with a hole in it.
+    /// </summary>
+    [TestMethod]
+    public void Select_ADayWhoseNewestIsPartial_AlsoKeepsThatDaysNewestCompleteCapture()
+    {
+        var earlierComplete = At(Now.AddDays(-1).AddHours(-4));
+        var laterPartial = Partial(Now.AddDays(-1));
+
+        var selection = RetentionPlanner.Select(
+            [earlierComplete, laterPartial],
+            new RetentionConfiguration { KeepDaily = 7 },
+            Now);
+
+        Assert.Contains(keep => keep.Snapshot == laterPartial, selection.Keep);
+
+        var complete = selection.Keep.SingleOrDefault(keep => keep.Snapshot == earlierComplete);
+        Assert.IsNotNull(
+            complete,
+            "the day's only complete backup expired in favour of a partial one captured later");
+        Assert.Contains(
+            reason => reason.Contains("complete", StringComparison.Ordinal),
+            complete.Reasons,
+            "the report does not say why the extra snapshot was kept");
+    }
+
+    /// <summary>
+    /// A history with no complete capture in it at all keeps exactly what the
+    /// old rules kept. There is no complete backup to fall back to, and
+    /// inventing a refusal here would strand the set.
+    /// </summary>
+    [TestMethod]
+    public void Select_AHistoryOfNothingButPartials_IsUnchanged()
+    {
+        var older = Partial(Now.AddDays(-2));
+        var newer = Partial(Now.AddDays(-1));
+
+        var selection = RetentionPlanner.Select(
+            [older, newer],
+            new RetentionConfiguration { MinGenerations = 1 },
+            Now);
+
+        Assert.AreEqual(newer, Assert.ContainsSingle(selection.Keep).Snapshot);
+        Assert.AreEqual(older, Assert.ContainsSingle(selection.Expire));
+    }
+
+    /// <summary>
+    /// And the change is provably additive: over a history with no partial in
+    /// it, the selection is identical to the one the old rules produced. The
+    /// other tests in this class are the regression net; this states the
+    /// property they rest on.
+    /// </summary>
+    [TestMethod]
+    public void Select_AHistoryWithNoPartials_SelectsExactlyAsBefore()
+    {
+        var snapshots = Days(400, 300, 200, 100, 20, 6, 1);
+        var policy = new RetentionConfiguration
+        {
+            KeepDaily = 2,
+            KeepWeekly = 2,
+            KeepMonthly = 2,
+            MinGenerations = 3,
+        };
+
+        var selection = RetentionPlanner.Select(snapshots, policy, Now);
+
+        // Every complete-capture rule is a no-op here, so no keep may carry a
+        // reason the fallback invented.
+        Assert.IsEmpty(
+            selection.Keep.SelectMany(keep => keep.Reasons)
+                .Where(reason => reason.Contains("complete", StringComparison.Ordinal)),
+            "a fallback reason appeared over a history containing no partial capture");
+
+        // Daily(2) keeps day-1; weekly(2) keeps day-1 and day-6; monthly(2)
+        // keeps day-1 and day-20; the floor of 3 is already satisfied by
+        // those three. Everything at 100 days and beyond expires.
+        Assert.HasCount(3, selection.Keep);
+        Assert.HasCount(4, selection.Expire);
+    }
+
     private static SnapshotFact At(DateTimeOffset capturedAt) =>
         new(Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()).PadRight(64, 'f'),
             (ulong)capturedAt.ToUnixTimeMilliseconds());
+
+    /// <summary>A capture that committed a snapshot without everything in it (manifest capture_status 2).</summary>
+    private static SnapshotFact Partial(DateTimeOffset capturedAt) =>
+        At(capturedAt) with { CaptureStatus = 2 };
 
     /// <summary>Snapshots captured the given number of days ago, oldest first.</summary>
     private static IReadOnlyList<SnapshotFact> Days(params int[] daysAgo) =>
