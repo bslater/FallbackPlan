@@ -139,6 +139,7 @@ Grouped by disposition. Each cites the release that named it.
 | Scheduler ignoring the scheduled time | "backups could run immediately" (2020-05-11) | `ScheduleClockBoundaryTests.ASetThatJustCompleted_IsNotImmediatelyDueAgain` |
 | A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
 | Shared content freed while still referenced (**O2**, was open — foreclosed, now proven) | "database inconsistency after shared metadata delete" (2026-07-13) | `Retention.Tests/SharedRecordRetentionTests` (5) |
+| An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired) | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (4) |
 
 ### Open — applies, and nothing proves it
 
@@ -146,7 +147,6 @@ What is left after the E-C work, ranked by what a defect would cost.
 
 | # | Mechanism | Duplicati | Why it applies here |
 |---|---|---|---|
-| **O5** | An index naming an object no blob holds | "`dindex`-files would reference non-existing `dblock` files" (2019-10-19); "race condition with index file uploads during backup" (2026-02-20) | `IndexPublisher` and the projector; the dangling-reference case is untested outside forensic rebuild |
 | **O6** | Partial backup interacting with retention | "partial backups could create defect backups when used with retention rules" (2019-12-08) | Compounds RN-F3: a partial snapshot must not be retention's only survivor |
 
 O3, O4 and O7 were closed by the E-C work — `Domain.Tests/PathRuleSelectionTests`
@@ -277,6 +277,49 @@ Mutation proof, since a passing invariant admits no red-first run: neutering
 `CollectionPlanner`'s `live > 0` guard fails four of the five; restricting
 `StagingMark.MarkAsync` to the first protected snapshot fails the fifth.
 Both were reverted before the commit.
+
+### O5 — an index naming an object no blob holds
+
+**The invariant holds. The safeguard meant to catch its violation had never
+run.** Two findings, and only the second is a defect.
+
+The invariant — every object reachable from a surviving snapshot resolves to a
+blob the store still holds, and still reads — is guaranteed from both ends.
+Publication order puts blobs durable in step 4 before the index entries naming
+them in step 6, and retention condemns only blobs holding nothing reachable.
+`RetentionIndexIntegrityTests` asserts it directly after a pass that really
+removed blobs. The mutation proof is worth quoting because it produces
+precisely Duplicati's symptom: with `CollectionPlanner`'s `live > 0` guard
+neutered, the closure walk reports objects it cannot reach and the reader
+answers *"No loaded blob carries a record for object 94b6c351…"* — an index
+naming an object no blob holds.
+
+The defect is the safeguard. Specification 07 §3 rule 3 says an entry whose
+blob is known deleted is treated as superseded and reported as damage;
+`IndexPrecedence.Resolve` has implemented it since the index plane was written.
+But the rule reads its input from a `Func<BlobId, BlobState>` the caller
+supplies, **the only production rebuild caller passed `null`**, and the
+`null` default is `_ => BlobState.Live`. `Catalogue.SetBlobState` — the column
+that would have persisted the conclusion — was called by nothing outside one
+unit test. The precondition was never true, so the rule had never executed
+outside a test in its entire life. A safeguard that cannot fire is not a
+safeguard, and it is worse than none, because it reads as covered.
+
+`CatalogueRebuilder.RebuildAsync` now takes the lifecycle lookup and the
+`rebuild` verb supplies one built from the store's own blob inventory. Absence
+counts as deletion only when that inventory is exhaustive — if any blob would
+not open, `KnownBlobs` answers `Live` for everything unknown, because
+discarding a valid location on the strength of a listing with holes is a
+self-inflicted outage, and `BlobState.Live` is documented as "live or unknown".
+
+**Stated limit.** Deletion-only collection leaves the index entries themselves
+behind, and the sweep clears a tombstone one generation after its object goes.
+Entries naming a collected blob therefore persist, and once the tombstone is
+cleared nothing distinguishes them from entries for a blob that is merely
+unlisted. Those entries name *garbage* — no reachable object is among them,
+which is the invariant proven above — so a restore is unaffected. Removing the
+entries is compaction's job
+([ADR-0025](../adr/0025-compaction-reseals-records.md), phase 4).
 
 ## Appendix — reproduction
 

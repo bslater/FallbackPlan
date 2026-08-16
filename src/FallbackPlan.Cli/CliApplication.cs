@@ -565,12 +565,25 @@ public static class CliApplication
                     }
 
                     var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+
+                    // Precedence rule 3 (specification 07 §3) needs to know
+                    // which blobs the store still holds, and this is the only
+                    // place that knows. Without it the rebuild assumes every
+                    // blob is live and serves locations into blobs collection
+                    // removed — the index naming an object no blob holds.
+                    using var inventory = new RepositoryReader(
+                        session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                    await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
                     var report = await new CatalogueRebuilder(loader).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
                         gapPatienceGenerations: 2,
                         isSequenceAccountedAsync: null,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        CatalogueRebuilder.KnownBlobs(
+                            inventory.Blobs.Select(blob => blob.BlobId),
+                            inventoryComplete: inventory.SkippedBlobs.Count == 0)).ConfigureAwait(false);
 
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                         $"rebuild: {report.DeltasApplied} delta(s) + {report.CheckpointsApplied} checkpoint(s) applied, {report.LocationsRecorded} location(s)"));
