@@ -274,19 +274,52 @@ Highest severity and it sets the vocabulary the other two report through.
 Check `Results.cs`, the CLI's status rendering, and the peer protocol for
 anything that switches exhaustively on `JobState`.
 
-### F1 second — compare occurrences as instants, not as wall clocks
+### F1 second — an occurrence's identity is its wall clock, not its instant
 
-1. In `Schedule.IsDue`, normalise both sides to UTC before comparing, so an
-   occurrence's identity is its absolute instant rather than its offset-local
-   rendering.
-2. Verify the spring-forward cases still pass — the fix must not trade a
-   double firing for a skipped day, which is the worse failure.
-3. Delete both `[Ignore]`s in `ScheduleClockBoundaryTests`.
+**The obvious fix is wrong, and that is worth writing down before somebody
+tries it.** "Normalise both sides to UTC and compare" does nothing:
+`DateTimeOffset` comparison is *already* absolute. The defect is not a
+comparison in the wrong frame; it is that **one wall-clock occurrence has two
+instants** on the fall-back night, and the second one looks like a new
+occurrence the completed run predates.
 
-*Care:* the anchor arrives as UTC (`FromUnixTimeMilliseconds`) and `now` as
-local (`DateTimeOffset.Now`). That mismatch is currently benign because
-`DateTimeOffset` comparison is absolute; do not "tidy" it without re-running
-these tests.
+Concretely, Sydney on 5 April 2026 with `daily at 02:30`:
+
+| | wall clock | instant |
+|---|---|---|
+| the run that fired | 02:30 +11:00 | 15:30Z |
+| the occurrence recomputed an hour later | 02:30 +10:00 | 16:30Z |
+
+`15:30Z < 16:30Z`, so it fires again. Both are "02:30 on 5 April".
+
+So the identity of a daily occurrence must be its **wall clock**, and the
+comparison must be `lastCompleted.DateTime < occurrence.DateTime` — 02:30
+against 02:30, which is not less than, so it does not fire.
+
+**That change alone is not enough, and this is the part that makes F1 bigger
+than it looks.** `Scheduler` builds the anchor with
+`DateTimeOffset.FromUnixTimeMilliseconds(...)`, which carries offset `+00:00`,
+so `lastCompleted.DateTime` is a UTC wall clock while `occurrence.DateTime` is
+a local one. Comparing them would be worse than the bug. The fix therefore has
+two halves:
+
+1. **Make the contract explicit.** `IsDue` and `NextRun` require both
+   arguments in the operator's wall-clock frame. Say so in the doc comment,
+   because nothing in the signature enforces it.
+2. **Honour it at all three call sites** — `Scheduler`, `CliApplication`,
+   `ServiceCommandHandler` — by converting the stored Unix-millisecond anchor
+   into the local frame before passing it. `.ToLocalTime()` is right for the
+   agent; the tests supply the frame explicitly, via tzdata, because the
+   container's zone is UTC and would prove nothing.
+3. Then the daily branch compares wall clocks, and the interval branch is left
+   alone — an interval is genuinely absolute and its test pins the twelve-hour
+   spacing across the same transition.
+4. Delete both `[Ignore]`s in `ScheduleClockBoundaryTests`.
+
+*Care, restated because it is the trap:* the fix must not trade the double
+firing for a skipped spring-forward day. Both directions are already pinned —
+`…OnTheNightAnHourDoesNotExist_StillFiresThatDay` and
+`…TheWeekAroundASpringForward_FiresEveryDay` pass today and must still pass.
 
 ### F2 third — guard the Windows conversion the way POSIX already does
 
