@@ -73,6 +73,9 @@
   <data name="FrameCodec_PeerClosedMidFrame" xml:space="preserve">
     <value>The peer closed mid-frame.</value>
   </data>
+  <data name="LocalEndpoint_FallbackDirectoryUnsafe" xml:space="preserve">
+    <value>The socket fallback directory '{0}' is not safe to use: {1}. Remove it and retry — repairing it would mean trusting whoever prepared it.</value>
+  </data>
   <data name="LocalEndpoint_SocketPathBytesPlatformAccepts" xml:space="preserve">
     <value>The socket path '{0}' is {1} bytes, and the platform accepts at most {2}. Choose a shorter state directory — this limit is the operating system's, not this program's.</value>
   </data>

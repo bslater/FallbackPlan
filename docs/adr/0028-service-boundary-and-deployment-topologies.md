@@ -186,6 +186,17 @@ their own machine. Both are artefacts of using a network transport for a boundar
 is not a network; a socket with OS permissions has neither problem, because the
 authentication is the same mechanism already protecting the state directory.
 
+The socket lives at `<state>/service.sock` when that path fits POSIX's
+~104-byte `sun_path` limit. When it does not — macOS reaches the limit with an
+ordinary state directory under `~/Library` or its per-user temp root — the
+address falls back to `/tmp/fbp-u<uid>/<hash-of-state-path>.sock`, derived
+deterministically from the state directory so the service and every client
+compute it independently and no pointer file can go stale. The per-user
+directory is created owner-only and **refused, never repaired**, if it turns
+out to be a symlink or to admit other users: repairing a directory somebody
+else prepared would be adopting their trap, while a squatter who pre-creates
+it correctly-looking gains only denial of service, loudly.
+
 **Remote** — TLS over TCP, **mutually authenticated by device identity**,
 disabled by default and enabled per service by an explicit administrative act
 that names the interface it binds. Topologies 3 and 4 use it.
