@@ -874,6 +874,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // (ADR-0029 §4). The result is the job identity, not the backup — a
         // client watches progress rather than holding a connection open for
         // hours.
+        // Local time on purpose: schedule arithmetic downstream works in the
+        // operator's wall clock (the DST rules depend on it), and every
+        // durable stamp goes through ToUnixTimeMilliseconds, which is
+        // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
         var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true);
 
@@ -1051,6 +1055,8 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
         }
 
+        // Local time for the same reason as the run verb: the offset serves
+        // schedule math, and the durable stamps are offset-aware.
         var now = DateTimeOffset.Now;
         var pairs = new List<(BackupSetConfiguration Set, string Destination, Task? Wait)>();
         foreach (var set in sets)

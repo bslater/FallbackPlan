@@ -1,3 +1,4 @@
+using System.Security.Cryptography.X509Certificates;
 using FallbackPlan.Protocol;
 using FallbackPlan.TestSupport;
 
@@ -374,6 +375,21 @@ public sealed class EphemeralTlsCertificateTests
         // reach the same 32 bytes from the certificate alone.
         SequenceAssert.AreEqual(certificate.PublicKeyHash, EphemeralTlsCertificate.BindingOf(certificate.Certificate));
         Assert.AreEqual(SessionBinding.TlsPublicKeyHashLength, certificate.PublicKeyHash.Length);
+    }
+
+    [TestMethod]
+    public void SessionCertificate_ThePrivateKey_TravelsInsideTheCertificateObject()
+    {
+        using var certificate = Create();
+
+        // The TLS stack receives Certificate alone — never the ECDsa that made
+        // it — so the key must live inside the certificate object, imported in
+        // a form the OS credential machinery accepts. Schannel and macOS both
+        // refuse a process-ephemeral key, which is what Create's PKCS#12 round
+        // trip exists to avoid.
+        Assert.IsTrue(certificate.Certificate.HasPrivateKey);
+        using var key = certificate.Certificate.GetECDsaPrivateKey();
+        Assert.IsNotNull(key);
     }
 
     [TestMethod]
