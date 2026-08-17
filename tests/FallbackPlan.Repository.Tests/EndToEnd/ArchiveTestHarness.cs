@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Storage.Local;
+using Microsoft.Data.Sqlite;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -121,9 +122,25 @@ public abstract class ArchiveTestHarness : IDisposable
     /// <summary>Deletes the temp root.</summary>
     protected virtual void Dispose(bool disposing)
     {
-        if (disposing && Directory.Exists(_root))
+        if (!disposing || !Directory.Exists(_root))
+        {
+            return;
+        }
+
+        // Connection pooling can keep a catalogue file open past its owning
+        // connection's dispose, and on Windows an open handle fails the
+        // recursive delete — a cleanup failure the test then wears as its
+        // own. Drain the pools first, and treat a residual refusal as best
+        // effort: the temp root is per-test-class and leaks nothing that
+        // matters more than the assertion that already ran.
+        SqliteConnection.ClearAllPools();
+        try
         {
             Directory.Delete(_root, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Best effort.
         }
     }
 }
