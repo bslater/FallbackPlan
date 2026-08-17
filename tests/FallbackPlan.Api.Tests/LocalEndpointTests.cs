@@ -46,12 +46,27 @@ public sealed class LocalEndpointTests : IDisposable
     [TestMethod]
     public void AddressFor_AStateDirectoryWithinTheLimit_KeepsTheSocketBesideTheState()
     {
-        var state = Path.Combine(_root, "s");
+        // Under /tmp directly, not the test temp root: on macOS GetTempPath()
+        // is /var/folders/... and this class's own root already busts the
+        // limit — which is the whole reason the fallback exists, and would
+        // make this test assert the wrong branch.
+        var state = Path.Combine("/tmp", $"fbp-ep-{Guid.NewGuid().ToString("n")[..8]}");
         Directory.CreateDirectory(state);
 
-        Assert.AreEqual(
-            Path.Combine(Path.GetFullPath(state), "service.sock"),
-            LocalEndpoint.AddressFor(state));
+        try
+        {
+            Assert.IsGreaterThan(
+                Encoding.UTF8.GetByteCount(Path.Combine(state, "service.sock")),
+                LocalEndpoint.MaximumSocketPathBytes,
+                "the fixture path does not fit, so this test would assert the fallback branch");
+            Assert.AreEqual(
+                Path.Combine(Path.GetFullPath(state), "service.sock"),
+                LocalEndpoint.AddressFor(state));
+        }
+        finally
+        {
+            Directory.Delete(state, recursive: true);
+        }
     }
 
     [PlatformCondition(TestPlatforms.Posix, "the limit is sockaddr_un's; Windows pipes have no path")]
