@@ -139,7 +139,7 @@ Grouped by disposition. Each cites the release that named it.
 | Scheduler ignoring the scheduled time | "backups could run immediately" (2020-05-11) | `ScheduleClockBoundaryTests.ASetThatJustCompleted_IsNotImmediatelyDueAgain` |
 | A failed delete leaving durable state inconsistent (**O1**, was open — a real defect, now fixed) | "failed delete causing database inconsistency" (2026-02-06) | `Retention.Tests/SweepFailureTests` (5) |
 | Shared content freed while still referenced (**O2**, was open — foreclosed, now proven) | "database inconsistency after shared metadata delete" (2026-07-13) | `Retention.Tests/SharedRecordRetentionTests` (5) |
-| An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired) | index objects referencing data blobs that no longer exist (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (4) |
+| An index naming an object no blob holds (**O5**, was open — invariant proven, inert safeguard wired; the completeness semantics the CLI's claim rests on are pinned) | index objects referencing data blobs that no longer exist (2019-10-19) | `Retention.Tests/RetentionIndexIntegrityTests` (6) |
 | A partial backup satisfying a retention rule (**O6**, was open — a real defect, now fixed; hardened again when review found "complete" implemented as "not partial", which read an aborted capture as complete) | "partial backups could create defect backups when used with retention rules" (2019-12-08) | `Retention.Tests/RetentionPlannerTests` (6 new), `Retention.Tests/PartialCaptureRetentionTests` (5) |
 
 ### Open — applies, and nothing proves it

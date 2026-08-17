@@ -8,6 +8,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -211,6 +212,79 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
                 held.Contains(winner),
                 $"object {objectId} still resolves to blob {winner}, which the store does not hold");
         }
+    }
+
+    /// <summary>
+    /// The load's honesty under a transient fault, which the CLI's
+    /// completeness claim rests on: a read that fails with an I/O error must
+    /// abort the inventory, not shrink it. If it became a skip instead, a
+    /// flaky disk would produce a "complete" inventory with holes, and rule 3
+    /// would condemn every entry the holes hid.
+    /// </summary>
+    [TestMethod]
+    public async Task ATransientReadFault_AbortsTheInventoryRatherThanShrinkingIt()
+    {
+        await BackUpAsync(Day1);
+
+        var faulting = new ReadFaultingObjectStore(new LocalFileSystemObjectStore(RepoPath));
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(faulting, passphrase, CancellationToken.None);
+
+        faulting.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
+
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, faulting);
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
+            await reader.LoadBlobsAsync(CancellationToken.None));
+
+        Assert.IsEmpty(
+            reader.SkippedBlobs,
+            "a transient I/O fault was recorded as damage — the inventory shrank instead of aborting");
+    }
+
+    /// <summary>
+    /// The whole chain the CLI's <c>SkippedBlobs.Count == 0</c> expression
+    /// carries: one unopenable blob makes the inventory incomplete, and an
+    /// incomplete inventory concludes nothing — even over an archive whose
+    /// index genuinely names collected blobs. The lie is asserted too:
+    /// claiming completeness over the same shrunken inventory produces the
+    /// damage findings the honest flag exists to withhold.
+    /// </summary>
+    [TestMethod]
+    public async Task AnUnopenableBlob_MakesTheInventoryIncomplete_AndTheRebuildClaimsNoDamage()
+    {
+        var store = await SweptArchiveAsync();
+
+        // One surviving blob is damaged in place: same length, wrong bytes,
+        // so the footer no longer parses and the load must skip it.
+        var victim = Directory.EnumerateFiles(Path.Combine(RepoPath, "blobs"), "*", SearchOption.AllDirectories).First();
+        File.WriteAllBytes(victim, new byte[new FileInfo(victim).Length]);
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        Assert.ContainsSingle(reader.SkippedBlobs);
+
+        var held = reader.Blobs.Select(blob => blob.BlobId).ToList();
+
+        // Exactly the CLI's expression, and it must come out false here.
+        var inventoryComplete = reader.SkippedBlobs.Count == 0;
+        Assert.IsFalse(inventoryComplete);
+
+        var honest = await RebuildAsync(
+            store, repository, CatalogueRebuilder.KnownBlobs(held, inventoryComplete));
+        Assert.IsEmpty(
+            honest.Findings.Where(finding => finding.Kind == DamageKind.MissingBlob),
+            "an inventory with a hole in it condemned entries the hole hid");
+
+        // The vacuity guard: the same inventory presented as complete does
+        // produce findings, so the honest run above withheld something real.
+        var lying = await RebuildAsync(
+            store, repository, CatalogueRebuilder.KnownBlobs(held, inventoryComplete: true));
+        Assert.IsNotEmpty(
+            lying.Findings.Where(finding => finding.Kind == DamageKind.MissingBlob),
+            "the archive holds no entry naming an absent blob, so this test pins nothing");
     }
 
     /// <summary>
