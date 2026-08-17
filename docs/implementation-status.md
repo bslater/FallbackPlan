@@ -4,7 +4,7 @@
 
 ---
 
-Thirty decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Thirty-six decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -60,6 +60,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager | **Partly built** | `Agent/ServiceProcessHost.cs`, `Agent/WindowsServiceHost.cs`, `Agent/ServiceUnit.cs` · [notes](#0033--the-os-can-own-the-process) |
 | [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations | **Built** | `FallbackPlan.Replication`, `Agent/FanOut`, `Application/DestinationSyncStore`, `Retention/StagingTrim` · `Repository.Tests/EndToEnd/AgentPassTests`, `InterruptionTests/StoreCopyOrderTests`, `Retention.Tests/StagingTrimTests` · [notes](#0034--the-hub-fans-out-ages-and-trims) |
 | [0035](adr/0035-destination-fitness.md) | Destination fitness | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
+| [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
 
 ---
 
@@ -187,7 +188,7 @@ Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no 
 |-------|-------|
 | [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — with one stated qualifier: the compaction criterion is discharged by its preconditions (nothing physical decodes; supersession converges), the compactor itself being phase 4 |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
-| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, web UI, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007) |
+| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
 | 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
@@ -216,6 +217,33 @@ The whole arc is built but for one named piece. Before it, the sixteen-range cha
 **Age and capacity** (`Application/StatusModel.cs`, `Application/DestinationCapacity.cs`, `Protocol/PeerReplicationMessages.cs`): a proof past its bound — seven days local, thirty peer — is named in the warnings without moving `ProtectionState`. A quota-bound peer reports its remaining headroom on the replication inventory frame, and the source warns below a tenth of the loan rather than refusing, because the existing boundary stop already refuses the exact object at the exact moment and keeps the partial progress. A local copy does not start below a 64 MiB free-space floor, recorded `Unavailable` so freeing space heals it unbidden.
 
 **What is not built: peer-side deep verification.** A peer replica has no readable object store this side of the wire — only the range challenge — so re-reading its bytes needs the session-establishment half of the push extracted first. The admission probe took the first half of that extraction (`Agent/PeerAddress.cs`); the rest is deferred and named rather than quietly omitted.
+
+### 0036 — the first front end beyond the CLI
+
+The local web console is built, and it is a client the way FR-SVC-001 always
+meant: `FallbackPlan.Web` references the command contract and nothing below it
+— a whitelist `ArchitectureTests/DependencyRuleTests` pins to exactly one
+project reference — connects over the same local binding the CLI uses, and has
+**no direct mode**, because a web server holding the writer role would be a
+second writer with a network face. `WebConsoleHost` binds `127.0.0.1` only,
+with no flag to widen it; `ConsoleAuth` is the per-run 256-bit token printed in
+the start-up URL plus the loopback `Host` check, which together close the
+cross-site-request and DNS-rebinding classes a local HTTP console invites. One
+endpoint relays any `ServiceCommand` and returns the service's result verbatim;
+one bridges `WatchAsync` onto server-sent events; the page itself — status
+matrix, snapshot browser, live jobs, notices, and the action surface with
+restore and retention-apply behind typed confirmations — is three embedded
+static files behind a `default-src 'self'` policy, no framework, nothing
+fetched at runtime. An unreachable service renders as **stale with the age of
+last contact**, never healthy and never failed (NFR-OPS-006). `Web.Tests`
+drives it over real loopback HTTP against a fake client; the refusals are
+asserted on status codes and closed-set error codes, not prose.
+
+**What is deliberately not built:** notice acknowledgement (the contract has no
+verb for it — the page says so and names the agent verb that does it), a
+set-editing UI over `upsert_backup_set`, and anything Q18/Q19 gate — restored
+content never streams to the page, and the console serves the one operator who
+launched it. All three are stated on the ADR rather than left to be inferred.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

@@ -27,6 +27,7 @@
     </Project>
     <Project Path="src/FallbackPlan.Storage.Abstractions/FallbackPlan.Storage.Abstractions.csproj" />
     <Project Path="src/FallbackPlan.Storage.Local/FallbackPlan.Storage.Local.csproj" />
+    <Project Path="src/FallbackPlan.Web/FallbackPlan.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FallbackPlan.Api.Tests/FallbackPlan.Api.Tests.csproj" />
@@ -45,6 +46,7 @@
     <Project Path="tests/FallbackPlan.Repository.FuzzTests/FallbackPlan.Repository.FuzzTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.Tests/FallbackPlan.Repository.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Storage.ContractTests/FallbackPlan.Storage.ContractTests.csproj" />
+    <Project Path="tests/FallbackPlan.Web.Tests/FallbackPlan.Web.Tests.csproj" />
     <Project Path="tests/FallbackPlan.TestSupport/FallbackPlan.TestSupport.csproj">
       <Build Solution="Debug|*" Project="false" />
     </Project>

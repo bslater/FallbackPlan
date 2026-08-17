@@ -406,6 +406,13 @@
           "MSTest": "[3.11.0, )"
         }
       },
+      "fallbackplan.web": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Api": "[1.0.0, )"
+        }
+      },
       "Bodu.Core": {
         "type": "CentralTransitive",
         "requested": "[0.2.0, )",

@@ -68,6 +68,9 @@ public sealed class DependencyRuleTests
     /// <summary>The peer protocol (ADR-0030).</summary>
     private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
+    /// <summary>The local web console (ADR-0036) — an executable, loaded by name.</summary>
+    private static Assembly Web => Assembly.Load("FallbackPlan.Web");
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -76,7 +79,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -581,6 +584,48 @@ public sealed class DependencyRuleTests
             reference.Count > 0,
             "The CLI's direct-mode exception exists only while it actually uses Application; if this canary "
             + "stops holding, the exception should be removed rather than left as dead permission.");
+    }
+
+    /// <summary>
+    /// 11 §2: user interfaces depend on the client contract, never on the
+    /// engine — and the web console has no direct-mode exception, because a
+    /// web server holding the writer role would be a second writer with a
+    /// network face (ADR-0036 §1). Enforced at both levels, in the Recovery
+    /// pattern: the IL (no reference to anything below the contract) and the
+    /// project file (an exact whitelist, so a transitive smuggle via a new
+    /// ProjectReference fails loudly).
+    /// </summary>
+    [TestMethod]
+    public void WebConsole_DependencyClosure_ReachesOnlyTheClientContract()
+    {
+        AssertPasses(
+            Types.InAssembly(Web)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Restore",
+                    "FallbackPlan.Recovery",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Web must reference the client contract and nothing below it (11 §2, ADR-0036).");
+
+        var project = Path.Combine(RepositoryRoot(), "src", "FallbackPlan.Web", "FallbackPlan.Web.csproj");
+        var references = System.Text.RegularExpressions.Regex
+            .Matches(File.ReadAllText(project), "ProjectReference Include=\"[^\"]*\\\\([^\"\\\\]+)\\.csproj\"")
+            .Select(match => match.Groups[1].Value)
+            .Order()
+            .ToArray();
+
+        SequenceAssert.AreEqual(["FallbackPlan.Api"], references);
     }
 
     /// <summary>

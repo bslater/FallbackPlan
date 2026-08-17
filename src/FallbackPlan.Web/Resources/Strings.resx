@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Web.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="RunningConsole_NoBoundAddress" xml:space="preserve">
+    <value>The server started but reported no bound address.</value>
+  </data>
+  <data name="WebConsoleHost_EmbeddedAssetMissing" xml:space="preserve">
+    <value>The embedded asset '{0}' is missing from this build.</value>
+  </data>
+  <data name="WebConsoleHost_HostNotLoopback" xml:space="preserve">
+    <value>This console answers loopback requests only. The request named a different host, which is what a DNS-rebinding page does — it was refused.</value>
+  </data>
+  <data name="WebConsoleHost_MalformedCommand" xml:space="preserve">
+    <value>The request body was not a command this contract knows: {0}</value>
+  </data>
+  <data name="WebConsoleHost_NoServiceListening" xml:space="preserve">
+    <value>service  none listening for '{0}' yet — the console keeps trying, and the page shows the service as unreachable until one answers</value>
+  </data>
+  <data name="WebConsoleHost_ServiceAnsweredUnexpectedly" xml:space="preserve">
+    <value>service  answered, but not with a service description — versions may be far apart</value>
+  </data>
+  <data name="WebConsoleHost_ServiceReachable" xml:space="preserve">
+    <value>service  reachable — {0}, contract {1}</value>
+  </data>
+  <data name="WebConsoleHost_TokenMissingOrWrong" xml:space="preserve">
+    <value>The request did not present this run's access token. Open the console through the URL printed at start — the token in it is this run's key.</value>
+  </data>
+  <data name="WebConsoleOptions_FlagNeedsValue" xml:space="preserve">
+    <value>The flag '{0}' needs a value.</value>
+  </data>
+  <data name="WebConsoleOptions_PortInvalid" xml:space="preserve">
+    <value>The port '{0}' is not a number between 0 and 65535.</value>
+  </data>
+  <data name="WebConsoleOptions_StateDirectoryMissing" xml:space="preserve">
+    <value>The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.</value>
+  </data>
+  <data name="WebConsoleOptions_StateDirectoryRequired" xml:space="preserve">
+    <value>Pass --state &lt;dir&gt; — the state directory whose service this console talks to.</value>
+  </data>
+  <data name="WebConsoleOptions_UnknownArgument" xml:space="preserve">
+    <value>Unknown argument '{0}'. Pass --help for usage.</value>
+  </data>
+</root>
