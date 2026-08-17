@@ -189,6 +189,35 @@ public sealed class SweepFailureTests : IDisposable
     }
 
     /// <summary>
+    /// The deferral posture holds for fault types no local store throws.
+    /// Today's only store fails with <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/>; the first remote store will
+    /// fail with something else, and a catch list sized to the local
+    /// filesystem would let that something escape the sweep and abort the
+    /// pass — the exact defect this suite exists to prevent. A refusal is
+    /// always deferrable, whatever its type: the tombstone stands and the
+    /// next pass retries.
+    /// </summary>
+    [TestMethod]
+    public async Task ADeleteThrowingAFaultTypeNoLocalStoreThrows_IsStillAFindingNotAnAbort()
+    {
+        var faulting = await ArmedAtSweepAsync();
+        faulting.Store.ArmThrow(
+            key => new TimeoutException($"Injected fault: the delete of '{key}' timed out."),
+            key => key.StartsWith("snapshots/", StringComparison.Ordinal));
+
+        var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
+
+        Assert.IsNotNull(report.Swept, "an unlisted fault type aborted the pass");
+        Assert.Contains(
+            finding => finding.Contains("could not be deleted", StringComparison.Ordinal),
+            report.Swept.Findings,
+            "a delete failed and nothing said so");
+        Assert.HasCount(4, await ListAsync(faulting.Inner, "snapshots/"));
+        Assert.IsGreaterThan(0, report.Swept.Deleted, "the pass stopped at the first refusal");
+    }
+
+    /// <summary>
     /// Cancellation is not a fault to be absorbed. A cancelled sweep must
     /// still throw, or a stop request reads as a completed pass.
     /// </summary>

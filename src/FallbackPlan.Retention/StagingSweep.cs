@@ -287,8 +287,14 @@ public static class StagingSweep
         {
             result = await store.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Any fault type, not a list of today's: IObjectStore leaves fault
+            // exceptions implementation-defined, and a catch sized to the
+            // local filesystem would let the first remote store's timeout
+            // escape the loop and abort the pass. A refusal is always
+            // deferrable — the tombstone stands — so deferring is safe for
+            // every fault, while cancellation must keep escaping.
             findings.Add(
                 $"deferred: {what} could not be deleted — {exception.Message}; the tombstone stands for the next pass");
             return false;

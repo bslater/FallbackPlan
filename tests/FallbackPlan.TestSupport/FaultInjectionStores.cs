@@ -417,9 +417,22 @@ public sealed class DeleteFaultingObjectStore(IObjectStore inner) : IObjectStore
 {
     private volatile Func<string, bool>? _throwing;
     private volatile Func<string, bool>? _lying;
+    private volatile Func<string, Exception>? _exceptionFactory;
 
     /// <summary>Starts throwing on deletes of keys matching <paramref name="keyFilter"/> (all when null).</summary>
     public void ArmThrow(Func<string, bool>? keyFilter = null) => _throwing = keyFilter ?? (_ => true);
+
+    /// <summary>
+    /// As <see cref="ArmThrow(Func{string, bool}?)"/>, but the caller chooses
+    /// the exception — for proving the sweep's posture holds for fault types
+    /// no local store throws today (a remote store's timeout, say), not just
+    /// the two the filesystem does.
+    /// </summary>
+    public void ArmThrow(Func<string, Exception> exceptionFactory, Func<string, bool>? keyFilter = null)
+    {
+        _exceptionFactory = exceptionFactory;
+        _throwing = keyFilter ?? (_ => true);
+    }
 
     /// <summary>
     /// Starts reporting <see cref="DeleteOutcome.NotFound"/> for matching keys
@@ -433,6 +446,7 @@ public sealed class DeleteFaultingObjectStore(IObjectStore inner) : IObjectStore
     {
         _throwing = null;
         _lying = null;
+        _exceptionFactory = null;
     }
 
     /// <inheritdoc />
@@ -463,7 +477,8 @@ public sealed class DeleteFaultingObjectStore(IObjectStore inner) : IObjectStore
     {
         if (_throwing is { } throwing && throwing(key.ToString()))
         {
-            throw new IOException($"Injected fault: the delete of '{key}' failed.");
+            throw _exceptionFactory?.Invoke(key.ToString())
+                ?? new IOException($"Injected fault: the delete of '{key}' failed.");
         }
 
         return _lying is { } lying && lying(key.ToString())
