@@ -271,11 +271,11 @@ public sealed class IndexPlaneTests : IDisposable
 
         // Run 2: recover — the pending number is a void-delta obligation.
         var recovered = CreateSequence();
-        SequenceAssert.AreEqual([skipped], recovered.RecoveredObligations);
+        SequenceAssert.AreEqual([skipped], recovered.OutstandingObligations);
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, recovered))
         {
-            foreach (var obligation in recovered.RecoveredObligations)
+            foreach (var obligation in recovered.OutstandingObligations)
             {
                 await publisher.PublishVoidDeltaAsync(0, obligation, CancellationToken.None);
             }
@@ -420,7 +420,7 @@ public sealed class IndexPlaneTests : IDisposable
 
         var reloaded = CreateSequence();
 
-        SequenceAssert.AreEqual([second], reloaded.RecoveredObligations);
+        SequenceAssert.AreEqual([second], reloaded.OutstandingObligations);
         Assert.AreEqual(3UL, reloaded.AllocateNext());
     }
 

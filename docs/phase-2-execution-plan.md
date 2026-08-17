@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** the service boundary is built on the local binding; the remote binding is blocked on pairing · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and peer replication (specs 03–05) is what remains of Phase 2 · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -27,12 +27,14 @@ then does the concurrency work ADR-0029 sequenced: measure, remove serial cost,
 client with direct mode, per-job progress, cancellation, keystore unlock on all
 three platforms, and the full ADR-0029 §6 sequence.
 
-**Not in scope, and named rather than implied.** The remote TLS binding, device
-pairing, the multi-instance console, and the desktop and web front ends.
-Topologies 3 and 4 of ADR-0028 §1 are designed and not built; the remote binding
-exists as a seam that is off by default and refuses to enable, because pairing
-reuses machinery [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)
-defines for peers and that does not exist yet.
+**Originally out of scope, since delivered.** The remote TLS binding and device
+pairing were named here as out of scope for this plan's first waves, blocked on
+machinery [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)
+defines for peers. That machinery now exists, and a later round built the binding
+on top of it: topologies 3 and 4 of ADR-0028 §1 are built, and the two exit
+criteria they own are met (see [§1 below](#1-the-remote-binding--built) and the
+exit-criteria table). Still genuinely out of scope: the multi-instance console
+and the desktop and web front ends.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
 [Q19](open-questions.md#q19--console-identity-and-multi-operator-access) gate the
 console and stay open.
@@ -72,7 +74,7 @@ A · Ownership ──▶ B · Contract ──▶ C · Service ──▶ D · Cli
 |---|------|----------|-----------|
 | B1 | ✅ `FallbackPlan.Api` — commands, results, events, client and service interfaces, status roll-up | FR-SVC-001, NFR-OPS-006 | The project references Domain and nothing else, so "UIs depend on the contract, never the engine" is mechanically enforceable |
 | B2 | ✅ The local binding — Unix domain socket or named pipe, authenticated by the operating system | FR-SVC-003, [T-16](threat-model.md) | No password, no token file, no port; the caller is identified by peer credentials |
-| B3 | ✅ The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port, and enabling the remote binding without pairing is refused with a stated reason |
+| B3 | ✅ The remote binding as a seam, off by default | FR-SVC-003 | A default install listens on no port; the seam was later carried to a real socket that admits only a pinned peer (see [§1](#1-the-remote-binding--built)) |
 | B4 | ✅ Contract-version negotiation | FR-SVC-007 | Incompatible versions refuse **naming both**, per service rather than wholesale |
 
 ### Wave C — The service
@@ -196,19 +198,20 @@ restated here with the test that will prove each:
 
 | Criterion | Proven by |
 |---|---|
-| A second process cannot take the writer role — it refuses naming the holder | `Application.Tests/StateDirectoryLockTests` |
+| A second process cannot take the writer role — it refuses naming the holder | `Hosts.Tests/ProcessRaceTests` — a real spawned CLI process refused across the kernel's file lock, and a killed holder's role freeing itself; `Application.Tests/StateDirectoryLockTests` holds the in-process API surface |
 | A default install listens on no port | `Api.Tests` — the remote-binding assertion |
 | A running job reports states beyond `Scanning` | `Api.Tests` — the progress-event assertion |
 | A service with no front end installed backs up unattended | `Hosts.Tests` |
 | Client and service at incompatible versions refuse with both versions named | `Api.Tests` — the negotiation assertion |
 | Restored bytes identical regardless of concurrency setting | `InterruptionTests/ConcurrentUploadTests` at 1, 2 and 4 — the whole setting now, not the upload workers alone, because ADR-0029 §1's staged pipeline carries it into segmentation, hashing and compression |
 | Recovery still works with no service and no state directory | `Hosts.Tests` — the recovery drill, unchanged |
+| An unpaired remote client is refused, and a substituted identity refused rather than prompted | `Hosts.Tests/RemoteBindingTests` — an unpaired console dialling a real socket is refused `not_paired` while the local binding still answers; `Protocol.Tests/PeerWireTests` proves `identity_changed` over the wire and the man-in-the-middle relay caught by channel binding |
+| A restore commanded remotely writes on the service's machine, no plaintext crossing | `Hosts.Tests/RemoteBindingTests` — a paired `RemoteServiceClient` commands a restore; the files land under the service-side path and the console receives counts, outcome and a path string, never content |
+| *(peer criterion)* No relay required on a LAN | **Unproven either way** — peers dial declared endpoints; no relay exists and none is needed on a routable LAN, but nothing exercises discovery or NAT traversal. Deferred with LAN discovery. |
+| *(peer criterion)* Multi-day disconnection and resumption | **Proven at pass scale, not soak scale** — an offline destination is recorded, retried under back-off, and converges with no command when it returns (`Repository.Tests/EndToEnd/AgentPassTests`, `Hosts.Tests/PeerReplicationTests`); the resumption mechanics carry any gap length because each object commits whole. The literal multi-day soak has not been run. |
 
 ### What is not met, said plainly
 
-- **An unpaired remote client refused**, and **a restore commanded remotely
-  writing on the service's machine.** Both need the remote binding, which needs
-  pairing.
 - **NFR-PERF-007's ≥400 MB/s on the reference machine.** Every number on the
   benchmarks page is container measurement. It compares configurations and
   versions against each other honestly and says nothing about the requirement,
@@ -273,35 +276,33 @@ and say so by name. A service can only run a configured set, so an ad-hoc backup
 root is refused with what to do instead rather than quietly run against state the
 service owns.
 
-### 1. The remote binding
+### 1. The remote binding — built
 
-Topologies 3 and 4, and the two exit criteria they own.
+Topologies 3 and 4, and the two exit criteria they own, are now met over a real
+socket. Both criteria above cite the tests that prove them.
 
-**No longer blocked on a design.** Pairing reuses
+Pairing reuses
 [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s
-machinery, and that is now settled by
-[ADR-0030](adr/0030-peer-identity-and-pairing.md) and specified in
+machinery, settled by [ADR-0030](adr/0030-peer-identity-and-pairing.md) and
+specified in
 [`specifications/peer-protocol/`](../specifications/peer-protocol/README.md)
 documents 01 and 02 — a peer keypair unrelated to the repository, a short
 authentication string both humans confirm, and a pinned identity whose change is
-a hard failure. Those two documents were written first precisely because the
-console is blocked on them.
-
-**Nor on the protocol itself any more.** `FallbackPlan.Protocol` implements
-everything both documents define: identity and fingerprints, the pairing key
-agreement and its transcript, the grant store, the destination's terms, framing,
-version and feature negotiation, and the channel-bound authentication that
-replaced RFC 7250 when it proved unreachable on the platform
-([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)).
-
-**What is left is the socket, and it is the whole of what is left.** Nothing
-opens a TCP or QUIC connection, negotiates TLS, presents the ephemeral
-certificate, or drives the session state machine over a network; no command
-shows a pairing string to a human, so the ceremony has never been performed by
-two people. Every test constructs both sides in one process, which proves the
-constructions agree with each other and proves nothing about a wire. That is the
-next piece of work, and it is now plumbing rather than design
-([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)).
+a hard failure. `FallbackPlan.Protocol` implements both documents in full, and
+now carries them over the wire: `PeerTlsConnection` opens TLS 1.3 over TCP with
+the per-connection ephemeral certificate, `PeerSessionDriver` drives the
+four-state machine over the live stream, `PeerKeypairStore` persists the device
+key, and `PairingCeremony` runs the ceremony with a human's approval on each
+side. `RemoteServiceListener` (Agent) binds the interface an administrator names
+and admits only a pinned peer; `RemoteServiceClient` (Cli) is the console's end,
+and the shipped CLI drives it — `fallbackplan <verb> --connect <host:port>
+--fingerprint <fp> --state <dir>` routes `backup`, `verify`, `check`, `restore`,
+`snapshots`, `ls` and `status` to a remote paired service, the service named by
+fingerprint because a grant holds a key and never an address. The
+man-in-the-middle relay that channel binding defeats is reproduced through
+two real TLS connections, and the ceremony is performed by two real
+operating-system processes
+([implementation status](implementation-status.md#0030--the-socket-exists)).
 
 What remains blocked is narrower still.
 [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and
@@ -310,11 +311,123 @@ what a paired console may *do* — whether restored content may stream to it, an
 whether its actions are attributable to a person. Neither gates who it is, so
 the identity and session layers can be built while they stay open.
 
-Still owed before peer-to-peer replication itself: peer-protocol documents 03
-(replication), 04 (verification) and 05 (quotas). Their behaviour is fixed in
-architecture 09 §1, §5 and §6; what is missing is the wire encoding.
+Of the peer-protocol documents this once owed — 03 (replication), 04
+(verification) and 05 (quotas) — all are since written and implemented,
+with 06 (retention instructions) landed beside them. 04 was the last:
+its keyed random-range challenge now rides every sync, with the tampered-byte
+cases proven against a peer over the wire and a local-path replica by
+read-back ([spec 04](../specifications/peer-protocol/04-verification.md)).
 
-### 2. NFR-PERF-007 on the reference machine
+### 2. The proof debt the pipeline integrity review left on the table
+
+The [pipeline integrity review](review/2026-08-pipeline-integrity-review.md)
+read the built pipeline back against the documents and fixed everything it
+graded — the durability of the writer sequence, the refusal guards on reused
+identifiers, session disposal, spool hygiene, the restore assembly check —
+each proven by a test that failed first. What it deliberately did not invent
+is the test infrastructure below. Each item says what "done" looks like.
+
+The [restore pipeline review](review/2026-08-restore-pipeline-review.md)
+closed a second round on the read path — the CLI's uncontained restore,
+symlink write-through, the dropped outcome and shared run store, unreachable
+cancellation — and repaired the coverage audit itself (`--drift` recognised
+only xUnit attributes and had been blind since the MSTest move; `--audit` now
+reports rotted citations). What both reviews deliberately left is below.
+
+1. ✅ **Cancel a live publication** — done
+   ([pipeline review Amendment 1](review/2026-08-pipeline-integrity-review.md#amendment-1-2026-08--the-base-hardening-round)):
+   all five of
+   [T-2](review/2026-08-prior-art-learnings.md#t-2--graceful-stop-is-a-different-code-path-from-a-crash-and-it-is-the-one-that-corrupts)'s
+   named tests exist and pass — four in `InterruptionTests/CancellationTests`,
+   the `ServiceCommandHandler` positive path in `Hosts.Tests/ServiceTests`.
+   The suite caught and fixed the exact defect class T-2 predicted: the
+   cancelled seal's unwind threw over the cancellation, so a cancelled job
+   reported failure instead of `Cancelled`. The upload drain after a cancel
+   is pinned as documented behaviour; the rerun's obligation discharge
+   (ADR-0029 §4, in the same process) is held by `SequenceAccountingTests`.
+2. ✅ **A store that tears and forgets** — built and run
+   ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)):
+   `TestSupport/FaultInjectionStores` delivers torn puts, vanishing
+   acknowledged objects, and read faults; `InterruptionTests/StoreFaultTests`
+   runs the five-point kill matrix over them and the 04 §5.1 claims held.
+   The decision it surfaced (SF-1) is **resolved**: `LoadBlobsAsync`
+   tolerates an unopenable blob and reports it in `SkippedBlobs`, so one
+   torn orphan no longer blocks every plain-path restore — the reader
+   converged on the recovery tool's posture, and the torn-write assertion
+   flipped to a restore as promised
+   ([review Amendment 1](review/2026-08-restore-pipeline-review.md#amendment-1-2026-08--the-fault-injection-round)).
+3. ✅ **Kills inside steps, and the four boundaries the matrix omits** — done:
+   both `KillPoints()` sources run all nine boundaries, 04 §5.1 was
+   reconciled to match (it had six rows for nine steps), and the in-step
+   kills are the put-budget sweep — `InterruptionTests/StorePutSweepTests`
+   single-stream, its twin in `TreeSnapshotInterruptionTests` for the tree
+   path's first-ever meeting with a fault store, which caught the advisory
+   hint put failing the whole publication (fixed test-first).
+4. ✅ **An interrupted restore** — both slices done: cooperative cancellation
+   (RR-5) and the read-fault slice
+   (`Repository.Tests/RestoreReadFaultTests`), which also fixed SF-2 —
+   a store fault mid-restore now fails the item in the receipt instead of
+   aborting the run with no receipt at all. Still owed at the *process* level
+   under item 6 (a real kill, not an exception).
+5. ✅ **The stale-local-state family** — done
+   ([pipeline review Amendment 2](review/2026-08-pipeline-integrity-review.md#amendment-2-2026-08--the-stale-state-round)):
+   each member has its named test or its written reason. Ahead-of-the-store
+   was the real defect — own-writer reuse trusted the location row with no
+   store I/O and could publish dangling references; the trust gate now runs
+   a memoized existence probe, and `PlanRestore` probes located blobs
+   instead of asking the catalogue about itself. Behind-the-store is pinned
+   as cost-only, the unchanged short-circuit as contained (confirming it
+   would undo NFR-PERF-003), and the dead `segment_dedup` table as inert —
+   all in `Repository.Tests/StaleCatalogueTests`.
+6. ✅ **Two real processes** — done: `Hosts.Tests/ProcessRaceTests` spawns
+   the shipped apphosts and crosses the kernel's file lock — a real CLI
+   contender refused naming the holder's role and pid, a killed Agent
+   holder's role freeing itself with no stale-lock heuristic, and two
+   processes with different state directories committing to one repository
+   concurrently (ADR-0028 §4's boundary, both sides). The spool directory
+   rides the same exclusion — `<state>/spool` sits behind the writer role
+   at every call site.
+7. **Contract-suite atomicity** (phase 3, with the second provider) — the
+   portable `Storage.ContractTests` do not require atomic visibility or
+   crash durability, so a second provider could pass while offering neither.
+   A design decision about what the contract *requires*, then tests.
+8. **Sample read-back after upload** (with the first remote provider) —
+   architecture 04 §5's optional step-5 sampling, worth building when
+   acknowledgements are less honest than a local fsync.
+9. **Restore-plan completeness** — the plan omits free space, required
+   privileges, physical-vs-logical size, and archival-tier rehydration
+   (FR-RST-003), and is neither exportable nor resumable (arch 08 §2). Needs
+   filesystem fault injection on the restore target to test. Done when the
+   plan reports each and a plan survives a round trip.
+10. **Alternate data streams on restore** (RR-6) — the *honesty* half is
+    ✅ done: catalogue schema v5 carries `has_alternate_streams` through the
+    live projection and both rebuilders, `RestorePlanner` declares the
+    `alternate-streams` degradation, and the receipt (schema v3) reports the
+    item `degraded` with the run `Partial`
+    ([restore review, RR-6 resolution note](review/2026-08-restore-pipeline-review.md#rr-6--alternate-data-streams-are-captured-and-never-restored)).
+    The *write-back* half stays owed: actually restoring the streams,
+    Windows-only — done when a file carrying ADS round-trips on a target
+    that can take them, at which point `SupportsAlternateStreams` stops
+    being unconditionally false.
+11. ✅ **Restore breadth** — done (`Repository.Tests/RestoreBreadthTests`):
+    `Replace` and `Fail` pinned, the receipt JSON pinned byte-for-byte by a
+    golden fixture (schema v3), and NFR-PERF-009 measured honestly — which
+    produced item 13 below rather than a pass.
+12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
+    a maintainer decision between implementing sparse write-out and amending
+    FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
+13. **The restore GET budget** (NFR-PERF-009) — architecturally unmet: the
+    read path opens every blob in the repository at load (three range reads
+    each, proportional to repository size) and issues one uncoalesced range
+    read per manifest and per segment.
+    `RestoreBreadthTests.Restore_GetRequests_AreCharacterisedAgainstTheDistinctBlobBudget`
+    pins the exact current counts so the shortfall cannot be mistaken for
+    met. Done when the reader learns catalogue-directed blob loading and
+    range coalescing and the characterization becomes the compliance test —
+    real read-path engine work, sensibly co-scheduled with the first remote
+    provider, where a GET has a price.
+
+### 3. NFR-PERF-007 on the reference machine
 
 The one exit criterion no amount of container measurement can close. Everything
 on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
@@ -375,14 +488,7 @@ The lesson is the one the watch list exists for: a plausible mechanism that
 explains a flake is not proof it is the only one. The eager-subscription fix was
 right and necessary, and stopping there was the error.
 
-### 2. NFR-PERF-007 on the reference machine
-
-The one exit criterion no amount of container measurement can close. Everything
-on [phase-2-benchmarks.md](phase-2-benchmarks.md) compares configurations and
-versions against each other; the ≥400 MB/s figure is stated against a machine
-none of it ran on.
-
-### Watch list — open
+#### Open
 
 `Repository.Tests/EndToEnd/AgentPassTests.A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent`
 fails roughly one run in twelve under four-way parallel full-suite load, on

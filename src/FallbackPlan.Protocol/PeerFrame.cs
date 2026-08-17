@@ -33,6 +33,39 @@ public enum PeerMessageType : ushort
 
     /// <summary>The channel-bound signature (02 §3.1).</summary>
     SessionAuthProof = 9,
+
+    /// <summary>A peer announces it has ended the peering (01 §3; feature-gated as "termination-notice").</summary>
+    PeeringTermination = 10,
+
+    /// <summary>A source's offer to replicate a repository (03 §3.1).</summary>
+    ReplicationOffer = 256,
+
+    /// <summary>A destination's inventory of what it already holds (03 §3.2).</summary>
+    ReplicationInventory = 257,
+
+    /// <summary>The start of one object's bytes (03 §3.3).</summary>
+    ReplicationObject = 258,
+
+    /// <summary>A slice of the current object's bytes (03 §3.3).</summary>
+    ReplicationChunk = 259,
+
+    /// <summary>The source has sent every object in scope (03 §3.4).</summary>
+    ReplicationComplete = 260,
+
+    /// <summary>The destination confirms what it received and committed (03 §3.4).</summary>
+    ReplicationAck = 261,
+
+    /// <summary>A commander's instruction naming the keys a replica drops (06 §4.1; feature-gated as "retention-instruction").</summary>
+    RetentionOffer = 262,
+
+    /// <summary>The spoke confirms what it deleted (06 §4.2).</summary>
+    RetentionAck = 263,
+
+    /// <summary>A keyed random-range challenge (04 §4.1).</summary>
+    VerificationChallenge = 264,
+
+    /// <summary>The destination's proof of possession, or its honest inability (04 §4.2).</summary>
+    VerificationProof = 265,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>
@@ -70,6 +103,9 @@ public enum PeerRefusalReason : ushort
 
     /// <summary>The peer did not prove possession of the identity it presented (02 §3.3).</summary>
     AuthenticationFailed = 11,
+
+    /// <summary>The destination cannot store — disk trouble, not policy (05 §4).</summary>
+    StorageExhausted = 12,
 }
 
 /// <summary>
@@ -129,6 +165,13 @@ public sealed class PeerProtocolException : Exception
 
     /// <summary>The closed-set code a peer branches on (02 §6).</summary>
     public PeerRefusalReason Reason { get; }
+
+    /// <summary>
+    /// Whether this refusal arrived off the wire from the peer, as opposed to
+    /// being raised here against the peer. A received refusal is surfaced and
+    /// never echoed back as a refusal of its own (02 §6).
+    /// </summary>
+    public bool ReceivedFromPeer { get; init; }
 }
 
 /// <summary>

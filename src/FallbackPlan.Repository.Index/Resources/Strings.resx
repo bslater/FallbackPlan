@@ -118,6 +118,9 @@
   <data name="JournalPublisher_StoreRefusedJournalRecordWith" xml:space="preserve">
     <value>The store refused journal record {0} with a failed precondition.</value>
   </data>
+  <data name="JournalStore_StoreHeldDifferentRecordAtSequence" xml:space="preserve">
+    <value>The store already holds a different journal record at sequence {0}: this writer's sequence state has regressed (specification 08 §2). The publication is refused while the source data still exists.</value>
+  </data>
   <data name="JournalRecordCodec_AuditPayloadCarriesUnknownKey" xml:space="preserve">
     <value>The audit payload carries an unknown key (specification 08 §6).</value>
   </data>

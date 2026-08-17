@@ -1061,8 +1061,17 @@ def _rules_compile(rule: str, case_sensitive: bool):
     else:
         pattern = _rules_glob_to_regex(rule)
 
+    # DOTALL because section 7.1 says `.` is "any character" and a newline is
+    # a legal character in a POSIX filename. Without it a trailing `**`, which
+    # compiles to `.+`, fails to reach `secrets/ssh\nkey` -- an exclude rule
+    # that does not reach a file is a file that gets copied.
+    #
+    # Matching is by `fullmatch` throughout, never `match` with `$`: `$` also
+    # matches immediately before a final newline, which would make the two
+    # different names `keep.txt` and `keep.txt\n` one name to a rule.
+    flags = re.DOTALL | (0 if case_sensitive else re.IGNORECASE)
     try:
-        return re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
+        return re.compile(pattern, flags)
     except re.error as error:  # a subset-passing pattern the engine refuses
         raise ValueError(str(error))
 
@@ -1137,6 +1146,27 @@ def path_rules_vectors() -> dict:
         (r"re:a[^/]*", "abc", True, True),
         (r"re:a[^/]*", "abc/d", True, False),
         (r"re:docs/.*", "docs/deep/tree/file", True, True),
+        # Names hostile to the regex a rule compiles into. A newline is legal
+        # in a POSIX filename, and both the "any character" of `.` and the
+        # "whole path" of implicit anchoring have to mean it -- an
+        # implementation whose `.` stops at a newline lets a file out of an
+        # exclude, and one that anchors with `$` merges two different names.
+        ("secrets/**", "secrets/ssh\nkey", True, True),
+        ("secrets/**", "secrets/two\nline\nname", True, True),
+        ("*.key", "host\nname.key", True, True),
+        ("keep.txt", "keep.txt\n", True, False),
+        ("docs/keep.txt", "docs/keep.txt\n", True, False),
+        (r"re:docs/.*", "docs/we\nird", True, True),
+        # Regex metacharacters as literal characters in a glob rule.
+        ("a$b.txt", "a$b.txt", True, True),
+        ("a$b.txt", "ab.txt", True, False),
+        ("v1.0", "v1.0", True, True),
+        ("v1.0", "v1x0", True, False),
+        ("(draft)", "notes/(draft)", True, True),
+        ("a+b", "a+b", True, True),
+        ("a+b", "aab", True, False),
+        ("a|b", "a|b", True, True),
+        ("a|b", "a", True, False),
     ]
 
     match_cases = []
@@ -1224,6 +1254,24 @@ def path_rules_vectors() -> dict:
             "excludes": ["*.BAK"],
             "case_sensitive": False,
             "paths": ["notes.bak", "notes.Bak", "notes.bakx"],
+        },
+        {
+            # A filename is attacker-influenced input in any shared directory,
+            # and an exclude list is a promise. Nothing about a name may let a
+            # path out of a subtree exclusion.
+            "name": "hostile_names_do_not_escape_exclusion",
+            "includes": [],
+            "excludes": ["secrets/**", "*.key", "*$"],
+            "case_sensitive": True,
+            "paths": [
+                "secrets/ssh\nkey",
+                "secrets/inner/ssh\nkey",
+                "secrets/trailing\n",
+                "home/host\nname.key",
+                "home/notes$",
+                "home/notes",
+                "home/keys",
+            ],
         },
     ]
 

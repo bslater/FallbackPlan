@@ -6,6 +6,49 @@ using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
 
+/// <summary>
+/// Reads <see cref="JobState"/> by name, and reads a name it does not know as
+/// <see cref="JobState.FailedRecoverable"/> rather than throwing.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The journal stores states as strings, which is what makes it diagnosable by
+/// eye — and it is also what would make a downgrade destructive. A build that
+/// predates a newly added state would throw on the unknown name, and
+/// <see cref="JobStateStore.Open"/> answers a <see cref="JsonException"/> by
+/// setting the whole file aside as corrupt and starting empty. That loses
+/// every set's schedule anchor at once, so every set becomes due at once: a
+/// version rollback would trigger a simultaneous backup of everything.
+/// </para>
+/// <para>
+/// <see cref="JobState.FailedRecoverable"/> is the landing place because it is
+/// the state the service retries on its next pass. An unrecognised terminal
+/// state read as "retry" costs one redundant run; read as "complete" it could
+/// silently anchor a schedule against something that never happened.
+/// </para>
+/// </remarks>
+internal sealed class TolerantJobStateConverter : JsonConverter<JobState>
+{
+    public override JobState Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var numeric))
+        {
+            return Enum.IsDefined(typeof(JobState), numeric) ? (JobState)numeric : JobState.FailedRecoverable;
+        }
+
+        var name = reader.GetString();
+        return Enum.TryParse<JobState>(name, ignoreCase: true, out var state)
+            ? state
+            : JobState.FailedRecoverable;
+    }
+
+    public override void Write(Utf8JsonWriter writer, JobState value, JsonSerializerOptions options)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+        writer.WriteStringValue(value.ToString());
+    }
+}
+
 /// <summary>One job's durable record.</summary>
 public sealed record JobRecord
 {
@@ -46,7 +89,7 @@ public sealed class JobStateStore
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new TolerantJobStateConverter(), new JsonStringEnumConverter() },
     };
 
     private readonly string _path;
@@ -162,13 +205,53 @@ public sealed class JobStateStore
     }
 
     /// <summary>The last COMPLETED run of a set — the schedule anchor (ADR-0027 §1).</summary>
+    /// <remarks>
+    /// <see cref="JobState.CompletedWithFailures"/> counts, and the reason is
+    /// worth stating because the opposite reading is a live-lock. That run
+    /// committed a snapshot and is genuinely the set's most recent backup;
+    /// excluding it would make a set whose backup was partial look as though
+    /// it had never run, so it would back up again on every scheduler pass —
+    /// for ever, on a set with one permanently unreadable file.
+    /// </remarks>
     public JobRecord? LastCompleted(string backupSetId)
     {
         lock (_gate)
         {
-            return _jobs.LastOrDefault(job => job.BackupSetId == backupSetId && job.State == JobState.Complete);
+            return _jobs.LastOrDefault(job =>
+                job.BackupSetId == backupSetId && IsCommitted(job.State));
         }
     }
+
+    /// <summary>Whether a state means "a snapshot was committed by this run".</summary>
+    public static bool IsCommitted(JobState state) =>
+        state is JobState.Complete or JobState.CompletedWithFailures;
+
+    /// <summary>
+    /// The schedule anchor for a set, in the operator's wall-clock frame —
+    /// what <see cref="Schedule.IsDue"/> and <see cref="Schedule.NextRun"/>
+    /// want, or <see langword="null"/> when the set has never completed a run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists to be the only place this conversion happens. The same five
+    /// lines used to appear in the scheduler, the CLI and the command handler,
+    /// and they were wrong in all three the same way: they built the anchor
+    /// with <see cref="DateTimeOffset.FromUnixTimeMilliseconds(long)"/>, which
+    /// carries offset <c>+00:00</c>, and handed it to a comparison whose other
+    /// side came from <see cref="DateTimeOffset.Now"/>. Three copies of a
+    /// conversion is how the same defect gets fixed twice and missed once.
+    /// </para>
+    /// <para>
+    /// <c>ToLocalTime</c> is what makes the frame right, and it is right per
+    /// instant rather than per process: it resolves the offset that was in
+    /// effect when the run completed, which is exactly what a daily schedule
+    /// needs on the night an offset changes.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset? ScheduleAnchor(string backupSetId) =>
+        LastCompleted(backupSetId) is { } completed
+            ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt).ToLocalTime()
+            : null;
 
     /// <summary>Jobs the Agent retries on its next pass — recoverable failures only (10 §3).</summary>
     public IReadOnlyList<JobRecord> RecoverableFailures(string backupSetId)

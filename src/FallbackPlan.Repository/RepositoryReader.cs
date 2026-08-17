@@ -33,6 +33,12 @@ public sealed record RestoreResult
 }
 
 /// <summary>
+/// One blob the load could not open, and why — reported, never silent
+/// (specification 00 §3's posture applied per blob rather than per load).
+/// </summary>
+public sealed record SkippedBlob(ObjectKey Key, string Reason);
+
+/// <summary>
 /// The read side of the slice, built on footers alone (specification 05 §4,
 /// 07 §10's premise; FR-ARCH-006, FR-MAN-007): list the blob namespace, open
 /// each blob through its locator and recovery footer, index records by object
@@ -51,6 +57,7 @@ public sealed class RepositoryReader : IDisposable
     private readonly IObjectStore _store;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly List<BlobReader> _blobReaders = [];
+    private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync"/> before reading.</summary>
@@ -69,24 +76,59 @@ public sealed class RepositoryReader : IDisposable
     public IEnumerable<RecordTableEntry> AllRecords => _blobReaders.SelectMany(reader => reader.RecordTable);
 
     /// <summary>
-    /// Lists the blob namespace and opens every blob through its recovery
-    /// footer, indexing records by object identifier.
+    /// Each loaded blob with the records its footer declares — the sweep
+    /// side's view (architecture 07 §3): a blob is deletable only when every
+    /// record it holds is unreachable, and a record duplicated across blobs
+    /// conservatively keeps each blob holding it. Skipped blobs are absent
+    /// here and must never be swept — see <see cref="SkippedBlobs"/>.
     /// </summary>
-    /// <returns>The number of blobs opened.</returns>
-    /// <exception cref="BlobFormatException">A blob is damaged — the finding names it.</exception>
+    public IEnumerable<(ObjectKey StoreKey, BlobId BlobId, IReadOnlyList<RecordTableEntry> Records)> Blobs =>
+        _blobReaders.Select(reader => (reader.StoreKey, reader.Envelope.BlobId, reader.RecordTable));
+
+    /// <summary>
+    /// The blobs the last load could not open, each with the refusal's own
+    /// message. A skipped blob's records read as absent — every downstream
+    /// caller already refuses a missing record loudly — and never as wrong
+    /// bytes; naming the damage exhaustively is <c>verify</c>'s job.
+    /// </summary>
+    public IReadOnlyList<SkippedBlob> SkippedBlobs => _skipped;
+
+    /// <summary>
+    /// Lists the blob namespace and opens every blob through its recovery
+    /// footer, indexing records by object identifier. Corruption is local
+    /// (architecture 04 §7; NFR-REL-004): a blob that will not open is
+    /// skipped and reported in <see cref="SkippedBlobs"/> rather than
+    /// refusing the load — one torn orphan must not block every restore of
+    /// every committed snapshot, which is the posture the recovery tool and
+    /// the verify engine already hold.
+    /// </summary>
+    /// <returns>The number of blobs opened, skips excluded.</returns>
     public async ValueTask<int> LoadBlobsAsync(CancellationToken cancellationToken)
     {
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            var reader = await BlobReader.OpenAsync(
-                _store,
-                entry.Key,
-                entry.Length,
-                _repositoryId,
-                _keys.DeriveClassKey,
-                _objectIdDeriver,
-                cancellationToken).ConfigureAwait(false);
+            BlobReader reader;
+            try
+            {
+                reader = await BlobReader.OpenAsync(
+                    _store,
+                    entry.Key,
+                    entry.Length,
+                    _repositoryId,
+                    _keys.DeriveClassKey,
+                    _objectIdDeriver,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (BlobFormatException exception)
+            {
+                // Damage, scoped to the blob it is in. An IOException is not
+                // caught here on purpose: a transient store fault is not a
+                // damage finding, and treating it as one would silently
+                // narrow the loaded world on a flaky connection.
+                _skipped.Add(new SkippedBlob(entry.Key, exception.Message));
+                continue;
+            }
 
             _blobReaders.Add(reader);
 
@@ -137,14 +179,32 @@ public sealed class RepositoryReader : IDisposable
     }
 
     /// <summary>
+    /// Restores a file version from its logical segment references with no
+    /// assembly check: every segment verifies individually, and the computed
+    /// whole-file hash is returned for the <em>caller</em> to compare. Two
+    /// same-length segments swapped pass every per-part check here — prefer
+    /// the overload that takes the manifest's expected hash whenever the
+    /// caller has one (architecture 08 §3).
+    /// </summary>
+    public ValueTask<RestoreResult> RestoreAsync(
+        IReadOnlyList<SegmentReference> references,
+        Stream destination,
+        CancellationToken cancellationToken) =>
+        RestoreAsync(references, destination, expectedContentHash: default, cancellationToken);
+
+    /// <summary>
     /// Restores a file version from its logical segment references. Nothing
     /// reaches <paramref name="destination"/> unless every segment verifies —
     /// a failed record refuses the whole restore rather than emitting a
-    /// partial file (FR-RST-005).
+    /// partial file (FR-RST-005) — and, when
+    /// <paramref name="expectedContentHash"/> is provided, unless the
+    /// assembled whole-file hash matches it, which is the only check that
+    /// catches verified segments assembled in the wrong order.
     /// </summary>
     public async ValueTask<RestoreResult> RestoreAsync(
         IReadOnlyList<SegmentReference> references,
         Stream destination,
+        ReadOnlyMemory<byte> expectedContentHash,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(references);
@@ -189,16 +249,25 @@ public sealed class RepositoryReader : IDisposable
                     expectedOffset += reference.LogicalLength;
                 }
 
+                var hash = new byte[32];
+                wholeFile.GetHashAndReset(hash);
+
+                // The assembly check, before a byte reaches the caller: every
+                // segment passed its own verification, so a mismatch here can
+                // only mean verified content assembled into the wrong file.
+                if (!expectedContentHash.IsEmpty && !expectedContentHash.Span.SequenceEqual(hash))
+                {
+                    return new RestoreResult(false, 0, null,
+                        "The assembled content does not match the expected whole-file hash; every segment verified individually, so the reference list assembles a different file (architecture 08 §3).");
+                }
+
                 // Every segment verified: only now does anything reach the
                 // caller's destination.
                 spool.Position = 0;
                 await spool.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+
+                return new RestoreResult(true, expectedOffset, hash, null);
             }
-
-            var hash = new byte[32];
-            wholeFile.GetHashAndReset(hash);
-
-            return new RestoreResult(true, expectedOffset, hash, null);
         }
         finally
         {

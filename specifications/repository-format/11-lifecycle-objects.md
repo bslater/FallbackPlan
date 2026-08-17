@@ -53,6 +53,8 @@ Four independent things break leases, and they are why the rule is absolute: clo
 
 `/tombstones/<object-type>/<object-id>` records that an object has been marked for deletion and when it becomes eligible. `<object-type>` is the two-lowercase-hex-digit rendering of the [02 §3.1](02-identifiers.md#31-object-types) type — `0d`, not `13` — and `<object-id>` is the 52-character base32 rendering of the object identifier.
 
+A **blob** has no [02 §3.1](02-identifiers.md#31-object-types) type — its identifier is writer-allocated, not content-derived ([02 §4](02-identifiers.md#4-blob-identifier)) — so a blob tombstone uses the type digits `07`: the reserved code that is already the blob domain in the store-key derivation ([02 §4.3](02-identifiers.md#43-not-leaking-writer-identity)) and that no record's `object_type` can ever carry. Its `<object-id>` is the 26-character base32 rendering of the 16-byte blob identifier, and key 3 below carries the 16 bytes — the width rule of §3.1.
+
 ```text
 tombstone = {
     1: u16       schema version, 1
@@ -73,6 +75,8 @@ The signature has the semantics of [06 §6.1](06-manifests.md#61-signature): rep
 `eligible_generation` is the index generation at or after which the delete may proceed. **There is no trusted clock in this format**, so a grace period measured in wall time is a grace period an adversary can end early by moving a clock. Generations advance only when a writer publishes, are monotonic, and are visible to every participant, which makes them the one ordering every participant agrees on. `tombstoned_at` is recorded for operators reading a diagnostic bundle and MUST NOT be used to decide eligibility.
 
 `object_id` is 32 bytes for every object type except a blob, whose identifier is 16 ([02 §4](02-identifiers.md#4-blob-identifier)). A reader MUST validate the width against `object_type` and refuse a mismatch.
+
+In a **single-writer archive** — a hub's staging archive is one by construction — the generation this field counts MAY be realised as the writer's journal sequence, which is that archive's per-publication monotonic and is visible in cleartext as each standalone record's counter. The property is the same either way: eligibility arrives only with visible advancement, never with a clock. → [ADR-0009 Amendment 5](../../docs/adr/0009-garbage-collection-safety.md#amendment-5-2026-08--the-grace-generation-realised)
 
 ### 3.2 What a collector must do before deleting
 

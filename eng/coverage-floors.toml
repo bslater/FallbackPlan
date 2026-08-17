@@ -1,0 +1,56 @@
+# Per-module line-coverage floors, read by `eng/coverage.py --floors`.
+#
+# WHAT THESE ARE FOR
+#
+# The global `--floor 50` catches a collapse: a project dropping out of the
+# run, a suite silently not executing. It cannot catch one module regressing,
+# because a healthy total absorbs it — `FallbackPlan.Keystore` could go to zero
+# and the union would barely move. These floors catch that, by name.
+#
+# Each is pinned roughly two points below the module's measured figure, which
+# is slack enough that ordinary refactoring does not trip it and tight enough
+# that deleting a test suite does.
+#
+# RAISING ONE IS A DELIBERATE ACT
+#
+# Lowering a floor to make a build pass is the failure this file exists to
+# prevent; if a module has genuinely and knowingly lost coverage — a feature
+# removed, a platform dropped — say so in the commit that lowers it. Raising
+# one after real work is welcome and needs no ceremony.
+#
+# These are NOT targets. A module sitting well above its floor is not being
+# asked to climb; the number is a tripwire, not a goal, and treating it as a
+# goal is how coverage figures start being gamed.
+#
+# THE TWO SINGLE-OS FIGURES
+#
+# `Keystore` and `Filesystem.Local` are measured here on Linux alone, where
+# their macOS and Windows halves are unreachable by construction. CI merges the
+# matrix and their real figures are higher, so these two floors are loose. They
+# are deliberately not guessed upward: a floor above the truth fails a build for
+# no reason, and the honest number needs a merged run to read off.
+# See `docs/review/2026-08-coverage-audit.md` §3.
+
+"FallbackPlan.Agent" = 80
+"FallbackPlan.Api" = 73
+"FallbackPlan.Application" = 88
+"FallbackPlan.Cli" = 87
+"FallbackPlan.Domain" = 97
+"FallbackPlan.Filesystem" = 98
+"FallbackPlan.Filesystem.Local" = 48
+"FallbackPlan.Import.Abstractions" = 98
+"FallbackPlan.Keystore" = 22
+"FallbackPlan.Protocol" = 88
+"FallbackPlan.Recovery" = 82
+"FallbackPlan.Replication" = 96
+"FallbackPlan.Repository" = 91
+"FallbackPlan.Repository.Catalogue" = 85
+"FallbackPlan.Repository.Crypto" = 85
+"FallbackPlan.Repository.Format" = 86
+"FallbackPlan.Repository.Index" = 86
+"FallbackPlan.Repository.Packing" = 89
+"FallbackPlan.Repository.Segmentation" = 93
+"FallbackPlan.Restore" = 83
+"FallbackPlan.Retention" = 89
+"FallbackPlan.Storage.Abstractions" = 81
+"FallbackPlan.Storage.Local" = 84

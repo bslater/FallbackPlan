@@ -2,6 +2,7 @@ using Bodu;
 using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Cli;
 using FallbackPlan.Domain;
@@ -14,9 +15,11 @@ using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
+using RestoreResult = FallbackPlan.Repository.RestoreResult;
 
 namespace FallbackPlan.Cli;
 
@@ -52,26 +55,39 @@ public static class CliApplication
         // every command is a straight line into the engine with no logic of its own,
         // so what it demonstrates is the engine, not the shell around it.
 
-        var repoOption = new Option<string>("--repo")
+        // --repo and --passphrase-env are required for a verb that works the
+        // local repository, but a verb reaching a remote service over --connect
+        // has neither (the service holds the repository). Requiredness is
+        // therefore conditional and enforced in the handler — see Repo/
+        // PassphraseEnv below and ResolveRemote — rather than by the parser,
+        // which can only say "always" or "never".
+        var repoOption = new Option<string?>("--repo")
         {
-            Description = "Path of the repository store root.",
-            Required = true,
+            Description = "Path of the repository store root. Required unless --connect names a remote service.",
         };
-        var passphraseEnvOption = new Option<string>("--passphrase-env")
+        var passphraseEnvOption = new Option<string?>("--passphrase-env")
         {
-            Description = "Name of the environment variable holding the passphrase (never the passphrase itself).",
-            Required = true,
+            Description = "Name of the environment variable holding the passphrase (never the passphrase itself). Required unless --connect names a remote service.",
         };
         var stateOption = new Option<string?>("--state")
         {
-            Description = "Client-local state directory (writer identity, sequence, catalogue, spool). Defaults per repository under the user profile.",
+            Description = "Client-local state directory (writer identity, sequence, catalogue, spool). Defaults per repository under the user profile; required with --connect (it holds this console's peer identity and pairings).",
         };
         var directOption = new Option<bool>("--direct")
         {
             Description = "Do the work in this process even if a service is running. Refused if the service holds the writer role.",
         };
+        var connectOption = new Option<string?>("--connect")
+        {
+            Description = "Reach a remote paired service at host:port over the peer protocol instead of the local repository (ADR-0028 §5). Requires --state and --fingerprint.",
+        };
+        var fingerprintOption = new Option<string?>("--fingerprint")
+        {
+            Description = "Fingerprint of the pinned service to expect when using --connect (the key it was paired to must answer).",
+        };
 
-        var root = new RootCommand("FallbackPlan low-level repository tooling (phase 0)");
+        var root = new RootCommand(
+            "FallbackPlan — encrypted backup: repository tooling, backup and restore, and the console for a running service");
 
         Command WithSession(Command command)
         {
@@ -82,8 +98,85 @@ public static class CliApplication
             return command;
         }
 
+        // A verb that can also reach a remote service: everything WithSession
+        // gives, plus the two options that name one. The repo/passphrase it
+        // inherits are only needed on the local path, so they stay optional and
+        // are validated there.
+        Command WithRemoteCapableSession(Command command)
+        {
+            WithSession(command);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            return command;
+        }
+
+        // Requiredness the parser cannot express: needed on the local path,
+        // absent on the remote one.
+        string Repo(ParseResult parse) => parse.GetValue(repoOption) is { Length: > 0 } value
+            ? value
+            : throw new CliFailureException("--repo is required.");
+        string PassphraseEnv(ParseResult parse) => parse.GetValue(passphraseEnvOption) is { Length: > 0 } value
+            ? value
+            : throw new CliFailureException("--passphrase-env is required.");
+
+        // Resolves the remote target when --connect is given, or null for the
+        // local path. Refuses the combinations that cannot mean anything: mixing
+        // --connect with --direct (both claim to decide where the work runs), or
+        // omitting the --state and --fingerprint --connect depends on.
+        (string Host, int Port, string State, string Fingerprint)? ResolveRemote(ParseResult parse, bool direct)
+        {
+            if (parse.GetValue(connectOption) is not { } connect)
+            {
+                return null;
+            }
+
+            if (direct)
+            {
+                throw new CliFailureException(
+                    "--connect and --direct cannot be combined; --connect already names where the work runs.");
+            }
+
+            if (!TryParseEndpoint(connect, out var host, out var port))
+            {
+                throw new CliFailureException($"'{connect}' is not host:port.");
+            }
+
+            var state = parse.GetValue(stateOption)
+                ?? throw new CliFailureException(
+                    "--connect requires --state (the console's peer identity and pairings).");
+            var fingerprint = parse.GetValue(fingerprintOption)
+                ?? throw new CliFailureException(
+                    "--connect requires --fingerprint (the pinned service to expect).");
+
+            return (host, port, state, fingerprint);
+        }
+
+        // A query verb over the remote binding: dial the pinned service, send one
+        // command, and insist on the result it should answer with. The read verbs
+        // that go through the gateway do not need this — the gateway carries them
+        // — but snapshots, ls and status read the catalogue directly on the local
+        // path, so the remote path is theirs to drive.
+        async Task<TResult> QueryRemoteAsync<TResult>(
+            (string Host, int Port, string State, string Fingerprint) target,
+            ServiceCommand command,
+            CancellationToken cancellationToken)
+            where TResult : ServiceResult
+        {
+            await using var connection = await RemotePeer.ConnectAsync(
+                target.Host, target.Port, target.State, target.Fingerprint, "fallbackplan-cli", cancellationToken)
+                .ConfigureAwait(false);
+
+            var result = await connection.Client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            return result switch
+            {
+                TResult expected => expected,
+                ServiceError error => throw new CliFailureException(error.Message),
+                _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+            };
+        }
+
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
-            parse.GetValue(repoOption)!, parse.GetValue(passphraseEnvOption)!, parse.GetValue(stateOption), cancellationToken);
+            Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken);
 
         // An engineering verb — one the service contract carries no command for
         // — takes the device's writer role for its duration and says so. Direct
@@ -95,8 +188,8 @@ public static class CliApplication
             ParseResult parse, string verb, CancellationToken cancellationToken)
         {
             var session = await CliSession.OpenAsync(
-                parse.GetValue(repoOption)!,
-                parse.GetValue(passphraseEnvOption)!,
+                Repo(parse),
+                PassphraseEnv(parse),
                 parse.GetValue(stateOption),
                 writerRole: true,
                 cancellationToken).ConfigureAwait(false);
@@ -116,12 +209,16 @@ public static class CliApplication
             Func<IOperationGateway, CancellationToken, ValueTask<OperationReport>> operation,
             CancellationToken cancellationToken)
         {
-            var gateway = await OperationGateway.OpenForReadAsync(
-                parse.GetValue(repoOption)!,
-                parse.GetValue(passphraseEnvOption)!,
-                parse.GetValue(stateOption),
-                parse.GetValue(directOption),
-                cancellationToken).ConfigureAwait(false);
+            var remote = ResolveRemote(parse, parse.GetValue(directOption));
+            var gateway = remote is { } target
+                ? await OperationGateway.OpenForRemoteAsync(
+                    target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                : await OperationGateway.OpenForReadAsync(
+                    Repo(parse),
+                    PassphraseEnv(parse),
+                    parse.GetValue(stateOption),
+                    parse.GetValue(directOption),
+                    cancellationToken).ConfigureAwait(false);
 
             await using (gateway.ConfigureAwait(false))
             {
@@ -167,6 +264,20 @@ public static class CliApplication
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
 
+        static bool TryParseEndpoint(string target, out string host, out int port)
+        {
+            host = string.Empty;
+            port = 0;
+            var colon = target.LastIndexOf(':');
+            if (colon <= 0 || colon == target.Length - 1)
+            {
+                return false;
+            }
+
+            host = target[..colon];
+            return int.TryParse(target[(colon + 1)..], CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
+        }
+
         static ObjectId ParseObjectId(string hex)
         {
             try
@@ -195,8 +306,8 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                var store = new LocalFileSystemObjectStore(parse.GetValue(repoOption)!);
-                using var passphrase = CliSession.ReadPassphrase(parse.GetValue(passphraseEnvOption)!);
+                var store = new LocalFileSystemObjectStore(Repo(parse));
+                using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
 
                 using var repository = await RepositoryLifecycle.CreateAsync(
@@ -418,7 +529,7 @@ public static class CliApplication
             };
             var catalogueOption = new Option<string?>("--catalogue")
             {
-                Description = "Catalogue database path. Defaults to the state directory's catalogue.db.",
+                Description = "Catalogue database path. Defaults to the state directory's per-archive catalogue.",
             };
             var command = WithSession(new Command("rebuild-index", "Rebuild the local catalogue from the store."));
             command.Options.Add(forensicOption);
@@ -454,12 +565,25 @@ public static class CliApplication
                     }
 
                     var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+
+                    // Precedence rule 3 (specification 07 §3) needs to know
+                    // which blobs the store still holds, and this is the only
+                    // place that knows. Without it the rebuild assumes every
+                    // blob is live and serves locations into blobs collection
+                    // removed — the index naming an object no blob holds.
+                    using var inventory = new RepositoryReader(
+                        session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                    await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
                     var report = await new CatalogueRebuilder(loader).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
                         gapPatienceGenerations: 2,
                         isSequenceAccountedAsync: null,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        CatalogueRebuilder.KnownBlobs(
+                            inventory.Blobs.Select(blob => blob.BlobId),
+                            inventoryComplete: inventory.SkippedBlobs.Count == 0)).ConfigureAwait(false);
 
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                         $"rebuild: {report.DeltasApplied} delta(s) + {report.CheckpointsApplied} checkpoint(s) applied, {report.LocationsRecorded} location(s)"));
@@ -488,7 +612,7 @@ public static class CliApplication
             {
                 Description = "Verify one file version (hex manifest object id) end to end instead of blobs.",
             };
-            var command = WithSession(new Command("verify", "Verify blobs at a chosen level, or one file version end to end."));
+            var command = WithRemoteCapableSession(new Command("verify", "Verify blobs at a chosen level, or one file version end to end."));
             command.Options.Add(levelOption);
             command.Options.Add(fileOption);
             command.Options.Add(directOption);
@@ -641,7 +765,7 @@ public static class CliApplication
             var includeOption = new Option<string[]>("--include") { Description = "rules-v1 include rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var excludeOption = new Option<string[]>("--exclude") { Description = "rules-v1 exclude rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var fullOption = new Option<bool>("--full") { Description = "Ignore the prior snapshot; read every file." };
-            var command = WithSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot)."));
+            var command = WithRemoteCapableSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot). With --connect, runs a configured set on the remote service."));
             command.Arguments.Add(rootArgument);
             command.Options.Add(setOption);
             command.Options.Add(includeOption);
@@ -654,13 +778,18 @@ public static class CliApplication
                 // The one verb that both writes and has a service equivalent, so
                 // the one whose side has to be resolved rather than assumed
                 // (ADR-0028 §3). Everything the two sides do differently lives
-                // behind the gateway; what is left here is the same either way.
-                var gateway = await OperationGateway.OpenForWriteAsync(
-                    parse.GetValue(repoOption)!,
-                    parse.GetValue(passphraseEnvOption)!,
-                    parse.GetValue(stateOption),
-                    parse.GetValue(directOption),
-                    cancellationToken).ConfigureAwait(false);
+                // behind the gateway; what is left here is the same either way —
+                // a remote service, like a local one, runs only a configured set.
+                var remote = ResolveRemote(parse, parse.GetValue(directOption));
+                var gateway = remote is { } target
+                    ? await OperationGateway.OpenForRemoteAsync(
+                        target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                    : await OperationGateway.OpenForWriteAsync(
+                        Repo(parse),
+                        PassphraseEnv(parse),
+                        parse.GetValue(stateOption),
+                        parse.GetValue(directOption),
+                        cancellationToken).ConfigureAwait(false);
 
                 await using (gateway.ConfigureAwait(false))
                 {
@@ -690,10 +819,40 @@ public static class CliApplication
         // ----------------------------------------------------------- snapshots
 
         {
-            var command = WithSession(new Command("snapshots", "List the catalogue's known snapshots, newest first."));
+            var command = WithRemoteCapableSession(new Command("snapshots", "List the catalogue's known snapshots, newest first. With --connect, lists the remote service's snapshots."));
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    var result = await QueryRemoteAsync<SnapshotsResult>(
+                        target, new ListSnapshotsCommand(), cancellationToken).ConfigureAwait(false);
+
+                    if (result.Snapshots.Count == 0)
+                    {
+                        output.WriteLine("no snapshots known to the service.");
+                        return 0;
+                    }
+
+                    // The service carries no signature state on the wire, so the
+                    // remote listing shows the file count where the local one
+                    // shows the signature column.
+                    foreach (var snapshot in result.Snapshots)
+                    {
+                        var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
+                            .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                        var captureStatus = snapshot.CaptureStatus == 1 ? "complete" : "partial";
+                        var destinations = snapshot.Destinations is { Count: > 0 }
+                            ? "  " + string.Join(", ", snapshot.Destinations)
+                            : string.Empty;
+                        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){destinations}"));
+                    }
+
+                    return 0;
+                }
+
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
 
@@ -726,12 +885,40 @@ public static class CliApplication
                 Description = "Directory path within the snapshot; omit for the root.",
                 Arity = ArgumentArity.ZeroOrOne,
             };
-            var command = WithSession(new Command("ls", "List a directory within a snapshot, from the catalogue."));
+            var command = WithRemoteCapableSession(new Command("ls", "List a directory within a snapshot, from the catalogue. With --connect, lists it from the remote service."));
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    var result = await QueryRemoteAsync<DirectoryResult>(
+                        target,
+                        new ListDirectoryCommand(parse.GetValue(snapshotArgument)!, parse.GetValue(pathArgument)),
+                        cancellationToken).ConfigureAwait(false);
+
+                    // The service names each entry by its leaf; a size is shown
+                    // only for files, as on the local path.
+                    foreach (var entry in result.Entries)
+                    {
+                        var entryKind = entry.Kind switch
+                        {
+                            "directory" => "dir ",
+                            "symlink" => "link",
+                            "special" => "spec",
+                            _ => "file",
+                        };
+                        var entrySize = entry.Kind == "file"
+                            ? entry.Length.ToString(CultureInfo.InvariantCulture)
+                            : string.Empty;
+                        output.WriteLine($"{entryKind}  {entrySize,12}  {entry.Name}");
+                    }
+
+                    return 0;
+                }
+
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
 
@@ -788,8 +975,8 @@ public static class CliApplication
                 Description = "Path within the snapshot to restore; omit for everything.",
                 Arity = ArgumentArity.ZeroOrOne,
             };
-            var outputOption = new Option<string>("--output") { Description = "Destination directory.", Required = true };
-            var command = WithSession(new Command(
+            var outputOption = new Option<string>("--output") { Description = "Destination directory. With --connect this is a path on the service's machine (ADR-0028 §6) — the console is told where, never sent the files.", Required = true };
+            var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
@@ -815,7 +1002,7 @@ public static class CliApplication
                 Description = "Blob verification level: locator | digest | records (05 §8).",
                 DefaultValueFactory = _ => "digest",
             };
-            var command = WithSession(new Command(
+            var command = WithRemoteCapableSession(new Command(
                 "check", "Repository health: blob verification sweep, journal survey, and the catalogue's damage findings."));
             command.Options.Add(levelOption);
             command.Options.Add(directOption);
@@ -823,6 +1010,90 @@ public static class CliApplication
             command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
                 parse,
                 (gateway, token) => gateway.CheckAsync(parse.GetValue(levelOption)!, token),
+                cancellationToken)));
+        }
+
+        // ----------------------------------------------------------------- sync
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Sync only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Sync only this declared destination; each set's every destination otherwise.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "sync",
+                "Converge declared destinations now, outside the schedule (ADR-0034 §3) — one pass per (set, destination) pair, answered from the sync ledger."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.SyncAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), token),
+                cancellationToken)));
+        }
+
+        // -------------------------------------------------- verify-destination
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Verify only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Verify only this declared destination; each set's every destination otherwise.",
+            };
+            var fullOption = new Option<bool>("--full")
+            {
+                Description = "Read every stored object now, rather than the next bounded segment (FR-VER-004).",
+            };
+            var probeOption = new Option<bool>("--probe")
+            {
+                Description =
+                    "Read nothing: confirm only that the destination could take a backup — the address works, "
+                    + "the directory exists and accepts writes, or the peer is reachable and honours the grant.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "verify-destination",
+                "Ask what a destination can still be trusted for (peer-protocol 04): --probe confirms it could "
+                + "take a backup, the default re-reads a bounded segment of its stored bytes, --full re-reads "
+                + "every one. `verify` sweeps this hub's own archives instead."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(fullOption);
+            command.Options.Add(probeOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.VerifyDestinationAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), parse.GetValue(fullOption),
+                    parse.GetValue(probeOption), token),
+                cancellationToken)));
+        }
+
+        // ------------------------------------------------------------ retention
+
+        {
+            var applyOption = new Option<bool>("--apply")
+            {
+                Description = "Tombstone, sweep and trim — the destructive half. Without it the pass reports only (FR-GC-005).",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "retention",
+                "Run a retention pass per configured set (architecture 07): the report always, deletion only with --apply."));
+            command.Options.Add(applyOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.RetentionAsync(parse.GetValue(applyOption), token),
                 cancellationToken)));
         }
 
@@ -859,7 +1130,7 @@ public static class CliApplication
                 // opens the exported object — a kit that cannot work is never
                 // written.
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var passphrase = CliSession.ReadPassphrase(parse.GetValue(passphraseEnvOption)!);
+                using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
 
                 var kit = await RecoveryKitFactory.BuildAsync(
                     session.Store,
@@ -867,7 +1138,7 @@ public static class CliApplication
                     session.DeviceId,
                     (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     [new FallbackPlan.Repository.Format.RecoveryKit.KitDestination(
-                        "local-path", Path.GetFullPath(parse.GetValue(repoOption)!), string.Empty, string.Empty)],
+                        "local-path", Path.GetFullPath(Repo(parse)), string.Empty, string.Empty)],
                     cancellationToken).ConfigureAwait(false);
 
                 var framed = FallbackPlan.Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(kit);
@@ -885,24 +1156,135 @@ public static class CliApplication
             }));
         }
 
-        // -------------------------------------------------------------- status
+        // ---------------------------------------------------------------- pair
 
         {
-            var command = WithSession(new Command(
-                "status", "Per-set protection status (architecture 10 §1) — captured is never protected, degraded is never unrecoverable."));
+            // Not a session verb: pairing needs no repository or passphrase,
+            // only the console's own state directory to hold its identity and
+            // the grant it is about to pin (ADR-0030 §1).
+            var connectArgument = new Argument<string>("host:port")
+            {
+                Description = "The service's remote binding, as host:port.",
+            };
+            var stateArgOption = new Option<string>("--state")
+            {
+                Description = "The console's state directory (its peer identity and pairings).",
+                Required = true,
+            };
+            var labelOption = new Option<string?>("--label")
+            {
+                Description = "A human label for this service, for display only.",
+            };
+            var roleOption = new Option<string?>("--role")
+            {
+                Description = "The role this console records for the service: stores-here, stores-for-us (default), "
+                    + "or both. Declared on the wire and approved by both humans (ADR-0030 Amendment 2).",
+            };
+
+            var command = new Command("pair", "Pair this console with a service's remote binding (ADR-0030).");
+            command.Arguments.Add(connectArgument);
+            command.Options.Add(stateArgOption);
+            command.Options.Add(labelOption);
+            command.Options.Add(roleOption);
+            root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
+                var target = parse.GetValue(connectArgument)!;
+                if (!TryParseEndpoint(target, out var host, out var port))
+                {
+                    throw new CliFailureException($"'{target}' is not host:port.");
+                }
+
+                var state = parse.GetValue(stateArgOption)!;
+                var label = parse.GetValue(labelOption);
+                if (!PeerRoles.TryParse(parse.GetValue(roleOption), out var role))
+                {
+                    throw new CliFailureException(
+                        $"--role '{parse.GetValue(roleOption)}' is not stores-here, stores-for-us, or both.");
+                }
+
+                using var keypair = PeerKeypairStore.Open(state);
+                var grants = PeerGrantStore.Open(state);
+
+                output.WriteLine($"this console is peer {keypair.Identity.Fingerprint}");
+                output.WriteLine($"dialling {host}:{port} …");
+
+                await using var connection = await PeerTlsConnection.DialAsync(
+                    host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+
+                var result = await PairingCeremony.OfferAsync(
+                    connection.Stream, keypair, grants, label ?? Environment.MachineName, role,
+                    (prospect, _) =>
+                    {
+                        output.WriteLine($"pairing with {prospect.PeerLabel} (peer {prospect.PeerIdentity.Fingerprint})");
+                        output.WriteLine($"they will record this console as: {prospect.TheirRoleForUs}");
+                        output.WriteLine($"compare this string on both devices: {prospect.ShortAuthenticationString}");
+                        output.Write("do the strings match, and do you approve? [y/N] ");
+                        output.Flush();
+                        var answer = Console.In.ReadLine();
+                        return ValueTask.FromResult(answer is not null && answer.Trim().StartsWith('y'));
+                    },
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false);
+
+                if (result.Approved)
+                {
+                    output.WriteLine($"paired with {result.Grant!.Label} ({result.Grant.Identity.Fingerprint}).");
+                    return 0;
+                }
+
+                output.WriteLine($"pairing did not complete: {result.Refusal?.Text ?? "the peer went away"}.");
+                return 1;
+            }));
+        }
+
+        // -------------------------------------------------------------- status
+
+        {
+            var command = WithRemoteCapableSession(new Command(
+                "status", "Per-set protection status (architecture 10 §1) — captured is never protected, degraded is never unrecoverable. With --connect, the remote service's status."));
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    var result = await QueryRemoteAsync<StatusResult>(
+                        target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
+
+                    error.WriteLine($"mode: service (remote) — {result.MachineName}");
+                    foreach (var notice in result.Notices)
+                    {
+                        output.WriteLine($"notice: {notice}");
+                    }
+
+                    foreach (var set in result.Sets)
+                    {
+                        // A verification claim is a coverage and a date, never
+                        // a bare tick (10 §1.2) — rendered wherever it exists.
+                        output.WriteLine(
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}");
+                        foreach (var row in set.Destinations)
+                        {
+                            // The matrix beneath the roll-up (ADR-0028 §8):
+                            // the detail is what the summary was computed from.
+                            output.WriteLine(
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                        }
+                    }
+
+                    return 0;
+                }
+
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
                 var configuration = ClientConfiguration.Load(session.ConfigurationPath);
                 var jobs = JobStateStore.Open(session.StateDirectory);
-                var repoPath = parse.GetValue(repoOption)!;
+                var repoPath = Repo(parse);
 
                 var findings = catalogue.Findings();
                 var requiredMissing = findings.Any(finding =>
                     finding.Kind is DamageKind.MissingBlob or DamageKind.MissingIndexObject);
-                var reachable = File.Exists(Path.Combine(repoPath, "repository-format"));
+                var ledger = DestinationSyncStore.Open(session.StateDirectory);
                 var snapshots = catalogue.EnumerateSnapshots();
 
                 var sets = configuration.BackupSets.Count > 0
@@ -917,22 +1299,32 @@ public static class CliApplication
                     var setId = Convert.FromHexString(set.Id);
                     var latest = snapshots.FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
 
-                    // The failure-domain fact (PT-8): same device as the source is
-                    // never `protected`. Unknown roots stay conservative.
-                    var sameDomain = true;
-                    if (set.Root.Length > 0 &&
-                        FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(set.Root, out var rootStat) &&
-                        FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(repoPath, out var repoStat))
+                    // The destination matrix (ADR-0034): one row per declared
+                    // destination, from the sync ledger. The failure-domain
+                    // fact (PT-8) is a device-identity comparison for a local
+                    // path, conservative when the platform cannot say; a peer
+                    // or cloud destination is another machine by construction.
+                    var lastCompleted = jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+                    var destinations = new List<DestinationStatusInput>();
+                    foreach (var reference in set.Destinations)
                     {
-                        sameDomain = rootStat.Device == repoStat.Device;
+                        destinations.Add(DestinationStatus.Describe(
+                            reference.Ref,
+                            configuration.FindDestination(reference.Ref),
+                            set.Root,
+                            ledger.Find(set.Id, reference.Ref),
+                            lastCompleted,
+                            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                            path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
+                                ? stat.Device
+                                : null));
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs
                     {
                         LatestSnapshotAt = latest?.CapturedAt,
                         LatestCaptureStatus = latest?.CaptureStatus,
-                        DestinationReachable = reachable,
-                        SameFailureDomain = sameDomain,
+                        Destinations = destinations,
                         DamageFindings = findings.Count,
                         RequiredObjectsMissing = requiredMissing,
                     });
@@ -946,14 +1338,13 @@ public static class CliApplication
                     if (!string.IsNullOrWhiteSpace(set.Schedule) &&
                         FallbackPlan.Application.Schedule.TryParse(set.Schedule!, out var schedule, out _))
                     {
-                        var anchor = jobs.LastCompleted(set.Id) is { } completed
-                            ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
-                            : (DateTimeOffset?)null;
+                        var anchor = jobs.ScheduleAnchor(set.Id);
                         nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now)
                             .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
                     }
 
-                    output.WriteLine($"{set.Name,-20} {status.State,-14} last: {lastProtected}  next: {nextRun}");
+                    output.WriteLine(
+                        $"{set.Name,-20} {status.State,-14} last: {lastProtected}  next: {nextRun}{DescribeVerification(status.Verification)}");
                     foreach (var warning in status.Warnings)
                     {
                         output.WriteLine($"{string.Empty,-20} warning: {warning}");
@@ -967,4 +1358,16 @@ public static class CliApplication
         return await root.Parse(args).InvokeAsync(configuration).ConfigureAwait(false);
 
     }
+
+    /// <summary>
+    /// A verification claim rendered as coverage and age — the only form
+    /// `verified` is allowed to take (10 §1.2) — or nothing when no pass has
+    /// ever proven bytes at a destination.
+    /// </summary>
+    private static string DescribeVerification(FallbackPlan.Domain.Status.VerificationDetail? verification) =>
+        verification is { } detail
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"  verified: {detail.Coverage:P0} of objects at {DateTimeOffset.FromUnixTimeMilliseconds((long)detail.VerifiedAtUnixMilliseconds):yyyy-MM-dd HH:mm}")
+            : string.Empty;
 }

@@ -132,8 +132,33 @@ unportable: lookbehind, backreferences, and flag semantics differ across
 engines and versions, and catastrophic backtracking becomes an input-driven
 denial of service inside a backup agent. Rejected.
 
+## Amendment 1 — the engine defaults the subset forgot (2026-08)
+
+Pinning *which constructs* a rule may use turned out not to pin *how a host
+engine reads them*. Two defaults, shared by nearly every regex engine, quietly
+narrowed the dialect in both reference implementations at once:
+
+- `.` excludes newlines unless told otherwise, so a trailing `/**` — compiled
+  to `.+` — failed to reach `secrets/ssh⏎key`. A newline is legal in a POSIX
+  filename, and this is an **exclusion bypass**: the operator excluded the
+  subtree and the file was copied anyway.
+- `$` matches immediately before a final newline as well as at the end, so the
+  C# implementation read the two distinct names `keep.txt` and `keep.txt⏎` as
+  one. Python's `fullmatch` did not, so the two implementations also
+  disagreed — the very thing the dual derivation exists to catch, missed
+  because no vector carried a newline.
+
+Both were found by reading the surveyed changelog, where filename and
+filter handling is a recurring class of shipped fix, and both are now stated
+normatively in 06 §7.1 with committed vectors. The ADR's own listed
+consequence — "the regex subset must be policed by our own validator" — was
+right about the direction and incomplete: policing which constructs are
+*accepted* does nothing about how the accepted ones are *executed*. A portable
+subset has to pin the engine's options, not only its syntax.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Dialect pinned with conformance vectors and dual reference implementations, ahead of Phase 1's scanner |
+| 2026-08 | Accepted | Amendment 1 — engine defaults (`.` and `$` versus newlines) pinned after both reference implementations were found to narrow the dialect |

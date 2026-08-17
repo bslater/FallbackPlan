@@ -16,7 +16,8 @@ namespace FallbackPlan.Api;
 /// <para>
 /// Compatibility is by <b>major</b>. A client and service that disagree on the
 /// major version must refuse to proceed with both versions named (FR-SVC-007),
-/// because the failure CrashPlan users met was an unexplained blank window. A
+/// because the failure users of a legacy backup service met was an
+/// unexplained blank window. A
 /// console in topology 3 routinely meets services at several versions at once,
 /// so the refusal is per service and never stops the console starting.
 /// </para>
@@ -26,7 +27,7 @@ namespace FallbackPlan.Api;
 public readonly record struct ContractVersion(int Major, int Minor)
 {
     /// <summary>The version this build speaks.</summary>
-    public static ContractVersion Current { get; } = new(1, 0);
+    public static ContractVersion Current { get; } = new(1, 6);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -69,9 +69,7 @@ public static class Scheduler
                 continue;
             }
 
-            var anchor = runtime.Jobs.LastCompleted(set.Id) is { } completed
-                ? DateTimeOffset.FromUnixTimeMilliseconds((long)completed.UpdatedAt)
-                : (DateTimeOffset?)null;
+            var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
 
             if (!schedule!.IsDue(anchor, now))
             {
@@ -87,8 +85,165 @@ public static class Scheduler
             outcomes.Add(new AgentSetOutcome(outcome.SetName, outcome.Outcome, outcome.Detail));
         }
 
+        // Phase 2: fan-out (ADR-0034 §3). After the backups, so a fresh
+        // snapshot reaches its destinations in the same pass; and every pass,
+        // so a destination that was offline catches up under back-off with no
+        // operator action (FR-DEST-003). The pass IS the retry pump — there
+        // is no other timer.
+        var syncs = new List<Task>();
+        foreach (var set in runtime.Configuration.BackupSets)
+        {
+            if (!runtime.ArchiveExists(set.Id))
+            {
+                continue;
+            }
+
+            foreach (var reference in set.Destinations)
+            {
+                if (ShouldSync(runtime, set, reference.Ref, now)
+                    && FanOut.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sync)
+                {
+                    syncs.Add(sync);
+                }
+            }
+        }
+
+        // The wait honours shutdown: a stop signal mid-transfer must reach
+        // the runtime's disposal — which is what cancels the jobs — rather
+        // than sit behind an hours-long fan-out until the service manager
+        // gives up and kills the process.
+        try
+        {
+            await Task.WhenAll(syncs).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The syncs themselves resume on the next pass; each object
+            // committed whole or not at all.
+        }
+        catch (Exception)
+        {
+            // A sync that faulted past its own handlers is the lane worker's
+            // to log and the ledger's to carry — the pass only synchronises,
+            // and the next pass retries the pair under back-off. One faulted
+            // destination must never take the scheduler loop down.
+        }
+
+        // Phase 3: the deep sweep (FR-VER-002, ADR-0034). Fan-out's challenge
+        // proves what a destination holds at the moment it is asked, for the
+        // objects it sampled; this re-reads stored bytes against their seals
+        // so rot between syncs is found by the product rather than by a
+        // restore. Bounded per pass and resumed from a cursor, so a large
+        // archive comes round over many passes instead of monopolising the
+        // one transfer worker.
+        //
+        // After the fan-out wait, deliberately: a sweep that read a replica
+        // while convergence was putting and deleting in it would manufacture
+        // failures about damage that never existed.
+        var sweeps = new List<Task>();
+        foreach (var set in runtime.Configuration.BackupSets)
+        {
+            if (!runtime.ArchiveExists(set.Id))
+            {
+                continue;
+            }
+
+            foreach (var reference in set.Destinations)
+            {
+                if (ShouldSweep(runtime, set, reference.Ref, now)
+                    && ReplicaSweepJob.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sweep)
+                {
+                    sweeps.Add(sweep);
+                }
+            }
+        }
+
+        try
+        {
+            await Task.WhenAll(sweeps).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled segment simply does not advance its cursor; the next
+            // pass re-reads from where the last completed one left off.
+        }
+        catch (Exception)
+        {
+            // As with fan-out: one destination's sweep faulting past its own
+            // handlers must never take the scheduler loop down.
+        }
+
         return new AgentPassResult(outcomes);
     }
+
+    /// <summary>
+    /// Whether a (set, destination) pair is due another sweep segment.
+    /// </summary>
+    /// <remarks>
+    /// Only local-path destinations sweep: a peer replica is behind the wire
+    /// with no store to read, so confirming its bytes needs the range
+    /// challenge, not this. Deliberately stated rather than silently skipped.
+    /// </remarks>
+    private static bool ShouldSweep(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
+    {
+        if (runtime.Configuration.FindDestination(destinationName) is not
+            { Kind: DestinationKind.LocalPath } destination)
+        {
+            return false;
+        }
+
+        var record = runtime.DestinationSync.Find(set.Id, destinationName);
+        if (record?.LastSuccessAt is null)
+        {
+            // Nothing has been copied there yet; there is nothing to re-read.
+            return false;
+        }
+
+        if (record.SweptAt is not { } swept)
+        {
+            return true;
+        }
+
+        var interval = (ulong)(destination.DeepVerifyIntervalDays ?? ReplicaSweepJob.DefaultIntervalDays)
+            * 24UL * 3_600_000UL;
+        return (ulong)now.ToUnixTimeMilliseconds() >= swept + interval;
+    }
+
+    /// <summary>
+    /// Whether a (set, destination) pair warrants an attempt this pass: yes
+    /// when never tried, when the staging archive moved past the last success,
+    /// and when a previous failure's back-off has elapsed. An in-sync pair
+    /// with nothing new costs nothing; a stated incapacity is refreshed only
+    /// once per new snapshot rather than retried.
+    /// </summary>
+    private static bool ShouldSync(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
+    {
+        var record = runtime.DestinationSync.Find(set.Id, destinationName);
+        if (record is null)
+        {
+            return true;
+        }
+
+        var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
+        var behind = record.LastSuccessAt is null || record.LastSuccessAt < lastCompleted;
+
+        return record.State switch
+        {
+            DestinationSyncState.InSync => behind,
+            DestinationSyncState.NotSupported => record.LastAttemptAt < lastCompleted,
+
+            // Unavailable and failed retry under exponential back-off, capped
+            // at an hour, anchored to the poll cadence — the gap closes itself
+            // when the destination returns (FR-DEST-003), without hammering a
+            // drive that is simply unplugged for the week.
+            _ => (ulong)now.ToUnixTimeMilliseconds() >= record.LastAttemptAt + BackoffMs(runtime, record.ConsecutiveFailures),
+        };
+    }
+
+    private static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
+        Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
 
     /// <summary>
     /// Queues one set's backup and hands back a task that completes when it

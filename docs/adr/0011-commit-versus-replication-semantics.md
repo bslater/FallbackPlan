@@ -47,6 +47,27 @@ Commit is per-replica and retention is per-replica, and nothing connected them. 
 
 Retention shall not expire a snapshot that has not reached the destinations its policy requires, unless a configured deferral bound is exceeded — at which point the gap is raised as a warning requiring action rather than applied silently. Holding extra snapshots costs disk; expiring them costs history.
 
+### Amendment 3 (2026-08) — "the local repository" becomes the set's staging archive
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) gives each backup set its own
+archive on the hub — a staging archive publication always lands in — and makes
+every destination a whole-archive replica of it. This ADR's separation carries
+over unchanged and becomes cleaner to state: **commit is against the staging
+archive** (always local, always achievable, never blocked by a destination), and
+**replication state is per `(snapshot, destination)`** exactly as the table
+above defines, now with real destinations to be in states about. What this
+amendment retires is the *privileged local replica*: staging is a cache the hub
+manages, not a destination a policy counts, so no user-facing state may treat
+"it is in the local repository" as protection — that judgement belongs entirely
+to [ADR-0018](0018-replica-failure-domains.md)'s domains, evaluated over
+configured destinations.
+
+The "per-destination snapshot objects" alternative below stays rejected, and
+per-set archives are not it: destinations hold byte-identical replicas of one
+archive, so the snapshot's identity is never ambiguous. The only lawful
+divergence is a lagging replica or a hub-planned retention trim
+(ADR-0034 §2, §4).
+
 ## Consequences
 
 **Positive**
@@ -79,3 +100,4 @@ Retention shall not expire a snapshot that has not reached the destinations its 
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Commit/replication split unchanged. `protected` now requires a replica outside the source's failure domain (PT-8); retention may not outrun replication (PT-9). |
+| 2026-08 | Accepted (amended) | Amendment 3: commit is against the set's staging archive and no state treats the local copy as privileged ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

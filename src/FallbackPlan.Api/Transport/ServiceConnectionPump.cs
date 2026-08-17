@@ -1,0 +1,112 @@
+using Bodu;
+
+namespace FallbackPlan.Api.Transport;
+
+/// <summary>
+/// Serves one already-connected client stream: the command-contract hello
+/// (ADR-0028 §7), then request/response and progress-stream framing until the
+/// client goes away.
+/// </summary>
+/// <remarks>
+/// This is the part of the service boundary that is the same over every
+/// transport. The local binding reaches it once an operating-system socket is
+/// accepted; the remote binding reaches it once a peer session has
+/// authenticated and opened (ADR-0030), carrying the same command contract as
+/// its payload over the same length-prefixed framing. Neither the commands nor
+/// the version gate know which transport carried them here, which is what keeps
+/// "a console commands the same service a local caller does" true by
+/// construction rather than by a second implementation.
+/// </remarks>
+public static class ServiceConnectionPump
+{
+    /// <summary>Runs the command contract over one connected stream until it closes.</summary>
+    /// <param name="stream">The connected duplex stream. Not disposed here — the caller owns it.</param>
+    /// <param name="service">The service to dispatch commands to.</param>
+    /// <param name="clientDescription">How to name this client in log lines.</param>
+    /// <param name="log">Optional sink for connection-level notes.</param>
+    /// <param name="cancellationToken">Stops the pump when the listener is stopping.</param>
+    /// <returns>A task that completes when the connection ends.</returns>
+    public static async Task RunAsync(
+        Stream stream,
+        IFallbackPlanService service,
+        string clientDescription,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(service);
+
+        try
+        {
+            if (await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false) is not HelloFrame hello)
+            {
+                return;
+            }
+
+            if (!ContractVersion.TryParse(hello.ContractVersion, out var clientVersion)
+                || !ContractVersion.Current.IsCompatibleWith(clientVersion))
+            {
+                // Name both versions rather than dropping the connection: an
+                // unexplained disconnect is the failure this rule exists for.
+                await FrameCodec.WriteAsync(
+                    stream,
+                    new HelloAcknowledgementFrame(
+                        ContractVersion.Current.ToString(),
+                        false,
+                        ContractVersion.DescribeMismatch(clientVersion, ContractVersion.Current)),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await FrameCodec.WriteAsync(
+                stream,
+                new HelloAcknowledgementFrame(ContractVersion.Current.ToString(), true, null),
+                cancellationToken).ConfigureAwait(false);
+
+            log?.Invoke($"accepted {hello.ClientName} from {clientDescription}");
+            await PumpAsync(stream, service, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException)
+        {
+            // A client that disconnects, or sends nonsense, ends its own
+            // connection and nothing else. Bounded parsing is what makes that
+            // true rather than hopeful (T-7).
+            log?.Invoke($"connection from {clientDescription} ended: {exception.Message}");
+        }
+    }
+
+    private static async Task PumpAsync(Stream stream, IFallbackPlanService service, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var frame = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+            switch (frame)
+            {
+                case null:
+                    return;
+
+                case RequestFrame request:
+                    var result = await service.ExecuteAsync(request.Command, cancellationToken).ConfigureAwait(false);
+                    await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case WatchFrame:
+                    await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
+                    return;
+
+                default:
+                    return;
+            }
+        }
+    }
+
+    private static async Task StreamProgressAsync(
+        Stream stream, IFallbackPlanService service, CancellationToken cancellationToken)
+    {
+        await foreach (var progress in service.WatchAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await FrameCodec.WriteAsync(stream, new ProgressFrame(progress), cancellationToken).ConfigureAwait(false);
+        }
+    }
+}

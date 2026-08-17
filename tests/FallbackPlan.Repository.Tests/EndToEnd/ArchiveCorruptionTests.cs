@@ -82,7 +82,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task BlobReader_TheLocatorIsTruncated_RefusesAtOpen()
+    public async Task BlobReader_TheLocatorIsTruncated_IsSkippedWithANamedFinding()
     {
         var (_, keys, store) = await ArchiveAsync();
         using var _ = keys;
@@ -91,10 +91,12 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         var bytes = await File.ReadAllBytesAsync(file, CancellationToken.None);
         await File.WriteAllBytesAsync(file, bytes[..^16], CancellationToken.None);
 
+        // Corruption is local (04 §7; NFR-REL-004): the damaged blob is
+        // skipped with a named finding rather than refusing the whole load.
         using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
 
-        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
-            await reader.LoadBlobsAsync(CancellationToken.None));
+        Assert.ContainsSingle(reader.SkippedBlobs);
     }
 
     [TestMethod]
@@ -107,10 +109,13 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         var bytes = await File.ReadAllBytesAsync(file, CancellationToken.None);
         await File.WriteAllBytesAsync(file, [.. bytes, 0xDE, 0xAD], CancellationToken.None);
 
+        // Post-seal append is the INV-BLOB-001 violation 05 §5.1 orders a
+        // reader to report — as a finding scoped to the blob, not a refusal
+        // of every other blob in the store.
         using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
 
-        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
-            await reader.LoadBlobsAsync(CancellationToken.None));
+        Assert.ContainsSingle(reader.SkippedBlobs);
     }
 
     [TestMethod]
@@ -122,10 +127,13 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         var otherRepository = FallbackPlan.Domain.Identifiers.RepositoryId.FromBytes(
             Convert.FromHexString("ffffffffffffffffffffffffffffffff"));
 
+        // Every blob fails footer authentication under the wrong repository
+        // identity, so the load opens nothing — and says why, per blob.
         using var reader = new RepositoryReader(otherRepository, keys, store);
+        var loaded = await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var exception = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
-            await reader.LoadBlobsAsync(CancellationToken.None));
-        Assert.Contains("authentication", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(0, loaded);
+        Assert.IsNotEmpty(reader.SkippedBlobs);
+        Assert.Contains("authentication", reader.SkippedBlobs[0].Reason, StringComparison.OrdinalIgnoreCase);
     }
 }

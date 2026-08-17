@@ -97,7 +97,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
             new MonotonicBlobCounterAllocator(600), SpoolDirectory, BlobWriteProfile.LocalDefault);
         await using (builder.ConfigureAwait(false))
         {
-            await builder.WriteStandaloneSnapshotAsync(snapshot, encoded, counter: 601, CancellationToken.None);
+            await builder.WriteStandaloneSnapshotAsync(snapshot, encoded, intentSequence: 601, CancellationToken.None);
         }
 
         // Enumerable from the bounded /snapshots/ prefix without any index

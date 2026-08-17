@@ -63,27 +63,31 @@ public static class BackupRunner
             jobs.Transition(jobId, JobState.Scanning, nowMs);
             progress.Enter(JobState.Scanning);
 
+            // The set's staging archive, created on its first backup — staging
+            // is internal, so nobody runs `init` for it (ADR-0034 §1).
+            var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
+
             var backupSetId = Convert.FromHexString(set.Id);
-            var prior = runtime.Catalogue.EnumerateSnapshots()
+            var prior = archive.Catalogue.EnumerateSnapshots()
                 .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
             var generation =
-                runtime.Repository.CurrentDataGeneration.Value >= runtime.Repository.CurrentMetadataGeneration.Value
-                    ? runtime.Repository.CurrentDataGeneration
-                    : runtime.Repository.CurrentMetadataGeneration;
+                archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
+                    ? archive.Repository.CurrentDataGeneration
+                    : archive.Repository.CurrentMetadataGeneration;
 
             var orchestrator = new PublicationOrchestrator(
                 CapturePolicy.Default,
-                runtime.Repository.RepositoryId,
+                archive.Repository.RepositoryId,
                 runtime.Writer,
                 generation,
-                runtime.Repository.Keys,
-                runtime.Repository.Hierarchy,
-                runtime.Store,
-                runtime.Sequence,
-                runtime.SpoolDirectory,
+                archive.Repository.Keys,
+                archive.Repository.Hierarchy,
+                archive.Store,
+                archive.Sequence,
+                archive.SpoolDirectory,
                 observer: null,
-                runtime.Catalogue,
+                archive.Catalogue,
                 progress);
 
             var snapshotId = RandomNumberGenerator.GetBytes(16);
@@ -102,6 +106,10 @@ public static class BackupRunner
                     ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
                     PriorSnapshotId = prior?.SnapshotId,
                     NowUnixMilliseconds = nowMs,
+                    // The pass clock above keeps schedule derivation pure; the
+                    // capture-completion stamp wants the time capture actually
+                    // finished, which only a live clock can say.
+                    Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     DeclaredMaxDurationMs = 3_600_000,
                     ExpiryGeneration = generation.Value + 2,
                     ClientVersion = "fallbackplan-agent/0.1",
@@ -114,13 +122,20 @@ public static class BackupRunner
             // compares two different clocks — and the answer is only right while
             // they happen to agree. A caller that injects a clock got a job
             // stamped in its own future and its next run never came due.
+            // A snapshot that could not capture everything committed anyway,
+            // and says so in the state rather than only in the detail. The
+            // detail stays as the human half — the count — but it is no longer
+            // the only thing distinguishing this run from a clean one.
+            var partial = published.ErrorManifestObjectId is not null;
+            var outcome = partial ? JobState.CompletedWithFailures : JobState.Complete;
+
             jobs.Transition(
                 jobId,
-                JobState.Complete,
+                outcome,
                 nowMs,
-                detail: published.ErrorManifestObjectId is null ? null : $"partial: {published.Failures.Count} failure(s)",
+                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
-            progress.Enter(JobState.Complete);
+            progress.Enter(outcome);
 
             return new BackupOutcome(
                 set.Name,
@@ -149,6 +164,15 @@ public static class BackupRunner
         {
             jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, exception.Message);
             progress.Enter(JobState.FailedRecoverable);
+            return new BackupOutcome(set.Name, "failed", exception.Message);
+        }
+        catch (Exception exception) when (exception is RepositoryOpenException or Repository.Crypto.KeyUnwrapFailedException)
+        {
+            // The staging archive refused to open — damage, or a passphrase
+            // that no longer matches. Retrying cannot fix either; a human can
+            // (10 §3).
+            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
+            progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
     }

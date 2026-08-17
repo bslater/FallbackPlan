@@ -42,16 +42,29 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
                 .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
     }
 
+    // Every one of the nine step boundaries (04 §5.1), not only those with a
+    // distinct durable state: the boundary after step 2 equals step 1's
+    // state and the one after step 5 equals step 4's — by construction on
+    // this path — and the boundary after step 9 fails the caller over an
+    // already-committed publication. The universal claims (the committed
+    // snapshot stays readable, a fresh process completes the job) must hold
+    // at all nine, and running the equivalent rows is what keeps that true
+    // if a step ever grows durable effects of its own.
+    //
     // An explicit initializer rather than a collection expression: Visual
     // Studio's analyzer lowers the expression through a path that trips
     // CA1825 (observed on Windows), and warnings are errors everywhere.
     public static IEnumerable<object[]> KillPoints() =>
     [
         [PublicationStep.PublishIntent],
+        [PublicationStep.ScanSource],
+        [PublicationStep.SegmentAndSeal],
         [PublicationStep.UploadBlobs],
+        [PublicationStep.VerifyAcknowledgements],
         [PublicationStep.PublishIndexDeltas],
         [PublicationStep.PublishSnapshot],
         [PublicationStep.RetireIntent],
+        [PublicationStep.Complete],
     ];
 
     [TestMethod]
@@ -204,7 +217,10 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         using var keys = CreateKeys();
         using var hierarchy = CreateHierarchy();
 
-        var faulting = new FaultInjectingObjectStore(store, putBudget: 1); // the intent put succeeds; the first blob put dies
+        // The intent put succeeds; the next put — the first blob's covering
+        // extension, which precedes its blob put (08 §3.1) — dies, so no
+        // blob byte ever reaches the store.
+        var faulting = new FaultInjectingObjectStore(store, putBudget: 1);
 
         using var source = new MemoryStream(BuildFile(seed: 3));
         await Assert.ThrowsExactlyAsync<IOException>(async () =>

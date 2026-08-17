@@ -25,14 +25,14 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Protocol/                ✓ peer identity, pairing, session, authentication (ADR-0030)
 │   ├── FallbackPlan.Protocol.Grpc/
 │   ├── FallbackPlan.Discovery/
-│   ├── FallbackPlan.Replication/
+│   ├── FallbackPlan.Replication/             ✓ store-to-store copier and replica verifier (ADR-0034)
 │   ├── FallbackPlan.Restore/                 ✓ restore planner and executor
-│   ├── FallbackPlan.Retention/
+│   ├── FallbackPlan.Retention/               ✓ planner, replication gate, mark, sweep, convergence, staging trim (ADR-0034)
 │   ├── FallbackPlan.Verification/
 │   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
 │   ├── FallbackPlan.Storage.{Local ✓,Peer,AzureBlob,S3}/
 │   ├── FallbackPlan.Import.Abstractions/     ✓ neutral legacy model
-│   ├── FallbackPlan.Import.CrashPlan/        optional, separately licensed
+│   ├── FallbackPlan.Import.Legacy/           optional, separately licensed
 │   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028)
 │   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
@@ -53,10 +53,11 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.FuzzTests/    ✓
 │   ├── FallbackPlan.Filesystem.Tests/        ✓
 │   ├── FallbackPlan.Restore.Tests/
-│   ├── FallbackPlan.Retention.Tests/
+│   ├── FallbackPlan.Replication.Tests/       ✓ the shared range reader and replica verifier
+│   ├── FallbackPlan.Retention.Tests/         ✓ planner, replication gate, staging trim
 │   ├── FallbackPlan.Protocol.Tests/          ✓ pairing, grants, framing, negotiation, channel binding
 │   ├── FallbackPlan.Storage.ContractTests/   ✓
-│   ├── FallbackPlan.Import.CrashPlan.Tests/
+│   ├── FallbackPlan.Import.Legacy.Tests/
 │   ├── FallbackPlan.ArchitectureTests/       ✓ enforces §2
 │   ├── FallbackPlan.InterruptionTests/       ✓
 │   ├── FallbackPlan.PerformanceTests/        ✓
@@ -86,7 +87,8 @@ That policy needs the map to say which half is which, and for a while it did not
 - Storage providers depend only on `Storage.Abstractions` and their provider SDK.
 - `Repository.Format` has no UI, host, or provider dependencies. It must be usable by the standalone recovery tool.
 - `Protocol` does not depend on `Desktop` or `Web`.
-- `Import.CrashPlan` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
+- **`Replication` may reference `Protocol`; storage providers still may not.** Fan-out serves two transport shapes — plain store-to-store copy for `local-path` and cloud kinds, the peer protocol for `peer` — and the second must live somewhere. It lives in `Replication`, so a provider stays a dumb byte store and the "providers depend only on `Storage.Abstractions` and their SDK" rule above survives hub-and-spoke intact ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md), [ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)).
+- `Import.Legacy` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
 - **Third-party cryptography lives only where it is named.** The primitives .NET does not supply do not inherit the platform's audit posture, so each is confined rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §3 and Amendment 2): Argon2id and XChaCha20-Poly1305 to `Repository.Crypto`, where a defect is already in the user's stored bytes; Ed25519 and X25519 to `Protocol`, where a defect costs a re-pairing. The allowlist is two projects by name, not a tier — widening it should take an argument.
@@ -111,8 +113,14 @@ Together they took the codebase from 64.7% to 85.0%, most of the gain
 landing in the engine rather than the shells, because the hosts are where
 the engine is integrated.
 
-What stays in `Main` is what genuinely belongs to the process: the Ctrl+C
-handler the Agent installs, and nothing else.
+What stays in `Main` is a single line. Even the process lifetime moved out:
+the Agent's `Main` calls `ServiceProcessHost`, which installs the Ctrl+C and
+`SIGTERM` handlers and, under the Windows Service Control Manager, hands off to
+`WindowsServiceHost` — the hosting layer that lets the operating system own the
+process (`ServiceProcessHost`, `WindowsServiceHost`, `ServiceUnit`;
+[ADR-0033](../adr/0033-hosting-under-an-os-service-manager.md)). It is a process
+concern that is nonetheless worth a test, so it follows the same
+callable-type-with-a-thin-entry-point rule as the hosts above it.
 
 Coverage from a single OS is a partial answer by construction: the scanner's
 Linux, Darwin and Windows interop can only run on its own platform, so a
@@ -164,9 +172,11 @@ Three stores, three lifecycles. The original proposal put all three in one sente
 |-------|----------|--------------|---------------------|
 | **Catalogue** | Path, version, segment, blob, and generation indexes; watermarks | ✅ From the repository | Slow rebuild. No data loss. |
 | **Durable local state** | Device keypair, pairing grants, destination authorisations, job history | ❌ | Device identity lost; every pairing must be re-approved manually at the other end |
-| **Configuration** | Backup sets, schedules, policies, provider settings | Partially — policy manifests record what each snapshot used | Backups silently stop happening |
+| **Configuration** | Backup sets, schedules, **named destinations and retention policies** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)), provider settings | Partially — policy manifests record what each snapshot used | Backups silently stop happening |
 
 They are separate stores on disk, not separate tables in one file, so that "delete the catalogue and let it rebuild" — a legitimate and documented recovery action — cannot take the device identity with it.
+
+Hub-and-spoke adds two journal-shaped files **beside** the durable state, deliberately not inside it ([ADR-0010 Amendment 1](../adr/0010-local-store-separation.md#amendment-1-2026-08--where-the-hub-and-spoke-state-lands-in-the-split)): per-destination **sync state** (what each destination holds, when it was last reached, why it last failed) and **notices** (peering ended, terms narrowed, quota hit). Both are sacrificial the way `jobs.json` is — sync state re-derives from a destination inventory pass, and a lost notice is re-raised by the condition still holding — so their corruption or deletion can never touch the device identity. And a privacy note the export guidance now carries: configuration holds no secrets, but with destinations in it, it names who stores your backups and where.
 
 **Durable local state** is backed up separately or re-established by re-pairing. The device *private key* is never written to the recovery kit; a recovering device establishes a new identity and is re-authorised ([`08-restore-and-recovery.md` §4.2](08-restore-and-recovery.md#42-what-is-deliberately-excluded)).
 
@@ -174,14 +184,14 @@ They are separate stores on disk, not separate tables in one file, so that "dele
 
 ## 4. Import isolation
 
-`Import.CrashPlan` is a separately packaged optional component:
+`Import.Legacy` — a placeholder name for any per-format importer, none of which exists yet — is a separately packaged optional component:
 
 - the core never references it — dependency direction is enforced by `ArchitectureTests`;
 - it depends on `Import.Abstractions`, which defines a neutral legacy model independent of any specific legacy format;
-- its own dependencies and licence obligations stay contained within it, which matters because the licence question is open ([ADR-0001](../adr/0001-licence-and-contribution-model.md), [ADR-0015](../adr/0015-crashplan-importer-isolation.md));
+- its own dependencies and licence obligations stay contained within it, which matters because the licence question is open ([ADR-0001](../adr/0001-licence-and-contribution-model.md), [ADR-0015](../adr/0015-legacy-importer-isolation.md));
 - it opens legacy archives **read-only** and never mutates a source.
 
-The neutral model exists so that the same import pipeline serves restic, Kopia, and Duplicati importers later without any of them reaching into the core.
+The neutral model exists so that the same import pipeline serves an importer for any legacy archive format later without that importer reaching into the core.
 
 ## 5. Technology
 
@@ -251,7 +261,7 @@ public interface IRestoreService
 }
 ```
 
-`SnapshotCommitResult` reports commit against the **local replica**; per-destination replication progresses separately and is observed through `IReplicationService` ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)).
+`SnapshotCommitResult` reports commit against the **set's staging archive**; per-destination replication progresses separately and is observed through `IReplicationService` ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)). `IReplicationService.PlanAsync` is deliberately endpoint-shaped — source, destination, scope — because under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the same planner serves the wire path to a peer and the store-to-store copy to a directory or, later, a cloud bucket.
 
 The corrected `IObjectStore` is in [`05-storage-providers.md` §2](05-storage-providers.md#2-the-store-interface).
 

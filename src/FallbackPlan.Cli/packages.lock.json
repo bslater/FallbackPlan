@@ -56,6 +56,16 @@
           "FallbackPlan.Domain": "[1.0.0, )"
         }
       },
+      "fallbackplan.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Application": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "System.Formats.Cbor": "[10.0.10, )"
+        }
+      },
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
@@ -125,6 +135,14 @@
         "dependencies": {
           "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )"
+        }
+      },
+      "fallbackplan.restore": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )"
         }
       },
       "fallbackplan.storage.abstractions": {

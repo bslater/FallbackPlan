@@ -2,7 +2,7 @@
 
 > FallbackPlan gives every computer a safe fallback: encrypted, versioned copies held on computers and storage that the user chooses.
 
-An open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore the capability that made the original free CrashPlan compelling — backing up one computer to another computer you control or trust, across a LAN or the internet, with no proprietary cloud service in between.
+An open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore a capability the consumer market has largely withdrawn — backing up one computer to another computer you control or trust, across a LAN or the internet, with no proprietary cloud service in between.
 
 **Status: Phase 0 ready to start.** The architecture is reviewed, the repository format is specified with conformance vectors, and the solution scaffold builds. Engine implementation has not begun.
 
@@ -45,7 +45,7 @@ An open-source backup and archival platform for Windows, macOS, and Linux. Its p
 | 3 | Cloud object stores — Azure Blob, S3 |
 | 4 | Retention, pruning, and healing |
 | — | **Format v1 freeze gate** |
-| 5 | CrashPlan migration preview |
+| 5 | Legacy archive import preview |
 | 6 | Consumer-ready release |
 
 Details in the [roadmap](docs/roadmap.md).
@@ -63,6 +63,6 @@ Requires the .NET SDK pinned in [`global.json`](global.json). Warnings are error
 
 **Dual-licensed** ([ADR-0001](docs/adr/0001-licence-and-contribution-model.md)): the code is **AGPL-3.0-only** ([LICENSE](LICENSE)) — every derivative, distributed or hosted, stays open — with commercial licences available from the maintainer for uses the AGPL does not fit. The repository-format **specification and conformance suite are Apache-2.0** ([specifications/LICENSE](specifications/LICENSE)), so independent readers can be implemented under any licence, owing this project nothing. The full map is in [LICENSING.md](LICENSING.md). External code contributions remain unmergeable until a CLA is published — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## A note on CrashPlan
+## A note on legacy archive import
 
-FallbackPlan is not affiliated with, endorsed by, or derived from CrashPlan or Code42. CrashPlan archive import is a separate, optional, read-only compatibility component, gated on legal review ([ADR-0015](docs/adr/0015-crashplan-importer-isolation.md)), and treated as experimental until validated against real archives. It never modifies a source archive.
+FallbackPlan is not affiliated with, endorsed by, or derived from any other backup product or its vendor. Importing an archive written by another product is a separate, optional, read-only compatibility component, gated on legal review ([ADR-0015](docs/adr/0015-legacy-importer-isolation.md)), and treated as experimental until validated against real archives. It never modifies a source archive.

@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository;
@@ -151,6 +152,19 @@ public sealed partial class PublicationOrchestrator
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
+        // FR-DED-004's gate, enforced where publications start: the
+        // unverified domain reuses other writers' segments without reading
+        // them, and it cannot be enabled without the acknowledgement that
+        // records what that risks.
+        if (policy.DedupTrustDomain == DedupTrustDomain.RepositoryUnverified
+            && !policy.AcknowledgesUnverifiedDedupRisk)
+        {
+            throw new ArgumentException(
+                "The repository-unverified trust domain requires the explicit acknowledgement that a "
+                + "faulty or hostile writer can corrupt other devices' backups (FR-DED-004).",
+                nameof(policy));
+        }
+
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -169,12 +183,21 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
+        // Crash hygiene before any new spool is created: a spool without its
+        // sidecar is unreachable by any resume and referenced by nothing
+        // (05 §6.3), and this writer owns the directory exclusively.
+        BlobWriter.SweepUnresumable(_spoolDirectory);
+
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
 
-        // Crash leftovers first: numbers a previous run allocated and never
-        // accounted for get their void deltas (07 §4) before new work.
-        foreach (var obligation in _sequence.RecoveredObligations)
+        // Leftovers first: numbers a previous run allocated and never
+        // accounted for get their void deltas (07 §4) before new work — a
+        // crash's and a cancellation's alike, on the next publication rather
+        // than the next restart (ADR-0029 §4). Reading the obligations here,
+        // in the serialised writer lane, is what makes the live pending set
+        // safe: nothing else is allocating.
+        foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
         }
@@ -310,9 +333,13 @@ public sealed partial class PublicationOrchestrator
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
 
             // Step 7: the snapshot's discoverable standalone copy — same
-            // bytes, same object identifier as the in-blob record.
+            // bytes, same object identifier as the in-blob record. It rides
+            // under the intent's sequence, hint-style (ADR-0022 §Decision 7):
+            // /snapshots/… is not a sequence-addressed key, so a number of
+            // its own could satisfy none of the four accounting cases and
+            // would surface as a void delta on the next run, forever.
             await builder.WriteStandaloneSnapshotAsync(
-                snapshot, encodedSnapshot, _sequence.AllocateNext(), cancellationToken).ConfigureAwait(false);
+                snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).

@@ -116,8 +116,10 @@ public sealed class PeerAuthenticator
 
         var grant = _grants.Find(theirs.Identity)
             ?? throw new PeerProtocolException(
-                PeerRefusalReason.NotPaired,
-                $"No grant exists for peer {theirs.Identity.Fingerprint}.");
+                _grants.IsRevoked(theirs.Identity) ? PeerRefusalReason.Revoked : PeerRefusalReason.NotPaired,
+                _grants.IsRevoked(theirs.Identity)
+                    ? $"The pairing with peer {theirs.Identity.Fingerprint} was ended."
+                    : $"No grant exists for peer {theirs.Identity.Fingerprint}.");
 
         _theirs = theirs;
         Peer = grant;
@@ -192,6 +194,16 @@ public sealed class PeerAuthenticator
 
         PeerMessageType.SessionHello or PeerMessageType.SessionAccept =>
             state == PeerSessionState.Authenticated,
+
+        // The payload documents (03–06) apply once the session is Open, and
+        // only then. A replication frame before Open is a stranger trying to
+        // move objects, which is exactly what the state machine forbids.
+        PeerMessageType.ReplicationOffer or PeerMessageType.ReplicationInventory
+            or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
+            or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
+            or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck
+            or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof =>
+            state == PeerSessionState.Open,
 
         _ => false,
     };

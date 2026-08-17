@@ -828,6 +828,28 @@ public sealed class ArchiveSession : IAsyncDisposable
                 throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
             }
 
+            // 05 §5.1: the only re-put a writer may treat as success is a
+            // byte-identical one. This blob's identifier was freshly
+            // allocated, so an existing object under its key means the
+            // sequence state regressed and another run's bytes are there;
+            // an index delta published over them would commit a snapshot
+            // that cannot be restored.
+            if (put.Outcome == PutOutcome.AlreadyExists &&
+                !await SealedBlobReadback.MatchesAsync(_store, storeKey, sealedBlob, CancellationToken.None).ConfigureAwait(false))
+            {
+                throw new IOException(Strings.FormatBlobUpload_StoreHeldDifferentBytesUnder(storeKey));
+            }
+
+            // ADR-0022 §Decision 7 case 4 is now satisfied — the blob is
+            // durable and a durable intent names it — so its counter has its
+            // accounting object and owes no void delta to any later run.
+            // Without a scope the case never becomes true, and the counter's
+            // fate stays with the caller who chose to upload uncovered.
+            if (_intentScope is not null)
+            {
+                _counters.MarkAccounted(sealedBlob.BlobCounter);
+            }
+
             EngineDiagnostics.BlobsSealed.Add(1, new KeyValuePair<string, object?>("class", "data"));
             EngineDiagnostics.BlobFillFraction.Record(
                 sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
@@ -1059,6 +1081,24 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        // Workers first. A producer that threw reaches disposal with workers
+        // parked on the channel or mid-put, and everything torn down below —
+        // the class key, the derivers — is still in use until they stop, so
+        // an upload finishing after disposal returned would be work escaping
+        // the lifetime that owned it. Their own failures stay here: the
+        // exception that ended the session is already propagating, and a
+        // secondary upload failure must not replace it. What they uploaded is
+        // intent-covered either way (04 §5.1 row 4).
+        _uploads.Writer.TryComplete();
+        try
+        {
+            await Task.WhenAll(_uploadWorkers).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Secondary to the failure that brought the session here.
+        }
+
         if (_writer is not null)
         {
             // A blob still open here means the session did not finish:

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Catalogue.Forensic;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -112,6 +113,90 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var sensitivePlan = RestorePlanner.Plan(
             catalogue, snapshotId, string.Empty, RestoreTargetProfile.ForLocalPlatform() with { CaseSensitive = true });
         Assert.DoesNotContain(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal), sensitivePlan.Conflicts);
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_AFileCarryingAlternateStreams_DeclaresTheDegradation()
+    {
+        // RR-6's honesty half: the format captures alternate data streams
+        // end to end, and no target can write them back yet — so a plan
+        // over a tree that carries them must SAY so, exactly as it says so
+        // for symlinks and POSIX metadata, instead of the receipt later
+        // reporting complete while the streams are dropped.
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile("data/streams.bin", Deterministic(4_096, 3));
+        carrier.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+        source.AddFile("data/plain.bin", Deterministic(4_096, 5), fileId: 9_002);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("ads-plan.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
+
+        var plan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), string.Empty,
+            RestoreTargetProfile.ForLocalPlatform());
+
+        var degradation = Assert.ContainsSingle(
+            plan.Degradations.Where(candidate => candidate.Capability == "alternate-streams"));
+        Assert.Contains("main stream", degradation.Detail, StringComparison.Ordinal);
+
+        // A tree with no stream-carrying file declares nothing — the
+        // degradation is presence-gated like the symlink one, not blanket.
+        var plainPlan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), "data/plain.bin",
+            RestoreTargetProfile.ForLocalPlatform());
+        Assert.DoesNotContain(candidate => candidate.Capability == "alternate-streams", plainPlan.Degradations);
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_AFileCarryingAlternateStreams_ReportsTheDegradedOutcomeNotComplete()
+    {
+        // The receipt half of RR-6's honesty: a restore that wrote the main
+        // stream and dropped the alternate ones did NOT completely restore
+        // that file, and `complete` was a lie the receipt told for as long
+        // as nothing consumed the plan's declaration.
+        var content = Deterministic(50_000, 9);
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile("data/streams.bin", content);
+        carrier.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("ads-receipt.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xA8, 16).ToArray(), string.Empty, target);
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var output = Path.Combine(SpoolDirectory, "ads-out");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "ads-run",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        // The main stream restored byte-identical — the shortfall is honest,
+        // not destructive.
+        SequenceAssert.AreEqual(content, File.ReadAllBytes(Path.Combine(output, "data", "streams.bin")));
+
+        // And the receipt says what actually happened: the item degraded,
+        // the run is Partial, and nothing reads as complete while streams
+        // were dropped (FR-RST-005's spirit, applied to metadata).
+        var item = Assert.ContainsSingle(receipt.Items.Where(candidate => candidate.Path == "data/streams.bin"));
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.IsNotNull(item.Detail);
+        Assert.Contains("alternate", item.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(RestoreOutcome.Partial, receipt.Outcome);
     }
 
     [TestMethod]
@@ -307,6 +392,54 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task RestoreExecution_APreSeededSymlinkPointsOutsideTheRoot_IsNotWrittenThrough()
+    {
+        // Lexical containment (Path.GetFullPath) is not enough: an attacker who
+        // can seed the restore target — or an earlier item that restored a
+        // symlink — can leave a directory link pointing outside the root, and a
+        // later item whose path traverses it escapes though every component
+        // reads as plain. Containment must resolve links, not just normalise
+        // dots (architecture 08 §3).
+        var (plan, target, reader, keys) = await OneRealItemAsync(0xD7);
+
+        using (keys)
+        using (reader)
+        {
+            var output = Path.Combine(SpoolDirectory, "seeded");
+            Directory.CreateDirectory(output);
+            var outside = Path.Combine(SpoolDirectory, "outside");
+            Directory.CreateDirectory(outside);
+
+            // A directory symlink inside the root pointing out of it.
+            Directory.CreateSymbolicLink(Path.Combine(output, "link"), outside);
+
+            var victim = plan.Items.Single(item => item.Path == "data/file.bin");
+            var throughLink = plan with
+            {
+                Items = [new RestorePlanItem("link/file.bin", victim.Kind, victim.ObjectId, victim.Length)],
+            };
+
+            var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+                throughLink, output,
+                new RestoreExecutionOptions
+                {
+                    RunId = "test",
+                    NowUnixMilliseconds = 1_722_700_000_000,
+                    DestinationMode = RestoreDestinationMode.InPlace,
+                },
+                CancellationToken.None);
+
+            Assert.AreEqual(RestoreOutcome.Failed, receipt.Outcome);
+            Assert.StartsWith("refused:", Assert.ContainsSingle(receipt.Items).Detail, StringComparison.Ordinal);
+
+            // The file must not have been written through the link to the
+            // outside directory.
+            Assert.IsFalse(File.Exists(Path.Combine(outside, "file.bin")),
+                "a file was written through a symlink that escapes the restore root");
+        }
+    }
+
+    [TestMethod]
     public async Task RestoreExecution_ARequiredItemIsSkipped_ReportsTheRestoreAsPartial()
     {
         // Architecture 08 §3: a restore that recovered 9 999 of 10 000 files
@@ -348,6 +481,89 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.DoesNotContain(item => item.Outcome == "failed", receipt.Items);
         Assert.AreEqual(RestoreOutcome.Partial, receipt.Outcome);
         Assert.AreEqual(RestoreReceipt.CurrentSchemaVersion, receipt.SchemaVersion);
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_Cancelled_ReportsCancelledWithAReceiptRatherThanThrowing()
+    {
+        // Architecture 08 §3's outcome enum promises Cancelled; it was
+        // unreachable because the loop threw on the cancellation token before
+        // the receipt was ever built, so a cancelled restore produced no
+        // account of what it had done. Stopping cooperatively between items
+        // leaves every restored item whole and still yields a receipt.
+        var (plan, target, reader, keys) = await OneRealItemAsync(0xD9);
+
+        using (keys)
+        using (reader)
+        using (var cancelled = new CancellationTokenSource())
+        {
+            await cancelled.CancelAsync();
+
+            var output = Path.Combine(SpoolDirectory, "cancelled-out");
+            var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+                plan, output,
+                new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 },
+                cancelled.Token);
+
+            Assert.AreEqual(RestoreOutcome.Cancelled, receipt.Outcome);
+            Assert.IsEmpty(receipt.Items);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_OneFileOfSeveralCannotBeRestored_ReportsFailedAndKeepsTheRest()
+    {
+        // FR-RST-005 / architecture 08 §3, the aggregate claim the suite never
+        // held: a multi-file restore where one file fails and the others
+        // succeed must report Failed — not Complete, not Partial — while the
+        // files that did restore are present and the receipt names the one that
+        // did not. Skipping (Partial) and containment refusal are covered
+        // elsewhere; this is a required item that simply could not be produced.
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/a.bin", Deterministic(4_096, 3));
+        source.AddFile("data/b.bin", Deterministic(4_096, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("one-fails.db");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+            .PublishAsync(Job(source, 0xD8), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xD8, 16).ToArray(), string.Empty, target);
+
+        // One real file, and one whose object identifier resolves to nothing —
+        // the shape a missing or unreadable blob leaves the executor: the file
+        // is required, the plan names it, and it cannot be produced.
+        var good = plan.Items.Single(item => item.Path == "data/a.bin");
+        var doomed = plan.Items.Single(item => item.Path == "data/b.bin");
+        var mixed = plan with
+        {
+            Items = [good, doomed with { ObjectId = ObjectId.FromBytes(Enumerable.Repeat((byte)0xEE, ObjectId.Size).ToArray()) }],
+        };
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var output = Path.Combine(SpoolDirectory, "one-fails-out");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            mixed, output,
+            new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Failed, receipt.Outcome);
+
+        var failed = Assert.ContainsSingle(receipt.Items.Where(item => item.Outcome == "failed"));
+        Assert.AreEqual("data/b.bin", failed.Path);
+
+        var restored = Assert.ContainsSingle(receipt.Items.Where(item => item.Outcome == "restored" && item.Bytes > 0));
+        Assert.AreEqual("data/a.bin", restored.Path);
+
+        // The file that could be restored is on disk; the one that failed is not.
+        Assert.IsTrue(File.Exists(Path.Combine(receipt.WrittenTo, "data", "a.bin")));
+        Assert.IsFalse(File.Exists(Path.Combine(receipt.WrittenTo, "data", "b.bin")));
     }
 
     [TestMethod]

@@ -121,11 +121,22 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.AreEqual(Local(4, 2, 30), schedule.NextRun(Local(3, 2, 45), Local(4, 1)));
         Assert.AreEqual(Local(5, 2, 30), schedule.NextRun(Local(4, 3, 10), Local(4, 9)));
 
-        // Mixed offsets: the anchor arrives in UTC, as a journal timestamp
-        // does, while now carries the Agent's local offset. The comparison
-        // must be by instant, not by the digits on either clock.
-        Assert.IsFalse(schedule.IsDue(Local(4, 3, 10).ToUniversalTime(), Local(4, 9)));
-        Assert.IsTrue(schedule.IsDue(Local(3, 2, 45).ToUniversalTime(), Local(4, 3)));
+        // This case used to assert the opposite, and it was wrong: it passed a
+        // UTC-framed anchor against a local `now` and required the comparison
+        // to be "by instant, not by the digits on either clock". That is
+        // exactly what let a daily schedule fire twice on the night an offset
+        // goes back, because one wall-clock occurrence has two instants then
+        // and the second looks new (RN-F1).
+        //
+        // `IsDue` now requires both arguments in the operator's wall-clock
+        // frame, and `JobStateStore.ScheduleAnchor` is what guarantees it —
+        // no production caller passes a raw journal timestamp any more.
+        // Mixing frames is therefore not a case to tolerate but one that
+        // cannot arise; asserting it here would re-pin the defect.
+        // `Application.Tests/ScheduleClockBoundaryTests` holds the boundary
+        // behaviour, and `PartialCaptureJournalTests` holds the conversion.
+        Assert.IsFalse(schedule.IsDue(Local(4, 3, 10), Local(4, 9)));
+        Assert.IsTrue(schedule.IsDue(Local(3, 2, 45), Local(4, 3)));
     }
 
     [TestMethod]
@@ -194,23 +205,35 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.IsTrue(File.Exists(Path.Combine(_stateDirectory, "jobs.json.corrupt")));
     }
 
+    private static DestinationStatusInput Destination(
+        string name = "vault",
+        DestinationSyncState sync = DestinationSyncState.InSync,
+        FailureDomain domain = FailureDomain.Independent,
+        DestinationKind kind = DestinationKind.LocalPath) => new()
+    {
+        Name = name,
+        Kind = kind,
+        Sync = sync,
+        Domain = domain,
+    };
+
     private static StatusInputs HealthyInputs() => new()
     {
         LatestSnapshotAt = 1_722_600_000_000,
         LatestCaptureStatus = 1,
-        DestinationReachable = true,
-        SameFailureDomain = false,
+        Destinations = [Destination()],
         DamageFindings = 0,
         RequiredObjectsMissing = false,
     };
 
     [TestMethod]
-    public void BackupSetStatus_TheStoreIsOnTheSourceDevice_ReportsCapturedRatherThanProtected()
+    public void BackupSetStatus_TheOnlyInSyncDestinationSharesTheSourceDevice_ReportsCapturedRatherThanProtected()
     {
-        // PT-8: the most common consumer configuration — repository on the
+        // PT-8: the most common consumer configuration — a destination on the
         // same disk as the source — is real protection against mistakes and
         // none against losing the disk. Never merged with `protected`.
-        var status = StatusDeriver.Derive(HealthyInputs() with { SameFailureDomain = true });
+        var status = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
         Assert.AreEqual(ProtectionState.Captured, status.State);
         Assert.Contains(warning => warning.Contains("failure domain", StringComparison.Ordinal), status.Warnings);
 
@@ -218,9 +241,211 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_TheFourDomains_EarnExactlyWhatTheySurvive()
+    {
+        // FR-SNP-007's four answers to "if this machine is destroyed, does a
+        // copy survive?": the two that die with it cap at Captured however
+        // healthy their sync is; the two that survive it protect.
+        var sameVolume = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
+        Assert.AreEqual(ProtectionState.Captured, sameVolume.State);
+
+        var sameMachine = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameMachine)] });
+        Assert.AreEqual(ProtectionState.Captured, sameMachine.State);
+        Assert.Contains(
+            warning => warning.Contains("same-machine", StringComparison.Ordinal), sameMachine.Warnings);
+
+        var sameSite = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameSite)] });
+        Assert.AreEqual(ProtectionState.Protected, sameSite.State);
+
+        var independent = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.Independent)] });
+        Assert.AreEqual(ProtectionState.Protected, independent.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ProtectionRestingOnSameSiteAlone_SaysSo()
+    {
+        // Honest about the residue (ADR-0018): a same-site copy answers the
+        // machine question, not the site one — and the warning goes away the
+        // moment an independent destination is in sync too.
+        var siteOnly = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameSite)] });
+        Assert.Contains(
+            warning => warning.Contains("not losing the site", StringComparison.Ordinal), siteOnly.Warnings);
+
+        var withIndependent = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(domain: FailureDomain.SameSite),
+                Destination("offsite", domain: FailureDomain.Independent),
+            ],
+        });
+        Assert.DoesNotContain(
+            warning => warning.Contains("not losing the site", StringComparison.Ordinal), withIndependent.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AProofPastItsBound_IsNamedWithoutMovingTheState()
+    {
+        // The gap this closes: an idle set never syncs, verification only ran
+        // inside a sync, so a healthy-looking destination's proof froze and
+        // nothing said so. Day 1 and day 400 read identically.
+        //
+        // Warning only, deliberately (ADR-0027 amendment). An old proof is
+        // still a proof, and demoting the set would say data is at risk when
+        // what is true is that nobody has looked lately.
+        var overdue = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven(ageDays: 40, boundDays: 7)],
+        });
+
+        Assert.AreEqual(ProtectionState.Verified, overdue.State);
+        Assert.Contains(
+            warning => warning.Contains("last proven 40 days ago", StringComparison.Ordinal), overdue.Warnings);
+
+        var fresh = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven(ageDays: 2, boundDays: 7)],
+        });
+        Assert.DoesNotContain(
+            warning => warning.Contains("last proven", StringComparison.Ordinal), fresh.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AnOverdueProofAndAStaleOne_ReadDifferentlyInTheSameList()
+    {
+        // Both sentences are about verification and both appear in one list,
+        // so they have to be tellable apart at a glance: one says the proof
+        // does not cover the latest sync, the other says nothing has re-read
+        // the bytes lately. Same words for both would make the list useless.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Proven("aged", ageDays: 40, boundDays: 7),
+                Proven("superseded", ageDays: 1, boundDays: 7) with { SyncedSequence = 99 },
+            ],
+        });
+
+        Assert.Contains(
+            warning => warning.Contains("'aged' was last proven 40 days ago", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.Contains(
+            warning => warning.Contains("'superseded' is in sync but its copy is not proven", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.DoesNotContain(
+            warning => warning.Contains("'superseded' was last proven", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AnOverdueLocalPathDestination_IsNamedEvenThoughItNeverProtects()
+    {
+        // A local path usually sits inside the source's failure domain, so
+        // the protection question never reaches its verification branch. Its
+        // proof is still what licenses the staging trim to reclaim space
+        // (FR-GC-009), so an overdue proof there stops space coming back —
+        // and that is exactly the consequence a domain-gated check would hide.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Proven("vault", ageDays: 40, boundDays: 7) with { Domain = FailureDomain.SameVolume }],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
+        Assert.Contains(
+            warning => warning.Contains("'vault' was last proven 40 days ago", StringComparison.Ordinal),
+            status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ADestinationWhoseAddressCannotWork_IsNamedInTheWarnings()
+    {
+        // Admission, not diagnosis: this says the declaration cannot be acted
+        // on, which is knowable before anything is attempted. A destination no
+        // set has synced yet has no ledger row at all, so the fan-out's own
+        // report of the same fact would never arrive.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination() with { AddressDefect = "endpoint 'friend.example' is not host:port." }],
+        });
+
+        Assert.Contains(
+            warning => warning.Contains("cannot be reached as declared", StringComparison.Ordinal),
+            status.Warnings);
+        Assert.Contains(
+            warning => warning.Contains("not host:port", StringComparison.Ordinal), status.Warnings);
+    }
+
+    /// <summary>A destination proven <paramref name="ageDays"/> ago, current for what it was sent.</summary>
+    private static DestinationStatusInput Proven(
+        string name = "vault", int ageDays = 1, int boundDays = 7) =>
+        Destination(name) with
+        {
+            SyncedSequence = 42,
+            VerifiedAt = 1_722_600_000_000,
+            VerifiedSequence = 42,
+            VerifiedObjects = 4,
+            VerifiedPopulation = 12,
+            VerificationAgeDays = ageDays,
+            VerificationBoundDays = boundDays,
+        };
+
+    [TestMethod]
+    public void BackupSetStatus_AnOffDomainDestinationIsInSync_ProtectsEvenWhileAnotherLags()
+    {
+        // The matrix rolls up truthfully: one destination behind does not
+        // undo the protection another provides — it becomes a warning naming
+        // the laggard (ADR-0027 amendment).
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination(), Destination("usb", DestinationSyncState.Unavailable)],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+        Assert.Contains(warning => warning.Contains("usb", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_EveryDestinationIsBehindOrUnreachable_ReportsDegraded()
+    {
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(sync: DestinationSyncState.Behind),
+                Destination("usb", DestinationSyncState.Unavailable),
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AReservedKind_IsAWarningRatherThanAFailure()
+    {
+        // FR-DEST-005: a configured cloud destination the runtime cannot
+        // serve yet is a stated incapacity. Alone it caps the set at
+        // Captured — nothing off-domain holds the data — but it never
+        // manufactures a Degraded.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination("s3-main", DestinationSyncState.NotSupported, kind: DestinationKind.S3)],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
+        Assert.Contains(warning => warning.Contains("s3-main", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
     public void BackupSetStatus_DegradedAndUnrecoverableTogether_KeepsThemDistinct()
     {
-        var degraded = StatusDeriver.Derive(HealthyInputs() with { DestinationReachable = false });
+        var degraded = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [Destination(sync: DestinationSyncState.Unavailable)],
+        });
         var unrecoverable = StatusDeriver.Derive(HealthyInputs() with { RequiredObjectsMissing = true });
 
         Assert.AreEqual(ProtectionState.Degraded, degraded.State);
@@ -231,7 +456,7 @@ public sealed class ApplicationServiceTests : IDisposable
         var both = StatusDeriver.Derive(HealthyInputs() with
         {
             RequiredObjectsMissing = true,
-            DestinationReachable = false,
+            Destinations = [Destination(sync: DestinationSyncState.Unavailable)],
             DamageFindings = 3,
         });
         Assert.AreEqual(ProtectionState.Unrecoverable, both.State);
@@ -240,15 +465,167 @@ public sealed class ApplicationServiceTests : IDisposable
     [TestMethod]
     public void BackupSetStatus_Verified_CarriesCoverageAndAgeRatherThanABareTick()
     {
-        var detail = new VerificationDetail(Coverage: 0.35, VerifiedAtUnixMilliseconds: 1_722_500_000_000);
-        var verified = StatusDeriver.Derive(HealthyInputs() with { LastVerification = detail });
+        // Verified is earned per destination (peer-protocol 04): in sync,
+        // off-domain, and a proof covering what the sync delivered. The
+        // claim carries the pass's real coverage fraction and its date —
+        // never a bare tick (10 §1.2, FR-VER-003).
+        var verified = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
 
         Assert.AreEqual(ProtectionState.Verified, verified.State);
-        Assert.AreEqual(detail, verified.Verification);
+        Assert.AreEqual(new VerificationDetail(0.35, 1_722_500_000_000), verified.Verification);
 
-        // Without a verification record the state is Protected, not an
+        // Without a verification stamp the state is Protected, not an
         // unverified "verified" (10 §1.2).
         Assert.AreEqual(ProtectionState.Protected, StatusDeriver.Derive(HealthyInputs()).State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_TheThreeWaysOfBeingUnproven_ReadDifferently()
+    {
+        // "Not verified" hides three situations that call for three different
+        // responses, so the matrix names them apart (FR-VER-006).
+        var never = Destination() with { SyncedSequence = 3 };
+        Assert.AreEqual("unproven", StatusDeriver.VerificationLabel(never));
+
+        var stale = never with { VerifiedAt = 1, VerifiedObjects = 4, VerifiedPopulation = 9, VerifiedSequence = 2 };
+        Assert.AreEqual("stale", StatusDeriver.VerificationLabel(stale));
+
+        var accepted = never with { RequiresVerification = false };
+        Assert.AreEqual("unprovable (accepted)", StatusDeriver.VerificationLabel(accepted));
+
+        var proven = stale with { VerifiedSequence = 3 };
+        Assert.AreEqual("proven", StatusDeriver.VerificationLabel(proven));
+
+        // And each unproven kind explains itself in the warnings, in its own
+        // words — an accepted one names the choice that was made.
+        var acceptedStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [accepted] });
+        Assert.AreEqual(ProtectionState.Protected, acceptedStatus.State);
+        Assert.Contains(
+            warning => warning.Contains("knowingly accepted unverifiable", StringComparison.Ordinal),
+            acceptedStatus.Warnings);
+
+        var neverStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [never] });
+        Assert.Contains(
+            warning => warning.Contains("no challenge has ever succeeded", StringComparison.Ordinal),
+            neverStatus.Warnings);
+
+        // A proven destination says nothing about being unproven.
+        var provenStatus = StatusDeriver.Derive(HealthyInputs() with { Destinations = [proven] });
+        Assert.AreEqual(ProtectionState.Verified, provenStatus.State);
+        Assert.DoesNotContain(
+            warning => warning.Contains("not proven", StringComparison.Ordinal), provenStatus.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AStampThatProvedNoRanges_IsNotVerification()
+    {
+        // A run where every sample was skipped counts zero passed and zero
+        // failed — indistinguishable from a clean sweep unless something
+        // insists on the numerator. The engine now withholds such a stamp;
+        // this refuses to honour one that reached the ledger anyway, so the
+        // word cannot be reached from nothing proven (FR-VER-003).
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 0,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+        Assert.IsNull(status.Verification, "0 of 20 is not a coverage figure, it is an absence of one");
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerificationStampOlderThanTheSync_FallsBackToProtected()
+    {
+        // A later sync ran unverified — an older peer build, say. The stamp
+        // went stale, not wrong: the destination is still protected, and
+        // "verified" waits for a proof covering the newer delivery.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination() with
+                {
+                    SyncedSequence = 5,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerifiedStampOnAFailingDestination_DoesNotEarnVerified()
+    {
+        // The destination proved bytes once, then failed — the roll-up says
+        // Degraded, and the old claim rides along as a dated fact rather
+        // than being erased or promoted.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(sync: DestinationSyncState.Failed) with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+        Assert.IsNotNull(status.Verification, "the dated claim is carried, never invented into Verified");
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_AVerifiedStampInsideTheSourceFailureDomain_CapsAtCaptured()
+    {
+        // PT-8 outranks verification: proving bytes on the source's own disk
+        // proves nothing about surviving that disk.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Destination(domain: FailureDomain.SameVolume) with
+                {
+                    SyncedSequence = 3,
+                    VerifiedAt = 1_722_500_000_000,
+                    VerifiedSequence = 3,
+                    VerifiedObjects = 7,
+                    VerifiedPopulation = 20,
+                },
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
     }
 
     [TestMethod]

@@ -124,8 +124,80 @@ AAD while the contradiction stands, making the eventual resolution a
 format revision instead of a documentation fix. Resolving now, while both
 options were still free, was the point of this pass. Rejected.
 
+## Amendment 1 (2026-08) — compaction runs in staging and propagates
+
+Re-sealing needs the repository keys and a writer identity, and under
+[ADR-0034](0034-hub-and-spoke-destinations.md) exactly one place per set has
+both: the hub's staging archive. A compaction pass therefore runs there, under
+the set's own writer sequence, and its output reaches every destination as
+ordinary replication — new blobs copied, superseded ones deleted under the
+deletion discipline. No destination ever compacts, allocates a sequence number,
+or re-seals anything; a destination that could would have the keys, which is
+the property the whole design refuses. §4's cost accounting is unchanged, paid
+once in staging rather than once per copy.
+
+## Amendment 2 (2026-08) — the twelve things compaction is known to get wrong
+
+Compaction is the single densest cluster of shipped fixes in the surveyed
+fifteen-year changelog: **29 of its 805 distinct fix entries**, spread across
+every year from 2016 to 2026, and more than any other mechanism
+([ledger](../review/2026-08-prior-art-changelog-ledger.md)). Nothing here is
+built yet, so nothing can be tested — which makes this the one moment when the
+list is free to write down.
+
+These are **exit criteria, not suggestions**: the compactor is not done until
+each has a test. Each cites the release that earned it, verbatim.
+
+1. **Every blocklist reaches the index compaction produces.** — "compact not
+   writing blocklists into index files" (2025-05-29); "compacted files would
+   miss a blocklist" (2020-01-23).
+2. **No blocklist appears twice in a produced index.** — "index files would
+   contain replicated blocklists" (2025-01-11).
+3. **A produced index is complete enough that a restore needs no extra
+   fetch.** — an index object missing a blocklist, causing extra
+   download on restores" (2024-11-06).
+4. **A compaction interrupted at any step leaves a repository that
+   verifies.** — "verification errors if the compact was interrupted"
+   (2024-11-06); "missing file error caused by interrupted compact"
+   (2023-12-27); "compacting that would cause the database to require a repair
+   if the compacting was interrupted" (2016-10-27).
+5. **No index object outlives the compaction that superseded it.** —
+   "leftover index files" (2024-11-06).
+6. **Near-identical inputs do not produce a broken index.** — "almost
+   identical files could cause broken index files" (2024-09-11).
+7. **Compaction never loses a live record.** — "data corruption caused by
+   compacting" (2019-06-30).
+8. **A re-derived index reports what was deleted, not merely what remains.** —
+   "recreated index files not reporting deleted blocks" (2025-07-11).
+9. **A re-derived index is complete.** — "a recreated index volume would
+   sometimes not contain all data" (2025-09-23).
+10. **A produced index stays within its size bound.** — "an issue that would
+    create large index files" (2018-06-17).
+11. **Concurrent index generation shares no mutable buffer.** — "shared
+    buffers causing validation errors when running multiple index file
+    generators" (2018-06-17).
+12. **An index never names an object no blob holds.** — index objects
+    referencing data blobs that no longer exist (2019-10-19); a race condition with
+    index file uploads during backup" (2026-02-20). This one is **not
+    compaction-only** and is already open against the built engine.
+
+Deliberately not pre-written as skipped tests: the compactor has no API, so
+tests written now would pin a design nobody has made. The criteria are the
+commitment; the tests get written against the real thing.
+
+Two of these are already half-answered by decisions rather than code.
+Criterion 4 rests on the same interruption discipline
+[ADR-0009](0009-garbage-collection-safety.md) gives the collector, which
+`InterruptionTests` already exercises for publication. Criterion 7 is the
+property [ADR-0007](0007-logical-object-identifiers-in-manifests.md) protects
+by keeping physical location out of manifests — compaction moves records and
+rewrites no manifest, so "loses a live record" can only mean an index error,
+never a manifest one.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Resolves Q15 with no format change; 04 §4 rewritten to match; compaction defined as a re-sealing operation for Phase 4 |
+| 2026-08 | Accepted (amended) | Amendment 1: compaction is a staging-archive operation whose output replicates; destinations never re-seal ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 2: twelve named exit criteria drawn from the 29 compaction fixes in the surveyed changelog ([ledger](../review/2026-08-prior-art-changelog-ledger.md)). |

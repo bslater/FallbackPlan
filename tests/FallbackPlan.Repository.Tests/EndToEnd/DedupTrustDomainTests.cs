@@ -11,7 +11,8 @@ using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Verify-on-reuse and trust-domain gating (FR-DED-002; specification 09 §5;
+/// Verify-on-reuse and trust-domain gating (FR-DED-001, FR-DED-002,
+/// FR-DED-003, NFR-SEC-007; specification 09 §5;
 /// [ADR-0006](../../../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)).
 ///
 /// Every other end-to-end suite has one writer, and with one writer all three
@@ -88,6 +89,31 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // record being honest.
         Assert.IsTrue(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
         Assert.IsEmpty(second.Catalogue.Findings());
+    }
+
+    [TestMethod]
+    public void UnverifiedDomain_WithoutTheAcknowledgement_CannotBeEnabled()
+    {
+        // FR-DED-004: opting out of reuse verification is opting into
+        // trusting every other writer's honesty and health. The pipeline
+        // refuses to start until that is acknowledged explicitly, and the
+        // policy's own validation names the same defect.
+        var unacknowledged = SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.RepositoryUnverified };
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var spool = Path.Combine(SpoolDirectory, "unacknowledged");
+        Directory.CreateDirectory(spool);
+
+        var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
+            unacknowledged, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
+        Assert.Contains("acknowledge", refusal.Message, StringComparison.OrdinalIgnoreCase);
+
+        var validation = unacknowledged.Validate();
+        Assert.IsFalse(validation.IsValid);
+        Assert.IsTrue(validation.Has("unverified_dedup_unacknowledged"));
     }
 
     [TestMethod]
@@ -316,7 +342,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy with { DedupTrustDomain = domain, Concurrency = concurrency },
+            SmallBlobPolicy with
+            {
+                DedupTrustDomain = domain,
+                Concurrency = concurrency,
+                // FR-DED-004: the unverified domain cannot be enabled without
+                // the explicit acknowledgement; these tests opt in knowingly.
+                AcknowledgesUnverifiedDedupRisk = domain == DedupTrustDomain.RepositoryUnverified,
+            },
             Repo,
             writer,
             KeyGeneration.Zero,

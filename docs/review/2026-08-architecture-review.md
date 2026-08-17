@@ -140,7 +140,7 @@ Applied in [`03-crypto.md`](../architecture/03-crypto.md), [`threat-model.md`](.
 
 > **§5.1:** "**Lease** — Time-limited coordination record for a writer or maintenance operation."
 
-§7.10 establishes the publication order — blobs first, index deltas second, snapshot last — which is correct and matches restic's hard-won rule. But it also creates a window, potentially hours long for a large initial backup, in which a writer's blobs are durable in the store and referenced by nothing. To a mark-and-sweep collector, they are indistinguishable from garbage.
+§7.10 establishes the publication order — blobs first, index deltas second, snapshot last — which is correct and matches the prior art's hard-won rule. But it also creates a window, potentially hours long for a large initial backup, in which a writer's blobs are durable in the store and referenced by nothing. To a mark-and-sweep collector, they are indistinguishable from garbage.
 
 The document's answer is leases. Leases cannot carry that weight:
 
@@ -249,17 +249,17 @@ Applied in [`02-repository-format.md`](../architecture/02-repository-format.md),
 
 **Where:** §21 Phase 0 exit criteria
 
-> "an **independently written reader** can parse public fixtures; and one representative **CrashPlan file version** can be streamed into this same archive pipeline."
+> "an **independently written reader** can parse public fixtures; and one representative **legacy file version** can be streamed into this same archive pipeline."
 
 Both criteria are excellent ideas attached to the wrong milestone, and as written Phase 0 cannot exit.
 
-The CrashPlan criterion requires a working read-only CrashPlan archive reader. That reader is Phase 5, and §13.8 makes it contingent on a research spike, a legal review, and a corpus of user-supplied archives that the project does not yet have. Making Phase 0 — the foundational engine slice, the thing everything else waits on — depend on the most legally and technically uncertain component in the plan inverts the entire dependency order.
+The legacy-import criterion requires a working read-only reader for a legacy archive format. That reader is Phase 5, and §13.8 makes it contingent on a research spike, a legal review, and a corpus of user-supplied archives that the project does not yet have. Making Phase 0 — the foundational engine slice, the thing everything else waits on — depend on the most legally and technically uncertain component in the plan inverts the entire dependency order.
 
 The independent-reader criterion requires a second implementation of the format to exist, written by someone else, at the moment the format is first drafted. There is nothing to write it from and no one to write it.
 
 **Resolution.**
 
-- Replace the CrashPlan criterion with what it was actually trying to prove — that the ingest path is not secretly coupled to the filesystem scanner. A **synthetic legacy source adapter** feeding the pipeline an arbitrary byte stream plus a provenance record demonstrates exactly that, needs no CrashPlan archive, and doubles as the test double the real importer will be developed against.
+- Replace the legacy-import criterion with what it was actually trying to prove — that the ingest path is not secretly coupled to the filesystem scanner. A **synthetic legacy source adapter** feeding the pipeline an arbitrary byte stream plus a provenance record demonstrates exactly that, needs no real legacy archive, and doubles as the test double the real importer will be developed against.
 - Move the independent-reader criterion to the **format v1 freeze gate**, where it belongs and where it is genuinely valuable: a reader written from the published specification alone, by someone who did not write the format, in a different language. That is the check that proves NFR-COMP-004, and it should block the freeze rather than the first prototype.
 
 Applied in [`roadmap.md`](../roadmap.md).
@@ -401,7 +401,7 @@ IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ContinuationToken? 
 
 §5.1 defines **segment** and **blob** as the normative terms and explicitly notes that a blob is "equivalent to a pack in some backup systems". The rest of the document then uses the alternatives freely: the §6 architecture diagram has `Chunk` in the domain core; §16.3's job state machine has a `Chunking` state; §13.4's import diagram says "chunk / encrypt / pack"; §25 P0 uses both. §15's project list has `Repository.Packing`, and §5.1's own *Blob* row uses "pack" in its definition.
 
-For a document whose stated goal is to be implementable by a third party (NFR-COMP-004), two names per concept is a defect. **Resolution:** [`01-domain-model.md`](../architecture/01-domain-model.md) is the single normative glossary; *segment* and *blob* are used throughout the revised set, with a short table of prior-art synonyms retained in one place so readers coming from restic or Kopia can map the vocabulary.
+For a document whose stated goal is to be implementable by a third party (NFR-COMP-004), two names per concept is a defect. **Resolution:** [`01-domain-model.md`](../architecture/01-domain-model.md) is the single normative glossary; *segment* and *blob* are used throughout the revised set, with a short table of prior-art synonyms retained in one place so readers arriving from another product can map the vocabulary.
 
 ### M2 — The threat model omits metadata side channels
 
@@ -433,9 +433,9 @@ The FR/NFR set covers the engine thoroughly and omits several areas the document
 
 **Resolution:** [ADR-0014](../adr/0014-format-versioning-and-stability.md) states the posture explicitly: pre-1.0 repository formats carry no forward-compatibility guarantee, builds must warn on creation, the format version is recorded so a build can refuse a repository it cannot read rather than misread it, and each pre-1.0 breaking change ships either a migration tool or an explicit statement that re-seeding is required. H1's CDC benchmark and H2's independent-reader gate both attach to the v1 freeze.
 
-### M7 — Naming proximity to CrashPlan carries trademark risk
+### M7 — Naming proximity to an incumbent carries trademark risk
 
-§13.3 covers interoperability and reverse-engineering carefully, and instructs that CrashPlan trademarks must not be used "in a way that implies affiliation". It does not consider the product name itself. "FallbackPlan" shares a structure, a domain, and a rhyme with "CrashPlan", and the project's principal advertised feature is reading CrashPlan archives — precisely the combination that makes a confusion argument easy to state.
+§13.3 covers interoperability and reverse-engineering carefully, and instructs that another vendor's trademarks must not be used "in a way that implies affiliation". It does not consider the product name itself. "FallbackPlan" shares a structure, a domain, and a rhyme with the name of a well-known incumbent, and the project's principal advertised feature is reading that product's archives — precisely the combination that makes a confusion argument easy to state.
 
 This is a flag, not a legal opinion. **Resolution:** folded into the §13.3 legal review scope in [`open-questions.md`](../open-questions.md) so the name is assessed at the same time as the interoperability question, while renaming is still cheap.
 
@@ -451,10 +451,10 @@ For the avoidance of doubt, the following were examined and deliberately kept:
 
 - **Snapshot-based backup over folder synchronisation** (§27). The reasoning is correct and the ordering of the two vertical slices is the right one.
 - **Publication ordering — blobs, then indexes, then snapshot** (§7.10). This is the single most important durability rule in the document and it is right. C4, C5, and C6 all reinforce it rather than replace it.
-- **The local catalogue as a pure cache** (FR-MAN-001, NFR-REL-002). Correct, and the direct answer to the Duplicati failure mode §4.5 identifies. H3 narrows its scope; it does not weaken it.
+- **The local catalogue as a pure cache** (FR-MAN-001, NFR-REL-002). Correct, and the direct answer to the surveyed product's failure mode §4.5 identifies. H3 narrows its scope; it does not weaken it.
 - **Keyed object identifiers** (§7.3). Correctly defends against confirmation-of-file by the storage provider. C3 addresses a different adversary.
 - **Encryption with no plaintext mode** (§7.1). Keep, including the discipline of not offering it as a compatibility switch.
 - **Retention selects; GC deletes** (§11.1). The separation is right and is what makes C4's fix possible.
-- **CrashPlan import as a separate, optional, read-only package** (§13.3, §15.1). Correct on both engineering and licensing grounds.
+- **Legacy import as a separate, optional, read-only package** (§13.3, §15.1). Correct on both engineering and licensing grounds.
 - **Compress before encrypt** (§7.5). Correct for efficiency; M2 records the side channel it creates rather than reversing the decision.
 - **Fixed-size segmentation as the v1 default** (§7.4). Kept — H1 changes when it is reviewed, not what it is.

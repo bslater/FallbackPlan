@@ -18,7 +18,11 @@ This document is **normative for terminology**. Where any other document, code i
 | **Snapshot** | An immutable point-in-time representation of a backup set. |
 | **Repository** | The logical collection of encrypted content, metadata, indexes, and snapshots, identified by a repository ID. |
 | **Store** | Physical object storage holding repository objects — a local directory, a peer, or a cloud bucket/container. |
-| **Replica** | A store holding a copy of all or a defined subset of a repository's objects. |
+| **Replica** | A store holding a copy of a repository's objects. A destination's replica is **whole-archive**: complete, self-verifying, independently restorable. It may lawfully lag the source or hold a hub-trimmed subset under retention; it never diverges ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). |
+| **Destination** | A named place a backup set replicates to, declared once in the client configuration and referenced by name from sets: a directory on a local or removable drive (`local-path`), a paired peer (`peer`), or — schema-accepted now, implemented later — a cloud store. Holds a whole-archive replica of the set's staging archive. None of a set's destinations has to be local. |
+| **Hub** | The service instance on a user's machine, in its orchestrating role: it manages the machine's backup sets, holds each set's staging archive, fans snapshots out to every available destination, and plans retention for all of them. |
+| **Spoke** | A destination, viewed from its hub. A spoke that is a peer runs its own FallbackPlan service and is a hub for its own sets; the roles are per-relationship, not per-installation. |
+| **Staging archive** | The per-set repository archive on the hub where publication lands. Internal — a cache the hub manages, not a destination a user configures or a policy counts. What makes capture unconditional and fan-out a copy of sealed objects. |
 | **Segment** | A logical portion of a file's byte stream, produced by the backup set's segmentation profile. |
 | **Segment record** | The stored form of one segment: compressed, independently encrypted, independently authenticated. |
 | **Blob** | An immutable physical container holding many segment or metadata records, plus a recovery footer. |
@@ -43,16 +47,16 @@ Each of these appears in the prior art and in the original proposal. They are li
 
 | Do not use | Use instead | Where it comes from |
 |------------|-------------|---------------------|
-| chunk | **segment** | restic, Kopia, borg |
-| block | **segment** | CrashPlan, Syncthing |
-| pack, pack file | **blob** | restic, Kopia |
-| volume, dblock | **blob** | Duplicati |
-| local database, local index | **catalogue** | Duplicati, CrashPlan |
-| lock | **lease** (advisory) or **write intent** (correctness) | restic |
+| chunk | **segment** | content-addressed snapshot repositories |
+| block | **segment** | consumer peer backup services; file synchronisers |
+| pack, pack file | **blob** | content-addressed snapshot repositories |
+| volume, data file | **blob** | plugin-oriented backup clients |
+| local database, local index | **catalogue** | products with an authoritative local database |
+| lock | **lease** (advisory) or **write intent** (correctness) | content-addressed snapshot repositories |
 
-Two qualifications. The rule governs **nouns**: *packing* is fine as a verb for the act of assembling records into a blob, and *content-defined chunking* keeps its established name because that is what the algorithm is called everywhere. Sections describing prior art also use each product's own vocabulary, since renaming restic's pack files inside a paragraph about restic would help nobody.
+Two qualifications. The rule governs **nouns**: *packing* is fine as a verb for the act of assembling records into a blob, and *content-defined chunking* keeps its established name because that is what the algorithm is called everywhere. Sections describing prior art may still use the source's own vocabulary where translating it would obscure the point being made — but they name the design, not the product ([naming and attribution](../naming-and-attribution.md)).
 
-Note too that "blob" is overloaded in the wider ecosystem: Azure Blob Storage calls every stored object a blob. Where that ambiguity could bite — chiefly [`05-storage-providers.md`](05-storage-providers.md) — we say **repository blob** for ours and **store object** for the provider's unit of storage.
+Note too that "blob" is overloaded in the wider ecosystem: Azure Blob Storage — an interface this project implements against, so its name stays — calls every stored object a blob. Where that ambiguity could bite — chiefly [`05-storage-providers.md`](05-storage-providers.md) — we say **repository blob** for ours and **store object** for the provider's unit of storage.
 
 ## 3. Object relationships
 
@@ -115,13 +119,13 @@ Conflating the two makes protection hostage to the least available destination: 
 
 The first release replicates repository objects, not live source folders:
 
-- a source scan produces a snapshot;
+- a source scan produces a snapshot, published once into the set's staging archive;
 - the snapshot references immutable trees, file-version manifests, and segments;
-- peers exchange missing immutable objects;
+- the hub fans missing immutable objects out to each of the set's destinations as they are available, and catches up the ones that were not;
 - a snapshot commits to a replica once its referenced objects are durable there;
 - a deletion appears in a later snapshot and erases nothing;
-- retention selects which snapshots remain protected;
-- garbage collection removes unreachable objects only after safety checks and grace periods.
+- retention selects which snapshots remain protected, per set and per destination;
+- garbage collection removes unreachable objects only after safety checks and grace periods — marked by the hub, executed at each destination on its instruction.
 
 This yields the transfer efficiency of synchronisation while preserving backup semantics.
 

@@ -18,17 +18,17 @@ namespace FallbackPlan.Api.Transport;
 /// no port.
 /// </para>
 /// <para>
-/// Loopback TCP was rejected for the local binding on the prior art. CrashPlan's
-/// desktop client authenticates to its service with a token file, and a stale
-/// one is among that product's most familiar failure modes — the UI insisting
-/// it cannot reach an engine that is running perfectly well. Duplicati listens
-/// on <c>localhost:8200</c> behind a server password, so any local process may
-/// attempt to connect and the user must manage a credential to talk to their
-/// own machine. Both are artefacts of using a network transport for a boundary
-/// that is not a network.
+/// Loopback TCP was rejected for the local binding on the prior art. One
+/// widely-deployed desktop client authenticates to its own service with a
+/// token file, and a stale one is among its most familiar failure modes — the
+/// UI insisting it cannot reach an engine that is running perfectly well.
+/// Another listens on a fixed loopback port behind a server password, so any
+/// local process may attempt to connect and the user must manage a credential
+/// to talk to their own machine. Both are artefacts of using a network
+/// transport for a boundary that is not a network.
 /// </para>
 /// </remarks>
-public static class LocalEndpoint
+public static partial class LocalEndpoint
 {
     /// <summary>
     /// The longest socket path the platform will accept. POSIX
@@ -41,6 +41,17 @@ public static class LocalEndpoint
     /// <summary>The socket path or pipe name for a state directory.</summary>
     /// <param name="stateDirectory">The state directory whose service is addressed.</param>
     /// <returns>The address, in the platform's own form.</returns>
+    /// <remarks>
+    /// When <c>&lt;state&gt;/service.sock</c> fits the platform limit it is used
+    /// as is. When it does not — macOS reaches the limit with nothing more
+    /// exotic than its per-user temp root or a long username under
+    /// <c>~/Library</c> — the socket falls back to a short path derived from
+    /// the state directory alone: <c>/tmp/fbp-u&lt;uid&gt;/&lt;hash&gt;.sock</c>.
+    /// Deterministic derivation is the point: the service and every client
+    /// compute the same address independently, so there is no pointer file to
+    /// go stale. The per-user directory is owner-only and refused rather than
+    /// repaired when it is not — see <see cref="EnsureFallbackDirectory"/>.
+    /// </remarks>
     public static string AddressFor(string stateDirectory)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
@@ -54,16 +65,73 @@ public static class LocalEndpoint
         }
 
         var socketPath = Path.Combine(Path.GetFullPath(stateDirectory), "service.sock");
-        var bytes = Encoding.UTF8.GetByteCount(socketPath);
+        if (Encoding.UTF8.GetByteCount(socketPath) <= MaximumSocketPathBytes)
+        {
+            return socketPath;
+        }
+
+        // The same hash-per-state-directory rule the Windows pipe uses, housed
+        // under /tmp directly — never GetTempPath(), whose TMPDIR indirection
+        // is exactly what made the standard path too long.
+        var fallback = Path.Combine(
+            EnsureFallbackDirectory(), $"{ShortHash(Path.GetFullPath(stateDirectory))}.sock");
+
+        var bytes = Encoding.UTF8.GetByteCount(fallback);
         if (bytes > MaximumSocketPathBytes)
         {
             var length = bytes.ToString(CultureInfo.InvariantCulture);
             var limit = MaximumSocketPathBytes.ToString(CultureInfo.InvariantCulture);
-            throw new IOException(Strings.FormatLocalEndpoint_SocketPathBytesPlatformAccepts(socketPath, length, limit));
+            throw new IOException(Strings.FormatLocalEndpoint_SocketPathBytesPlatformAccepts(fallback, length, limit));
         }
 
-        return socketPath;
+        return fallback;
     }
+
+    /// <summary>
+    /// The per-user fallback directory, created owner-only and verified on
+    /// every use — by clients as much as by the service, because both resolve
+    /// addresses through it.
+    /// </summary>
+    /// <remarks>
+    /// A directory in a world-writable place is only as trustworthy as its
+    /// permissions, so an existing one that is a symlink or that admits other
+    /// users is <b>refused, never repaired</b>: tightening the permissions of
+    /// a directory somebody else prepared would be adopting their trap. A
+    /// squatter who pre-creates the name with correct-looking permissions
+    /// gains nothing but denial of service — the socket bind and connect fail
+    /// on ownership either way, loudly.
+    /// </remarks>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static string EnsureFallbackDirectory()
+    {
+        var directory = $"/tmp/fbp-u{GetEffectiveUserId().ToString(CultureInfo.InvariantCulture)}";
+        const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+        var info = new DirectoryInfo(directory);
+        if (!info.Exists)
+        {
+            Directory.CreateDirectory(directory, OwnerOnly);
+            info.Refresh();
+        }
+
+        if (info.LinkTarget is not null)
+        {
+            throw new IOException(
+                Strings.FormatLocalEndpoint_FallbackDirectoryUnsafe(directory, "it is a symbolic link"));
+        }
+
+        if (info.UnixFileMode != OwnerOnly)
+        {
+            throw new IOException(
+                Strings.FormatLocalEndpoint_FallbackDirectoryUnsafe(
+                    directory, "its permissions admit other users"));
+        }
+
+        return directory;
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "geteuid")]
+    private static partial uint GetEffectiveUserId();
 
     /// <summary>
     /// Prepares the directory the endpoint lives in, so that permissions are the

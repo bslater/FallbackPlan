@@ -88,9 +88,35 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
             $"pending={string.Join(',', state.PendingSequences.Select(sequence => sequence.ToString(CultureInfo.InvariantCulture)))}\n" +
             $"last-delta={(state.LastDeltaId is { } delta ? Convert.ToHexStringLower(delta.ToArray()) : string.Empty)}\n";
 
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, content);
-        File.Move(temporary, _path, overwrite: true);
+        // The rename alone leaves the new bytes in the page cache; a power
+        // loss then regresses the sequence space, and every number the lost
+        // state had consumed is handed out again — the identity-cloning shape
+        // of architecture 04 §2, and a blob-key collision under 05 §5.1.
+        // Flushed to the platter before the rename, so the contract
+        // AllocateNext documents — durable before the number is returned —
+        // is what the disk actually holds.
+        var temporary = $"{_path}.{Guid.NewGuid():n}.tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream))
+            {
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, _path, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+
+            throw;
+        }
     }
 }
 
@@ -121,15 +147,32 @@ public sealed class WriterSequence : IBlobCounterAllocator
         _next = state.NextSequence;
         _pending = [.. state.PendingSequences];
         _lastDeltaId = state.LastDeltaId;
-        RecoveredObligations = [.. state.PendingSequences];
     }
 
     /// <summary>
-    /// Sequence numbers allocated by a previous run and never accounted for —
-    /// each one MUST get a void delta so readers can distinguish "skipped"
-    /// from "missing" (specification 07 §4).
+    /// Sequence numbers allocated and not yet accounted for. Read at
+    /// publication start — where the serialised writer lane guarantees no
+    /// allocation is in flight — these are exactly a previous run's
+    /// leftovers, and each one MUST get a void delta so readers can
+    /// distinguish "skipped" from "missing" (specification 07 §4). Reading
+    /// the live pending set rather than a construction-time snapshot is what
+    /// makes a cancelled run's numbers "discharged by the next publication,
+    /// exactly as a crash's would" (ADR-0029 §4) in the long-lived service,
+    /// whose sequence outlives every job: a snapshot would defer the
+    /// discharge to a restart the service may not have for weeks. An
+    /// obligation leaves this list when it is accounted for, so a void is
+    /// published exactly once.
     /// </summary>
-    public IReadOnlyList<ulong> RecoveredObligations { get; }
+    public IReadOnlyList<ulong> OutstandingObligations
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _pending];
+            }
+        }
+    }
 
     /// <summary>The writer's most recently published delta, for predecessor chaining.</summary>
     public DeltaId? LastDeltaId
@@ -175,6 +218,14 @@ public sealed class WriterSequence : IBlobCounterAllocator
             Persist();
         }
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The blob-counter case of ADR-0022 §Decision 7: the durable blob named
+    /// by a durable intent is the accounting object, so the number leaves the
+    /// pending set the moment its upload is acknowledged.
+    /// </remarks>
+    void IBlobCounterAllocator.MarkAccounted(ulong blobCounter) => MarkAccounted(blobCounter);
 
     private void Persist() => _store.Save(new SequenceState(_next, [.. _pending], _lastDeltaId));
 }

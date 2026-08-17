@@ -8,6 +8,8 @@
 
 A session runs over **TLS 1.3** ([RFC 8446](https://www.rfc-editor.org/rfc/rfc8446)) over TCP, or over **QUIC** ([RFC 9000](https://www.rfc-editor.org/rfc/rfc9000)) with the same TLS 1.3 handshake. Whether a session is direct or relayed MUST be reported to the operator either way ([architecture 09 §7](../../docs/architecture/09-replication-and-peers.md#7-relay)).
 
+**TLS 1.2** ([RFC 5246](https://www.rfc-editor.org/rfc/rfc5246)) MUST also be accepted. One supported platform's TLS stack cannot speak 1.3 at all, and negotiation requires both ends to overlap, so an implementation that offered only 1.3 would exclude that platform from peering entirely rather than only from 1.3. Two 1.3-capable ends still negotiate 1.3 — RFC 8446 §4.1.3's downgrade sentinels detect an attacker forcing a lower version — and no security property of this protocol derives from the TLS version: confidentiality and integrity come from either version's cipher suites, and identity comes only from §3's pinned-key proof, which binds to the exchanged certificates identically under both.
+
 **TLS provides confidentiality, integrity and key exchange. It does not provide peer identity here.** Authentication is the protocol's own, in §3.
 
 Each side MUST present a **self-signed certificate generated for that connection alone**. Such a certificate:
@@ -19,6 +21,8 @@ Each side MUST present a **self-signed certificate generated for that connection
 - SHOULD be destroyed once the connection ends.
 
 Both sides request and present one; the client certificate message is not optional. Neither side makes any trust decision about the certificate it receives — no chain is built, no name is checked, no authority is consulted, and there is no certificate this design would reject on the strength of who issued it. **A certificate here is a container for an ephemeral key and nothing more.** Its only durable role is the hash of its public key, which §3 binds the authentication proof to.
+
+"MUST NOT be persisted" governs the certificate's lifetime, not the operating system's bookkeeping while it is alive: some platforms refuse to use a private key for TLS unless it is handed to OS-managed key storage (a Windows key container, a macOS keychain) for the duration. An implementation MAY use such transient storage provided the key material is destroyed with the connection — the rule's intent is that nothing about the certificate outlives the connection it was made for.
 
 **No trust decision occurs during the TLS handshake.** An implementation MUST NOT treat a completed handshake as evidence of identity. → [`threat-model.md` T-7](../../docs/threat-model.md#t-7-malicious-or-malformed-protocol-input)
 
@@ -108,7 +112,7 @@ A failure of (2) or (3) is refused as `authentication_failed`. The two are not d
 
 **Only a side that was expecting a particular peer can report `identity_changed`.** An initiator dialled a pinned identity and can say that something else answered — which is the case [01 §2.5](01-identity-and-pairing.md#25-rejecting-a-changed-identity) exists for. A responder taking an inbound connection expected nobody in particular, so an unrecognised key there is `not_paired` and MUST NOT be reported as anything else. Distinguishing them would require knowing which pairing a stranger *meant* to be, and the only thing a stranger has offered is the key that is wrong.
 
-**`revoked` requires a retained revocation record, which this specification does not require.** Revocation removes a grant ([01 §3](01-identity-and-pairing.md#3-grants)); an implementation that keeps no tombstone reports `not_paired`, which is what it honestly knows. Keeping one means holding a permanent list of every peer ever unpaired, and that is a worse trade than a slightly vaguer refusal.
+**`revoked` requires a retained revocation record.** Revocation removes a grant, and a side that kept no record of the removal would honestly know only `not_paired`. [01 §3](01-identity-and-pairing.md#3-grants) therefore keeps a tombstone — the revoked identity's fingerprint, nothing more — because the two refusals call for different operator action, and because `revoked` is the fallback delivery of a termination the peer may never have heard announced ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)). Re-pairing clears the tombstone, so the list grows only with deliberate endings.
 
 ### 3.4 Why this holds
 
@@ -174,7 +178,15 @@ A side MUST NOT use a feature that is not in the intersection, and MUST NOT infe
 
 This mirrors the repository format's required/optional split ([repository format 00 §5](../repository-format/00-conventions.md#5-versioning-and-feature-negotiation)) for the same reason: a peer that supports most of a version needs a way to say so, rather than having to refuse everything or claim everything.
 
-No features are defined at protocol version 1. The mechanism is specified now because retrofitting negotiation onto a deployed protocol means a flag day, and the documents that will define features ([03–05](README.md#documents)) are not written yet.
+The features defined so far:
+
+| Identifier | Meaning |
+|------------|---------|
+| `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)). A source **requires** this of a destination it replicates to, so declining it refuses the session rather than silently forgoing the check |
+| `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
+| `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
+
+The mechanism predates its first feature deliberately — retrofitting negotiation onto a deployed protocol means a flag day — and `termination-notice` is the proof it was worth specifying early: the message it gates is announced only to peers that offered it, and an older build is never sent a type it would refuse as `message_unknown`.
 
 ## 7 Framing
 
@@ -199,8 +211,12 @@ frame = u32(payload_length) ‖ payload
 | 7 | `SessionRefuse` | §8 |
 | 8 | `SessionAuth` | §3.1 |
 | 9 | `SessionAuthProof` | §3.1 |
-| 10–255 | Reserved for this specification | — |
-| 256+ | Reserved for [03–05](README.md#documents) | — |
+| 10 | `PeeringTermination` | [01 §3.1](01-identity-and-pairing.md#31-ending-a-peering) |
+| 11–255 | Reserved for this specification | — |
+| 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
+| 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
+| 264–265 | Verification | [04](04-verification.md#4-messages) |
+| 264+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 
@@ -211,6 +227,8 @@ Length framing outside TLS is deliberate rather than redundant. It bounds alloca
 ## 8 Errors and refusal
 
 A side that cannot continue sends `SessionRefuse` (or `PairRefuse` during pairing) and closes. There is no error that leaves a session half-open.
+
+**Closing follows the refusal being *read*, not merely sent.** After writing the refusal, the refusing side SHOULD hold the connection open — reading and discarding whatever the peer has in flight — until the peer closes or a short timeout passes. Tearing the connection down at once turns the peer's in-flight write into a transport reset, and on common stacks the reset purges the unread refusal from the peer's receive buffer: a `revoked` experienced as a broken pipe loses the one fact the refusal existed to carry. For the same reason, a side that receives a refusal MUST NOT answer it with a refusal of its own — it closes, and that close is what releases the refusing side's linger.
 
 **`SessionRefuse`**
 
@@ -232,6 +250,7 @@ A side that cannot continue sends `SessionRefuse` (or `PairRefuse` during pairin
 | 9 | `busy` | The peer cannot serve a session now; retry later |
 | 10 | `pairing_declined` | A human declined ([01 §2.4](01-identity-and-pairing.md#24-approval-and-pinning)) |
 | 11 | `authentication_failed` | The peer did not prove possession of the identity it presented (§3.3) |
+| 12 | `storage_exhausted` | The destination cannot store — disk trouble, not policy ([05 §4](05-quotas.md#4-disk-trouble-is-not-policy)) |
 
 The code is what a client branches on; the text is what a human reads. A conforming implementation MUST NOT parse the text.
 
@@ -249,4 +268,4 @@ The ephemeral TLS certificate key of §1 is not an exception. It authenticates n
 
 ---
 
-**Previous:** [01 — Identity and pairing](01-identity-and-pairing.md) · **Next:** Replication — [not written](README.md#documents)
+**Previous:** [01 — Identity and pairing](01-identity-and-pairing.md) · **Next:** [03 — Replication](03-replication.md)

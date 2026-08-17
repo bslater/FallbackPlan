@@ -81,6 +81,8 @@ Precedence is therefore explicit:
 
 Two **insertions** for one `object_id` are benign: two writers independently stored the same content in different blobs, and either location serves. A **supersession** is ordered and must be honoured.
 
+Rule 3 depends on the reader knowing which blobs are gone, and **an implementation that supplies no such knowledge does not satisfy rule 3 — it merely never triggers it.** "Known to be deleted" is a positive claim, so a reader that cannot make it MUST assume live: absence from a listing is not deletion on a provider that lists eventually, and discarding a valid location on that evidence turns a stale index into an outage. A reader whose blob inventory is exhaustive — every blob listed and every one openable — MAY treat absence as deletion; one that had to skip a blob MUST NOT, because an inventory with holes cannot distinguish "collected" from "unreadable right now".
+
 With precedence stated, applying entries in any order converges on the same state — because the winner is a property of the entries, not of arrival sequence. That is what makes §6 safe.
 
 ## 4 Sequence gaps and void deltas

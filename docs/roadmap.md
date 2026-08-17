@@ -26,7 +26,7 @@ Architecture decision records and threat model · versioned configuration schema
 - Garbage collection concurrent with an in-flight backup deletes none of its intent-covered blobs.
 - **A synthetic legacy source adapter feeds an arbitrary byte stream plus a provenance record through the same pipeline**, demonstrating the ingest path is not coupled to the filesystem scanner.
 
-> **Two criteria moved.** The original Phase 0 required "one representative CrashPlan file version can be streamed into this pipeline" — which needs the Phase 5 reader, itself contingent on a legal review and an archive corpus we do not have — and "an independently written reader can parse public fixtures", which needs a second implementation to exist before the format is drafted. The first is replaced by the synthetic adapter above, which proves the same property. The second moves to the format freeze gate, where it is both achievable and genuinely valuable ([H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0)).
+> **Two criteria moved.** The original Phase 0 required one representative legacy file version to be streamable into this pipeline — which needs the Phase 5 reader, itself contingent on a legal review and an archive corpus we do not have — and "an independently written reader can parse public fixtures", which needs a second implementation to exist before the format is drafted. The first is replaced by the synthetic adapter above, which proves the same property. The second moves to the format freeze gate, where it is both achievable and genuinely valuable ([H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0)).
 
 ---
 
@@ -42,11 +42,11 @@ Filesystem capture, immutable tree and snapshot manifests, reliable local restor
 
 ## Phase 2 — Peer-to-peer backup, and the service boundary
 
-Restore CrashPlan-style computer-to-computer backup, and make the engine a service that front ends talk to ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)).
+Restore computer-to-computer backup, and make the engine a service that front ends talk to ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md)).
 
-**Features:** device identity and pairing · peer store · direct TLS/QUIC transfer · LAN discovery · resumable replication · destination quotas and retention floors · per-destination replication state · keyed random-range verification challenges · dedup trust domains · **command surface and both transport bindings** · **CLI becomes a client, with direct mode** · **writer-role exclusion on the state directory** · **keystore unlock** · **per-job progress events** · local web UI · **multi-instance console** · service installation · bandwidth schedules · protocol version negotiation.
+**Features:** device identity and pairing · peer store · direct TLS/QUIC transfer · LAN discovery · **resumable replication** · destination quotas and retention floors · per-destination replication state · keyed random-range verification challenges · dedup trust domains · **command surface and both transport bindings** · **CLI becomes a client, with direct mode** · **writer-role exclusion on the state directory** · **keystore unlock** · **per-job progress events** · local web UI · **multi-instance console** · **service installation** · bandwidth schedules · protocol version negotiation.
 
-**Status:** the service boundary is built on the local binding — writer-role exclusion, the command contract and its versioning, status aggregation, unlock, per-job progress, and a CLI that asks a running service to back up, restore, verify and check, taking direct mode when none is listening. **The remote binding is not built:** it validates and binds nothing, because pairing reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s machinery. That machinery is now specified *and* built as far as the session layer: [ADR-0030](adr/0030-peer-identity-and-pairing.md) settles peer identity and the pairing ceremony, [`specifications/peer-protocol/`](../specifications/peer-protocol/README.md) makes it normative, and `FallbackPlan.Protocol` implements identity, the pairing derivation and short authentication string, the grant store and the destination's terms, framing, version and feature negotiation, and the channel-bound authentication that replaced RFC 7250. **What is missing is the transport**: nothing yet opens a socket, negotiates TLS or drives the state machine over a network, and no command shows a pairing string to a human — so the protocol is implemented and has never spoken to another machine ([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)). [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and [Q19](open-questions.md#q19--console-identity-and-multi-operator-access) remain open and gate what a paired console may *do*, which is a separate question from who it is. Two of the exit criteria below need it — the unpaired-client refusal and the no-plaintext-across-the-remote-binding claim — so those two are unmet by construction rather than untested, along with topologies 3 and 4 of [ADR-0028 §1](adr/0028-service-boundary-and-deployment-topologies.md). Restore, verify and check are served over the command surface, on the job queue's reader lane so a restore runs alongside a scheduled backup rather than behind it.
+**Status:** the service boundary is built on both bindings — writer-role exclusion, the command contract and its versioning, status aggregation, unlock, per-job progress, and a CLI that asks a running service to back up, restore, verify and check, taking direct mode when none is listening. **The remote binding is now built too:** pairing reuses [architecture 09 §3](architecture/09-replication-and-peers.md#3-pairing)'s machinery, which [ADR-0030](adr/0030-peer-identity-and-pairing.md) settles and [`specifications/peer-protocol/`](../specifications/peer-protocol/README.md) makes normative, and `FallbackPlan.Protocol` now carries it over a real TLS 1.3 socket: identity and the pairing ceremony, the grant store and the destination's terms, framing, version and feature negotiation, the channel-bound authentication that replaced RFC 7250, and a durable device key. `RemoteServiceListener` binds only an interface an administrator names and admits only a pinned peer; a paired console reaches the service and an unpaired one is refused, with the ceremony performed by two real processes ([implementation status](implementation-status.md#0030--the-socket-exists)). [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) and [Q19](open-questions.md#q19--console-identity-and-multi-operator-access) remain open and gate what a paired console may *do*, which is a separate question from who it is. The two exit criteria below that needed it — the unpaired-client refusal and the no-plaintext-across-the-remote-binding claim — are now met, closing topologies 3 and 4 of [ADR-0028 §1](adr/0028-service-boundary-and-deployment-topologies.md); what remains of Phase 2 is the rest of peer replication. Its first slice is built: the hub pushes a repository's immutable objects to a paired destination over the peer session ([peer-protocol 03](../specifications/peer-protocol/03-replication.md)) — on every backup via fan-out, on demand via the `sync` verb — the destination holds a replica it cannot read, and the standalone recovery tool restores the original files from it — a source recovered from its destination, proven end to end. Destination verification ([spec 04](../specifications/peer-protocol/04-verification.md)) is built: every sync challenges a bounded sample of the destination's copy — a peer over keyed range proofs, a local path by direct read-back — the newest snapshot is always covered, and `verified` in a status line carries coverage and age from the sync ledger's stamps, earned only by an in-sync destination whose declared failure domain survives losing this machine (FR-SNP-007, [ADR-0018 Amendment 2](adr/0018-replica-failure-domains.md)). The rest of the remainder — pairing roles on the wire, termination notices, quota enforcement (spec 05) — is sequenced in the [hub-and-spoke arc](#the-hub-and-spoke-arc--multi-destination-backup-sets-built) below, and the 03 refinements (snapshot scoping, the compact object-set filter) are superseded there by per-set archives, which make whole-archive replication per-set by construction ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)). Restore, verify and check are served over the command surface, on the job queue's reader lane so a restore runs alongside a scheduled backup rather than behind it. **Service installation is built too** ([ADR-0033](adr/0033-hosting-under-an-os-service-manager.md)): the agent shuts down cleanly on the stop signal systemd and launchd send, bridges the Windows Service Control Manager, and its `install` verb generates the systemd unit, launchd plist or Windows `sc.exe` commands that register it — signed installers and self-contained packaging remain a Phase 4 item.
 
 **Exit criteria (service boundary):** a second process cannot take the writer role — it refuses with a stated reason naming the holder · a default install listens on no port · an unpaired remote client is refused, and a substituted identity is refused rather than prompted · a restore commanded remotely writes on the service's machine and no plaintext crosses the remote binding · a running job reports states beyond `Scanning` · a service with no front end installed backs up unattended, and an unreachable console never stops it · client and service at incompatible versions refuse with both versions named.
 
@@ -54,7 +54,43 @@ Restore CrashPlan-style computer-to-computer backup, and make the engine a servi
 
 ---
 
+## The hub-and-spoke arc — multi-destination backup sets *(built)*
+
+[ADR-0034](adr/0034-hub-and-spoke-destinations.md) re-architects the middle of the product: a backup set gains named destinations and retention, each set gets its own staging archive on the hub, and the hub fans every snapshot out to all of its destinations and runs retention against them. The arc cuts across the phase list rather than following it — it **completes Phase 2's remainder** (pairing roles on the wire, termination notices, terms enforcement — spec 05), **pulls Phase 4's retention forward** (nothing in "one archive becomes N, each aging under policy" is sensible to build twice), and **prepares Phase 3** (cloud kinds are modelled in configuration, status and retention now, so a provider lands later as an `IObjectStore` behind the existing fan-out, not a feature).
+
+Ordered slices, each shippable, each proven by a failing-test-first suite:
+
+1. **Configuration schema v2** — top-level named destinations (`local-path`, `peer`; `s3`/`azure-blob`/`dropbox` schema-reserved), per-set destination references and retention policy, v1 rejected with a migration message (FR-DEST-001/005/006).
+2. **Per-set staging archives** — `ServiceRuntime` holds one archive handle per set (own writer sequence, catalogue, spool), opened lazily; two sets publish independently and each archive restores alone.
+3. **Fan-out to local-path destinations** — the store-to-store copier extracted from the replication initiator, per-`(set, destination)` sync state, the transfer job lane, scheduler-driven catch-up, the `sync` verb superseding `replicate` (FR-DEST-002/003/004).
+4. **The status matrix** — per-destination inputs, `protected` requiring an off-domain in-sync destination, real volume-identity failure-domain comparison (ADR-0027 amendment).
+5. **Peer destinations** — the negotiated role in the pairing ceremony, fan-out over the peer session from the configured endpoint.
+6. **Termination and notices** — the termination message, the durable notice store, `Revoked` as the fallback signal, `unpair --notify` (FR-DEST-008).
+7. **Terms enforcement** — quota at the blob boundary, quota ≠ disk-full ≠ transient, narrowing surfaces as degraded ([spec 05](../specifications/peer-protocol/README.md)).
+8. **Local retention engine** — planner, mark and sweep against staging under every ADR-0009 mechanism, the replication gate (FR-GC-009), first production deletion.
+9. **Retention against local-path destinations** — per-destination convergence under policy overrides (FR-GC-010).
+10. **Retention against peers** — hub marks, spoke deletes, floor refusals (spec 06).
+11. **Staging trim** *(the stretch slice, landed)* — once every destination entitled to a historic data blob verifiably holds it, staging drops it under `retention --apply`; the newest snapshot's closure stays as the dedup cache, so a set whose only destination shares its volume pays same-disk storage for the current generation, not for history ([ADR-0034 §6](adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+
+**Status:** all eleven slices are built and proven, the stretch trim included, and the operator surface landed with them — `sync` superseded `replicate`, and `retention` is commandable from a paired console ([implementation status](implementation-status.md#0034--the-hub-fans-out-ages-and-trims)). Destination verification ([spec 04](../specifications/peer-protocol/README.md#documents)) remains the Phase-2 tail outside this arc.
+
+**Exit criteria:** a set with two destinations — one local-path, one peer — and no other local copy backs up on schedule to both when available · the destination that was offline catches up automatically · `status` shows the per-destination matrix and `protected` is earned only by an off-domain in-sync destination · retention ages each destination under its own policy with the spoke's floor honoured · either peer ends the peering and both sides see a durable notice · each destination archive restores independently with the recovery tool.
+
+### The destination-fitness arc — is this destination one a backup can be built on? *(built)*
+
+[ADR-0035](adr/0035-destination-fitness.md) closes the gap the arc above left: the hub could fan out to a destination, age it, trim against it and challenge it — but almost everything it knew about whether that destination was *fit* it learned by trying to use it. Six findings, each verified against the code: a destination that had silently lost data was silently re-seeded; age was invisible, so day 1 and day 400 read identically; an uncomputable convergence filter was discarded without a word; nothing checked capacity anywhere; nothing probed a destination before the first full copy counted on it; and sampling coverage never accumulated, so FR-VER-002's weighting was specified and unimplemented.
+
+Underneath all six sat one structural fact — **verification only ever ran inside a sync, and a sync only ran when the archive moved on** — which is why an idle set froze its own proof with nothing saying so, and why the scheduled sweep had to land before staleness could honestly be complained about.
+
+**Status:** built. Admission (address defects reported, never refused at load; `verify-destination --probe` for both kinds), shortfall detection from what the destination declares holding, named convergence refusals, the scheduled deep sweep on the transfer lane with its on-demand depths, an accumulating sampler rotation, age as a warning that does not move the state, and capacity on both halves — headroom on the replication inventory frame, a free-space floor for a local path ([implementation status](implementation-status.md#0035--a-destination-has-to-earn-being-relied-on)). **Peer-side deep verification is the one piece not built:** a peer replica has no readable store this side of the wire, so re-reading its bytes needs the session-establishment half of the push extracted first — the admission probe took the first half of that extraction.
+
+**Exit criteria:** a destination that quietly deletes objects is named on the next sync rather than silently re-seeded · a destination unproven past its bound is named in status without the protection state becoming ambiguous · a convergence filter that could not be computed says so instead of quietly taking a whole copy · a typo'd endpoint is reported before anything counts on it and a new destination can be probed before the first full copy · a peer push about to run out of room says so a pass early and a local copy that would fill the volume does not start · a replica's stored bytes are re-confirmed against their seals on a schedule, with sampling coverage that provably accumulates.
+
+---
+
 ## Phase 3 — Cloud object stores
+
+Reframed by [ADR-0034](adr/0034-hub-and-spoke-destinations.md): a cloud store is one more **destination kind** behind the fan-out built in the arc above — configuration, status, retention and quota semantics already exist for it; what Phase 3 adds is the provider.
 
 **Features:** Azure Blob provider · S3 and S3-compatible provider · credential integrations · multipart and staged-block uploads · request and cost telemetry · tier and lifecycle guidance · replication between peer and cloud stores.
 
@@ -64,9 +100,13 @@ Restore CrashPlan-style computer-to-computer backup, and make the engine a servi
 
 ## Phase 4 — Retention, pruning, and healing
 
-**Features:** retention engine · generation-based mark and sweep · write-intent-aware reachability · blob compaction via index republication · tombstone grace periods · mandatory dry-run reports · replica healing · damaged-snapshot scoping · retention floors and destructive-action auditing.
+Largely absorbed by the hub-and-spoke arc, which builds the retention engine, mark and sweep, the replication gate, and per-destination retention (arc slices 8–10). What remains here is the tail: blob compaction, replica healing, and the audit machinery around destructive change.
 
-**Exit criteria:** interruption at every GC step preserves published snapshots · GC concurrent with backup never deletes in-flight blobs · compaction modifies no manifest · deleted content retained per policy · corruption healed from another replica · clock skew of ±24 h changes no GC outcome.
+**Features:** ~~retention engine · generation-based mark and sweep · write-intent-aware reachability~~ *(arc)* · blob compaction via index republication · tombstone grace periods · mandatory dry-run reports · replica healing · damaged-snapshot scoping · ~~retention floors~~ *(arc)* and destructive-action auditing.
+
+**Exit criteria:** interruption at every GC step preserves published snapshots · GC concurrent with backup never deletes in-flight blobs · compaction modifies no manifest · deleted content retained per policy · corruption healed from another replica · clock skew of ±24 h changes no GC outcome · **and the twelve compaction criteria of [ADR-0025 Amendment 2](adr/0025-compaction-reseals-records.md#amendment-2-2026-08--the-twelve-things-compaction-is-known-to-get-wrong)**, each with a test.
+
+Those twelve are not padding. Compaction is the densest cluster of shipped fixes in the surveyed product's entire fifteen-year changelog — 29 of 805 distinct entries, more than any other mechanism, recurring every year from 2016 to 2026 ([ledger](review/2026-08-prior-art-changelog-ledger.md)). They are written down now, while nothing is built, because that is the only moment the list is free.
 
 ---
 
@@ -87,9 +127,9 @@ Two decisions the gate forced rather than measured are written up in [freeze-gat
 
 ---
 
-## Phase 5 — CrashPlan migration preview
+## Phase 5 — Legacy archive import preview
 
-Controlled read-only import for validated archive variants. Gated on the legal review in [ADR-0015](adr/0015-crashplan-importer-isolation.md) — **no parser work begins before that gate passes**.
+Controlled read-only import for validated archive variants. Gated on the legal review in [ADR-0015](adr/0015-legacy-importer-isolation.md) — **no parser work begins before that gate passes**.
 
 **Features:** archive inspector and variant detection · key-source adapters · latest-state import · selected historical import · resumable checkpoints · provenance and migration reporting · source/destination hash comparison · opaque archive-preservation option.
 
@@ -149,7 +189,7 @@ Provider capability contract · Azure Blob · S3 · emulator integration tests �
 
 Retention engine · generation GC · compaction · tombstones and grace periods · dry-run reporting · replica healing · clock-skew testing.
 
-### P5 — CrashPlan research
+### P5 — Legacy format research
 
 **Legal and licence review gate first.** Then: archive corpus and variant catalogue · read-only inspector · key-material adapters · manifest and history parser prototypes · block decrypt/decompress pipeline · neutral legacy model · single-version streaming import proof · historical state reconstruction · comparison and reporting.
 
@@ -159,6 +199,7 @@ Retention engine · generation GC · compaction · tombstones and grace periods 
 
 - Windows, macOS, and Linux agents create and restore native snapshots.
 - One computer backs up directly to another with no project-operated service.
+- A backup set fans out to every configured destination, none of which has to be local; protection means a configured destination outside the source's failure domain is in sync, never merely that a local copy exists ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)).
 - Azure Blob and S3 repositories pass the shared contract suite.
 - All content and metadata are encrypted before leaving the source trust boundary.
 - A repository restores from a clean machine using only repository access and a recovery kit.
@@ -172,4 +213,4 @@ Retention engine · generation GC · compaction · tombstones and grace periods 
 - User documentation explains what is and is not protected.
 - External security and format reviews are complete.
 - The format v1 freeze gate has passed.
-- CrashPlan import is released with a narrow verified compatibility matrix, or clearly retained as preview — never broadly claimed.
+- Legacy import is released with a narrow verified compatibility matrix, or clearly retained as preview — never broadly claimed.

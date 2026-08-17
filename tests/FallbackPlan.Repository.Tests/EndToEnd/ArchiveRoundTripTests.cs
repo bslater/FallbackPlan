@@ -102,6 +102,39 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task BackupAndRestore_AFileSpanningOverAHundredBlobs_RestoresByteIdentically()
+    {
+        // FR-ARCH-006's acceptance names a figure — a file spanning at least a
+        // hundred blobs — and the existing multi-blob test spans only a few
+        // under the small-blob policy. Incompressible content forces a fresh
+        // blob roughly every TargetSizeBytes, so a file well past 100 × that
+        // exercises the many-blob assembly the requirement is about.
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var archiver = CreateArchiver(store, keys);
+
+        var blobTarget = SmallBlobPolicy.BlobWriteProfile.TargetSizeBytes;
+        var original = new byte[blobTarget * 130];
+        new Random(20260810).NextBytes(original);
+
+        using var source = new MemoryStream(original);
+        var result = await archiver.ArchiveAsync(source, CancellationToken.None);
+
+        Assert.IsTrue(result.Blobs.Count >= 100,
+            $"expected a file spanning at least 100 blobs; got {result.Blobs.Count}");
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        Assert.AreEqual(result.Blobs.Count, await reader.LoadBlobsAsync(CancellationToken.None));
+
+        using var restored = new MemoryStream();
+        var restore = await reader.RestoreAsync(result.SegmentReferences, restored, CancellationToken.None);
+
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(original, restored.ToArray());
+        SequenceAssert.AreEqual(result.WholeFileHash, restore.WholeFileHash);
+    }
+
+    [TestMethod]
     public async Task BlobReader_AnySegment_IsIndividuallyReadableByItsObjectIdentifier()
     {
         var original = BuildTestFile(regions: 6);

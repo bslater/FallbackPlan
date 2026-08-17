@@ -88,6 +88,42 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Restore_OverAnExistingFile_DisplacesItRatherThanOverwriting()
+    {
+        // A behavioural guard that direct-mode restore stays on the contained
+        // executor (RR-1): the old hand-rolled CLI path wrote with File.Create,
+        // overwriting whatever was there and applying no containment. The
+        // executor preserves an existing file by displacing it into a
+        // per-run store. If the reroute is ever undone, this fails — there is
+        // no .fbp-displaced copy when the restore just overwrites.
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/one.txt", "first");
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+
+        var snapshot = await FirstSnapshotIdAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var first = await _cli.RunAsync("restore", snapshot, "--output", destination);
+        Assert.IsTrue(first.ExitCode == 0, first.All);
+        Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
+
+        // A second restore to the same directory finds the file in the way and,
+        // rather than clobbering it, moves it into the executor's displaced
+        // store — a signature the uncontained path did not have.
+        var second = await _cli.RunAsync("restore", snapshot, "--output", destination);
+        Assert.IsTrue(second.ExitCode == 0, second.All);
+
+        var displaced = Directory.Exists(destination)
+            ? Directory.EnumerateFiles(destination, "one.txt", SearchOption.AllDirectories)
+                .Where(path => path.Contains(".fbp-displaced", StringComparison.Ordinal))
+                .ToList()
+            : [];
+
+        Assert.IsTrue(displaced.Count > 0,
+            "restoring over an existing file must displace it — the contained executor's behaviour, not an overwrite");
+    }
+
+    [TestMethod]
     public async Task Check_AnUndamagedRepository_ReportsItHealthy()
     {
         await _cli.InitAsync();
@@ -97,6 +133,33 @@ public sealed class CommandTests : IDisposable
         var check = await _cli.RunAsync("check");
 
         Assert.IsTrue(check.ExitCode == 0, check.All);
+    }
+
+    [TestMethod]
+    public async Task Sync_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Fan-out is the service's job — its scheduler, ledger and staging
+        // archives do the work — so direct mode refuses rather than
+        // improvising a copy the ledger would never learn about.
+        var sync = await _cli.RunAsync("sync");
+
+        Assert.AreEqual(1, sync.ExitCode);
+        Assert.Contains("fallbackplan-agent sync", sync.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Retention_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Retention needs the hub's configuration, sync ledger and writer
+        // role; a console commands it, the hub runs it.
+        var retention = await _cli.RunAsync("retention");
+
+        Assert.AreEqual(1, retention.ExitCode);
+        Assert.Contains("fallbackplan-agent retention", retention.All, StringComparison.Ordinal);
     }
 
     [TestMethod]

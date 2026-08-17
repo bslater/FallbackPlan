@@ -12,11 +12,11 @@ namespace FallbackPlan.Api.Transport;
 /// decision, not a default (FR-SVC-003).
 /// </para>
 /// <para>
-/// This build parses and validates the options and <b>binds nothing</b>. Remote
-/// clients are paired, not passworded, and pairing reuses the mechanism
-/// architecture 09 §3 defines for peers — which is not built yet. Enabling the
-/// binding therefore fails with that stated, rather than opening a port with no
-/// authentication behind it and calling it progress.
+/// Remote clients are paired, not passworded, and the binding admits only a
+/// client whose device identity is pinned (ADR-0030) — the listener runs the
+/// peer session handshake before a command crosses. These options say whether
+/// to open the port and which interface to name; the pairing that stands
+/// behind it is a separate, deliberate act.
 /// </para>
 /// </remarks>
 public sealed record RemoteBindingOptions
@@ -61,8 +61,7 @@ public sealed record RemoteBindingOptions
             return false;
         }
 
-        reason = "The remote binding requires paired device identity (ADR-0028 §5), which this build does not "
-            + "implement. It is refused rather than opened without authentication.";
-        return false;
+        reason = null;
+        return true;
     }
 }

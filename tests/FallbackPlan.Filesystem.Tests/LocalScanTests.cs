@@ -323,8 +323,10 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Posix, "a filename that is not valid UTF-8 is only expressible on POSIX")]
-    [PlatformTrait(TestPlatforms.Posix)]
+    [PlatformCondition(
+        TestPlatforms.Linux,
+        "a filename that is not valid UTF-8 is only expressible on POSIX, and macOS's APFS enforces valid UTF-8 at the filesystem, so the fixture cannot exist there")]
+    [PlatformTrait(TestPlatforms.Linux)]
     public async Task Scan_NameIsNotValidUtf8_ReportsItRatherThanManglesIt()
     {
         // 0xFF 0xFE is not a valid UTF-8 sequence and is a perfectly legal
@@ -610,16 +612,30 @@ public sealed partial class LocalScanTests : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Directory.Exists(_root))
+        if (!Directory.Exists(_root))
         {
-            try
+            return;
+        }
+
+        try
+        {
+            // Reparse points first, non-recursively: Windows' recursive
+            // delete refuses a directory junction ("the parameter is
+            // incorrect") and would fail the whole cleanup over a link this
+            // suite created on purpose.
+            foreach (var entry in new DirectoryInfo(_root).EnumerateDirectories("*", SearchOption.AllDirectories))
             {
-                Directory.Delete(_root, recursive: true);
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    entry.Delete();
+                }
             }
-            catch (UnauthorizedAccessException)
-            {
-                // a permission-test directory left unreadable; best effort
-            }
+
+            Directory.Delete(_root, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // a permission-test directory left unreadable; best effort
         }
     }
 }

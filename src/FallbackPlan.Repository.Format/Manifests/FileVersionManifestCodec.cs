@@ -389,6 +389,48 @@ public static class FileVersionManifestCodec
         return diagnostics;
     }
 
+    /// <summary>
+    /// A stable digest of the metadata that constitutes a change — the value
+    /// an incremental capture compares to decide whether a file needs a new
+    /// version even though its bytes did not move.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists so a capture can tell "the bytes are unchanged" apart from
+    /// "nothing about this file changed". Those are not the same question, and
+    /// answering the second with the first discards a <c>chmod</c>: POSIX
+    /// <c>chmod</c> moves ctime, not mtime, so identity, size and modification
+    /// time — the three signals reuse is keyed on — all still say nothing
+    /// happened while the mode on disk has changed.
+    /// </para>
+    /// <para>
+    /// <b>Access time is deliberately excluded.</b> Reading a file moves its
+    /// atime, and the backup's own read is a read: including it would make
+    /// every file differ from itself on the next pass, turning a whole-tree
+    /// reuse into a whole-tree re-capture and costing exactly the work
+    /// NFR-PERF-003 exists to avoid. Atime is still captured and still
+    /// restored — it is simply not evidence that anything changed. This is the
+    /// only field held back, and it is held back because it says something
+    /// about the observer rather than about the file.
+    /// </para>
+    /// <para>
+    /// The encoding is the same canonical CBOR the manifest itself uses, so
+    /// two equal maps digest equally on every platform and in every version,
+    /// and the digest is truncated to 16 bytes because it is compared for
+    /// equality against a value this device wrote and is never a security
+    /// boundary.
+    /// </para>
+    /// </remarks>
+    /// <param name="metadata">The map to digest.</param>
+    public static byte[] MetadataDigest(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        var writer = new CanonicalCborWriter();
+        WriteMetadata(writer, metadata with { AccessedAt = null });
+        return System.Security.Cryptography.SHA256.HashData(writer.Encode())[..16];
+    }
+
     internal static void WriteMetadata(CanonicalCborWriter writer, EntryMetadata metadata)
     {
         var keyCount =

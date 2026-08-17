@@ -148,4 +148,4 @@ Four rules that apply to every item, each closing a failure already documented i
 
 ## What Phase 0 deliberately excludes
 
-Filesystem scanner and include/exclude rules (Phase 1) · tree and snapshot manifests beyond what the engine needs (Phase 1) · peer protocol and replication (Phase 2) · cloud providers (Phase 3) · retention and garbage collection *execution* — the write-intent side is Phase 0 because the engine cannot be correct without it (Phase 4) · the CrashPlan reader (Phase 5).
+Filesystem scanner and include/exclude rules (Phase 1) · tree and snapshot manifests beyond what the engine needs (Phase 1) · peer protocol and replication (Phase 2) · cloud providers (Phase 3) · retention and garbage collection *execution* — the write-intent side is Phase 0 because the engine cannot be correct without it (Phase 4) · the legacy archive reader (Phase 5).

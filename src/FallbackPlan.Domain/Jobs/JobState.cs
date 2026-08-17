@@ -50,4 +50,35 @@ public enum JobState
 
     /// <summary>Needs intervention; never silently retried.</summary>
     FailedPermanent = 13,
+
+    /// <summary>
+    /// Finished, with a committed snapshot that does not hold everything that
+    /// was asked for — at least one entry could not be captured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It is a distinct terminal state rather than <see cref="Complete"/> with
+    /// a note, because "backed up your 40 000 files" and "backed up 39 998 of
+    /// your 40 000 files" are different outcomes and a caller must be able to
+    /// tell them apart without reading English. Specification 02 §8 makes the
+    /// same argument about wire refusals — the code carries the meaning and
+    /// the message is explicitly not for parsing — and a job state a console
+    /// or a script reads is the same kind of surface.
+    /// </para>
+    /// <para>
+    /// The snapshot is real and committed, so this is an outcome and not a
+    /// failure: the run is the set's most recent backup and anchors its
+    /// schedule exactly as <see cref="Complete"/> does. What it is not is a
+    /// success — the command surface reports it as one that did not do
+    /// everything it was asked to.
+    /// </para>
+    /// <para>
+    /// The surveyed changelog carries three separate fixes for the absence of
+    /// this distinction — an operation reporting success although it failed,
+    /// one error masking another, and compression errors being hidden — spread
+    /// over five years, which is what makes it the worst class of backup
+    /// defect: nothing is reported wrong until somebody restores.
+    /// </para>
+    /// </remarks>
+    CompletedWithFailures = 14,
 }

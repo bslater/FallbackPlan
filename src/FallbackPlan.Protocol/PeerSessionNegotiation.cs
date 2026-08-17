@@ -28,17 +28,38 @@ public static class PeerSessionNegotiation
     /// <summary>The oldest protocol version this build speaks.</summary>
     public const ushort OldestSupportedVersion = 1;
 
-    /// <summary>The features this build offers. None are defined at version 1 (02 §4).</summary>
-    public static IReadOnlyList<string> SupportedFeatures { get; } = [];
+    /// <summary>A peer that offers this understands <see cref="PeeringTermination"/> (01 §3).</summary>
+    public const string TerminationNoticeFeature = "termination-notice";
+
+    /// <summary>The peer answers keyed random-range challenges (04).</summary>
+    public const string DestinationVerificationFeature = "destination-verification";
+
+    /// <summary>A peer that offers this accepts <see cref="RetentionOffer"/> within its floor (06).</summary>
+    public const string RetentionInstructionFeature = "retention-instruction";
+
+    /// <summary>The features this build offers (02 §4).</summary>
+    public static IReadOnlyList<string> SupportedFeatures { get; } =
+        [DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>
     /// <param name="terms">Terms, when this side is the destination (01 §4).</param>
     /// <param name="required">Features this side requires of the peer.</param>
+    /// <param name="offered">
+    /// What this endpoint offers, defaulting to everything this build supports.
+    /// The offered set is a property of the endpoint rather than a global
+    /// constant (02 §4: "each side offers what it supports"), and narrowing it
+    /// is the only way to stand an older peer in front of this one without
+    /// checking out an older build — which is what the compatibility tests do
+    /// with it. Nothing in production passes anything but the default.
+    /// </param>
     /// <returns>The hello.</returns>
     public static SessionHello Hello(
-        string agentVersion, PeerTerms? terms = null, IReadOnlyList<string>? required = null) =>
-        new(OldestSupportedVersion, CurrentVersion, SupportedFeatures, required ?? [], agentVersion, terms);
+        string agentVersion,
+        PeerTerms? terms = null,
+        IReadOnlyList<string>? required = null,
+        IReadOnlyList<string>? offered = null) =>
+        new(OldestSupportedVersion, CurrentVersion, offered ?? SupportedFeatures, required ?? [], agentVersion, terms);
 
     /// <summary>Negotiates a session from two hellos.</summary>
     /// <param name="ours">The hello this side sent.</param>

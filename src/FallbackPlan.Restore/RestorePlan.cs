@@ -17,6 +17,15 @@ public sealed record RestoreTargetProfile
     /// <summary>Whether the target can create symlinks without elevation.</summary>
     public required bool SupportsSymlinks { get; init; }
 
+    /// <summary>
+    /// Whether the executor can write NTFS alternate data streams back on
+    /// this target. <see langword="false"/> everywhere — including Windows —
+    /// until the RR-6 write-back half lands: the polarity is "what the
+    /// executor can do", not "what the filesystem could hold", and an
+    /// executor that drops streams must say so on every target.
+    /// </summary>
+    public bool SupportsAlternateStreams { get; init; }
+
     /// <summary>The target's maximum path bytes, when known.</summary>
     public uint? MaxPathBytes { get; init; }
 
@@ -34,7 +43,8 @@ public sealed record RestorePlanItem(
     string Path,
     EntryKind Kind,
     ObjectId ObjectId,
-    ulong Length);
+    ulong Length,
+    bool HasAlternateStreams = false);
 
 /// <summary>A conflict the plan surfaces BEFORE any byte moves (architecture 08 §2).</summary>
 public sealed record RestoreConflict(string Path, string Reason);
@@ -95,7 +105,8 @@ public static class RestorePlanner
             foreach (var entry in catalogue.ListDirectory(snapshotId, parent))
             {
                 items.Add(new RestorePlanItem(
-                    entry.Path, entry.EntryKind, entry.ObjectId, entry.LogicalLength ?? 0));
+                    entry.Path, entry.EntryKind, entry.ObjectId, entry.LogicalLength ?? 0,
+                    entry.HasAlternateStreams));
 
                 if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                 {
@@ -117,7 +128,9 @@ public static class RestorePlanner
             }
             else
             {
-                items.Add(new RestorePlanItem(entry.Path, entry.EntryKind, entry.ObjectId, entry.LogicalLength ?? 0));
+                items.Add(new RestorePlanItem(
+                    entry.Path, entry.EntryKind, entry.ObjectId, entry.LogicalLength ?? 0,
+                    entry.HasAlternateStreams));
                 if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                 {
                     Walk(entry.Path);
@@ -169,6 +182,17 @@ public static class RestorePlanner
         {
             degradations.Add(new MetadataDegradation(
                 "special-files", "Special files (FIFOs, sockets, devices) are recorded but not materialised."));
+        }
+
+        // Presence-gated like the symlink one: declared only when this tree
+        // actually carries streams (RR-6 — the captured streams exist in the
+        // repository; what cannot happen yet is writing them back).
+        if (!target.SupportsAlternateStreams && items.Any(item => item.HasAlternateStreams))
+        {
+            degradations.Add(new MetadataDegradation(
+                "alternate-streams",
+                "Files carrying alternate data streams will restore their main stream only on this target; "
+                + "the streams are captured and recorded, not written back."));
         }
 
         return new RestorePlan

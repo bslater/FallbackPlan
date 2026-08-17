@@ -8,7 +8,7 @@ namespace FallbackPlan.Import.Abstractions;
 /// key 13) — the one place import history may live, because everywhere else
 /// an imported version MUST be format-indistinguishable from a native one.
 /// </summary>
-/// <param name="SourceSystem">The legacy system, e.g. <c>crashplan</c>.</param>
+/// <param name="SourceSystem">The legacy system's own short name, chosen by the importer that read it.</param>
 /// <param name="SourceIdentifier">The legacy archive's own identifier for this version.</param>
 /// <param name="OriginalModifiedAtUnixMs">The file's modification time as the legacy archive recorded it.</param>
 /// <param name="OriginalCapturedAtUnixMs">When the legacy archive captured the version.</param>
@@ -59,13 +59,16 @@ public sealed record LegacyFileVersion(
 
 /// <summary>
 /// A legacy archive that can be imported (FR-CP-002; exit criterion 11).
-/// Implementations — CrashPlan, restic, a synthetic test source — live in
-/// their own packages and depend only on this assembly and Domain; the
-/// engine never learns which one fed it.
+/// Implementations — one per legacy format, plus a synthetic test source —
+/// live in their own packages and depend only on this assembly and Domain;
+/// the engine never learns which one fed it. That ignorance is the point: an
+/// imported version must be format-indistinguishable from a native one, and
+/// the surest way to keep it so is for the core to have no vocabulary for the
+/// difference.
 /// </summary>
 public interface ILegacyArchiveSource
 {
-    /// <summary>The source system name recorded in provenance, e.g. <c>crashplan</c>.</summary>
+    /// <summary>The source system name recorded in provenance; the importer names its own format.</summary>
     string SourceName { get; }
 
     /// <summary>Enumerates every file version the legacy archive holds, oldest first.</summary>

@@ -63,7 +63,7 @@ A store or peer presents a stale snapshot set to hide recent backups or restore 
 ### T-8 Destination withholding data
 A destination claims to hold data it has discarded.
 **Mitigation:** keyed random-range challenges that cannot be precomputed or cached ([`09-replication-and-peers.md` §5](architecture/09-replication-and-peers.md#5-destination-verification)); coverage and challenge age reported rather than a boolean.
-**Residual:** a challenge proves possession *now*, not willingness to serve a restore later. Only a recovery drill proves that.
+**Residual:** a challenge proves possession *now*, not willingness to serve a restore later. Only a recovery drill proves that. The mitigation is no longer declinable — a destination that does not offer the challenge feature is refused rather than replicated to, since the feature set is the destination's own declaration and this mitigation defends against that same destination (FR-VER-006). Keeping an unprovable destination requires an explicit acknowledgement, and one kept on those terms never reports `verified` and never licenses reclaiming the source's last copy.
 
 ### T-9 Compromised destination without source keys
 **Mitigation:** destinations never receive content keys. A destination holding every blob can decrypt nothing.
@@ -104,12 +104,13 @@ A relay cannot decrypt, but it learns which device identities communicate, when,
 **Mitigation:** pinned dependencies with integrity hashes; vulnerability scanning in CI; SBOM per release; signed, reproducible builds; auto-update with signature verification and rollback protection. NFR-SUP-001..004.
 
 ### T-15 Parser attacks through legacy archives
-A crafted CrashPlan archive attacks the importer.
+A crafted legacy archive attacks the importer.
 **Mitigation:** importer isolated in an optional package; read-only source access; bounded allocations; fuzz testing of every parser; path traversal containment. FR-CP-001, FR-CP-006.
 
 ### T-16 Local privilege boundaries
 The UI user and the service run at different privilege levels, and the service holds key material the UI user must never obtain.
 **Mitigation:** the local binding is a Unix domain socket or named pipe in a directory only the service account may write, so **the operating system authenticates callers** — filesystem permissions decide who may connect and the service reads peer credentials to identify them. No token file and no local port, both of which would put a copyable credential where a local process could take it ([ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §5). Key material never crosses the boundary in either direction; clients receive commands, results and progress only. The service exposes no raw filesystem access to clients.
+**Note (2026-08):** the identifying half of that mitigation did not work on Linux until a coverage audit went looking — the `SO_PEERCRED` read used an accessor that rejects raw native option names, so every local caller was reported as unidentified. Authentication was never affected; identification now works and is pinned by a test over a real socket pair ([coverage audit G5](review/2026-08-coverage-audit.md#g5--apitransportpeercredentialscs-222--including-the-linux-success-path)).
 
 ### T-17 Secrets in logs and diagnostics
 **Mitigation:** redaction by declared **type**, not string pattern — a new secret-bearing field is redacted by construction. Diagnostic bundles exclude credentials, keys, plaintext paths, and correlatable identifiers by default. NFR-SEC-006, NFR-PRIV-003.
@@ -152,7 +153,7 @@ OS-authenticated local command surface · key material confined to the service a
 
 | Control | Waiting on |
 |---------|-----------|
-| Paired device identity for remote clients, off by default | The protocol is built; nothing carries it over a socket ([implementation status](implementation-status.md#0030--everything-above-the-socket-nothing-at-it)) |
+| Paired device identity for remote clients, off by default | Built and carried over a real TLS socket; an unpaired client is refused and a substituted identity is refused rather than prompted ([implementation status](implementation-status.md#0030--the-socket-exists)) |
 | Mutual device authentication | The same — the construction exists and has never spoken to another machine |
 | Content withheld from remote clients unless separately enabled | [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) |
 | Least-privilege repository grants; separate read/append/retention/administrative permissions | Phase 2–3 |

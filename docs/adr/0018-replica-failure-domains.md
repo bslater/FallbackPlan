@@ -77,8 +77,58 @@ The domain is declared rather than inferred. A cloud store is `independent`; a m
 
 **Require an independent replica before any backup runs.** Rejected as hostile: a local-only backup is worth having, and refusing to start until an offsite destination exists would push users to no backup at all.
 
+## Amendment 1 (2026-08) — the domain is declared per configured destination
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) makes destinations named
+configuration entries that backup sets reference, so the failure domain now has
+an unambiguous home: **each destination declares its domain in its
+configuration entry**, defaulting sensibly by kind (a directory on the source
+volume is `same-volume` by volume-identity comparison rather than by trust; a
+peer or cloud destination defaults to `independent` unless the user says
+otherwise) and always overridable, because §Rationale's point stands — only the
+user knows where the NAS actually sits.
+
+Two consequences of the hub-and-spoke shape. The evaluation becomes a matrix —
+`protected` is judged per set over that set's destinations, not over one global
+replica list. And the set's staging archive **never counts**: it shares the
+source's domain by construction and ADR-0034 makes it a cache rather than a
+replica, so the first-run warning of §First-run-says-so now triggers when a
+set's *destinations* all share the source's domain, which is the same honesty
+with the new vocabulary.
+
+## Amendment 2 (2026-08) — the vocabulary is built, and a peer's default narrows
+
+The four-value domain is now code, not prose: destinations carry an optional
+`failure_domain` field (`same-volume` / `same-machine` / `same-site` /
+`independent`, refused outside that vocabulary), the status derivation
+consumes the domain instead of the boolean same/other comparison that stood
+in for it, and the status matrix renders each destination's domain beside its
+sync state.
+
+Two defaults changed from Amendment 1's sketch, both toward honesty:
+
+- **A peer defaults to `same-site`, not `independent`.** The common peer is a
+  friend's machine on the same LAN or a NAS in the same house; a LAN friend
+  does not survive the house fire. Calling a peer `independent` is now a
+  declaration the user makes, never an assumption the product does. Cloud
+  kinds keep the `independent` default — offsite is their nature.
+- **A local path never infers past `same-machine`.** Device-identity
+  comparison distinguishes `same-volume` from `same-machine` (conservatively
+  `same-volume` when the platform cannot say), and stops there: a second disk
+  or attached USB drive still dies with the machine, so anything further is
+  the user's declaration.
+
+The threshold follows §Rationale's question — *if this machine is destroyed,
+does a copy survive?* `protected` (and therefore `verified`) requires an
+in-sync destination at `same-site` or `independent`; `same-volume` and
+`same-machine` cap at `captured` with a warning naming the domain. When
+protection rests only on `same-site` destinations, the status says so — a
+copy at the same site survives losing the machine, not losing the site.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Forced into the open by PT-8 |
+| 2026-08 | Accepted (amended) | Amendment 1: domains are declared per configured destination and evaluated per set; staging never counts ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 2: the vocabulary is built — declared `failure_domain` per destination, peer default narrowed to `same-site`, threshold fixed at surviving the machine. |

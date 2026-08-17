@@ -73,7 +73,9 @@ public sealed class KeystoreTests : IDisposable
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Posix, "Unix file modes decide who can read the stored material.")]
+    [PlatformCondition(
+        TestPlatforms.Linux,
+        "the file-mode contract belongs to the Linux owner-only file store; macOS keeps the material in the Keychain, so there are no files whose modes could say anything")]
     [UnsupportedOSPlatform("windows")]
     public void Write_OnPosix_StoresTheMaterialReadableByItsOwnerOnly()
     {

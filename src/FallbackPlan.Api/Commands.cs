@@ -20,6 +20,9 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
+[JsonDerivedType(typeof(RetentionCommand), "retention")]
+[JsonDerivedType(typeof(SyncCommand), "sync")]
+[JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -79,6 +82,52 @@ public sealed record VerifyCommand(string Level) : ServiceCommand;
 /// <summary>Checks repository health and reports findings.</summary>
 /// <param name="Level">One of <c>locator</c>, <c>digest</c>, <c>records</c>.</param>
 public sealed record CheckCommand(string Level) : ServiceCommand;
+
+/// <summary>
+/// Runs a retention pass over every configured set (architecture 07). The
+/// dry-run report is always produced; with <paramref name="Apply"/> the
+/// condemned are tombstoned and the grace-expired swept — the destructive
+/// half, which is why it is not the default (FR-GC-005).
+/// </summary>
+/// <param name="Apply">False reports only; true tombstones and sweeps.</param>
+public sealed record RetentionCommand(bool Apply) : ServiceCommand;
+
+/// <summary>
+/// Converges destinations now, outside the schedule (ADR-0034 §3,
+/// FR-DEST-002): one sync per matching <c>(set, destination)</c> pair,
+/// answered when they have run so the result reflects the refreshed ledger.
+/// </summary>
+/// <param name="BackupSetName">The set to sync; null syncs every configured set.</param>
+/// <param name="DestinationName">The destination to sync; null syncs each set's every destination.</param>
+public sealed record SyncCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
+
+/// <summary>
+/// Asks what a destination can still be trusted for, at one of three depths
+/// (FR-DEST-001, FR-VER-002, FR-VER-004).
+/// </summary>
+/// <remarks>
+/// One verb with a depth, rather than several that drift apart: probe asks
+/// whether the destination could take a backup at all, the default reads one
+/// bounded segment of its stored bytes, and full reads every one of them.
+/// Aimed at a <i>destination</i>, where <see cref="VerifyCommand"/> sweeps the
+/// hub's own staging archives at a chosen level.
+/// </remarks>
+/// <param name="BackupSetName">The set to verify; null takes every configured set.</param>
+/// <param name="DestinationName">The destination to verify; null takes each set's every destination.</param>
+/// <param name="Full">
+/// False reads one bounded segment, as the scheduled sweep does; true keeps
+/// going until the circuit closes, which is what a recovery drill wants
+/// (FR-VER-004). Ignored when <paramref name="Probe"/> is set.
+/// </param>
+/// <param name="Probe">
+/// Reads nothing: confirms only that the destination could take a backup —
+/// the address is usable, the directory exists and accepts writes, or the peer
+/// is reachable and still honours the grant. The one depth that answers before
+/// the first sync has ever run, which is when a destination is least proven
+/// and most trusted.
+/// </param>
+public sealed record VerifyDestinationCommand(
+    string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

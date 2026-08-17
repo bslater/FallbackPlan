@@ -138,6 +138,30 @@ def unresolved_tests(traceability: str) -> list[str]:
     return problems
 
 
+# The test-method attributes this checker recognises. MSTest since ADR-0032;
+# the xUnit forms stay recognised so a partial migration in either direction
+# cannot silently blind the coverage machinery — the exact regression that
+# went unnoticed when the suite moved off xUnit and drift reported zero by
+# construction. `test_detector_is_not_blind` fails the build if this ever
+# stops matching the suite again.
+TEST_ATTRIBUTE_PATTERN = re.compile(r"\[(?:TestMethod|DataTestMethod|Fact|Theory)\b")
+
+
+def recognised_test_files() -> int:
+    """How many test files the coverage machinery can see — 0 means blind."""
+    count = 0
+    for path in TEST_ROOT.glob("*/**/*.cs"):
+        relative = path.relative_to(ROOT).as_posix()
+        if "/bin/" in relative or "/obj/" in relative:
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        names = [n for n in CLASS_PATTERN.findall(text) if n.endswith(("Tests", "Properties"))]
+        if names and TEST_ATTRIBUTE_PATTERN.search(text):
+            count += 1
+    return count
+
+
 def covering_classes() -> dict[str, set[str]]:
     """Requirement id -> the test classes whose file cites it and holds tests."""
     covers: dict[str, set[str]] = collections.defaultdict(set)
@@ -148,7 +172,7 @@ def covering_classes() -> dict[str, set[str]]:
 
         text = path.read_text(encoding="utf-8")
         names = [n for n in CLASS_PATTERN.findall(text) if n.endswith(("Tests", "Properties"))]
-        if not names or not re.search(r"\[(?:Fact|Theory)\b", text):
+        if not names or not TEST_ATTRIBUTE_PATTERN.search(text):
             continue
 
         disclaimed = {
@@ -190,6 +214,35 @@ def drift(traceability: str) -> list[str]:
     return reports
 
 
+def uncredited(traceability: str) -> list[str]:
+    """Requirements whose row cites only classes that never declare them."""
+    covers = covering_classes()
+    reports: list[str] = []
+
+    for line in traceability.splitlines():
+        match = ROW_PATTERN.match(line)
+        if not match:
+            continue
+
+        cells = [cell.strip() for cell in match.group(2).split("|")]
+        cell = cells[2] if len(cells) > 2 else ""
+        named = set(re.findall(r"`([^`]+)`", cell))
+        if not named:
+            continue
+
+        for rid in sorted(traced_ids(match.group(1))):
+            declaring = covers.get(rid, set())
+            if named & declaring:
+                continue
+
+            reports.append(
+                f"{rid}: cited {sorted(named)}, none of which declare it"
+                + (f"; declared by {sorted(declaring)}" if declaring else "")
+            )
+
+    return reports
+
+
 def main() -> int:
     functional = (REQUIREMENTS / "functional.md").read_text()
     non_functional = (REQUIREMENTS / "non-functional.md").read_text()
@@ -202,6 +255,16 @@ def main() -> int:
     duplicates = [i for i, c in collections.Counter(defined).items() if c > 1]
     if duplicates:
         failures.append(f"duplicate requirement IDs: {sorted(duplicates)}")
+
+    # The coverage machinery is only as honest as its ability to see the tests.
+    # If it recognises no test files at all, --drift and --audit report nothing
+    # for the right reason turned into nothing for the wrong one — which is how
+    # the xUnit-only detector went blind after the MSTest move. Fail loudly
+    # rather than pass quietly.
+    if recognised_test_files() == 0:
+        failures.append(
+            "the coverage detector recognises no test files — its attribute "
+            "pattern no longer matches the suite (see TEST_ATTRIBUTE_PATTERN)")
 
     untraced = sorted(defined_set - traced_ids(traceability))
     if untraced:
@@ -240,13 +303,20 @@ def main() -> int:
     # A cell may both name a class and disclaim it — "measured by X, but the
     # figure is stated against a machine none of it ran on". The marker wins:
     # counting those as tested is exactly the flattery this column had before.
-    tested = sum(
-        1
-        for line in traceability.splitlines()
-        if ROW_PATTERN.match(line)
-        and "`" in line.split("|")[4]
-        and not UNTESTED_PATTERN.search(line.split("|")[4])
-    )
+    # And the count is of REQUIREMENTS, not rows: a row like FR-KIT-001..006
+    # carries six of them, and counting it as one made the summary read 94/161
+    # when 134 requirements were actually traced — rows against requirements
+    # is apples against oranges.
+    tested_ids: set[str] = set()
+    for line in traceability.splitlines():
+        match = ROW_PATTERN.match(line)
+        if (
+            match
+            and "`" in line.split("|")[4]
+            and not UNTESTED_PATTERN.search(line.split("|")[4])
+        ):
+            tested_ids |= traced_ids(match.group(1))
+    tested = len(tested_ids & defined_set)
 
     print(f"requirements defined : {len(defined)}")
     print(f"traceability tested  : {tested}/{len(defined_set)}")
@@ -259,6 +329,18 @@ def main() -> int:
         # It is a prompt for a maintainer to look, not a verdict.
         reports = drift(traceability)
         print(f"\ndrift ({len(reports)} requirement(s) proven by a test the matrix does not name):")
+        for report in reports:
+            print(f"  {report}")
+
+    if "--audit" in sys.argv:
+        # The reverse of --drift, and reporting-only for the same reason: a row
+        # whose every cited class is silent about the id may still be right —
+        # the matrix's methodology asks tests to declare the ids they establish,
+        # and a silent citation is a class that never adopted the convention,
+        # not necessarily a wrong citation. It is a prompt to either add the
+        # declaration or fix the cell, decided by reading the test.
+        reports = uncredited(traceability)
+        print(f"\naudit ({len(reports)} requirement(s) whose cited classes never declare them):")
         for report in reports:
             print(f"  {report}")
     print(f"traceability coverage: {len(defined_set & traced_ids(traceability))}/{len(defined_set)}")

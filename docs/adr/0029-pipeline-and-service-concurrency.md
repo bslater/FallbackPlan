@@ -170,6 +170,66 @@ question inside one process rather than a locking question across several.
   become void-delta obligations discharged by the next publication, exactly as a
   crash's would.
 
+#### Amendment (2026-08): a third lane for fan-out
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) adds a kind of work the two
+lanes above cannot honestly carry: copying a set's staging archive out to its
+destinations. It takes no writer role — fan-out reads sealed, immutable objects
+— so the writer lane is wrong for it; and it is long-running background
+transfer that must never make a user's restore wait, so the reader lane is
+wrong for it too. Fan-out therefore runs in its own **transfer lane**: one
+worker to start (destinations mostly contend for the same uplink), at most one
+queued-or-running job per `(set, destination)` so a slow destination coalesces
+its backlog instead of queueing it — the coalescing rule of ADR-0027 §1,
+applied to transfers — and the same yield-to-user-initiated priority as
+everything else. Widening the lane per destination is the anticipated axis if
+measurement ever shows independent links idling; it is not done speculatively.
+
+#### Amendment 2 (2026-08): the transfer lane's premise, and the set gate
+
+The paragraph above justified a free-running transfer lane on "fan-out reads
+sealed, immutable objects". The staging trim ([ADR-0034 §6](0034-hub-and-spoke-destinations.md#6-the-costs-accepted))
+quietly broke that premise: a retention apply now deletes historic data blobs
+from staging, so staging is immutable per object but not per archive, and two
+operations that each hold half the truth can run at once. The concrete hazard
+is a lost blob: the trim verifies a replica holds it, a concurrent convergence
+— computed against the staging archive the same pass's sweep is mutating, and
+therefore against a narrower keep-set than the trim's entitlement — drops it
+at the replica, and the trim then removes the staging copy of a blob that no
+longer exists anywhere.
+
+The rule: **a destructive retention apply and a sync for the same set are
+mutually exclusive**, on a per-set gate the runtime owns. The asymmetry
+matters as much as the exclusion. A sync *waits* for the gate — a retention
+pass is minutes, and the sync was going to read the post-retention truth
+anyway. A retention apply *tries* the gate and, when a sync holds it, runs
+that set report-only and says so — a first sync can run for hours, and the
+writer lane, where backups queue, must never stall behind one. Two
+belt-and-braces guards back the gate for the mutations it cannot see: the
+trim re-verifies each replica-probed copy at the moment of deletion, and both
+convergence drop paths list staging immediately before condemning rather than
+trusting an opening inventory an hours-long push has made stale.
+
+#### Amendment 3 (2026-08): a third scheduler phase, on the transfer lane
+
+The pass had two phases — backups, then fan-out. It gains a third: the deep
+sweep that re-reads a local-path replica's stored objects and checks them
+against their seals ([ADR-0035 §4](0035-destination-fitness.md)). It attaches
+after the fan-out wait, and it runs on the **transfer lane**.
+
+Not the reader lane, which is the lane its work superficially resembles. A
+reader-lane sweep would read the replica while a concurrent convergence is
+putting and deleting in it — the reader lane runs alongside transfer by design
+— and would manufacture failures out of a healthy destination, setting the pair
+failed and raising a notice about damage that never existed. The transfer lane
+is correct by serialisation for exactly the reason §4's fan-out is.
+
+The cost is that the transfer lane still has one worker for the whole process,
+so a long sweep would starve replication. That is why the sweep takes a bounded
+budget per pass and resumes from a persisted cursor rather than running to
+completion. The cursor exists more for this than for the coverage claim it also
+supports.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -276,9 +336,14 @@ guarantee that is not tracked.
 §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested value.
 §4's service-level scheduling — sets serialised, read work in its own lane,
 user-initiated work ahead of scheduled, and cancellation recording
-`JobState.Cancelled`. §5's progress events, with the states beyond `Scanning`
-actually emitted. §6's order of work, all three steps, with results in
-[`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
+`JobState.Cancelled` — with §4's full acceptance now held by tests: the five
+T-2 cancellation tests (`InterruptionTests/CancellationTests`,
+`Hosts.Tests/ServiceTests`), and "discharged by the next publication, exactly
+as a crash's would" held **in the same process** by
+`InterruptionTests/SequenceAccountingTests` after the base-hardening round
+made `WriterSequence` read its live pending set. §5's progress events, with
+the states beyond `Scanning` actually emitted. §6's order of work, all three
+steps, with results in [`phase-2-benchmarks.md`](../phase-2-benchmarks.md).
 
 §2's upload workers: a sealed blob is handed to a bounded worker set and the
 archive loop continues, with the covering intent made durable per blob before
@@ -330,3 +395,5 @@ cost is no longer a question worth asking.
 | 2026-08 | Proposed | Written alongside ADR-0028, after benchmarks showed the gap is serial cost rather than thread count |
 | 2026-08 | Accepted | The shape is settled; §6's sequence is under way and its status is recorded above |
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
+| 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
+| 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |

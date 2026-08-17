@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Retention and collection (architecture 07, ADR-0009): the planner
+       selects, the collector deletes, and both run only against a set's
+       staging archive on the hub — destinations are converged, never
+       collected (ADR-0009 Amendment 4). -->
+  <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Application\FallbackPlan.Application.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Bodu.Core" />
+  </ItemGroup>
+
+</Project>

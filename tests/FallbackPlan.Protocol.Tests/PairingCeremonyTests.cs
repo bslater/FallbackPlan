@@ -37,7 +37,7 @@ public sealed class PairingCeremonyTests
     private static (string Offerer, string Responder) Ceremony(
         Side offerer, Side responder, ushort version = 1)
     {
-        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, version);
+        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, version, PeerRole.StoresForUs, PeerRole.StoresHere);
 
         var offererSecret = offerer.Exchange.DeriveSharedSecret(responder.Exchange.PublicKey);
         var responderSecret = responder.Exchange.DeriveSharedSecret(offerer.Exchange.PublicKey);
@@ -89,7 +89,7 @@ public sealed class PairingCeremonyTests
         using var responder = Side.Create();
         using var impostor = PeerKeypair.Generate();
 
-        var honest = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1);
+        var honest = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere);
         var secret = offerer.Exchange.DeriveSharedSecret(responder.Exchange.PublicKey);
 
         var expected = PairingTranscript.ShortAuthenticationString(
@@ -101,9 +101,11 @@ public sealed class PairingCeremonyTests
         foreach (var forged in new[]
         {
             PairingTranscript.Build(
-                offerer.Contribution with { Identity = impostor.Identity }, responder.Contribution, 1),
+                offerer.Contribution with { Identity = impostor.Identity }, responder.Contribution, 1,
+                PeerRole.StoresForUs, PeerRole.StoresHere),
             PairingTranscript.Build(
-                offerer.Contribution, responder.Contribution with { Identity = impostor.Identity }, 1),
+                offerer.Contribution, responder.Contribution with { Identity = impostor.Identity }, 1,
+                PeerRole.StoresForUs, PeerRole.StoresHere),
         })
         {
             Assert.AreNotEqual(
@@ -126,10 +128,10 @@ public sealed class PairingCeremonyTests
         Assert.AreNotEqual(
             PairingTranscript.ShortAuthenticationString(
                 secret, offerer.Exchange.Nonce, responder.Exchange.Nonce,
-                PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1)),
+                PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere)),
             PairingTranscript.ShortAuthenticationString(
                 secret, offerer.Exchange.Nonce, responder.Exchange.Nonce,
-                PairingTranscript.Build(offerer.Contribution, responder.Contribution, 2)));
+                PairingTranscript.Build(offerer.Contribution, responder.Contribution, 2, PeerRole.StoresForUs, PeerRole.StoresHere)));
     }
 
     [TestMethod]
@@ -146,10 +148,32 @@ public sealed class PairingCeremonyTests
         Assert.AreNotEqual(
             PairingTranscript.ShortAuthenticationString(
                 secret, one.Exchange.Nonce, two.Exchange.Nonce,
-                PairingTranscript.Build(one.Contribution, two.Contribution, 1)),
+                PairingTranscript.Build(one.Contribution, two.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere)),
             PairingTranscript.ShortAuthenticationString(
                 secret, two.Exchange.Nonce, one.Exchange.Nonce,
-                PairingTranscript.Build(two.Contribution, one.Contribution, 1)));
+                PairingTranscript.Build(two.Contribution, one.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere)));
+    }
+
+    [TestMethod]
+    public void ShortAuthenticationString_ADifferentDeclaredRole_Changes()
+    {
+        using var offerer = Side.Create();
+        using var responder = Side.Create();
+
+        var secret = offerer.Exchange.DeriveSharedSecret(responder.Exchange.PublicKey);
+
+        // The declared roles are inside the transcript (01 §2.3), so a relay
+        // that alters who-stores-for-whom alters the string the humans
+        // compare — the grants cannot silently disagree (ADR-0030 Amendment 2).
+        Assert.AreNotEqual(
+            PairingTranscript.ShortAuthenticationString(
+                secret, offerer.Exchange.Nonce, responder.Exchange.Nonce,
+                PairingTranscript.Build(
+                    offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere)),
+            PairingTranscript.ShortAuthenticationString(
+                secret, offerer.Exchange.Nonce, responder.Exchange.Nonce,
+                PairingTranscript.Build(
+                    offerer.Contribution, responder.Contribution, 1, PeerRole.StoresHere, PeerRole.StoresForUs)));
     }
 
     [TestMethod]
@@ -158,7 +182,7 @@ public sealed class PairingCeremonyTests
         using var offerer = Side.Create();
         using var responder = Side.Create();
 
-        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1);
+        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere);
         var bytes = PairingTranscript.ConfirmationBytes(transcript);
         var signature = offerer.Keypair.Sign(bytes);
 
@@ -173,9 +197,10 @@ public sealed class PairingCeremonyTests
         using var responder = Side.Create();
         using var impostor = PeerKeypair.Generate();
 
-        var honest = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1);
+        var honest = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere);
         var forged = PairingTranscript.Build(
-            offerer.Contribution, responder.Contribution with { Identity = impostor.Identity }, 1);
+            offerer.Contribution, responder.Contribution with { Identity = impostor.Identity }, 1,
+            PeerRole.StoresForUs, PeerRole.StoresHere);
 
         var signature = offerer.Keypair.Sign(PairingTranscript.ConfirmationBytes(honest));
 
@@ -190,7 +215,7 @@ public sealed class PairingCeremonyTests
         using var offerer = Side.Create();
         using var responder = Side.Create();
 
-        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1);
+        var transcript = PairingTranscript.Build(offerer.Contribution, responder.Contribution, 1, PeerRole.StoresForUs, PeerRole.StoresHere);
 
         // Domain separation (00 §4): the bytes signed must not be the bare
         // transcript, or a signature could be replayed wherever the transcript
@@ -223,12 +248,12 @@ public sealed class PairingCeremonyTests
         Assert.ThrowsExactly<ArgumentException>(() => PairingTranscript.Build(
             new PairingContribution(keypair.Identity, new byte[31], new byte[PairingTranscript.NonceLength]),
             new PairingContribution(keypair.Identity, good, new byte[PairingTranscript.NonceLength]),
-            1));
+            1, PeerRole.StoresForUs, PeerRole.StoresHere));
 
         Assert.ThrowsExactly<ArgumentException>(() => PairingTranscript.Build(
             new PairingContribution(keypair.Identity, good, new byte[8]),
             new PairingContribution(keypair.Identity, good, new byte[PairingTranscript.NonceLength]),
-            1));
+            1, PeerRole.StoresForUs, PeerRole.StoresHere));
     }
 }
 

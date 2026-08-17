@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.10, §8.1–8.2 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
 
-**Built:** Publication yes; the collector this section also constrains does not exist — see [implementation status](../implementation-status.md).
+**Built:** Publication yes; the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -28,7 +28,7 @@ Two invariants govern everything below:
 >
 > **I2.** Published objects are immutable. Correction is by publishing new objects, never by rewriting old ones.
 
-I1 is restic's write-ordering rule and it is the most valuable single import from the prior art.
+I1 is the write-ordering rule of the content-addressed repositories in [`00-overview.md` §5.3](00-overview.md#53-content-addressed-snapshot-repositories), and it is the most valuable single import from the prior art.
 
 ## 4. Write intent
 
@@ -106,13 +106,18 @@ Readers go the other way: enumerate a stable snapshot set first, then load the i
 | Interrupted after | State | Recovery |
 |-------------------|-------|----------|
 | 1 | Intent published, no blobs | Intent expires after grace; nothing collectable was written |
-| 3 | Partial spool, nothing uploaded | Resume from spool checkpoint or discard — [`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing) |
+| 2 | Scan complete. Single-stream: identical to row 1. Tree path: uploads may already be in flight during the walk, so row 4's state can exist here too | As rows 1 and 4 — the boundary adds no state of its own |
+| 3 | Data blobs sealed and durable, metadata not yet flushed | Intent covers what was uploaded; the *mid-step* state — a partial spool, nothing uploaded — is the spool suite's row: resume from spool checkpoint or discard — [`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing) |
 | 4 | Blobs durable, unreferenced | Intent keeps them reachable; job resumes or blobs expire with the intent |
+| 5 | Identical to row 4 — acknowledgements were checked per put | As row 4 |
 | 6 | Deltas published, no snapshot | Index entries are harmless; blobs remain intent-covered until retirement or expiry |
 | 7 | Snapshot published, intent live | Snapshot is valid and restorable; intent retires on next run or expires |
-| 8 | Complete | — |
+| 8 | Publication complete: snapshot durable, intent retired | The caller sees a failure over committed work; the live catalogue may be unprojected, which costs nothing — it is a cache |
+| 9 | Complete | — |
 
 No interruption at any step can make a previously committed snapshot unreadable (NFR-REL-001), and none can leave a published snapshot referencing a collectable blob.
+
+The boundaries are not the only interruption points: a store can die at *every individual put* inside a step. The put-budget sweep (`StorePutSweepTests`, and its tree twin in `TreeSnapshotInterruptionTests`) kills the publication after each put in turn and holds the same three claims at all of them — nothing durable is collectable, no partial snapshot can exist, and a fresh process completes with no repair. Cancellation is the same matrix by another door: a cancelled publication lands in the row its progress had reached (`CancellationTests`), with in-flight uploads drained and intent-covered.
 
 ## 6. Commit versus replication
 
@@ -138,26 +143,25 @@ Under the split, a snapshot commits locally and is immediately protective. It be
 
 ### 6.3 Policy evaluation
 
-A backup set declares its durability policy over replication state:
+A backup set declares one or more named destinations — none of which has to be local ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)) — and its durability policy is evaluated over their replication state. Commit itself is always against the set's **staging archive** on the hub, which is what keeps capture unconditional; staging is internal and no policy counts it:
 
 ```text
 Snapshot captured when:
-  - any replica: durable
+  - committed to the set's staging archive
 
 Snapshot protected when:
-  - at least one replica outside the source's failure domain: durable
+  - at least one destination outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
-  - local repository:  durable, and
-  - at least one peer: durable
+  - every destination the set's policy requires: durable
 
-Snapshot healthy when:
-  - local repository:  verified within 7 days,  and
-  - trusted peer:      verified within 30 days, and
-  - cloud replica:     durable within 24 hours
+Snapshot healthy when (example policy):
+  - a local-path destination: verified within 7 days,  and
+  - a peer destination:       verified within 30 days, and
+  - a cloud destination:      durable within 24 hours
 ```
 
-This gives the status model in [`10-observability.md`](10-observability.md) something truthful to say. "Protected locally, waiting on the offsite copy" is a real state that the original design could not express — it would have shown no recent backup at all.
+This gives the status model in [`10-observability.md`](10-observability.md) something truthful to say. "Captured, waiting on the offsite copy" is a real state that the original design could not express — it would have shown no recent backup at all.
 
 ### 6.4 `protected` requires an independent failure domain
 
@@ -172,7 +176,7 @@ Replicas therefore declare a **failure domain**, and `protected` requires at lea
 | `same-site` | NAS or peer on the same LAN | Survives machine loss, not site loss |
 | `independent` | Offsite peer, cloud store | Yes |
 
-A snapshot committed only to a same-volume replica is `captured`, never `protected`, and the first-run flow warns when the only configured destination shares a failure domain with the source.
+A snapshot committed only to staging, or replicated only to a same-volume destination, is `captured`, never `protected` — the staging archive shares the source's domain by construction and never counts ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). The first-run flow warns when all of a set's configured destinations share a failure domain with the source.
 
 Without this, the most common consumer setup — accept the default local repository, never bring the offsite peer online — reads as `protected` right up until the disk dies. That is the "consumer UI hides degraded state → false confidence" risk the original proposal named as a major risk, and it would have been reintroduced by the fix for it ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain), [ADR-0018](../adr/0018-replica-failure-domains.md)).
 
@@ -196,7 +200,7 @@ Maintenance operations (compaction, garbage collection, healing) take advisory l
 - **Blob compaction** — republishes index entries only; manifests are untouched, so two compactors converge ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 - **Garbage collection** — bounded by generation cut-off, intent coverage, and grace periods, all of which are evaluated independently by each collector ([`07-retention-and-gc.md` §3](07-retention-and-gc.md#3-garbage-collection)).
 
-No routine operation requires a global exclusive lock. That was an explicit improvement target over restic ([`00-overview.md` §5.3](00-overview.md#53-restic)) and the mechanisms above are what deliver it.
+No routine operation requires a global exclusive lock. That was an explicit improvement target over the prior art ([`00-overview.md` §5.3](00-overview.md#53-content-addressed-snapshot-repositories)) and the mechanisms above are what deliver it.
 
 ## 9. Two different concurrencies, and why conflating them is dangerous
 
@@ -213,6 +217,14 @@ machine may hold it, and the answer is exactly one:
 > **A device's writer role is held by one process at a time.** While a service
 > is running it is that process; any other local process is a client of it
 > ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md)).
+
+Under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the hub holds one
+such archive — and therefore one writer role, one gapless sequence, one spool —
+**per backup set**, all inside the one process the state-directory lock
+protects. The rule's arithmetic changes; the rule does not. Destinations never
+hold a writer role at all: every object at a destination was sealed in a
+staging archive and copied there, so nothing at a destination ever allocates a
+sequence number ([ADR-0034 §3](../adr/0034-hub-and-spoke-destinations.md)).
 
 The rule is not fastidiousness. Two processes sharing a state directory share a
 writer identity, and therefore share the single monotonic gapless sequence

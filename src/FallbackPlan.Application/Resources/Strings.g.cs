@@ -45,6 +45,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetIdMustHex, arg0);
 
     /// <summary>
+    /// Backup set '{0}' references destination '{1}' more than once.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetDuplicateDestination => Get(nameof(ClientConfiguration_BackupSetDuplicateDestination));
+
+    /// <summary>
+    /// Backup set '{0}' references destination '{1}' more than once.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetDuplicateDestination(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetDuplicateDestination, arg0, arg1);
+
+    /// <summary>
     /// Backup set names must be non-empty and unique; '{0}' is not.
     /// </summary>
     private static string ClientConfiguration_BackupSetNamesMustNon => Get(nameof(ClientConfiguration_BackupSetNamesMustNon));
@@ -54,6 +65,17 @@ internal static class Strings
     /// </summary>
     internal static string FormatClientConfiguration_BackupSetNamesMustNon(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetNamesMustNon, arg0);
+
+    /// <summary>
+    /// Backup set '{0}' declares no destinations; declare at least one — a local directory is the 'local-path' kind (FR-DEST-001).
+    /// </summary>
+    private static string ClientConfiguration_BackupSetNeedsDestination => Get(nameof(ClientConfiguration_BackupSetNeedsDestination));
+
+    /// <summary>
+    /// Backup set '{0}' declares no destinations; declare at least one — a local directory is the 'local-path' kind (FR-DEST-001).
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetNeedsDestination(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetNeedsDestination, arg0);
 
     /// <summary>
     /// Backup set '{0}': root must not be empty.
@@ -67,6 +89,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetRootMustNot, arg0);
 
     /// <summary>
+    /// Backup set '{0}' references destination '{1}', which is not declared.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetUnknownDestination => Get(nameof(ClientConfiguration_BackupSetUnknownDestination));
+
+    /// <summary>
+    /// Backup set '{0}' references destination '{1}', which is not declared.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetUnknownDestination(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetUnknownDestination, arg0, arg1);
+
+    /// <summary>
     /// '{0}' declares schema_version {1}; this build reads version {2} only.
     /// </summary>
     private static string ClientConfiguration_DeclaresSchemaVersionBuildReads => Get(nameof(ClientConfiguration_DeclaresSchemaVersionBuildReads));
@@ -76,6 +109,83 @@ internal static class Strings
     /// </summary>
     internal static string FormatClientConfiguration_DeclaresSchemaVersionBuildReads(object? arg0, object? arg1, object? arg2) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DeclaresSchemaVersionBuildReads, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Destination '{0}': '{1}' does not apply to its kind.
+    /// </summary>
+    private static string ClientConfiguration_DestinationFieldNotForKind => Get(nameof(ClientConfiguration_DestinationFieldNotForKind));
+
+    /// <summary>
+    /// Destination '{0}': '{1}' does not apply to its kind.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationFieldNotForKind(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationFieldNotForKind, arg0, arg1);
+
+    /// <summary>
+    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// </summary>
+    private static string ClientConfiguration_DestinationCannotDeclineVerification => Get(nameof(ClientConfiguration_DestinationCannotDeclineVerification));
+
+    /// <summary>
+    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationCannotDeclineVerification(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationCannotDeclineVerification, arg0);
+
+    /// <summary>
+    /// Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.
+    /// </summary>
+    private static string ClientConfiguration_DestinationIntervalMustBePositive => Get(nameof(ClientConfiguration_DestinationIntervalMustBePositive));
+
+    /// <summary>
+    /// Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationIntervalMustBePositive(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationIntervalMustBePositive, arg0);
+
+    /// <summary>
+    /// Destination '{0}': id must be 32 hex digits.
+    /// </summary>
+    private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));
+
+    /// <summary>
+    /// Destination '{0}': id must be 32 hex digits.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationIdMustHex(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationIdMustHex, arg0);
+
+    /// <summary>
+    /// Destination names must be non-empty and unique; '{0}' is not.
+    /// </summary>
+    private static string ClientConfiguration_DestinationNamesMustNon => Get(nameof(ClientConfiguration_DestinationNamesMustNon));
+
+    /// <summary>
+    /// Destination names must be non-empty and unique; '{0}' is not.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationNamesMustNon(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNamesMustNon, arg0);
+
+    /// <summary>
+    /// Destination '{0}' is 'local-path' and must name a path.
+    /// </summary>
+    private static string ClientConfiguration_DestinationNeedsPath => Get(nameof(ClientConfiguration_DestinationNeedsPath));
+
+    /// <summary>
+    /// Destination '{0}' is 'local-path' and must name a path.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationNeedsPath(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsPath, arg0);
+
+    /// <summary>
+    /// Destination '{0}' is 'peer' and must name a fingerprint and an endpoint.
+    /// </summary>
+    private static string ClientConfiguration_DestinationNeedsPeerIdentity => Get(nameof(ClientConfiguration_DestinationNeedsPeerIdentity));
+
+    /// <summary>
+    /// Destination '{0}' is 'peer' and must name a fingerprint and an endpoint.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationNeedsPeerIdentity(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsPeerIdentity, arg0);
 
     /// <summary>
     /// '{0}' holds no configuration object.
@@ -98,6 +208,28 @@ internal static class Strings
     /// </summary>
     internal static string FormatClientConfiguration_NotValidConfigurationFile(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_NotValidConfigurationFile, arg0, arg1);
+
+    /// <summary>
+    /// Backup set '{0}': retention values for '{1}' must be positive.
+    /// </summary>
+    private static string ClientConfiguration_RetentionMustBePositive => Get(nameof(ClientConfiguration_RetentionMustBePositive));
+
+    /// <summary>
+    /// Backup set '{0}': retention values for '{1}' must be positive.
+    /// </summary>
+    internal static string FormatClientConfiguration_RetentionMustBePositive(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_RetentionMustBePositive, arg0, arg1);
+
+    /// <summary>
+    /// '{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.
+    /// </summary>
+    private static string ClientConfiguration_SchemaVersion1NeedsDestinations => Get(nameof(ClientConfiguration_SchemaVersion1NeedsDestinations));
+
+    /// <summary>
+    /// '{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.
+    /// </summary>
+    internal static string FormatClientConfiguration_SchemaVersion1NeedsDestinations(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_SchemaVersion1NeedsDestinations, arg0);
 
     /// <summary>
     /// No job '{0}' exists in the journal.

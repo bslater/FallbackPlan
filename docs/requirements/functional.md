@@ -94,6 +94,21 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-KIT-005 **[new]** | Kit status — never generated, saved, stale — shall be surfaced continuously. | Changing destinations marks the kit stale. |
 | FR-KIT-006 **[new]** | A recovery drill restoring a file using only the kit shall be a supported, prompted workflow. | The drill runs without the catalogue or durable local state. |
 
+## Destinations and fan-out
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-DEST-001 **[new]** | A backup set shall declare one or more named destinations, referencing declarations made once at the top level of the client configuration. None of them need be local: a set whose only destination is a peer or a removable drive is valid. A set with no destinations is rejected at configuration time with a stated reason. | Configuration with a peer-only set validates; configuration with a destination-less set is refused naming the set. |
+| FR-DEST-002 **[new]** | Each snapshot shall be published exactly once, into the set's staging archive, and fanned out to destinations as immutable-object copies. No destination holds an archive whose journal references objects deliberately absent from it. | Two destinations of one set hold byte-identical archives after sync; each restores independently with the recovery tool. |
+| FR-DEST-003 **[new]** | An unavailable destination shall not delay or fail capture. The gap shall be recorded per `(set, destination)` and closed automatically when the destination returns, without operator action. | A backup with one destination offline completes; the destination catches up on its next appearance with no command issued. |
+| FR-DEST-004 **[new]** | Per-`(set, destination)` sync state — last attempt, last success, how far behind, and the failure class of the last error — shall be durable across service restarts and reported per destination, never summarised into one flag. | After a restart, `status` still names which destination is behind and why. |
+| FR-DEST-005 **[new]** | Destination kinds `local-path` and `peer` shall be operational. Kinds `s3`, `azure-blob`, and `dropbox` shall be accepted by configuration validation and refused at runtime as a stated incapacity, distinct from failure. | A configured cloud destination reports "not yet supported", not `degraded`; it appears in the status matrix as such. |
+| FR-DEST-006 **[new]** | Destination addresses — paths, peer endpoints and fingerprints — shall live only in the local configuration. Pairing grants shall hold no endpoint; the repository shall hold no destination list. | A grant round-trips with no address field; a repository fixture contains no endpoint bytes. |
+| FR-DEST-007 **[new]** | Removing a destination shall warn what remains there and that the hub stops managing it — the data at the destination is not deleted by the removal. | Removal names the sets affected and the copies left behind; the destination's archive is untouched. |
+| FR-DEST-008 **[new]** | Either side of a peering may end it unilaterally. The ending shall produce a durable notice on both sides — delivered when reachable, inferred from refusal otherwise — surfaced until acknowledged. | Terminating while the peer is offline still surfaces a notice at that peer's next dial; both households see a warning that survives restart. |
+| FR-DEST-009 **[new]** | A destination's declared address shall be checked for the defects that can be found without touching the world — a relative local path, a fingerprint that is not one, an endpoint that is not `host:port` — and each defect reported wherever the destination is reported. The check shall never refuse a configuration: a defect in one destination shall not stop other sets backing up or stop status answering. A destination shall additionally be probeable on demand, confirming it could accept a backup without sending one, and a probe shall record its failures but never a success. | A configuration carrying a mistyped endpoint loads, every other set keeps running, and status names the defect; probing a detached drive reports it unavailable and probing a live peer establishes a session, leaves nothing there, and writes no last-success. |
+| FR-DEST-010 **[new]** | Where a quota bounds a destination, the destination shall report the bytes it can still accept, and the source shall warn before a push runs into that ceiling rather than only when one does. An absent report shall mean "not stated", never "no room". A copy to a local path shall not begin when the destination volume's free space is under the floor the hub leaves for the machine that owns it, and shall be recorded as a gap that closes itself rather than as a fault. | A peer whose loan is nearly spent produces a warning while its syncs still succeed; a destination under no quota produces none; a volume under the floor is recorded unavailable and resumes unbidden once space is freed. |
+
 ## Replication and verification
 
 | ID | Requirement | Acceptance |
@@ -107,6 +122,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-VER-003 **[new]** | Verification status shall be reported as coverage and age, never as a bare boolean. | No UI surface presents "verified" without both. |
 | FR-VER-004 **[new]** | Full on-demand verification shall be available and shall run before a recovery drill. | It completes and reports per-object results. |
 | FR-VER-005 **[new]** | A verification failure shall mark the affected `(snapshot, destination)` `degraded` and raise a warning requiring action. | Status changes and the warning appears. |
+| FR-VER-006 **[new]** | A destination shall be verifiable. One that cannot answer challenges shall be refused rather than replicated to, unless the configuration explicitly acknowledges keeping it unproven; the acknowledgement shall not be available to a destination the source can read back itself. An unproven destination shall never report `verified` and shall never license reclaiming the source's last local copy. | A peer that does not offer verification is refused with a stated reason and holds nothing; the acknowledgement is a value that cannot be set by accident, and is refused outright on a local path; an unproven destination never satisfies the staging-trim gate, and the retention report names it and why. |
 
 ## Retention and garbage collection
 
@@ -120,7 +136,8 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-GC-006 **[new]** | Deletion shall follow tombstoning, a configurable grace period, and pre-delete revalidation, in bounded batches. | Interruption at any step leaves every published snapshot recoverable. |
 | FR-GC-007 **[new]** | Destination-side retention floors shall not be reducible by a source device. | A source request to reduce below the floor is refused and audited. |
 | FR-GC-008 **[new]** | Retention reduction and bulk snapshot deletion shall require stronger authorisation than ordinary backup, and shall produce signed audit records. | Both are recorded and attributable. |
-| FR-GC-009 **[new]** | Retention shall not expire a snapshot that has not reached the destinations its own policy requires, unless a configured deferral bound is exceeded — at which point the resulting history gap shall be raised as a warning requiring action. | A destination offline beyond the local retention window does not cause history to be lost from every replica silently. |
+| FR-GC-009 **[amended]** | Retention shall not expire a snapshot that has not reached the destinations its own policy requires, unless a configured deferral bound is exceeded — at which point the resulting history gap shall be raised as a warning requiring action. Reclaiming the source's last copy of an object shall rest on a destination's **proof** of possession, never on a record of what was sent to it. | A destination offline beyond the local retention window does not cause history to be lost from every replica silently. A destination with a current sync record but no covering proof does not license the deletion. |
+| FR-GC-010 **[new]** | Retention policy shall be declared per backup set, with optional per-destination overrides. The hub computes each destination's keep-set — only the hub can read manifests — and a destination deletes only what the hub instructs, bounded below by its own granted retention floor: an instruction that would breach the floor is refused with a stated reason. | Two destinations of one set hold different snapshot ranges under different overrides, each restorable; a floor-breaching instruction is refused and the refusal is visible at the hub. |
 
 ## Quotas and capacity
 
@@ -151,11 +168,11 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-GOV-003 **[new]** | A security disclosure policy with a contact and response commitment shall be published before the first beta. | `SECURITY.md` exists. |
 | FR-GOV-004 **[new]** | The repository format specification and conformance fixtures shall be public before format v1 freeze. | Published under `specifications/`. |
 
-## CrashPlan migration
+## Legacy archive import
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| FR-CP-001 | CrashPlan archives shall be opened read-only. | Source bytes are unchanged after any import, verified by digest. |
+| FR-CP-001 | Legacy archives shall be opened read-only. | Source bytes are unchanged after any import, verified by digest. |
 | FR-CP-002 | The importer shall map recoverable file versions into the same native pipeline used by filesystem capture. | Imported versions are indistinguishable in format from natively captured ones. |
 | FR-CP-003 | Conversion shall stream from the archive into native blobs without a complete temporary plaintext restore. | Peak scratch usage stays bounded regardless of archive size. |
 | FR-CP-004 | Import shall be resumable, produce provenance records, and verify imported versions against every hash available from the source archive. | Interrupted import resumes without republishing completed snapshots. |

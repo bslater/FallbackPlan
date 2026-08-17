@@ -229,6 +229,27 @@ within the backup-set root: components joined by `/`, NFC-normalised, no
 leading `/`, and no trailing `/` for directories. The empty path (the root
 itself) matches no rule.
 
+**A name is arbitrary text.** Every character other than `/` may appear in a
+component, including a newline, and matching MUST treat such a name like any
+other. Two consequences are normative because host regex engines default
+against both:
+
+- *Any character* means any character. Where this section says `.` matches
+  any character, and where a trailing `/**` matches every strict descendant,
+  a newline in a name MUST NOT stop the match. An implementation compiling to
+  a regex engine whose `.` excludes newlines by default MUST enable the
+  option that includes them (`DOTALL`, `RegexOptions.Singleline`, `(?s)`).
+- *The whole path* means the whole path. Implicit anchoring MUST be an
+  absolute end-of-input match (`\A`…`\z`, or a full-match API), never `^`…`$`
+  — in most engines `$` also matches immediately before a final newline,
+  which makes the two distinct names `keep.txt` and `keep.txt⏎` one name to
+  every rule.
+
+Both are exclusion bypasses, which is why they are stated rather than left to
+the engine: an exclude rule that fails to reach a file is a file copied off
+the machine after the operator said not to, and a filename is
+attacker-influenced input in any directory more than one person can write to.
+
 **Rule forms.** A rule whose first three characters are `re:` is a *regex
 rule*; every other rule is a *glob rule*. There is no glob escape
 mechanism: a pattern that must match a literal `*` or `?`, or a literal

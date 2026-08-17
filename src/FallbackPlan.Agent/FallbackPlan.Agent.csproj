@@ -10,6 +10,9 @@
   <ItemGroup>
     <ProjectReference Include="..\FallbackPlan.Api\FallbackPlan.Api.csproj" />
     <ProjectReference Include="..\FallbackPlan.Application\FallbackPlan.Application.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Protocol\FallbackPlan.Protocol.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Replication\FallbackPlan.Replication.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Retention\FallbackPlan.Retention.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
@@ -24,6 +27,9 @@
          validation (ADR-0019 section 4 / ADR-0021). Guard clauses are one
          vocabulary across the solution rather than per-project taste. -->
     <PackageReference Include="Bodu.Core" />
+    <!-- The Windows SCM handshake (ADR-0033). Windows-only implementation,
+         cross-platform reference; every use is guarded by OperatingSystem.IsWindows(). -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
   </ItemGroup>
 
 </Project>

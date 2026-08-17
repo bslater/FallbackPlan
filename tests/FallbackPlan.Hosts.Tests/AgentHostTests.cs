@@ -41,7 +41,7 @@ public sealed class AgentHostTests : IDisposable
     [TestMethod]
     [DataRow("walk")]                                  // not a command
     [DataRow("run")]                                   // no options at all
-    [DataRow("run", "--repo", "/tmp/nowhere")]         // missing state and passphrase
+    [DataRow("run", "--archives", "/tmp/nowhere")]     // missing state and passphrase
     public async Task AgentHost_CommandLineIsIncomplete_RefusesWithTheUsage(params string[] args)
     {
         var result = await RunAsync(args);
@@ -55,7 +55,7 @@ public sealed class AgentHostTests : IDisposable
     {
         var result = await RunAsync(
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET");
 
@@ -75,7 +75,7 @@ public sealed class AgentHostTests : IDisposable
 
         var result = await RunAsync(
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable,
             "--once");
@@ -94,7 +94,7 @@ public sealed class AgentHostTests : IDisposable
 
         var result = await RunAsync(
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable,
             "--once");
@@ -115,7 +115,7 @@ public sealed class AgentHostTests : IDisposable
         string[] arguments =
         [
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable,
             "--once",
@@ -140,7 +140,7 @@ public sealed class AgentHostTests : IDisposable
 
         var result = await RunAsync(
             "run",
-            "--repo", _harness.RepositoryPath,
+            "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable,
             "--once");
@@ -152,7 +152,7 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AgentHost_PassphraseIsWrong_RefusesWithoutAStackTrace()
+    public async Task AgentHost_PassphraseIsWrong_FailsTheSetWithoutAStackTrace()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
@@ -164,18 +164,41 @@ public sealed class AgentHostTests : IDisposable
         {
             var result = await RunAsync(
                 "run",
-                "--repo", _harness.RepositoryPath,
+                "--archives", _harness.ArchivesRoot,
                 "--state", _harness.StateDirectory,
                 "--passphrase-env", variable,
                 "--once");
 
-            Assert.AreEqual(1, result.ExitCode);
+            // Archives open lazily, one per set on first use (ADR-0034), so a
+            // wrong passphrase surfaces where it is discovered: the set whose
+            // existing archive refused to unwrap fails permanently — exit 2, a
+            // failed set — rather than the whole invocation being refused up
+            // front. Still no stack trace: it is an operator message, not a
+            // crash.
+            Assert.AreEqual(2, result.ExitCode);
             Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
         }
         finally
         {
             Environment.SetEnvironmentVariable(variable, null);
         }
+    }
+
+    [TestMethod]
+    public async Task AgentHost_TheOldRepoFlag_IsRefusedNamingTheRename()
+    {
+        var result = await RunAsync(
+            "run",
+            "--repo", _harness.RepositoryPath,
+            "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable,
+            "--once");
+
+        // Pre-1.0 breaks are sanctioned but never silent (ADR-0034): the old
+        // flag gets directions, not a guess at what the caller meant.
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("--archives", result.Error, StringComparison.Ordinal);
+        Assert.Contains("ADR-0034", result.Error, StringComparison.Ordinal);
     }
 
     /// <inheritdoc />

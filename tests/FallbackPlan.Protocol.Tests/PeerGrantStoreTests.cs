@@ -198,10 +198,16 @@ public sealed class PeerTermsTests
     }
 
     [TestMethod]
-    public void DestinationTerms_TermsPermitNothing_AdmitNoRequest()
+    public void DestinationTerms_QuotaZeroDeclaresNoCeiling_AdmitsAnyRequestAndExceedsEveryStatedOne()
     {
+        // Quota 0 is "no byte ceiling declared", not "store nothing" (05 §1) —
+        // the unconfigured household default must not refuse everything.
         Assert.IsTrue(PeerTerms.None.IsWithin(PeerTerms.None));
-        Assert.IsFalse(new PeerTerms(1, string.Empty, 0).IsWithin(PeerTerms.None));
+        Assert.IsTrue(new PeerTerms(1, string.Empty, 0).IsWithin(PeerTerms.None));
+
+        // Asking for "unbounded" from a destination that stated a ceiling is
+        // asking for more than was given.
+        Assert.IsFalse(new PeerTerms(0, string.Empty, 0).IsWithin(new PeerTerms(1_000, string.Empty, 0)));
     }
 
     [TestMethod]
@@ -218,5 +224,9 @@ public sealed class PeerTermsTests
 
         Assert.IsFalse(new PeerTerms(1_000, string.Empty, 4).Narrows(before));
         Assert.IsFalse(new PeerTerms(2_000, string.Empty, 8).Narrows(before));
+
+        // Quota 0 is no ceiling: one appearing narrows, one lifted widens.
+        Assert.IsTrue(new PeerTerms(500, string.Empty, 4).Narrows(new PeerTerms(0, string.Empty, 4)));
+        Assert.IsFalse(new PeerTerms(0, string.Empty, 4).Narrows(new PeerTerms(500, string.Empty, 4)));
     }
 }

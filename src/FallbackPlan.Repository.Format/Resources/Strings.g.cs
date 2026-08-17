@@ -1121,4 +1121,64 @@ internal static class Strings
     /// Stored bytes are not one standard Zstandard frame producing exactly the record's logical length (specification 10 §4.1).
     /// </summary>
     internal static string ZstdSegmentDecompressor_StoredBytesNotOneStandard => Get(nameof(ZstdSegmentDecompressor_StoredBytesNotOneStandard));
+
+    /// <summary>
+    /// A tombstone signature is exactly 64 bytes.
+    /// </summary>
+    internal static string TombstoneCodec_SignatureExactlyBytes => Get(nameof(TombstoneCodec_SignatureExactlyBytes));
+
+    /// <summary>
+    /// A tombstone is not canonical CBOR: {0}
+    /// </summary>
+    private static string TombstoneCodec_NotCanonicalCbor => Get(nameof(TombstoneCodec_NotCanonicalCbor));
+
+    /// <summary>
+    /// A tombstone is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatTombstoneCodec_NotCanonicalCbor(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_NotCanonicalCbor, arg0);
+
+    /// <summary>
+    /// Tombstone schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    private static string TombstoneCodec_SchemaVersionUnsupported => Get(nameof(TombstoneCodec_SchemaVersionUnsupported));
+
+    /// <summary>
+    /// Tombstone schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    internal static string FormatTombstoneCodec_SchemaVersionUnsupported(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_SchemaVersionUnsupported, arg0);
+
+    /// <summary>
+    /// A tombstone for object type {0} carries a {1}-byte identifier; {2} bytes are required (11 §3.1).
+    /// </summary>
+    private static string TombstoneCodec_ObjectIdWidthMismatch => Get(nameof(TombstoneCodec_ObjectIdWidthMismatch));
+
+    /// <summary>
+    /// A tombstone for object type {0} carries a {1}-byte identifier; {2} bytes are required (11 §3.1).
+    /// </summary>
+    internal static string FormatTombstoneCodec_ObjectIdWidthMismatch(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_ObjectIdWidthMismatch, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Tombstone reason {0} is not in the closed vocabulary (11 §3).
+    /// </summary>
+    private static string TombstoneCodec_ReasonOutsideVocabulary => Get(nameof(TombstoneCodec_ReasonOutsideVocabulary));
+
+    /// <summary>
+    /// Tombstone reason {0} is not in the closed vocabulary (11 §3).
+    /// </summary>
+    internal static string FormatTombstoneCodec_ReasonOutsideVocabulary(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_ReasonOutsideVocabulary, arg0);
+
+    /// <summary>
+    /// A tombstone omits required key {0} (11 §3).
+    /// </summary>
+    private static string TombstoneCodec_RequiredKeyMissing => Get(nameof(TombstoneCodec_RequiredKeyMissing));
+
+    /// <summary>
+    /// A tombstone omits required key {0} (11 §3).
+    /// </summary>
+    internal static string FormatTombstoneCodec_RequiredKeyMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequiredKeyMissing, arg0);
 }

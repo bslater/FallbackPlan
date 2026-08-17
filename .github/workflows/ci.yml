@@ -97,15 +97,25 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
           path: coverage
-      # The floor sits below today's weakest module on purpose: it is there
-      # to catch a collapse — a project dropping out of the run, a suite
-      # silently not executing — not to police ordinary drift, which a
-      # number nobody can move without a fight only teaches people to game.
+      # Two floors, answering two different questions, and CI wants both.
+      #
+      # The global one sits below today's weakest module on purpose: it is
+      # there to catch a COLLAPSE — a project dropping out of the run, a suite
+      # silently not executing — which a per-module table cannot, because a
+      # table only checks the modules it already knows about.
+      #
+      # The per-module table catches one module regressing, which the global
+      # floor cannot, because a healthy total absorbs it: Keystore could go to
+      # zero and the union would barely move. It also fails on a floor naming
+      # a module that no longer exists, and on a module with no floor — a new
+      # assembly is otherwise unguarded from the moment it is created, which
+      # is exactly when nobody notices it has no tests.
       - name: Merge and report
         shell: bash
         run: |
           set -o pipefail
-          python3 eng/coverage.py --report-only coverage --floor 50 | tee coverage-summary.txt
+          python3 eng/coverage.py --report-only coverage \
+            --floor 50 --floors eng/coverage-floors.toml | tee coverage-summary.txt
           {
             echo '### Coverage (union of ubuntu, windows, macos)'
             echo '```'
@@ -167,6 +177,35 @@ jobs:
           dotnet restore FallbackPlan.slnx --locked-mode
           dotnet build FallbackPlan.slnx -c Release --no-restore
           dotnet test FallbackPlan.slnx -c Release --no-build
+
+  # Every runner in the build matrix is an English, dot-decimal machine, so the
+  # matrix proves nothing about the locale the software actually runs under.
+  # `HostileCultureTests` covers the asymmetric case a whole-suite sweep cannot
+  # — written under one culture, read under another — and this covers the
+  # opposite blind spot: the code paths nobody thought to write a culture test
+  # for. tr-TR is the harshest single choice, because its dotless `ı` breaks
+  # ASCII case folding and its numbers use a comma decimal and a dot group
+  # separator. DOTNET_CLI_UI_LANGUAGE keeps the log readable; it moves the UI
+  # culture only, so the formatting culture under test stays Turkish.
+  hostile-culture:
+    name: Suite passes under a hostile locale
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore FallbackPlan.slnx --locked-mode
+      - name: Build
+        run: dotnet build FallbackPlan.slnx -c Release --no-restore
+      - name: Test under tr-TR
+        env:
+          LC_ALL: tr-TR.UTF-8
+          LANG: tr-TR.UTF-8
+          DOTNET_CLI_UI_LANGUAGE: en
+        run: dotnet test FallbackPlan.slnx -c Release --no-build
 
   conformance-vectors:
     name: Conformance vectors are reproducible

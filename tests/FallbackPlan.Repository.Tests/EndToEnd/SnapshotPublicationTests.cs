@@ -146,6 +146,46 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task SnapshotManifest_AClockIsSupplied_StampsCaptureCompletionWhenItHappened()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("a.bin", Deterministic(1000, 1));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        // Retention is the one wall-clock consumer and it reads capture
+        // times (00-conventions §7), so a multi-hour capture stamped as
+        // zero-duration misstates the very field retention decides on. The
+        // engine takes no clock of its own; the job carries one.
+        var job = Job(source) with { Clock = () => 1_722_600_005_000 };
+        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+
+        var snapshotKeys = new List<ObjectKey>();
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
+        {
+            snapshotKeys.Add(entry.Key);
+        }
+
+        byte[] snapshotBytes;
+        using (var read = await store.OpenReadAsync(Assert.ContainsSingle(snapshotKeys), range: null, CancellationToken.None))
+        {
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory);
+            snapshotBytes = memory.ToArray();
+        }
+
+        var record = StandaloneRecordFraming.Parse(snapshotBytes);
+        var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
+        Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plain));
+        var manifest = SnapshotManifestCodec.Decode(plain).Manifest;
+
+        Assert.AreEqual(1_722_600_000_000UL, manifest.CaptureStartedAt);
+        Assert.AreEqual(1_722_600_005_000UL, manifest.CaptureCompletedAt);
+    }
+
+    [TestMethod]
     public async Task SnapshotManifest_APublishedSnapshot_RecordsProbeParentsPolicyAndStatus()
     {
         var source = new FakeFileSystemSource();

@@ -48,6 +48,9 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(RestoreResult), "restore")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
+[JsonDerivedType(typeof(RetentionResult), "retention")]
+[JsonDerivedType(typeof(SyncResult), "sync")]
+[JsonDerivedType(typeof(VerifyDestinationResult), "verify_destination")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -68,13 +71,15 @@ public sealed record AcknowledgedResult : ServiceResult;
 /// <param name="Schedule">Its schedule expression, or null for manual-only.</param>
 /// <param name="IncludeRules">Include rules, in rules-v1 dialect.</param>
 /// <param name="ExcludeRules">Exclude rules, in rules-v1 dialect.</param>
+/// <param name="Destinations">The declared destination names the set replicates to (FR-DEST-001).</param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
     string Root,
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
-    IReadOnlyList<string> ExcludeRules);
+    IReadOnlyList<string> ExcludeRules,
+    IReadOnlyList<string> Destinations);
 
 /// <summary>The configured backup sets.</summary>
 /// <param name="Sets">The sets.</param>
@@ -111,12 +116,19 @@ public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResu
 /// <param name="CapturedAt">When it was captured, Unix milliseconds.</param>
 /// <param name="CaptureStatus">1 complete, 2 partial.</param>
 /// <param name="Files">How many files it holds.</param>
+/// <param name="Destinations">
+/// Where this snapshot stands at each of its set's destinations, one
+/// <c>name: state</c> line per destination with the FR-SNP-003 vocabulary
+/// (<c>pending</c>, <c>replicating</c>, <c>durable</c>, <c>verified</c>,
+/// <c>degraded</c>); null from a service that could not derive it.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
     ulong CapturedAt,
     byte CaptureStatus,
-    long Files);
+    long Files,
+    IReadOnlyList<string>? Destinations = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">The snapshots, oldest first.</param>
@@ -143,7 +155,14 @@ public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<str
 /// <param name="Restored">Files written.</param>
 /// <param name="Failed">Files that could not be written.</param>
 /// <param name="OutputDirectory">Where they were written, on the service's machine.</param>
-public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory) : ServiceResult;
+/// <param name="Outcome">
+/// The receipt outcome — <c>complete</c>, <c>partial</c>, <c>failed</c> or
+/// <c>cancelled</c> (FR-RST-005). Carried explicitly because a caller cannot
+/// reconstruct it from <paramref name="Failed"/>: a restore that skipped a
+/// required item failed nothing yet is not complete, and a remote client told
+/// only <c>Failed = 0</c> would report success for it.
+/// </param>
+public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory, string Outcome) : ServiceResult;
 
 /// <summary>What a verification run found.</summary>
 /// <param name="ObjectsChecked">How many objects were examined.</param>
@@ -155,11 +174,56 @@ public sealed record VerificationResult(long ObjectsChecked, long Failures, stri
 /// <param name="Findings">The findings, in the order they matter.</param>
 public sealed record CheckResult(IReadOnlyList<string> Findings) : ServiceResult;
 
-/// <summary>One set's derived protection status, with the set it belongs to.</summary>
+/// <summary>A retention pass's report, per set in configuration order (FR-GC-005).</summary>
+/// <param name="Lines">The report — what is protected and why, what is held for a laggard, what went.</param>
+public sealed record RetentionResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>An on-demand sync's report, one line per (set, destination) pair (FR-DEST-002/004).</summary>
+/// <param name="Lines">Where each pair stands after its sync ran — read from the refreshed ledger.</param>
+public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>
+/// What a deep verification found, one line per (set, destination) pair.
+/// </summary>
+/// <param name="Lines">The per-pair report.</param>
+/// <param name="Damaged">
+/// Objects that no longer match what was sealed, across every pair. Separate
+/// from the lines because an exit code must not be recovered by parsing prose.
+/// </param>
+public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long Damaged) : ServiceResult;
+
+/// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
+/// <param name="Name">The destination's declared name.</param>
+/// <param name="Kind">Its declared kind, in the configuration's spelling.</param>
+/// <param name="State">Where the pair stands: <c>in-sync</c>, <c>behind</c>, <c>unavailable</c>, <c>failed</c>, or <c>not-supported</c>.</param>
+/// <param name="LastSuccessAt">When it last synced, Unix milliseconds; null when never.</param>
+/// <param name="Detail">What the last failure said, or null.</param>
+/// <param name="FailureDomain">Where it sits relative to the source: <c>same-volume</c>, <c>same-machine</c>, <c>same-site</c>, or <c>independent</c> (FR-SNP-007).</param>
+/// <param name="Verification">
+/// Where it stands on proving possession (FR-VER-006): <c>proven</c>,
+/// <c>stale</c> (proven once, but not for what it was last sent),
+/// <c>unproven</c> (no challenge has ever succeeded), or
+/// <c>unprovable (accepted)</c> (knowingly kept without proof).
+/// </param>
+public sealed record DestinationStatusDescriptor(
+    string Name,
+    string Kind,
+    string State,
+    ulong? LastSuccessAt,
+    string? Detail,
+    string FailureDomain,
+    string Verification);
+
+/// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>
-/// <param name="Status">The derived status.</param>
+/// <param name="Status">The derived status — computed from the matrix, never beside it (ADR-0028 §8).</param>
 /// <param name="NextRun">When the schedule next fires, ISO-8601, or null for manual-only.</param>
-public sealed record BackupSetStatusDescriptor(string SetName, BackupSetStatus Status, string? NextRun);
+/// <param name="Destinations">The matrix rows, in declaration order.</param>
+public sealed record BackupSetStatusDescriptor(
+    string SetName,
+    BackupSetStatus Status,
+    string? NextRun,
+    IReadOnlyList<DestinationStatusDescriptor> Destinations);
 
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
@@ -169,10 +233,12 @@ public sealed record BackupSetStatusDescriptor(string SetName, BackupSetStatus S
 /// <param name="MachineName">The machine this service speaks for.</param>
 /// <param name="Sets">Per-set detail.</param>
 /// <param name="ObservedAt">When the service produced this, Unix milliseconds.</param>
+/// <param name="Notices">Durable events awaiting a human — surfaced here until acknowledged (10 §3.1).</param>
 public sealed record StatusResult(
     string MachineName,
     IReadOnlyList<BackupSetStatusDescriptor> Sets,
-    ulong ObservedAt) : ServiceResult;
+    ulong ObservedAt,
+    IReadOnlyList<string> Notices) : ServiceResult;
 
 /// <summary>The client configuration as JSON.</summary>
 /// <param name="Json">The configuration document.</param>

@@ -71,6 +71,17 @@ internal static class Strings
     internal static string FrameCodec_PeerClosedMidFrame => Get(nameof(FrameCodec_PeerClosedMidFrame));
 
     /// <summary>
+    /// The socket fallback directory '{0}' is not safe to use: {1}. Remove it and retry — repairing it would mean trusting whoever prepared it.
+    /// </summary>
+    private static string LocalEndpoint_FallbackDirectoryUnsafe => Get(nameof(LocalEndpoint_FallbackDirectoryUnsafe));
+
+    /// <summary>
+    /// The socket fallback directory '{0}' is not safe to use: {1}. Remove it and retry — repairing it would mean trusting whoever prepared it.
+    /// </summary>
+    internal static string FormatLocalEndpoint_FallbackDirectoryUnsafe(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, LocalEndpoint_FallbackDirectoryUnsafe, arg0, arg1);
+
+    /// <summary>
     /// The socket path '{0}' is {1} bytes, and the platform accepts at most {2}. Choose a shorter state directory — this limit is the operating system's, not this program's.
     /// </summary>
     private static string LocalEndpoint_SocketPathBytesPlatformAccepts => Get(nameof(LocalEndpoint_SocketPathBytesPlatformAccepts));

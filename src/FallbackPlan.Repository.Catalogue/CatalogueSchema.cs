@@ -24,8 +24,23 @@ public static class CatalogueSchema
     /// files; covered, 0.28 ms). A version bump because a cache is never
     /// migrated, only rebuilt.
     /// </para>
+    /// <para>
+    /// v5 over v4: <c>file_versions.has_alternate_streams</c>, so
+    /// <c>RestorePlanner</c> can declare the <c>alternate-streams</c>
+    /// degradation (RR-6) without reading a manifest per file. On
+    /// <c>file_versions</c> rather than <c>tree_entries</c> so the covering
+    /// parent index is untouched and the flag rides the existing join.
+    /// </para>
+    /// <para>
+    /// v6 over v5: <c>file_versions.metadata_digest</c>, so an incremental
+    /// capture can tell "the bytes are unchanged" apart from "nothing about
+    /// this file changed". Without it, a <c>chmod</c> — which moves ctime and
+    /// not mtime — passed every signal reuse is keyed on, and the new mode was
+    /// discarded. On <c>file_versions</c> beside the other reuse inputs, so
+    /// the covering parent index is untouched.
+    /// </para>
     /// </remarks>
-    public const int Version = 4;
+    public const int Version = 6;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -98,16 +113,18 @@ public static class CatalogueSchema
         ) WITHOUT ROWID;
 
         CREATE TABLE file_versions (
-            object_id        BLOB PRIMARY KEY,
-            name             BLOB NOT NULL,
-            entry_kind       INTEGER NOT NULL,
-            logical_length   INTEGER NOT NULL,
-            whole_file_hash  BLOB NOT NULL,
-            parent_version   BLOB,
-            segment_count    INTEGER NOT NULL,
-            modified_at      INTEGER,
-            identity_device  INTEGER,
-            identity_file_id INTEGER
+            object_id             BLOB PRIMARY KEY,
+            name                  BLOB NOT NULL,
+            entry_kind            INTEGER NOT NULL,
+            logical_length        INTEGER NOT NULL,
+            whole_file_hash       BLOB NOT NULL,
+            parent_version        BLOB,
+            segment_count         INTEGER NOT NULL,
+            modified_at           INTEGER,
+            identity_device       INTEGER,
+            identity_file_id      INTEGER,
+            has_alternate_streams INTEGER NOT NULL DEFAULT 0,
+            metadata_digest       BLOB
         ) WITHOUT ROWID;
 
         CREATE INDEX ix_file_versions_hash ON file_versions (whole_file_hash);

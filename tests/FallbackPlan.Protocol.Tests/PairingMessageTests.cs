@@ -26,7 +26,7 @@ public sealed class PairingMessageTests
         using var keypair = PeerKeypair.Generate();
         using var exchange = PairingExchange.Start();
 
-        var offer = new PairOffer(Contribution(keypair.Identity, exchange), "Ana's laptop", 3);
+        var offer = new PairOffer(Contribution(keypair.Identity, exchange), "Ana's laptop", 3, PeerRole.StoresForUs);
 
         var (type, body) = PeerFrame.Decode(PeerFrame.Encode(offer));
 
@@ -41,7 +41,7 @@ public sealed class PairingMessageTests
         using var exchange = PairingExchange.Start();
 
         var terms = new PeerTerms(500_000_000_000, "every 1h", 4);
-        var destination = new PairAccept(Contribution(keypair.Identity, exchange), "the NAS", 2, terms);
+        var destination = new PairAccept(Contribution(keypair.Identity, exchange), "the NAS", 2, terms, PeerRole.StoresHere);
         var source = destination with { Terms = null };
 
         Assert.AreEqual(destination, PairAccept.Read(PeerFrame.Decode(PeerFrame.Encode(destination)).Body));
@@ -72,7 +72,8 @@ public sealed class PairingMessageTests
         using var exchange = PairingExchange.Start();
 
         var offer = new PairOffer(
-            Contribution(keypair.Identity, exchange), new string('x', PairOffer.MaximumLabelBytes + 1), 1);
+            Contribution(keypair.Identity, exchange), new string('x', PairOffer.MaximumLabelBytes + 1), 1,
+            PeerRole.StoresForUs);
 
         // Truncating would put a label on the wire that is not the one the
         // human typed — and the label is how an operator recognises which
@@ -117,14 +118,18 @@ public sealed class PairingMessageTests
         // Nothing below touches the other side's objects — only what came off
         // the wire. That is the property these messages exist to make testable.
         var offerFrame = PeerFrame.Encode(
-            new PairOffer(Contribution(offererKey.Identity, offererExchange), "laptop", 1));
+            new PairOffer(Contribution(offererKey.Identity, offererExchange), "laptop", 1, PeerRole.StoresForUs));
         var acceptFrame = PeerFrame.Encode(
-            new PairAccept(Contribution(responderKey.Identity, responderExchange), "the NAS", 1, PeerTerms.None));
+            new PairAccept(
+                Contribution(responderKey.Identity, responderExchange), "the NAS", 1, PeerTerms.None,
+                PeerRole.StoresHere));
 
         var offer = PairOffer.Read(PeerFrame.Decode(offerFrame).Body);
         var accept = PairAccept.Read(PeerFrame.Decode(acceptFrame).Body);
 
-        var transcript = PairingTranscript.Build(offer.Contribution, accept.Contribution, accept.SelectedVersion);
+        var transcript = PairingTranscript.Build(
+            offer.Contribution, accept.Contribution, accept.SelectedVersion,
+            offer.RoleForResponder, accept.RoleForOfferer);
 
         // Each side derives the shared secret from the peer's ephemeral key as
         // it arrived, not as it was constructed.

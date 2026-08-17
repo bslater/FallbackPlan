@@ -32,7 +32,7 @@ Unless a requirement says otherwise, targets are measured on:
 |----|-------------|--------|
 | NFR-PERF-001 **[changed]** | Memory shall be bounded by configured concurrency, segment size, and blob-buffer limits — not by file size, file count, version count, or repository size. | Agent peak RSS ≤ 1 GB at scale **L** with default profiles. Processing a 2 TiB single file adds ≤ 256 MB over idle. |
 | NFR-PERF-002 | The pipeline shall parallelise read, hash, compress, encrypt, and write while preserving deterministic segment order. | Restored bytes identical regardless of concurrency setting. |
-| NFR-PERF-003 **[changed]** | Unchanged files and segments shall avoid payload reads and writes when identity, size, and mtime match and the prior version's content identifiers are known. | An incremental scan of an unchanged tree at scale **M** reads ≤ 1% of logical bytes. |
+| NFR-PERF-003 **[amended]** | Unchanged files and segments shall avoid payload reads and writes when identity, size, and mtime match and the prior version's content identifiers are known. Metadata that changed without the content changing shall be recorded in a new version, still without a payload read. Access time shall not count as a change. | An incremental scan of an unchanged tree at scale **M** reads ≤ 1% of logical bytes; a `chmod`-only pass reads zero payload bytes and still publishes the new mode. |
 | NFR-PERF-004 **[changed]** | Catalogue path resolution shall not require remote enumeration. | p99 ≤ 10 ms at scale **M**; p99 ≤ 50 ms at scale **L**. |
 | NFR-PERF-005 | Metadata growth shall be incremental; one snapshot shall not rewrite metadata proportional to repository size. | Metadata written per snapshot is proportional to changed entries, within 10%. |
 | NFR-PERF-006 | Cloud operation shall minimise transaction amplification by packing segments into blobs. | See NFR-PERF-008. |
@@ -107,7 +107,7 @@ Unless a requirement says otherwise, targets are measured on:
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| NFR-PORT-001 | Core processing shall run on supported Windows, macOS, and Linux without a platform-specific database engine. | CI runs the full suite on all three. |
+| NFR-PORT-001 **[amended]** | Core processing shall run on supported Windows, macOS, and Linux without a platform-specific database engine, and shall behave identically whatever locale the host is configured for. Durable state written under one locale shall read back unchanged under any other. | CI runs the full suite on all three platforms, and again under a hostile locale (`tr-TR`). Configuration and the sync ledger survive a write under one culture and a read under another. |
 | NFR-PORT-002 | Storage, cryptography, compression, segmentation, catalogue, and legacy import shall be separated behind tested interfaces. | Architecture tests enforce [`../architecture/11-solution-structure.md` §2](../architecture/11-solution-structure.md#2-dependency-rules). |
 | NFR-PORT-003 | Deterministic fixtures and property-based tests shall cover all repository encodings and state transitions. | Every encoding has a round-trip property test. |
 | NFR-PORT-004 | Public APIs shall use asynchronous streaming, cancellation, bounded concurrency, and explicit result types. | Expected outcomes are results, not exceptions ([`../architecture/05-storage-providers.md` §2.2](../architecture/05-storage-providers.md#22-results-not-exceptions)). |

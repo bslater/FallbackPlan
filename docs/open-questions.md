@@ -6,15 +6,15 @@ Decisions that are deliberately unresolved, who owns them, and what they block. 
 
 ---
 
-## Q2 — Plan C licence and reuse posture
+## Q2 — Third-party reader licence and reuse posture
 
-**Owner:** project maintainer, with legal review · **Blocks:** Phase 5 · **ADR:** [0015](adr/0015-crashplan-importer-isolation.md)
+**Owner:** project maintainer, with legal review · **Blocks:** Phase 5 · **ADR:** [0015](adr/0015-legacy-importer-isolation.md)
 
-The original proposal cites Plan C as evidence that CrashPlan archives can be read, and instructs that its licence be reviewed before any reuse. **That licence has not been verified** — it could not be checked from the environment this review was produced in, and it is not asserted anywhere in this document set.
+The original proposal cites a community reader project as evidence that a legacy service's archives can be read, and instructs that its licence be reviewed before any reuse. **That licence has not been verified** — it could not be checked from the environment this review was produced in, and it is not asserted anywhere in this document set.
 
 Required before any parser work:
 
-1. Verify Plan C's licence and its compatibility with Q1's answer.
+1. Verify that reader's licence and its compatibility with Q1's answer.
 2. Decide reuse posture: direct reuse (if compatible), documentation-only reference, or full clean-room with an independent implementer who has not read the source.
 3. Confirm the interoperability position for reverse engineering in the target jurisdictions.
 
@@ -24,9 +24,9 @@ Required before any parser work:
 
 ## Q3 — Product name and trademark
 
-**Owner:** project maintainer, with legal review · **Blocks:** first public release · **Review finding:** [M7](review/2026-08-architecture-review.md#m7--naming-proximity-to-crashplan-carries-trademark-risk)
+**Owner:** project maintainer, with legal review · **Blocks:** first public release · **Review finding:** [M7](review/2026-08-architecture-review.md#m7--naming-proximity-to-an-incumbent-carries-trademark-risk)
 
-"FallbackPlan" shares a structure, a domain, and a rhyme with "CrashPlan", and the project's most visible advertised capability is reading CrashPlan archives. That combination is what makes a confusion argument easy to state.
+"FallbackPlan" shares a structure, a domain, and a rhyme with the name of a well-known incumbent product, and the project's most visible advertised capability is reading that product's archives. That combination is what makes a confusion argument easy to state.
 
 This is a flag rather than a legal opinion. It should be assessed alongside Q2 — the same review, the same lawyer — while renaming is still cheap. It becomes expensive the moment a repository format, a wire protocol, and a package name carry it.
 
@@ -136,6 +136,16 @@ A related build decision is recorded here so it is not silently re-made: `Invari
 **Owner:** product · **Blocks:** Phase 2 console work
 
 A console pairs with each service it manages, and pairing is revocable at the service. What is undecided is what happens above that: whether several operators may share one console, whether a service can distinguish them, and whether an action taken through a console is attributable to a person rather than to the console's device identity. Shares an administrative surface with [Q9](#q9--repository-server-scope) and [Q13](#q13--device-level-signature-attribution), and should be settled with them rather than separately.
+
+---
+
+## Q22 — Sparse restore materialises zeroes
+
+**Owner:** maintainer · **Blocks:** nothing — but FR-ARCH-013's acceptance is currently claimed and not met
+
+FR-ARCH-013 requires a sparse file to restore "without materialising zero payload". The restore path does the opposite: `RestoreEngine` writes explicit zero buffers into its spool for every hole, and the executor copies them to the destination — correct bytes, correct whole-file hash, and a fully allocated file where the source had holes. No sparse-allocation API (`SEEK_HOLE`/`fallocate` punch, `FSCTL_SET_SPARSE`) is called anywhere. The format is not implicated: hole extents are captured faithfully (ADR-0026); only the write-out ignores them.
+
+Two honest resolutions, one to pick: **(a)** implement sparse-aware write-out — platform-specific work on both POSIX and Windows, with a test that asserts allocated size < logical size where the platform can report it; or **(b)** amend FR-ARCH-013's acceptance to say v1 restores holes as written zeroes, and keep sparse write-out as a later enhancement. What is not acceptable is the current state, where the requirement says one thing, the code does another, and the previously cited test could not tell the difference — the August 2026 restore pipeline review records it so it cannot persist silently.
 
 ---
 

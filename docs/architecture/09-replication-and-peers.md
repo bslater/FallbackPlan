@@ -2,13 +2,13 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** Identity, pairing and the session layer built; no transport, no replication — see [implementation status](../implementation-status.md).
+**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding — see [implementation status](../implementation-status.md).
 
 ---
 
 ## 1. What replication moves
 
-Peers exchange immutable repository objects — blobs, manifests, snapshots, and index generations. They never reconcile live folders, and there is no notion of a single "current" global file state. This is the distinction from Syncthing set out in [`00-overview.md` §5.2](00-overview.md#52-syncthing).
+Peers exchange immutable repository objects — blobs, manifests, snapshots, and index generations. They never reconcile live folders, and there is no notion of a single "current" global file state. This is the distinction from a file synchroniser set out in [`00-overview.md` §5.2](00-overview.md#52-peer-synchronisation-protocols).
 
 Exchange sequence:
 
@@ -21,6 +21,8 @@ Exchange sequence:
 7. verification receipts.
 
 Steps 3–6 are ordered so the cheapest discovery happens first: a filter exchange establishes most of what is missing without enumerating anything.
+
+**Built so far (peer-protocol 03, first slice).** The exchange runs for the widest scope — the source offers a whole repository, the destination declares the object keys it holds as an explicit inventory, and the source streams the rest, each object committed whole under a create-if-absent write so a re-run resumes with no checkpoint. Three decisions this section left open were settled there rather than in the architecture, because they are encoding and placement, not behaviour: the destination keeps each source's replica in a store it names locally by repository id (a storage path never crosses the wire, §3); an object commits atomically, so resumption is a property of the exchange rather than a negotiated position; and step 3's compact object-set filter is an *optional negotiated feature* layered over the explicit inventory, so a v1 implementation is complete without it. Snapshot scoping (steps 2, 4, 5) and the filter are a later slice; quotas (§6) are built per [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md); verification (§5) follows.
 
 ## 2. Transport
 
@@ -50,33 +52,66 @@ Specified in [`specifications/peer-protocol/01`](../../specifications/peer-proto
 - The **destination** sets quota, storage path, schedule window, and retention floor. These are its terms: a source may operate under narrower ones of its own choosing and can never ask for more generous. The storage path is deliberately not on the wire at all — a source that knew it would be a source that could name it.
 - A source never receives unrestricted filesystem access to a destination — it speaks the repository protocol ([`05-storage-providers.md` §4.2](05-storage-providers.md#42-fallbackplan-peer)).
 - A destination cannot read source content. Holding blobs conveys no ability to decrypt them.
+- **The direction of storage is part of what is approved.** The ceremony's offer proposes which side stores for which — one way, the other, or both — and the acceptance confirms it inside the authenticated transcript, so the two grants cannot disagree about who lends the disk ([ADR-0030 Amendment 2](../adr/0030-peer-identity-and-pairing.md#amendment-2-2026-08--the-pairing-lifecycle-completes-roles-on-the-wire-endings-announced-terms-enforced)).
 
-That last pair of properties is what makes "back up to a friend's computer" a reasonable thing to ask of a friend. Neither party has to trust the other with anything.
+That pair of properties above — protocol-only access, ciphertext-only holding — is what makes "back up to a friend's computer" a reasonable thing to ask of a friend. Neither party has to trust the other with anything.
+
+### 3.1 Ending a peering
+
+Either side may end a peering unilaterally, at any time, for any reason — revocation is a local act and no protocol round-trip is ever a precondition for it ([peer-protocol 01 §3](../../specifications/peer-protocol/01-identity-and-pairing.md)). What the ending must not be is *silent*. The ender sends a best-effort **termination notice** when the peer is reachable (feature-gated, so an older peer is simply not sent what it cannot parse); a peer that was unreachable learns the same thing from the `Revoked` refusal at its next dial. Both paths produce a **durable notice** the user sees until acknowledged: the hub that lost a destination is told to reconfigure the sets that counted on it, and the spoke left holding a departed hub's ciphertext is told the data is now its own to evict, after a stated grace period. Eviction is the storing side's own decision on its own timetable — the notice creates awareness, never an obligation.
 
 ## 4. Durability policy
 
-A backup set declares its policy over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)):
+A backup set declares one or more named destinations, and its policy is evaluated over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication), [ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). **None of the destinations has to be local.** Publication always lands in the set's staging archive on the hub — that is what makes capture unconditional — but staging is a cache the hub manages, not a destination a policy may count:
 
 ```text
 Snapshot captured when:
-  - any replica: durable
+  - committed to the set's staging archive
 
 Snapshot protected when:
-  - at least one replica outside the source's failure domain: durable
+  - at least one destination outside the source's failure domain: durable
 
 Snapshot policy-compliant when:
-  - local repository:  durable, and
-  - at least one peer: durable
+  - every destination the set's policy requires: durable
 
 Snapshot healthy when:
-  - local repository:  verified within 7 days,  and
-  - trusted peer:      verified within 30 days, and
-  - cloud replica:     durable within 24 hours
+  - a local-path destination: verified within 7 days,  and
+  - a peer destination:       verified within 30 days, and
+  - a cloud destination:      durable within 24 hours (reserved; no cloud kind is served)
 ```
 
-Because commit is per-replica, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured locally, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+The verification bounds are no longer an illustration. They are the values the
+status derivation compares each destination's proof against
+([ADR-0035 §7](../adr/0035-destination-fitness.md)), and the local bound is
+chosen against the deep sweep's weekly default cadence rather than in the
+abstract — a bound shorter than the cadence meant to satisfy it would be
+permanently unmet.
 
-`protected` deliberately requires a replica outside the source's failure domain, so that a local repository sharing a disk with the source data never reads as safe. Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
+Passing the bound produces a **warning and no change of state**. An old proof
+is still a proof, and demoting a set over its age would say the data is at risk
+when what is true is that nobody has looked lately. The warning is worth
+reading because it fires only where nothing else is already complaining: an
+unproven, sequence-stale or knowingly-unprovable destination each earns its own
+line naming that situation. It is checked for every destination, including
+those inside the source's failure domain that can never earn `protected` — a
+local path's proof is what licenses the staging trim, so an overdue proof there
+quietly stops space being reclaimed.
+
+Two other fitness facts join the policy at the same place, on the same terms —
+reported, never enforced by refusing a configuration
+([ADR-0035](../adr/0035-destination-fitness.md)):
+
+- **Admission.** A destination's declared address is checked for the defects
+  findable without touching the world, and can be probed on demand to confirm
+  it would accept a backup before one has ever been sent there.
+- **Capacity.** A quota-bound peer reports its remaining headroom, and a source
+  warns below a tenth of the loan. A local copy does not begin when the
+  destination volume is under the floor the hub leaves for the machine that
+  owns it.
+
+Because commit is to staging and replication is per destination, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+
+`protected` deliberately requires a destination outside the source's failure domain, so that a repository directory sharing a disk with the source data never reads as safe — and the staging archive, which shares the source's domain by construction, never counts at all ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
 
 ## 5. Destination verification
 

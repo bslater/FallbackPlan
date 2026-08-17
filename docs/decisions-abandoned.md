@@ -35,7 +35,7 @@ These were adopted, written down, and then given up. Each cost something to reve
 | TLS 1.3 with RFC 7250 raw public keys, X.509 prohibited | Unreachable on the reference platform — no raw-public-key API, no keying-material exporter, no usable Ed25519 certificate — so authentication moved into the protocol and kept the guarantee | [ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls) |
 | A session hello offering one protocol version | The specification required a refusal naming "both ranges", which one number cannot express; an operator could not tell which side needed upgrading | [peer-protocol 02 §5](../specifications/peer-protocol/02-session.md#5-protocol-version) |
 | A short authentication string of words from a wordlist | The document specified six words from a thousand-word list, argued the security of three, and carried no list; six base32 characters says what it means and needs nothing shipped | [peer-protocol 01 §2.6](../specifications/peer-protocol/01-identity-and-pairing.md) |
-| Two of the phase-0 exit criteria | One needed the phase-5 CrashPlan reader and a corpus we do not have; the other needed a second implementation to exist before the format was drafted | [H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0) → [roadmap](roadmap.md#phase-0--archive-engine-vertical-slice) |
+| Two of the phase-0 exit criteria | One needed the phase-5 legacy reader and a corpus we do not have; the other needed a second implementation to exist before the format was drafted | [H2](review/2026-08-architecture-review.md#h2--two-phase-0-exit-criteria-cannot-be-met-at-phase-0) → [roadmap](roadmap.md#phase-0--archive-engine-vertical-slice) |
 
 ---
 
@@ -164,9 +164,9 @@ Grouped by what they would have changed. One line each; the reasoning is at the 
 | Vendor a Bodu source subset in-tree | Imports a second build system's props, targets and analyzers into every build | [0021](adr/0021-consume-bodu-via-committed-package-feed.md#alternatives-considered) |
 | `git subtree` merge | Imports a 126 MB monorepo and its history to use two libraries | [0021](adr/0021-consume-bodu-via-committed-package-feed.md#alternatives-considered) |
 | Publish Bodu to nuget.org | The cleanest end state, but not this repository's decision — the committed feed migrates to it in one commit if it happens | [0021](adr/0021-consume-bodu-via-committed-package-feed.md#alternatives-considered) |
-| Put the CrashPlan importer in the core | Couples the project's licence to the importer's dependencies and puts a hostile-input parser inside the trust boundary | [0015](adr/0015-crashplan-importer-isolation.md#alternatives-considered) |
-| Begin CrashPlan parser work in parallel with legal review | Precisely the sequencing error the gate exists to prevent | [0015](adr/0015-crashplan-importer-isolation.md#alternatives-considered) |
-| Skip CrashPlan import entirely | Considered seriously as the highest-risk feature; kept because isolation makes the risk containable and dropping it later costs nothing | [0015](adr/0015-crashplan-importer-isolation.md#alternatives-considered) |
+| Put a legacy importer in the core | Couples the project's licence to the importer's dependencies and puts a hostile-input parser inside the trust boundary | [0015](adr/0015-legacy-importer-isolation.md#alternatives-considered) |
+| Begin legacy parser work in parallel with legal review | Precisely the sequencing error the gate exists to prevent | [0015](adr/0015-legacy-importer-isolation.md#alternatives-considered) |
+| Skip legacy import entirely | Considered seriously as the highest-risk feature; kept because isolation makes the risk containable and dropping it later costs nothing | [0015](adr/0015-legacy-importer-isolation.md#alternatives-considered) |
 | MPL-2.0, GPL and other licence shapes | Weighed in a table against third-party readers, GPL reuse, proprietary forks and distro packaging; the promise that a user can leave depends on independent implementations existing | [0001](adr/0001-licence-and-contribution-model.md#options) |
 
 ---

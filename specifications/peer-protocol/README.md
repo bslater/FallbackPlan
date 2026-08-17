@@ -1,6 +1,6 @@
 # FallbackPlan peer protocol — specification
 
-**Protocol version:** 1 (draft) · **Status:** incomplete — pairing and session only; see [Documents](#documents) · **Implemented:** 01's identity and pairing derivation, in `FallbackPlan.Protocol`
+**Protocol version:** 1 (draft) · **Status:** all seven documents written; see [Documents](#documents) · **Implemented:** 01, 02, 03's base object exchange, 04's verification challenges, 05's quota enforcement and 06's retention instructions, over a real TLS socket
 
 ---
 
@@ -27,22 +27,25 @@ It is written to the same standard as the [repository format](../repository-form
 
 ## Documents
 
-This set is **incomplete, and the table says which parts**. A missing document is stated here rather than discovered by an implementer halfway through, because the alternative — drafting the remaining three thinly so the set *looks* whole — is how a specification becomes something nobody can build from.
+All seven documents are now written; the table says which are also implemented. The set spent its first months deliberately incomplete, with the missing parts stated here rather than discovered by an implementer halfway through — the alternative, drafting the remainder thinly so the set *looked* whole, is how a specification becomes something nobody can build from.
 
 | # | Document | Covers | Status |
 |---|----------|--------|--------|
 | — | [Conventions](00-conventions.md) | What is inherited from the repository format, and what differs | Written |
-| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony, pinning, grants and terms | Written; §1–§2 implemented |
-| 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written |
-| 03 | Replication | The object exchange: filters, missing-object discovery, ranged transfer, resumption | **Not written** |
-| 04 | Verification | The keyed random-range challenge and its sampling policy | **Not written** |
-| 05 | Quotas | Exhaustion, disk-full, and their distinct reporting | **Not written** |
+| 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony with negotiated storage roles, pinning, grants and terms | Written; implemented |
+| 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written; implemented |
+| 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
+| 04 | [Verification](04-verification.md) | The keyed random-range challenge and its sampling policy | Written; implemented |
+| 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
+| 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
 
-What is implemented so far is the part that has to be right before anything reaches a wire: the keypair, the transcript, the short authentication string, and the confirmation signature — in `FallbackPlan.Protocol`, with `FallbackPlan.Protocol.Tests` covering what the string is bound to. Grants (01 §3), terms (01 §4) and the whole of 02 are specified and unimplemented.
+Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, in `FallbackPlan.Protocol`: the keypair and its durable device key, the pairing ceremony (key agreement, transcript, short authentication string, confirmation signature and the four messages that carry them), grants (01 §3) and terms (01 §4), and the whole session layer of 02 — the four-state machine, channel-bound authentication, framing with its pre-allocation bounds, version selection and feature negotiation, and the coarse refusal codes. `FallbackPlan.Protocol.Tests` exercises all of it over loopback TCP, including the man-in-the-middle relay that channel binding defeats; `FallbackPlan.Hosts.Tests` performs the pairing ceremony between two real operating-system processes.
 
-Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)'s remote binding was blocked on: a console pairs and opens a session by the same rules a peer does, and carries a different payload over it. They were written first for that reason.
+Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)'s remote binding was blocked on: a console pairs and opens a session by the same rules a peer does, and carries a different payload over it. They were written first for that reason, and that binding now exists — a paired console reaches the service over the wire, an unpaired one is refused.
 
-Documents 03–05 have their behaviour fixed in architecture already — [09 §1](../../docs/architecture/09-replication-and-peers.md#1-what-replication-moves) gives the exchange sequence, [09 §5](../../docs/architecture/09-replication-and-peers.md#5-destination-verification) gives the challenge construction and the reasoning behind it, [09 §6](../../docs/architecture/09-replication-and-peers.md#6-quotas-and-exhaustion) gives the exhaustion semantics — so what is missing is the wire encoding, not the design.
+Document 03 is now written, and its base object exchange is implemented: a source pushes a repository's objects to a paired destination over an Open session, the destination stores the ciphertext it cannot read, and the transfer is resumable because each object commits whole or not at all. `FallbackPlan.Hosts.Tests` proves it end to end over loopback — a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica. What 03 defers to a later slice is the optimization, not the mechanism: a compact object-set filter (an optional negotiated feature) in place of the explicit inventory, and snapshot-scoped replication in place of the whole-repository scope.
+
+Document 05 is now written and its enforcement implemented: a destination attributes each replica to the peer that offered it, refuses `terms_refused` at the object boundary when the peer's quota would be crossed, refuses `storage_exhausted` when its own storage fails, and announces its current terms in every hello so a source learns a narrowing before the first refusal. Document 04 is written and implemented: challenges ride the replication session after the acknowledgement, a tampered byte at the destination fails the proof and is recorded durably at the source, and the same fact is earned by local-path replicas through direct read-back — both destination kinds answer to bytes, not to their word.
 
 ## Requirement language
 

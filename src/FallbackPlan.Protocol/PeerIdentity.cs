@@ -17,7 +17,7 @@ namespace FallbackPlan.Protocol;
 /// </para>
 /// <para>
 /// It is unrelated to the repository. The signing key of
-/// <see href="https://github.com/">ADR-0020</see> is repository-scoped and
+/// ADR-0020 is repository-scoped and
 /// derived from the master key; authenticating a peer with it would mean giving
 /// the master key to the destination whose disk is being borrowed. A destination
 /// holds one of these and no repository key at all.

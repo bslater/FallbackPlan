@@ -29,9 +29,20 @@ public sealed record BackupSetConfiguration
     [JsonPropertyName("exclude_rules")]
     public IReadOnlyList<string> ExcludeRules { get; init; } = [];
 
-    /// <summary>Schedule placeholder — semantics land with the Agent (phase-1 push 2).</summary>
+    /// <summary>The set's schedule, evaluated by the scheduler's due-ness pass (ADR-0027 §1); null means manual-only.</summary>
     [JsonPropertyName("schedule")]
     public string? Schedule { get; init; }
+
+    /// <summary>The set's retention policy; null defers retention entirely (architecture 07 §2).</summary>
+    [JsonPropertyName("retention")]
+    public RetentionConfiguration? Retention { get; init; }
+
+    /// <summary>
+    /// The destinations this set replicates to, by declared name — at least
+    /// one, none of which has to be local (FR-DEST-001, ADR-0034).
+    /// </summary>
+    [JsonPropertyName("destinations")]
+    public IReadOnlyList<SetDestinationReference> Destinations { get; init; } = [];
 }
 
 /// <summary>
@@ -44,7 +55,7 @@ public sealed record BackupSetConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -55,6 +66,10 @@ public sealed record ClientConfiguration
     /// <summary>The schema version this file was written under.</summary>
     [JsonPropertyName("schema_version")]
     public required int SchemaVersion { get; init; }
+
+    /// <summary>The declared destinations — the hub's address book (ADR-0034 §5, FR-DEST-006).</summary>
+    [JsonPropertyName("destinations")]
+    public IReadOnlyList<DestinationConfiguration> Destinations { get; init; } = [];
 
     /// <summary>The configured backup sets.</summary>
     [JsonPropertyName("backup_sets")]
@@ -89,9 +104,16 @@ public sealed record ClientConfiguration
         return configuration;
     }
 
-    /// <summary>Writes the configuration; also the export path — the file holds no secrets.</summary>
+    /// <summary>
+    /// Validates then writes; an invalid configuration is refused here rather
+    /// than discovered by the scheduler at two in the morning. Also the export
+    /// path — the file holds no secrets, though it now names who stores the
+    /// backups and where (FR-DEST-006).
+    /// </summary>
+    /// <exception cref="ClientStateException">The configuration is invalid — the message names the defect.</exception>
     public void Save(string path)
     {
+        Validate(path);
         AtomicFile.WriteAllText(path, JsonSerializer.Serialize(this, SerializerOptions));
     }
 
@@ -102,11 +124,25 @@ public sealed record ClientConfiguration
     public BackupSetConfiguration? FindSet(string name) =>
         BackupSets.FirstOrDefault(set => string.Equals(set.Name, name, StringComparison.Ordinal));
 
+    /// <summary>Finds a declared destination by name; null when unknown.</summary>
+    public DestinationConfiguration? FindDestination(string name) =>
+        Destinations.FirstOrDefault(destination => string.Equals(destination.Name, name, StringComparison.Ordinal));
+
     private void Validate(string path)
     {
         if (SchemaVersion != CurrentSchemaVersion)
         {
-            throw new ClientStateException(Strings.FormatClientConfiguration_DeclaresSchemaVersionBuildReads(path, SchemaVersion, CurrentSchemaVersion));
+            // Version 1 gets the migration, not just the refusal: it is the
+            // schema every pre-hub-and-spoke install wrote (ADR-0034).
+            throw new ClientStateException(SchemaVersion == 1
+                ? Strings.FormatClientConfiguration_SchemaVersion1NeedsDestinations(path)
+                : Strings.FormatClientConfiguration_DeclaresSchemaVersionBuildReads(path, SchemaVersion, CurrentSchemaVersion));
+        }
+
+        var destinationNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var destination in Destinations)
+        {
+            ValidateDestination(destination, destinationNames);
         }
 
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -134,6 +170,105 @@ public sealed record ClientConfiguration
             {
                 throw new ClientStateException(Strings.FormatClientConfiguration_BackupSet(set.Name, string.Join("; ", defects)));
             }
+
+            ValidateSetDestinations(set, destinationNames);
+        }
+    }
+
+    private static void ValidateDestination(DestinationConfiguration destination, HashSet<string> names)
+    {
+        if (destination.Id.Length != 32 || !destination.Id.All(Uri.IsHexDigit))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationIdMustHex(destination.Name));
+        }
+
+        if (string.IsNullOrWhiteSpace(destination.Name) || !names.Add(destination.Name))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNamesMustNon(destination.Name));
+        }
+
+        // Each kind requires its own fields and refuses the others': a peer
+        // carrying a path is a misread configuration, not extra information.
+        var (requiresPath, requiresPeer) = destination.Kind switch
+        {
+            DestinationKind.LocalPath => (true, false),
+            DestinationKind.Peer => (false, true),
+            _ => (false, false),
+        };
+
+        if (requiresPath && string.IsNullOrWhiteSpace(destination.Path))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsPath(destination.Name));
+        }
+
+        if (requiresPeer && (string.IsNullOrWhiteSpace(destination.Fingerprint) || string.IsNullOrWhiteSpace(destination.Endpoint)))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsPeerIdentity(destination.Name));
+        }
+
+        if (!requiresPath && destination.Path is not null)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "path"));
+        }
+
+        if (!requiresPeer && (destination.Fingerprint is not null || destination.Endpoint is not null))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "fingerprint/endpoint"));
+        }
+
+        // The acknowledgement exists for destinations that genuinely cannot be
+        // challenged — an older peer, a kind with no verification path. A
+        // directory this hub owns is neither: the hub reads it back to verify
+        // and the check costs sixteen ranges of a few kilobytes. Accepting the
+        // excuse here would buy nothing measurable and permanently forfeit the
+        // staging trim, so it is refused at load rather than regretted later
+        // (FR-VER-006).
+        if (requiresPath && !destination.RequiresVerification)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationCannotDeclineVerification(destination.Name));
+        }
+
+        // Zero would read as "never" to anyone writing it and as "every pass"
+        // to the arithmetic. Refused rather than guessed at.
+        if (destination.DeepVerifyIntervalDays is { } interval && interval <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+        }
+    }
+
+    private static void ValidateSetDestinations(BackupSetConfiguration set, HashSet<string> destinationNames)
+    {
+        // At least one destination, none of which has to be local — a set
+        // with none is unprotectable and refused up front (FR-DEST-001).
+        if (set.Destinations.Count == 0)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetNeedsDestination(set.Name));
+        }
+
+        var references = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in set.Destinations)
+        {
+            if (!destinationNames.Contains(reference.Ref))
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetUnknownDestination(set.Name, reference.Ref));
+            }
+
+            if (!references.Add(reference.Ref))
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetDuplicateDestination(set.Name, reference.Ref));
+            }
+
+            if (reference.Retention is { IsValid: false })
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_RetentionMustBePositive(set.Name, reference.Ref));
+            }
+        }
+
+        if (set.Retention is { IsValid: false })
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_RetentionMustBePositive(set.Name, set.Name));
         }
     }
 }

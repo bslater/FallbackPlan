@@ -11,7 +11,10 @@ namespace FallbackPlan.Storage.Abstractions;
 /// <remarks>
 /// Expected outcomes — already exists, not found, precondition failed — are
 /// results; exceptions are reserved for genuine faults such as network,
-/// authentication, or provider errors.
+/// authentication, or provider errors. Fault exception types are
+/// implementation-defined: a caller that must survive a fault handles
+/// everything except <see cref="OperationCanceledException"/>, never a list
+/// of the types today's providers happen to throw.
 /// </remarks>
 public interface IObjectStore
 {

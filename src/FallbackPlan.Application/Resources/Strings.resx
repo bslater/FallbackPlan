@@ -61,20 +61,56 @@
   <data name="ClientConfiguration_BackupSetIdMustHex" xml:space="preserve">
     <value>Backup set '{0}': id must be 32 hex digits.</value>
   </data>
+  <data name="ClientConfiguration_BackupSetDuplicateDestination" xml:space="preserve">
+    <value>Backup set '{0}' references destination '{1}' more than once.</value>
+  </data>
   <data name="ClientConfiguration_BackupSetNamesMustNon" xml:space="preserve">
     <value>Backup set names must be non-empty and unique; '{0}' is not.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetNeedsDestination" xml:space="preserve">
+    <value>Backup set '{0}' declares no destinations; declare at least one — a local directory is the 'local-path' kind (FR-DEST-001).</value>
   </data>
   <data name="ClientConfiguration_BackupSetRootMustNot" xml:space="preserve">
     <value>Backup set '{0}': root must not be empty.</value>
   </data>
+  <data name="ClientConfiguration_BackupSetUnknownDestination" xml:space="preserve">
+    <value>Backup set '{0}' references destination '{1}', which is not declared.</value>
+  </data>
   <data name="ClientConfiguration_DeclaresSchemaVersionBuildReads" xml:space="preserve">
     <value>'{0}' declares schema_version {1}; this build reads version {2} only.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationFieldNotForKind" xml:space="preserve">
+    <value>Destination '{0}': '{1}' does not apply to its kind.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationCannotDeclineVerification" xml:space="preserve">
+    <value>Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationIntervalMustBePositive" xml:space="preserve">
+    <value>Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationIdMustHex" xml:space="preserve">
+    <value>Destination '{0}': id must be 32 hex digits.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationNamesMustNon" xml:space="preserve">
+    <value>Destination names must be non-empty and unique; '{0}' is not.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationNeedsPath" xml:space="preserve">
+    <value>Destination '{0}' is 'local-path' and must name a path.</value>
+  </data>
+  <data name="ClientConfiguration_DestinationNeedsPeerIdentity" xml:space="preserve">
+    <value>Destination '{0}' is 'peer' and must name a fingerprint and an endpoint.</value>
   </data>
   <data name="ClientConfiguration_HoldsNoConfigurationObject" xml:space="preserve">
     <value>'{0}' holds no configuration object.</value>
   </data>
   <data name="ClientConfiguration_NotValidConfigurationFile" xml:space="preserve">
     <value>'{0}' is not a valid configuration file: {1}</value>
+  </data>
+  <data name="ClientConfiguration_RetentionMustBePositive" xml:space="preserve">
+    <value>Backup set '{0}': retention values for '{1}' must be positive.</value>
+  </data>
+  <data name="ClientConfiguration_SchemaVersion1NeedsDestinations" xml:space="preserve">
+    <value>'{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.</value>
   </data>
   <data name="JobStateStore_NoJobExistsJournal" xml:space="preserve">
     <value>No job '{0}' exists in the journal.</value>

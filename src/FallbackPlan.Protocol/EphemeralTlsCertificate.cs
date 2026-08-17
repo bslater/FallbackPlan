@@ -57,11 +57,24 @@ public sealed class EphemeralTlsCertificate : IDisposable
     /// <param name="notAfter">End of validity.</param>
     /// <returns>The certificate and its key.</returns>
     /// <remarks>
+    /// <para>
     /// The validity window is required by the encoding and read by nobody: 02
     /// §1 makes no trust decision about this certificate, so an expired one is
     /// no worse than a current one. The clock is a parameter rather than
     /// <see cref="DateTimeOffset.UtcNow"/> so that a test can pin it, not
     /// because anything downstream cares what it says.
+    /// </para>
+    /// <para>
+    /// The certificate handed out is a PKCS#12 round trip of the one the
+    /// request signed, on every platform, because two of them refuse the
+    /// original: Schannel will not take a certificate whose private key is
+    /// process-ephemeral as a server credential, and macOS requires the key
+    /// in a keychain. The import gives the key to the OS for the certificate's
+    /// lifetime and deletes it on dispose, which keeps 02 §1's "never
+    /// persisted" in the sense that rule exists for — the key never outlives
+    /// the connection. One unconditional path also means the suite exercises
+    /// on Linux exactly what ships on the platforms that made it necessary.
+    /// </para>
     /// </remarks>
     public static EphemeralTlsCertificate Create(DateTimeOffset notBefore, DateTimeOffset notAfter)
     {
@@ -76,7 +89,11 @@ public sealed class EphemeralTlsCertificate : IDisposable
             var request = new CertificateRequest(
                 "CN=fallbackplan-peer-session", key, HashAlgorithmName.SHA256);
 
-            return new EphemeralTlsCertificate(key, request.CreateSelfSigned(notBefore, notAfter));
+            using var ephemeral = request.CreateSelfSigned(notBefore, notAfter);
+            return new EphemeralTlsCertificate(
+                key,
+                X509CertificateLoader.LoadPkcs12(
+                    ephemeral.Export(X509ContentType.Pfx), password: null));
         }
         catch
         {

@@ -174,6 +174,62 @@ states (`replicated`, `policy-compliant`) activate with multi-destination
 replication in a later phase; the vocabulary and derivation seams exist
 now so the UI never has to re-learn the words.
 
+#### Amendment (2026-08): the derivation gains its destination axis
+
+That later phase is [ADR-0034](0034-hub-and-spoke-destinations.md), and the
+promise above is called in: the derivation's input becomes **per set, per
+configured destination** — reachability, sync state, declared failure domain,
+last success — and the single-destination booleans retire. The vocabulary does
+not change; what changes is what earns each word. `Captured` is commit to the
+set's staging archive. `Protected` requires at least one destination outside
+the source's failure domain **in sync** — staging never counts
+([ADR-0018 Amendment 1](0018-replica-failure-domains.md)). Every destination
+behind, unreachable or refusing is `Degraded`, with the per-destination reason
+carried, not summarised away. A destination kind the schema accepts but the
+runtime cannot serve yet reports as exactly that — a stated incapacity, not a
+failure. The never-merge rules hold at the same single derivation site, which
+is the point of having one: the matrix is the truth and every roll-up is
+computed from it in front of the reader.
+
+With destination verification built
+([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)),
+`verified` is earned the same per-destination way: the repository-level
+verification input this ADR sketched was never produced in practice and is
+replaced by per-destination stamps from the sync ledger — when bytes were
+last proven, how many ranges of how many eligible objects, and the highest
+publication sequence the sample covered. The roll-up says `verified` only
+for a destination that is in sync, outside the machine's failure domain
+([ADR-0018 Amendment 2](0018-replica-failure-domains.md)), and whose proof
+covers what its last sync delivered; the claim carries the real coverage
+fraction and its date, never a bare tick, exactly as §4 required.
+
+#### Amendment (2026-08): a warning class that does not move the state
+
+§4 kept the derivation a pure function of observed facts, and deliberately gave
+it no clock. That was right, and it had a consequence nobody had noticed: age
+could not enter the derivation at all, so a destination proved on day 1 and one
+proved on day 400 read identically.
+
+The fix does not give `Derive` a clock. The age arrives as a number on the
+destination row, alongside the per-kind bound it is compared against, computed
+where the row is built ([ADR-0035 §7](0035-destination-fitness.md)) — so the
+derivation stays a function of plain values and gains no new axis of test
+surface on a signature this section makes normative.
+
+What it adds is a **warning class that does not move `ProtectionState`**. An
+overdue proof, an address that cannot work, a convergence filter that could not
+be computed: each is named in the warnings and none of them changes the word. A
+state that means two different things is worse than a warning that means one,
+and an old proof is still a proof.
+
+This also fixes the boundary between the two channels §4 left implicit. A
+condition recomputed on every derivation is a **warning** and therefore
+self-clearing; a finding that must survive being ignored is a **notice** and
+persists until acknowledged. The notice store gained the ability to resolve an
+entry for that rule to be usable — without it, every transient condition became
+a permanent nag — and now refreshes a re-raised notice's message, which it had
+documented and not done.
+
 ## Consequences
 
 ### Amendment (2026-08): the peer-host model is superseded

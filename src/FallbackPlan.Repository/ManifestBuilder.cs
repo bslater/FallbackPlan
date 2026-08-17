@@ -146,6 +146,13 @@ public sealed class ManifestBuilder : IAsyncDisposable
             await SealAndUploadAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Deliberately no pinned configuration, so no sidecar and no resume
+        // (05 §6 is a MAY, not a MUST). Manifests are regenerated from the
+        // next run's walk for less than a resume costs — and a metadata
+        // checkpoint in the shared spool directory would be found by the
+        // data session's resume walk, whose pinned fields it can never
+        // match, forcing a restart that deletes it (05 §6.2). What a crash
+        // strands here is reclaimed by the sweep at publication start.
         _writer ??= BlobWriter.Create(
             _repositoryId,
             _writerId,
@@ -189,10 +196,22 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// (ADR-0022 §Decision 1) with the same manifest bytes — and therefore
     /// the same object identifier — as the in-blob record.
     /// </summary>
+    /// <param name="manifest">The snapshot manifest being published.</param>
+    /// <param name="encodedManifest">The manifest's encoded bytes, signature included.</param>
+    /// <param name="intentSequence">
+    /// The publication's write-intent sequence number, which the standalone
+    /// copy carries hint-style rather than drawing a number of its own
+    /// (ADR-0022 §Decision 7): <c>/snapshots/…</c> is not a
+    /// sequence-addressed key, so an own number could satisfy none of the
+    /// four accounting cases and would be voided by the next run — one junk
+    /// void delta per publication, forever. Key and nonce uniqueness never
+    /// rested on the counter; each object seals under a fresh 32-byte salt.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the write.</param>
     public async ValueTask WriteStandaloneSnapshotAsync(
         SnapshotManifest manifest,
         ReadOnlyMemory<byte> encodedManifest,
-        ulong counter,
+        ulong intentSequence,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(manifest);
@@ -205,7 +224,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
             _metadataClassKey,
             _generation,
             _writerId,
-            counter,
+            intentSequence,
             ObjectType.SnapshotManifest,
             objectId,
             encodedManifest.Span);
@@ -278,11 +297,25 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 objectId,
                 encoded);
 
-            await _store.PutAsync(
-                MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
-                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
-                PutConditions.IfNotExists,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.PutAsync(
+                    MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
+                    _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                    PutConditions.IfNotExists,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // The advisory bargain, applied to faults as well as
+                // refusals: a hint the store would not take costs a later
+                // reader one rename optimisation, never the publication —
+                // whose blobs and deltas are already durable, and whose
+                // snapshot must still follow. Cancellation is not caught:
+                // stopping the job is the caller's command, not a store
+                // fault to shrug off.
+                continue;
+            }
         }
     }
 
@@ -307,6 +340,23 @@ public sealed class ManifestBuilder : IAsyncDisposable
             if (put.Outcome == PutOutcome.PreconditionFailed)
             {
                 throw new IOException(Strings.FormatPreparedSegment_StoreRefusedBlobWithFailed(storeKey));
+            }
+
+            // 05 §5.1: only a byte-identical re-put is success. A freshly
+            // allocated identifier answered AlreadyExists means the sequence
+            // state regressed — see ArchiveSession.UploadAsync.
+            if (put.Outcome == PutOutcome.AlreadyExists &&
+                !await SealedBlobReadback.MatchesAsync(_store, storeKey, sealedBlob, cancellationToken).ConfigureAwait(false))
+            {
+                throw new IOException(Strings.FormatBlobUpload_StoreHeldDifferentBytesUnder(storeKey));
+            }
+
+            // ADR-0022 §Decision 7 case 4, exactly as the data path: durable
+            // and intent-named means accounted, so no later run voids a
+            // number this blob embeds.
+            if (_intentScope is not null)
+            {
+                _counters.MarkAccounted(sealedBlob.BlobCounter);
             }
 
             FallbackPlan.Domain.Diagnostics.EngineDiagnostics.BlobsSealed.Add(

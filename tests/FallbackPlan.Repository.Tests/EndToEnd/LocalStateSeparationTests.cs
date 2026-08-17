@@ -56,9 +56,14 @@ public sealed class LocalStateSeparationTests : IDisposable
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [new DestinationConfiguration
+            {
+                Id = new string('1', 32), Name = "vault", Kind = DestinationKind.LocalPath, Path = "/mnt/vault",
+            }],
             BackupSets = [new BackupSetConfiguration
             {
                 Id = new string('a', 32), Name = "docs", Root = "/data/docs",
+                Destinations = [new SetDestinationReference { Ref = "vault" }],
             }],
         }.Save(ConfigPath);
 
@@ -80,10 +85,15 @@ public sealed class LocalStateSeparationTests : IDisposable
         var configuration = new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [new DestinationConfiguration
+            {
+                Id = new string('2', 32), Name = "vault", Kind = DestinationKind.LocalPath, Path = "/mnt/vault",
+            }],
             BackupSets = [new BackupSetConfiguration
             {
                 Id = new string('b', 32), Name = "home", Root = "/home/user",
                 ExcludeRules = ["**/*.tmp"],
+                Destinations = [new SetDestinationReference { Ref = "vault" }],
             }],
         };
         configuration.Save(ConfigPath);
@@ -100,7 +110,7 @@ public sealed class LocalStateSeparationTests : IDisposable
     [TestMethod]
     public void ConfigurationLoad_AnUnknownField_IsRejectedRatherThanIgnored()
     {
-        File.WriteAllText(ConfigPath, """{ "schema_version": 1, "backup_sets": [], "shedule": "daily" }""");
+        File.WriteAllText(ConfigPath, """{ "schema_version": 2, "backup_sets": [], "shedule": "daily" }""");
 
         // A typo'd field silently dropped is a schedule that silently never
         // runs — named-field rejection is the guard (11 §3).
@@ -118,8 +128,11 @@ public sealed class LocalStateSeparationTests : IDisposable
     public void ConfigurationLoad_ABackupSetCarriesInvalidRules_IsRefused()
     {
         File.WriteAllText(ConfigPath, $$"""
-            { "schema_version": 1, "backup_sets": [
-              { "id": "{{new string('c', 32)}}", "name": "bad", "root": "/x", "exclude_rules": ["a**b"] } ] }
+            { "schema_version": 2,
+              "destinations": [ { "id": "{{new string('1', 32)}}", "name": "vault", "kind": "local-path", "path": "/mnt/v" } ],
+              "backup_sets": [
+              { "id": "{{new string('c', 32)}}", "name": "bad", "root": "/x", "exclude_rules": ["a**b"],
+                "destinations": [ "vault" ] } ] }
             """);
         var exception = Assert.ThrowsExactly<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
         Assert.Contains("a**b", exception.Message, StringComparison.Ordinal);

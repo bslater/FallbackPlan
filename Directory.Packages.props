@@ -18,6 +18,13 @@
   <ItemGroup Label="CLI">
     <PackageVersion Include="System.CommandLine" Version="2.0.10" />
   </ItemGroup>
+  <ItemGroup Label="Agent service host">
+    <!-- ServiceBase, for the Windows SCM Start/Stop handshake (ADR-0033). The
+         implementation is Windows-only; the reference assembly is cross-platform
+         so the Linux and macOS builds compile, and every call is guarded by
+         OperatingSystem.IsWindows(). -->
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.10" />
+  </ItemGroup>
   <ItemGroup Label="Testing">
     <PackageVersion Include="MSTest" Version="3.11.0" />
     <!-- FsCheck's property runner ships xUnit and NUnit integrations and no

@@ -485,16 +485,22 @@ public sealed class PeerSessionNegotiationTests
     }
 
     [TestMethod]
-    public void FeatureNegotiation_NeitherSideOffersAnyFeature_StillAgrees()
+    public void FeatureNegotiation_TwoCurrentBuilds_AgreeOnTheFeaturesThisBuildOffers()
     {
         var hello = PeerSessionNegotiation.Hello("1.0.0");
 
         var accept = PeerSessionNegotiation.Negotiate(hello, hello);
 
-        // The mechanism exists before any feature does, because retrofitting
-        // negotiation onto a deployed protocol means a flag day (02 §4).
+        // The mechanism predates its first feature (02 §6) and now carries it:
+        // two current builds agree on exactly what this build offers, and a
+        // hello offering nothing still negotiates — the intersection is empty,
+        // never an error.
         Assert.AreEqual(PeerSessionNegotiation.CurrentVersion, accept.Version);
-        Assert.IsEmpty(accept.Features);
+        SequenceAssert.AreEqual(PeerSessionNegotiation.SupportedFeatures.Order(StringComparer.Ordinal), accept.Features);
+
+        var bare = PeerSessionNegotiation.Negotiate(
+            hello, hello with { FeaturesOffered = [], FeaturesRequired = [] });
+        Assert.IsEmpty(bare.Features);
     }
 
     [TestMethod]

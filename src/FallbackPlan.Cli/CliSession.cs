@@ -63,10 +63,20 @@ public sealed class CliSession : IDisposable
 
     public string StateDirectory { get; }
 
-    public string SpoolDirectory => Path.Combine(StateDirectory, "spool");
+    /// <summary>
+    /// The archive's identity in file names. Per-archive client state —
+    /// spool, catalogue, sequence — is keyed by repository id so that the
+    /// CLI's direct mode and the service name the same files for the same
+    /// archive; keying by anything else would give one archive two sequence
+    /// spaces under one writer identity, which is the ADR-0028 hazard by the
+    /// back door (ADR-0034).
+    /// </summary>
+    private string RepositoryIdHex => Repository.RepositoryId.ToString();
 
-    /// <summary>The disposable catalogue — one of the three separated stores (11 §3).</summary>
-    public string CataloguePath => Path.Combine(StateDirectory, "catalogue.db");
+    public string SpoolDirectory => Path.Combine(StateDirectory, "spool", RepositoryIdHex);
+
+    /// <summary>The disposable catalogue — one of the three separated stores (11 §3), one per archive.</summary>
+    public string CataloguePath => Path.Combine(StateDirectory, $"catalogue-{RepositoryIdHex}.db");
 
     /// <summary>The user-editable configuration — the second store (11 §3).</summary>
     public string ConfigurationPath => Path.Combine(StateDirectory, "config.json");
@@ -214,7 +224,7 @@ public sealed class CliSession : IDisposable
     public byte[] BackupSetId => State.DefaultBackupSetId;
 
     public WriterSequence CreateSequence() =>
-        new(new FileSequenceStateStore(Path.Combine(StateDirectory, "sequence.txt")));
+        new(new FileSequenceStateStore(Path.Combine(StateDirectory, $"sequence-{RepositoryIdHex}.txt")));
 
     /// <inheritdoc />
     public void Dispose()

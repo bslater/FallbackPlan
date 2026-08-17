@@ -44,7 +44,7 @@ The domain is recorded in the policy manifest and participates in the dedup inde
 
 The original version of this ADR made `device` the default, reasoning that it "costs nothing at all in the single-device case, which is the overwhelmingly common one".
 
-The premise is true; the conclusion does not follow. `repository` also costs nothing in the single-device case, for the reason above. The argument therefore selected between two options on a criterion where they are identical, and said nothing about the case where they actually differ — the multi-device household backing up four laptops that share an operating system and a music library, where `device` stores four copies. That is CrashPlan's classic use case and this project's stated reason for existing ([PT-11](../review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)).
+The premise is true; the conclusion does not follow. `repository` also costs nothing in the single-device case, for the reason above. The argument therefore selected between two options on a criterion where they are identical, and said nothing about the case where they actually differ — the multi-device household backing up four laptops that share an operating system and a music library, where `device` stores four copies. That is the classic consumer use case and this project's stated reason for existing ([PT-11](../review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)).
 
 The default is therefore `repository`: free where `device` is free, cheaper where they differ, and it keeps the integrity guarantee that motivated the trust domains in the first place. The residual cost is one read per first reuse, plus the confirmation side channel below — for which `device` remains available as the hardened setting.
 
@@ -101,6 +101,16 @@ second**, and that ordering is what makes the default affordable:
   FR-DED-002's "a fresh single-device repository performs no verification
   reads", and it is measured rather than asserted — the second backup of an
   unchanged single-writer tree issues **zero** store reads.
+
+  > **Note (2026-08, stale-state round).** "With no read" is not "with no
+  > check". Before any trust question, the gate probes that the blob the
+  > location row points at still *exists* — one memoized `GetMetadata` per
+  > distinct blob per publication, never a read. The catalogue is a cache,
+  > and a row that outlived its object (a GC race, a provider rollback,
+  > another participant's compaction) would otherwise let a publication
+  > commit a manifest whose references dangle — the exact failure this
+  > decision exists to catch at write time. Held by `StaleCatalogueTests`;
+  > the zero-verification-read measurement above is unchanged.
 - **`device`** refuses another writer's object outright and stores its own
   copy. Duplicate storage across a user's devices is what this domain sells.
 - **`repository`** (the default) fetches, decrypts, and confirms the content

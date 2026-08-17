@@ -54,6 +54,7 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly SpoolPinnedConfiguration? _pinned;
     private bool _sealed;
     private bool _abandoned;
+    private bool _spoolClosed;
 
     private BlobWriter(
         BlobEnvelope envelope,
@@ -178,6 +179,42 @@ public sealed class BlobWriter : IAsyncDisposable
     }
 
     /// <summary>
+    /// Deletes spool files no resume can ever reach: a <c>blob-*.spool</c>
+    /// with no checkpoint sidecar, and a sidecar with no spool. Sealing
+    /// deletes the sidecar before the upload collects the spool, and a
+    /// metadata blob never writes one — so a kill in either window leaves a
+    /// file <see cref="TryResume"/> cannot see and nothing referenced. The
+    /// caller must own the spool directory exclusively (one writer per state
+    /// directory, ADR-0028 §2), which is what makes an unpaired file garbage
+    /// rather than another session's work in flight.
+    /// </summary>
+    public static void SweepUnresumable(string spoolDirectory)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
+
+        if (!Directory.Exists(spoolDirectory))
+        {
+            return;
+        }
+
+        foreach (var spool in Directory.EnumerateFiles(spoolDirectory, "blob-*.spool"))
+        {
+            if (!File.Exists(SpoolCheckpoint.PathFor(spool)))
+            {
+                File.Delete(spool);
+            }
+        }
+
+        foreach (var checkpoint in Directory.EnumerateFiles(spoolDirectory, "blob-*.spool.checkpoint"))
+        {
+            if (!File.Exists(checkpoint[..^".checkpoint".Length]))
+            {
+                File.Delete(checkpoint);
+            }
+        }
+    }
+
+    /// <summary>
     /// Attempts to resume the checkpointed spool in
     /// <paramref name="spoolDirectory"/> (specification 05 §6.3; C1;
     /// FR-ARCH-011). Resume re-emits the spooled sealed bytes verbatim and
@@ -195,6 +232,14 @@ public sealed class BlobWriter : IAsyncDisposable
     /// restart. So no ordinal is ever re-used under one salt, which is the
     /// property 05 §6.1 exists to protect, and it holds without writing
     /// anything per record.
+    /// <para>
+    /// The walk takes the lexicographically first checkpoint in the
+    /// directory, which is safe only because one session owns the directory
+    /// at a time — the writer role serialises processes (ADR-0028 §2) and
+    /// the scheduler's single writer lane serialises jobs within one.
+    /// Nothing here enforces that ownership; a second concurrent session
+    /// over one spool directory is a caller bug.
+    /// </para>
     /// </remarks>
     public static ResumeResult TryResume(
         string spoolDirectory,
@@ -539,16 +584,35 @@ public sealed class BlobWriter : IAsyncDisposable
     /// spool stays on disk for <see cref="TryResume"/>; a partial spool is
     /// still never uploaded (specification 05 §6.3).
     /// </summary>
+    /// <remarks>
+    /// Never throws for state reasons: the caller is an unwind that may
+    /// already be propagating the exception that interrupted the session,
+    /// and an abandon that threw would replace it — a cancelled job would
+    /// then report a failure instead of its cancellation. A writer whose
+    /// seal was interrupted mid-write arrives here marked sealed with the
+    /// spool still open; what it leaves on disk is judged by the next
+    /// session's resume walk, whose authentication restarts on doubt
+    /// (05 §6.2) — nothing this unwind could decide.
+    /// </remarks>
     public async ValueTask AbandonAsync()
     {
-        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
+        if (_abandoned)
+        {
+            return;
+        }
+
         _abandoned = true;
 
         _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
         _digest.Dispose();
-        _spool.Flush(flushToDisk: true);
-        await _spool.DisposeAsync().ConfigureAwait(false);
+
+        if (!_spoolClosed)
+        {
+            _spoolClosed = true;
+            _spool.Flush(flushToDisk: true);
+            await _spool.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private void WriteCheckpoint()
@@ -619,6 +683,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _spool.Flush(flushToDisk: true);
         await _spool.DisposeAsync().ConfigureAwait(false);
+        _spoolClosed = true;
         _cipher.Dispose();
         CryptographicOperations.ZeroMemory(_blobKey);
 
@@ -628,7 +693,8 @@ public sealed class BlobWriter : IAsyncDisposable
             File.Delete(SpoolCheckpoint.PathFor(_spoolPath));
         }
 
-        return new SealedBlob(_spoolPath, _envelope.BlobId, _envelope.BlobClass, CurrentLength, digest, _entries);
+        return new SealedBlob(
+            _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest, _entries);
     }
 
     /// <summary>
@@ -648,9 +714,18 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _digest.Dispose();
 
+        // A writer whose seal was interrupted mid-write is marked sealed
+        // with the spool handle still open — closed here, its file left on
+        // disk for the resume walk to judge, exactly as AbandonAsync leaves
+        // it. Only a never-sealed spool is discarded below.
+        if (!_spoolClosed)
+        {
+            _spoolClosed = true;
+            await _spool.DisposeAsync().ConfigureAwait(false);
+        }
+
         if (!_sealed)
         {
-            await _spool.DisposeAsync().ConfigureAwait(false);
             if (File.Exists(_spoolPath))
             {
                 File.Delete(_spoolPath);

@@ -20,7 +20,9 @@ public sealed class AgentPassTests : IDisposable
 
     private const string PassphraseText = "agent-pass-tests-passphrase!!";
 
-    private string RepoPath => Path.Combine(_root, "repo");
+    private string ArchivesRoot => Path.Combine(_root, "archives");
+
+    private string RepoPath => Path.Combine(ArchivesRoot, new string('a', 32));
 
     private string StateDirectory => Path.Combine(_root, "state");
 
@@ -44,9 +46,20 @@ public sealed class AgentPassTests : IDisposable
             createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
     }
 
+    private DestinationConfiguration Vault => new()
+    {
+        Id = new string('d', 32),
+        Name = "vault",
+        Kind = DestinationKind.LocalPath,
+        Path = Path.Combine(StateDirectory, "vault"),
+    };
+
+    private static SetDestinationReference VaultRef => new() { Ref = "vault" };
+
     private void WriteConfiguration(string schedule) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+        Destinations = [Vault],
         BackupSets =
         [
             new BackupSetConfiguration
@@ -55,6 +68,7 @@ public sealed class AgentPassTests : IDisposable
                 Name = "docs",
                 Root = SourceRoot,
                 Schedule = schedule,
+                Destinations = [VaultRef],
             },
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
@@ -62,7 +76,7 @@ public sealed class AgentPassTests : IDisposable
     private async Task<AgentPassResult> RunPassAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        return await AgentPass.RunAsync(RepoPath, passphrase, StateDirectory, now, CancellationToken.None);
+        return await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
     }
 
     [TestMethod]
@@ -103,7 +117,8 @@ public sealed class AgentPassTests : IDisposable
         using var passphrase = Passphrase.Create(PassphraseText);
         using var repository = await RepositoryLifecycle.OpenAsync(
             new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
-        using var catalogue = CatalogueDb.Open(Path.Combine(StateDirectory, "catalogue.db"), repository.RepositoryId);
+        using var catalogue = CatalogueDb.Open(
+            Path.Combine(StateDirectory, $"catalogue-{repository.RepositoryId}.db"), repository.RepositoryId);
         Assert.AreEqual(2, catalogue.EnumerateSnapshots().Count);
     }
 
@@ -118,6 +133,181 @@ public sealed class AgentPassTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AgentPass_TwoSets_GetTwoIndependentStagingArchives()
+    {
+        // No CreateRepositoryAsync: staging archives are the service's own to
+        // create, one per set on first backup (ADR-0034 §1, FR-DEST-002).
+        var secondSource = Path.Combine(_root, "source-2");
+        Directory.CreateDirectory(secondSource);
+        File.WriteAllText(Path.Combine(secondSource, "p.txt"), "second set");
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Vault],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = new string('a', 32), Name = "docs", Root = SourceRoot,
+                    Schedule = "every 4h", Destinations = [VaultRef],
+                },
+                new BackupSetConfiguration
+                {
+                    Id = new string('f', 32), Name = "pics", Root = secondSource,
+                    Schedule = "every 4h", Destinations = [VaultRef],
+                },
+            ],
+        }.Save(Path.Combine(StateDirectory, "config.json"));
+
+        var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+        Assert.AreEqual(2, result.Ran);
+
+        // Two archives on disk, each a complete repository with its own
+        // identity — and therefore its own writer sequence and catalogue,
+        // named by that identity.
+        using var passphrase = Passphrase.Create(PassphraseText);
+        var identities = new List<string>();
+        foreach (var setId in new[] { new string('a', 32), new string('f', 32) })
+        {
+            using var repository = await RepositoryLifecycle.OpenAsync(
+                new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, setId)), passphrase, CancellationToken.None);
+            var identity = repository.RepositoryId.ToString();
+            identities.Add(identity);
+
+            Assert.IsTrue(File.Exists(Path.Combine(StateDirectory, $"sequence-{identity}.txt")));
+            using var catalogue = CatalogueDb.Open(
+                Path.Combine(StateDirectory, $"catalogue-{identity}.db"), repository.RepositoryId);
+            var snapshot = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
+            Assert.IsTrue(snapshot.BackupSetId.Span.SequenceEqual(Convert.FromHexString(setId)));
+        }
+
+        Assert.AreNotEqual(identities[0], identities[1]);
+    }
+
+    private static async Task<HashSet<string>> KeysOfAsync(string storeRoot)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var store = new LocalFileSystemObjectStore(storeRoot);
+        await foreach (var entry in store.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, CancellationToken.None))
+        {
+            keys.Add(entry.Key.Value);
+        }
+
+        return keys;
+    }
+
+    [TestMethod]
+    public async Task AgentPass_ALocalPathDestination_ReceivesACompleteReplica()
+    {
+        Directory.CreateDirectory(Vault.Path!);
+        WriteConfiguration("every 4h");
+
+        var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+        Assert.AreEqual(1, result.Ran);
+
+        // The pair is in sync and says so durably (FR-DEST-004).
+        var record = DestinationSyncStore.Open(StateDirectory).Find(new string('a', 32), "vault");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.InSync, record.State);
+
+        // Byte-for-byte the same archive: every object key the staging
+        // archive holds, the destination holds (FR-DEST-002). The replica
+        // lands under the archive's repository id, like a peer's would.
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        var replicaRoot = Path.Combine(Vault.Path!, repository.RepositoryId.ToString());
+
+        var stagingKeys = await KeysOfAsync(RepoPath);
+        var replicaKeys = await KeysOfAsync(replicaRoot);
+        Assert.IsTrue(stagingKeys.SetEquals(replicaKeys));
+        Assert.IsNotEmpty(stagingKeys);
+
+        // And it is a repository in its own right: it opens with nothing but
+        // the path and the passphrase.
+        using var replica = await RepositoryLifecycle.OpenAsync(
+            new LocalFileSystemObjectStore(replicaRoot), passphrase, CancellationToken.None);
+        Assert.AreEqual(repository.RepositoryId, replica.RepositoryId);
+    }
+
+    [TestMethod]
+    public async Task AgentPass_AnOfflineDestination_IsRecordedAndCatchesUpWhenItReturns()
+    {
+        // The vault's directory deliberately does not exist: an unplugged
+        // drive, in this harness's terms.
+        WriteConfiguration("every 4h");
+        var now = new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero);
+
+        var first = await RunPassAsync(now);
+        Assert.AreEqual(1, first.Ran);
+
+        var offline = DestinationSyncStore.Open(StateDirectory).Find(new string('a', 32), "vault");
+        Assert.IsNotNull(offline);
+        Assert.AreEqual(DestinationSyncState.Unavailable, offline.State);
+        Assert.IsNull(offline.LastSuccessAt);
+
+        // The drive comes back; the next pass closes the gap with no command
+        // issued (FR-DEST-003). No backup is due — this is pure catch-up.
+        Directory.CreateDirectory(Vault.Path!);
+        var second = await RunPassAsync(now.AddMinutes(30));
+        Assert.AreEqual(0, second.Ran);
+
+        var caughtUp = DestinationSyncStore.Open(StateDirectory).Find(new string('a', 32), "vault");
+        Assert.IsNotNull(caughtUp);
+        Assert.AreEqual(DestinationSyncState.InSync, caughtUp.State);
+    }
+
+    [TestMethod]
+    public async Task AgentPass_TwoDestinations_BothConverge()
+    {
+        var second = Path.Combine(StateDirectory, "vault-2");
+        Directory.CreateDirectory(Vault.Path!);
+        Directory.CreateDirectory(second);
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                Vault,
+                new DestinationConfiguration
+                {
+                    Id = new string('e', 32), Name = "vault-2",
+                    Kind = DestinationKind.LocalPath, Path = second,
+                },
+            ],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = new string('a', 32), Name = "docs", Root = SourceRoot,
+                    Schedule = "every 4h",
+                    Destinations = [VaultRef, new SetDestinationReference { Ref = "vault-2" }],
+                },
+            ],
+        }.Save(Path.Combine(StateDirectory, "config.json"));
+
+        var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+        Assert.AreEqual(1, result.Ran);
+
+        var ledger = DestinationSyncStore.Open(StateDirectory);
+        Assert.AreEqual(DestinationSyncState.InSync, ledger.Find(new string('a', 32), "vault")!.State);
+        Assert.AreEqual(DestinationSyncState.InSync, ledger.Find(new string('a', 32), "vault-2")!.State);
+
+        var stagingKeys = await KeysOfAsync(RepoPath);
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var repository = await RepositoryLifecycle.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        foreach (var root in new[] { Vault.Path!, second })
+        {
+            var keys = await KeysOfAsync(Path.Combine(root, repository.RepositoryId.ToString()));
+            Assert.IsTrue(stagingKeys.SetEquals(keys));
+        }
+    }
+
+    [TestMethod]
     public async Task AgentPass_AMissingRootAndABadSchedule_AreClassifiedRecoverableAndPermanent()
     {
         await CreateRepositoryAsync();
@@ -125,17 +315,20 @@ public sealed class AgentPassTests : IDisposable
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Vault],
             BackupSets =
             [
                 new BackupSetConfiguration
                 {
                     Id = new string('b', 32), Name = "gone",
                     Root = Path.Combine(_root, "unmounted"), Schedule = "every 1h",
+                    Destinations = [VaultRef],
                 },
                 new BackupSetConfiguration
                 {
                     Id = new string('c', 32), Name = "typo",
                     Root = SourceRoot, Schedule = "hourly",
+                    Destinations = [VaultRef],
                 },
             ],
         }.Save(Path.Combine(StateDirectory, "config.json"));

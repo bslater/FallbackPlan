@@ -9,7 +9,7 @@
 
 ## Context
 
-Publication order — blobs, then index deltas, then snapshot — is correct and is the most valuable rule inherited from restic. It also creates a window: between the first blob upload and the delta publication, potentially hours on an initial backup, a writer's blobs are durable and referenced by nothing. A mark-and-sweep collector cannot distinguish them from garbage.
+Publication order — blobs, then index deltas, then snapshot — is correct and is the most valuable rule inherited from the prior art. It also creates a window: between the first blob upload and the delta publication, potentially hours on an initial backup, a writer's blobs are durable and referenced by nothing. A mark-and-sweep collector cannot distinguish them from garbage.
 
 The proposal closed this with "account for active writer leases and grace periods". A lease cannot carry that weight:
 
@@ -99,9 +99,57 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 
 **Collect only blobs older than a long fixed age.** Rejected. An age threshold long enough to be safe for a slow initial backup is long enough to make collection useless, and it is still a clock.
 
+## Amendment 4 (2026-08) — where the collector runs under hub-and-spoke
+
+[ADR-0034](0034-hub-and-spoke-destinations.md) splits one archive into a
+staging archive per set plus whole-archive replicas at destinations, and the
+collector's world divides the same way. **Marking happens where the keys are:
+the hub computes the keep-set and its object closure against the set's staging
+archive**, under every safety mechanism above, unchanged — intents, generation
+cut-off, grace, revalidation. Destinations are then *converged, not collected*:
+a local-path destination has the hub's plan executed against it directly, and a
+peer is instructed which objects to delete and deletes exactly those, bounded
+by its own granted floor — a spoke holds ciphertext it cannot mark, so it never
+runs this algorithm and never decides what is garbage.
+
+Two rules join the four mechanisms for the fan-out world. **Deletion may not
+outrun replication**: an object leaves staging only when every configured
+destination of the set holds it, or the deferral bound of
+[ADR-0011 Amendment 2](0011-commit-versus-replication-semantics.md) has been
+raised as a warning — the same gate that makes staging trimmable at all.
+And **a destination's deletions are keyed to the hub's plan**, never inferred
+from local reachability, because local reachability at a replica is exactly the
+partial view this ADR exists to distrust.
+
+## Amendment 5 (2026-08) — the grace generation, realised
+
+Building the collector surfaced a conflation the design had survived on
+paper: the number every code path called "the generation" is the **key
+generation**, which advances on key rotation — not on publication. A grace
+period counted in it would never run, and a replication gate compared
+against it would hold nothing, because rotation is rare and publication is
+the event both actually wait for.
+
+A per-set staging archive is **single-writer by construction**
+([ADR-0034](0034-hub-and-spoke-destinations.md)), and a single writer has
+exactly one per-publication monotonic every participant can see: its
+**journal sequence**, carried in cleartext as each standalone snapshot
+record's counter ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md)
+§Decision 7). The staging collector therefore counts its grace in that
+sequence — a tombstone becomes eligible only after the writer has visibly
+published past the decision — and the replication gate compares each
+snapshot's publication sequence to the highest sequence a destination's
+sync had when it began. Sealing and signing keep using the key generation,
+which is what derives keys; only the ordering arithmetic moved. When
+multi-writer archives exist, this returns to the index generation
+[specification 11 §3.1](../../specifications/repository-format/11-lifecycle-objects.md#31-the-grace-period-is-counted-in-generations-not-in-time)
+speaks of; the property preserved is the same — no clock, only visible
+advancement.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |
+| 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |

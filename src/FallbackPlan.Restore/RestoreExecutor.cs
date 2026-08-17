@@ -104,9 +104,12 @@ public sealed record RestoreReceipt
     /// The boolean is not carried alongside it: a reader that understood the
     /// old field would have read <c>true</c> for a partial restore, which is
     /// the defect, so leaving it present would preserve the lie for exactly
-    /// the readers most likely to trust it.
+    /// the readers most likely to trust it. Version 3 added the
+    /// <c>degraded</c> item outcome (RR-6): a file whose alternate data
+    /// streams were captured and not written back is not <c>restored</c>,
+    /// and a run containing one is not <c>Complete</c>.
     /// </remarks>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -240,7 +243,17 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
 
         foreach (var item in plan.Items)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // Cooperative stop, not an exception: break so the receipt is still
+            // produced and Aggregate can see fewer items than planned and
+            // report Cancelled (architecture 08 §3's outcome, previously
+            // unreachable because this threw before the receipt was built).
+            // Stopping between items means every item already in the receipt is
+            // whole — a cancelled restore leaves the same class of state a
+            // completed prefix would.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
 
             if (!TryResolve(root, item.Path, out var destination, out var refusal))
             {
@@ -258,7 +271,24 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                 continue;
             }
 
-            var read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+            RecordReadResult read;
+            try
+            {
+                read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException exception)
+            {
+                // A store fault is contained to the item it hit (architecture
+                // 08 §3): the receipt accounts for it as failed and the run
+                // continues, exactly as an unreadable record does. Letting it
+                // propagate aborted the whole run with no receipt at all.
+                items.Add(new ReceiptItem
+                {
+                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                });
+                continue;
+            }
+
             if (read.Outcome != RecordReadOutcome.Ok)
             {
                 items.Add(new ReceiptItem
@@ -278,10 +308,29 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                 {
                     var spool = destination + ".fbp-restore-tmp";
                     RestoreResult result;
-                    var output = File.Create(spool);
-                    await using (output.ConfigureAwait(false))
+                    try
                     {
-                        result = await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
+                        var output = File.Create(spool);
+                        await using (output.ConfigureAwait(false))
+                        {
+                            result = await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                    catch (IOException exception)
+                    {
+                        // Same containment as the manifest read above: the
+                        // fault fails this item, the spool never becomes the
+                        // destination, and the run carries on.
+                        if (File.Exists(spool))
+                        {
+                            File.Delete(spool);
+                        }
+
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                        });
+                        continue;
                     }
 
                     if (!result.Success)
@@ -336,6 +385,23 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                     // default metadata — recoverable — never the reverse.
                     ApplyMetadata(destination, manifest.Metadata);
 
+                    // The main stream restored and verified; alternate data
+                    // streams the manifest carries did not (RR-6's honesty
+                    // half — write-back is not implemented on any target).
+                    // "degraded", not "restored": the file on disk is not the
+                    // file that was captured, and the receipt says so per
+                    // item, exactly where the shortfall is.
+                    if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
+                    {
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length,
+                            Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
+                                + "and not written back on this target (declared in the plan)",
+                        });
+                        break;
+                    }
+
                     items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length });
                     break;
                 }
@@ -389,11 +455,13 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
     /// <param name="planned">How many items the plan held.</param>
     /// <returns>The aggregate.</returns>
     /// <remarks>
-    /// A skipped item makes the restore <see cref="RestoreOutcome.Partial"/>.
-    /// The plan declaring in advance that a symlink cannot be materialised on
-    /// this target is a reason the shortfall is expected — it is not a reason
-    /// to report that nothing is missing. What the operator needs to know is
-    /// that the tree they restored is not the tree that was captured.
+    /// A skipped or degraded item makes the restore
+    /// <see cref="RestoreOutcome.Partial"/>. The plan declaring in advance
+    /// that a symlink cannot be materialised on this target — or that a
+    /// file's alternate streams cannot be written back — is a reason the
+    /// shortfall is expected; it is not a reason to report that nothing is
+    /// missing. What the operator needs to know is that the tree they
+    /// restored is not the tree that was captured.
     /// </remarks>
     private static RestoreOutcome Aggregate(List<ReceiptItem> items, int planned)
     {
@@ -407,7 +475,7 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             return RestoreOutcome.Cancelled;
         }
 
-        return items.Any(item => item.Outcome == "skipped")
+        return items.Any(item => item.Outcome is "skipped" or "degraded")
             ? RestoreOutcome.Partial
             : RestoreOutcome.Complete;
     }
@@ -461,8 +529,66 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             return false;
         }
 
+        // GetFullPath is lexical — it normalises `..` and `.` but does not
+        // follow symlinks. A link inside the root pointing out of it (seeded by
+        // an attacker, or restored by an earlier item) would let a later path
+        // traverse it and escape though every component reads as plain. Resolve
+        // the deepest existing ancestor through its links and re-check: a real
+        // path that leaves the root is refused before anything is written.
+        if (EscapesThroughALink(root, resolved))
+        {
+            refusal = "refused: the path traverses a symlink that leaves the restore root";
+            return false;
+        }
+
         destination = resolved;
         return true;
+    }
+
+    private static bool EscapesThroughALink(string root, string resolved)
+    {
+        // Lexical containment already proved `resolved` is under `root`. What is
+        // left is a component *between* the root and the destination that exists
+        // on disk as a symlink leaving the root — the only way a link can be
+        // traversed by this write. The root itself is the executor's own
+        // directory and is not suspect; anything at or above it is out of scope.
+        var realRootFence = RealPath(root) + Path.DirectorySeparatorChar;
+        var rootFence = (root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar);
+
+        var component = Path.GetDirectoryName(resolved);
+        while (!string.IsNullOrEmpty(component)
+            && component.Length >= rootFence.Length
+            && (component + Path.DirectorySeparatorChar).StartsWith(rootFence, StringComparison.Ordinal))
+        {
+            if (Directory.Exists(component) || File.Exists(component))
+            {
+                var real = RealPath(component) + Path.DirectorySeparatorChar;
+                if (!real.StartsWith(realRootFence, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            component = Path.GetDirectoryName(component);
+        }
+
+        return false;
+    }
+
+    private static string RealPath(string path)
+    {
+        // ResolveLinkTarget with returnFinalTarget follows a chain of links to
+        // the real object; a non-link returns null and the path stands.
+        try
+        {
+            var resolved = Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName
+                ?? File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName;
+            return resolved is null ? Path.GetFullPath(path) : Path.GetFullPath(resolved);
+        }
+        catch (IOException)
+        {
+            return Path.GetFullPath(path);
+        }
     }
 
     private static bool IsPlainComponent(string component, out string why)

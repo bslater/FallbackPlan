@@ -41,7 +41,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task BlobEnvelope_ABitIsFlipped_FailsTheBlobAtOpenAndNoOther()
+    public async Task BlobEnvelope_ABitIsFlipped_IsSkippedWithANamedFindingAndNoOther()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -49,12 +49,17 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
 
         // Flip inside the envelope's salt: the derived blob key changes, so
         // the footer fails authentication at open — a scoped damage finding.
+        // Corruption is local (04 §7; NFR-REL-004): the damaged blob is
+        // skipped and named, every other blob loads, and the damaged blob's
+        // records read as absent downstream — a loud refusal, never wrong
+        // bytes. Naming the damage exhaustively is verify's job.
         await FlipByteAsync(FirstDataBlobPath(), 20);
 
         using var reader = new RepositoryReader(Repo, keys, store);
-        var exception = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
-            await reader.LoadBlobsAsync(CancellationToken.None));
-        Assert.Contains("authentication", exception.Message, StringComparison.OrdinalIgnoreCase);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var skipped = Assert.ContainsSingle(reader.SkippedBlobs);
+        Assert.Contains("authentication", skipped.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]
@@ -109,7 +114,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     }
 
     [TestMethod]
-    public async Task RecoveryFooter_ABitIsFlipped_FailsTheBlobAtOpen()
+    public async Task RecoveryFooter_ABitIsFlipped_IsSkippedWithANamedFinding()
     {
         var (_, keys, hierarchy, store) = await PublishAsync();
         using var _keys = keys;
@@ -119,11 +124,15 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         var length = new FileInfo(path).Length;
 
         // Flip inside the encrypted footer (between the last record and the
-        // locator) — table authentication fails at open.
+        // locator) — table authentication fails at open, and the blob is
+        // skipped with a named finding rather than refusing the whole load
+        // (04 §7; NFR-REL-004).
         await FlipByteAsync(path, (int)(length - FooterLocator.Length - 4));
 
         using var reader = new RepositoryReader(Repo, keys, store);
-        await Assert.ThrowsExactlyAsync<BlobFormatException>(async () => await reader.LoadBlobsAsync(CancellationToken.None));
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        Assert.ContainsSingle(reader.SkippedBlobs);
     }
 
     [TestMethod]
