@@ -101,7 +101,14 @@ public sealed class AtomicFileTests : IDisposable
         var path = Path.Combine(_root, "state.json");
         Directory.CreateDirectory(path);
 
-        Assert.ThrowsExactly<IOException>(() => AtomicFile.WriteAllText(path, "{}"));
+        // POSIX reports the directory-in-the-way as IOException; Windows
+        // reports it as UnauthorizedAccessException. The contract under test
+        // is that the failure escapes and cleans up, not which of the two
+        // shapes the platform gives it.
+        var thrown = Assert.Throws<Exception>(() => AtomicFile.WriteAllText(path, "{}"));
+        Assert.IsTrue(
+            thrown is IOException or UnauthorizedAccessException,
+            $"an unexpected exception type escaped: {thrown.GetType().Name}");
 
         Assert.IsEmpty(
             Directory.GetFiles(_root, "*.tmp"),

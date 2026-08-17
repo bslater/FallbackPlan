@@ -144,9 +144,22 @@ public sealed class ProcessRaceTests : IDisposable
             // the role frees itself: no stale-lock heuristic, no timeout, no
             // pid-file second-guessing (ADR-0028 §4). The stale owner file
             // left behind must not matter — the handle is the truth.
-            Assert.IsTrue(
-                StateDirectoryLock.TryAcquire(_harness.StateDirectory, StateDirectoryLock.DirectRole, out var reacquired),
-                "the writer role stayed taken after its holder was killed.");
+            //
+            // "With the process" is not "with WaitForExit": on Windows a tree
+            // kill signals the process object before every handle has been
+            // torn down, so the freed role is polled against a deadline. The
+            // deadline absorbs release latency only — a genuinely stuck lock
+            // still fails, because nothing here ever deletes the file.
+            StateDirectoryLock? reacquired = null;
+            var freedBy = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (!StateDirectoryLock.TryAcquire(_harness.StateDirectory, StateDirectoryLock.DirectRole, out reacquired))
+            {
+                Assert.IsTrue(
+                    DateTime.UtcNow < freedBy,
+                    "the writer role stayed taken after its holder was killed.");
+                await Task.Delay(100);
+            }
+
             reacquired!.Dispose();
         }
         finally
