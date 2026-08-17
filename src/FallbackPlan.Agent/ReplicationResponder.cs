@@ -567,9 +567,13 @@ internal static class ReplicationResponder
 
             // A create-if-absent write makes commit atomic and re-runs idempotent
             // (03 §5): an object already held is identical to the one offered.
+            // The read handle must share with _spool, which is still open with
+            // write access — a default-share open is a sharing violation on
+            // Windows, and the commit would fail for every object ever spooled.
             await replica.PutAsync(
                 objectKey,
-                _ => new ValueTask<Stream>(File.OpenRead(_path)),
+                _ => new ValueTask<Stream>(
+                    new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)),
                 PutConditions.IfNotExists,
                 cancellationToken).ConfigureAwait(false);
         }
