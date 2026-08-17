@@ -179,10 +179,40 @@ public sealed class PartialCaptureRetentionTests : IDisposable
     }
 
     /// <summary>
-    /// Publishes a standalone snapshot object carrying <c>capture_status</c> 2
-    /// into the archive an earlier backup created, one hour after it. Its root
-    /// tree is the one the real snapshot already published, so the closure
-    /// walks and the archive stays consistent — only the status differs.
+    /// An aborted capture (<c>capture_status</c> 3) is no more complete than a
+    /// partial one. This implementation never publishes 3, but the format
+    /// assigns it and the codec admits it on read, so retention must read it
+    /// defensively: the floor is filled by status 1 alone, not by
+    /// "anything that is not 2".
+    /// </summary>
+    [TestMethod]
+    public async Task WithAnAbortedCaptureAsTheNewest_TheOlderCompleteBackupIsStillProtected()
+    {
+        await BackUpAsync(Day1);
+        var abortedAt = await WritePartialSnapshotAsync(captureStatus: 3);
+
+        var facts = await SurveyAsync();
+        Assert.IsFalse(
+            facts.Single(snapshot => snapshot.Fact.CaptureStatus == 3).Fact.IsComplete,
+            "an aborted capture surveyed as complete");
+
+        var selection = RetentionPlanner.Select(
+            [.. facts.Select(snapshot => snapshot.Fact)],
+            new RetentionConfiguration { MinGenerations = 1 },
+            abortedAt.AddHours(1));
+
+        Assert.IsEmpty(
+            selection.Expire,
+            "a complete backup expired while the set's only other snapshot was an aborted one");
+        Assert.HasCount(2, selection.Keep);
+    }
+
+    /// <summary>
+    /// Publishes a standalone snapshot object carrying the given
+    /// <c>capture_status</c> into the archive an earlier backup created, one
+    /// hour after it. Its root tree is the one the real snapshot already
+    /// published, so the closure walks and the archive stays consistent —
+    /// only the status differs.
     /// </summary>
     /// <returns>When the partial capture completed, so a caller can pick a clock after it.</returns>
     /// <remarks>
@@ -193,7 +223,7 @@ public sealed class PartialCaptureRetentionTests : IDisposable
     /// and the test would be exercising the opposite ordering to the one it
     /// claims.
     /// </remarks>
-    private async Task<DateTimeOffset> WritePartialSnapshotAsync()
+    private async Task<DateTimeOffset> WritePartialSnapshotAsync(byte captureStatus = 2)
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
         using var passphrase = Passphrase.Create(PassphraseText);
@@ -217,9 +247,8 @@ public sealed class PartialCaptureRetentionTests : IDisposable
             PolicyManifest = existing.Manifest.PolicyManifest,
             ConsistencyMethod = existing.Manifest.ConsistencyMethod,
 
-            // The one thing under test: what OperationGateway writes when a
-            // publication carried an error manifest.
-            CaptureStatus = 2,
+            // The one thing under test.
+            CaptureStatus = captureStatus,
             SourceFilesystem = existing.Manifest.SourceFilesystem,
             PublicationGeneration = generation.Value,
             ClientVersion = existing.Manifest.ClientVersion,

@@ -25,8 +25,14 @@ public sealed record SnapshotFact(
     ulong PublicationSequence = 0,
     byte CaptureStatus = 1)
 {
-    /// <summary>Whether the capture holds everything it was asked for.</summary>
-    public bool IsComplete => CaptureStatus != 2;
+    /// <summary>
+    /// Whether the capture holds everything it was asked for. Status 1 alone
+    /// qualifies: the format also assigns 2 (partial) and 3 (aborted), the
+    /// codec admits all three on read, and a value this build has never heard
+    /// of must fail closed — an unknown status filling the min-generations
+    /// floor is the same data loss the partial rule exists to prevent.
+    /// </summary>
+    public bool IsComplete => CaptureStatus == 1;
 }
 
 /// <summary>A kept snapshot and every rule that keeps it — the dry-run report's vocabulary (FR-GC-005).</summary>

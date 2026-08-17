@@ -136,6 +136,36 @@ public sealed class RetentionPlannerTests
         Assert.IsEmpty(selection.Expire);
     }
 
+    /// <summary>
+    /// Complete means status 1 — not "not partial". The format assigns 3 to an
+    /// aborted capture (specification 06 §snapshot-manifest) and the codec
+    /// admits it on read; this implementation never writes it, but another
+    /// writer may, and an aborted backup filling the floor is the same data
+    /// loss as a partial one doing it.
+    /// </summary>
+    [TestMethod]
+    public void Select_MinGenerations_DoesNotLetAnAbortedCaptureFillTheFloor()
+    {
+        var complete = At(Now.AddDays(-200));
+        var aborted = At(Now.AddDays(-1)) with { CaptureStatus = 3 };
+
+        var selection = RetentionPlanner.Select(
+            [complete, aborted],
+            new RetentionConfiguration { MinGenerations = 1 },
+            Now);
+
+        Assert.IsFalse(aborted.IsComplete, "an aborted capture read as complete");
+        Assert.Contains(
+            keep => keep.Snapshot == complete,
+            selection.Keep,
+            "the only complete backup expired because an aborted capture filled the floor");
+        Assert.IsFalse(
+            selection.Keep.Any(keep =>
+                keep.Snapshot == aborted
+                && keep.Reasons.Any(reason => reason.Contains("complete", StringComparison.Ordinal))),
+            "an aborted capture was kept AS the complete representative of its bucket");
+    }
+
     /// <summary>A floor of two means the two newest complete captures, whatever sits between them.</summary>
     [TestMethod]
     public void Select_MinGenerations_ReachesPastPartialsToFillTheFloor()
