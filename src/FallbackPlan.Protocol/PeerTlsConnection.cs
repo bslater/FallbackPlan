@@ -131,6 +131,15 @@ public sealed class PeerTlsConnection : IAsyncDisposable
         {
             stream = new SslStream(new NetworkStream(socket, ownsSocket: true), leaveInnerStreamOpen: false);
 
+            // 1.2 alongside 1.3, on every platform (02 §1): one supported
+            // platform's TLS stack cannot speak 1.3 at all, and negotiation
+            // needs both ends to overlap, so pinning 1.3 anywhere means that
+            // platform can peer with nobody. Two 1.3-capable ends still land
+            // on 1.3 — the protocol's own downgrade sentinels see to it — and
+            // no security property here derives from the version: identity is
+            // the pinned-key proof of 02 §3, bound to these certificates.
+            const SslProtocols AcceptedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+
             if (role == PeerSessionRole.Responder)
             {
                 await stream.AuthenticateAsServerAsync(
@@ -141,7 +150,7 @@ public sealed class PeerTlsConnection : IAsyncDisposable
                         // one — but the platform validates none of it (02 §1).
                         ClientCertificateRequired = true,
                         RemoteCertificateValidationCallback = static (_, _, _, _) => true,
-                        EnabledSslProtocols = SslProtocols.Tls13,
+                        EnabledSslProtocols = AcceptedProtocols,
                     },
                     cancellationToken).ConfigureAwait(false);
             }
@@ -155,7 +164,7 @@ public sealed class PeerTlsConnection : IAsyncDisposable
                         TargetHost = host ?? "fallbackplan-peer",
                         ClientCertificates = [certificate.Certificate],
                         RemoteCertificateValidationCallback = static (_, _, _, _) => true,
-                        EnabledSslProtocols = SslProtocols.Tls13,
+                        EnabledSslProtocols = AcceptedProtocols,
                     },
                     cancellationToken).ConfigureAwait(false);
             }

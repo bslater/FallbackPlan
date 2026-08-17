@@ -8,6 +8,8 @@
 
 A session runs over **TLS 1.3** ([RFC 8446](https://www.rfc-editor.org/rfc/rfc8446)) over TCP, or over **QUIC** ([RFC 9000](https://www.rfc-editor.org/rfc/rfc9000)) with the same TLS 1.3 handshake. Whether a session is direct or relayed MUST be reported to the operator either way ([architecture 09 §7](../../docs/architecture/09-replication-and-peers.md#7-relay)).
 
+**TLS 1.2** ([RFC 5246](https://www.rfc-editor.org/rfc/rfc5246)) MUST also be accepted. One supported platform's TLS stack cannot speak 1.3 at all, and negotiation requires both ends to overlap, so an implementation that offered only 1.3 would exclude that platform from peering entirely rather than only from 1.3. Two 1.3-capable ends still negotiate 1.3 — RFC 8446 §4.1.3's downgrade sentinels detect an attacker forcing a lower version — and no security property of this protocol derives from the TLS version: confidentiality and integrity come from either version's cipher suites, and identity comes only from §3's pinned-key proof, which binds to the exchanged certificates identically under both.
+
 **TLS provides confidentiality, integrity and key exchange. It does not provide peer identity here.** Authentication is the protocol's own, in §3.
 
 Each side MUST present a **self-signed certificate generated for that connection alone**. Such a certificate:

@@ -152,6 +152,10 @@ borrower's good manners. And §3's narrowing rule gets its mechanism: terms in a
 session hello narrower than the grant surface as a durable notice and a
 degraded set, never as silent non-replication.
 
+## Amendment 3 (2026-08) — TLS 1.2 accepted alongside 1.3
+
+One supported platform's TLS stack cannot speak TLS 1.3 at all — its `SslStream` refuses the protocol outright — and negotiation needs both ends to overlap, so a build that offered only 1.3 would exclude that platform from peering with anybody, not merely from 1.3. Sessions now accept **TLS 1.2 or 1.3** on every platform ([spec 02 §1](../../specifications/peer-protocol/02-session.md#1-transport)): two 1.3-capable ends still land on 1.3 under RFC 8446's own downgrade protection, and nothing this decision guarantees derives from the version — identity was moved out of TLS by Amendment 1, and the channel-bound proof reads the exchanged certificates identically under both.
+
 ## Status history
 
 | Date | Status | Note |
@@ -160,3 +164,4 @@ degraded set, never as silent non-replication.
 | 2026-08 | Amended | Amendment 1: RFC 7250 found unreachable on the reference platform; authentication moved from TLS into the protocol, guarantee preserved |
 | 2026-08 | Accepted | The decision stands after Amendment 1 rebuilt its mechanism: a transport keypair the repository knows nothing about, proven by a channel-bound signature in the protocol rather than by TLS. It is now built and carried over a real TLS socket, including a man-in-the-middle test the construction defeats and a pairing ceremony performed by two real processes; a paired console reaches the service and an unpaired one is refused. The [implementation status](../implementation-status.md#0030--the-socket-exists) says what remains — peer replication itself (specs 03–05). |
 | 2026-08 | Accepted (amended) | Amendment 2: the role joins the authenticated ceremony, endings produce notices with `Revoked` as the fallback signal, and the destination's terms are enforced at its own edge ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 3: TLS 1.2 accepted alongside 1.3 — one supported platform's stack has no 1.3, and no guarantee here rests on the version. |
