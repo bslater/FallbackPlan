@@ -199,12 +199,86 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Serves one invite-authenticated pairing (01 §2.7). No human is prompted
+    /// on this side: the operator approved when they issued the invite, and
+    /// the dialler's MAC over the transcript and channel bindings is what
+    /// proves it holds the code that issuance created.
+    /// </summary>
+    private async Task ServeInvitePairingAsync(PeerTlsConnection connection, System.Formats.Cbor.CborReader body)
+    {
+        if (_stateDirectory is null)
+        {
+            _log?.Invoke("pairing offered but this listener holds no state directory; closing");
+            return;
+        }
+
+        try
+        {
+            var offer = PairOffer.Read(body);
+            var invites = PairingInviteStore.Open(_stateDirectory);
+            var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var result = await PairingCeremony.AcceptWithInviteAsync(
+                connection.Stream, offer, _keypair, _grants, Environment.MachineName, invites,
+                initiatorBinding: connection.RemoteBinding, responderBinding: connection.LocalBinding,
+                now, _stopping.Token).ConfigureAwait(false);
+
+            if (result.Grant is { } grant)
+            {
+                _log?.Invoke($"peer paired via invite: '{grant.Label}' ({grant.Identity.Fingerprint})");
+
+                // Durable, not just a log line: the issuing operator learns who
+                // redeemed their invite even if they were away (FR-DEST-008's
+                // posture, applied to arrivals).
+                FallbackPlan.Application.NoticeStore.Open(_stateDirectory).Raise(
+                    $"pairing-invite-redeemed:{grant.Identity.Fingerprint}",
+                    $"'{grant.Label}' ({grant.Identity.Fingerprint}) redeemed a pairing invite and is now "
+                    + $"paired as {DescribeRole(grant.Role)}.",
+                    now);
+            }
+            else
+            {
+                _log?.Invoke(
+                    $"invite pairing did not complete: {result.Refusal?.Reason} — {result.Refusal?.Text}");
+            }
+        }
+        catch (PeerProtocolException refusal)
+        {
+            _log?.Invoke($"invite pairing refused: {refusal.Reason} — {refusal.Message}");
+        }
+    }
+
+    private static string DescribeRole(PeerRole role) => role switch
+    {
+        PeerRole.StoresHere => "a source whose backups store here",
+        PeerRole.StoresForUs => "a destination that stores for this device",
+        _ => "both a source and a destination",
+    };
+
     private async Task ServeAsync(Socket accepted)
     {
         try
         {
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 accepted, DateTimeOffset.UtcNow, _stopping.Token).ConfigureAwait(false);
+
+            // The first frame decides what this connection is (ADR-0030
+            // Amendment 3): a pairing offer redeems an invite; anything else
+            // is the session handshake, handed on with the frame it opened
+            // with. An unpaired dialler with no valid invite is refused either
+            // way — by the ceremony there, by the authenticator here.
+            var first = await PeerFrame.ReadAsync(connection.Stream, _stopping.Token).ConfigureAwait(false);
+            if (first is null)
+            {
+                return;
+            }
+
+            if (first.Value.Type == PeerMessageType.PairOffer)
+            {
+                await ServeInvitePairingAsync(connection, first.Value.Body).ConfigureAwait(false);
+                return;
+            }
 
             PeerSession session;
             try
@@ -221,6 +295,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     connection, _keypair, _grants, _agentVersion, terms: null,
                     termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
                     offeredFeatures: _offeredFeatures,
+                    preread: first,
                     cancellationToken: _stopping.Token).ConfigureAwait(false);
             }
             catch (PeerProtocolException refusal)

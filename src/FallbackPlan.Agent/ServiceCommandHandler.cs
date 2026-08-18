@@ -29,7 +29,7 @@ namespace FallbackPlan.Agent;
 /// so it runs where the person typed it.
 /// </para>
 /// </remarks>
-public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingState remoteBinding)
+public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingState remoteBinding)
     : IFallbackPlanService
 {
     /// <inheritdoc/>
@@ -308,6 +308,17 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     {
         ListBackupSetsCommand => ListBackupSets(),
         UpsertBackupSetCommand upsert => UpsertBackupSet(upsert),
+        DeleteBackupSetCommand deleteSet => DeleteBackupSet(deleteSet),
+        ListDestinationsCommand => ListDestinations(),
+        UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
+        DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
+        ListPairingsCommand => ListPairings(),
+        BrowseFoldersCommand browse => BrowseFolders(browse),
+        ValidateSetDraftCommand draft => ValidateSetDraft(draft),
+        CreatePairingInviteCommand invite => CreatePairingInvite(invite),
+        ListPairingInvitesCommand => ListPairingInvites(),
+        RevokePairingInviteCommand revoke => RevokePairingInvite(revoke),
+        PairWithInviteCommand pair => await PairWithInviteAsync(pair, cancellationToken).ConfigureAwait(false),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
@@ -808,15 +819,27 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         new BackupSetsResult(
             [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
                 set.Id, set.Name, set.Root, set.Schedule, set.IncludeRules, set.ExcludeRules,
-                [.. set.Destinations.Select(reference => reference.Ref)]))]);
+                [.. set.Destinations.Select(reference => reference.Ref)],
+                ToPolicyDescriptor(set.Retention),
+                ToOverrideDescriptors(set.Destinations)))]);
 
     private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
     {
         var configuration = runtime.Configuration;
 
-        // The command names destinations; a retention override stays a
-        // configuration-file concern until a client needs to write one.
-        // An upsert keeps any override the set already carried per name.
+        // The schedule is validated here, at the command boundary, and not in
+        // configuration load — ADR-0035 §1's blast-radius rule: a throw on
+        // the load path stops every set backing up over one typo. Unvalidated,
+        // a bad schedule saves cleanly and fails permanently at the next
+        // pass, which is the worse discovery (ADR-0037 §2).
+        if (ScheduleDefect(command.Set.Schedule) is { } scheduleDefect)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect);
+        }
+
+        // What the command does not carry is preserved, never zeroed: a 1.6
+        // client's upsert leaves retention exactly as it stood. A carried
+        // policy with every field absent is the explicit "none" (ADR-0037).
         var existing = configuration.BackupSets
             .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
         var replacement = new BackupSetConfiguration
@@ -827,17 +850,33 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             Schedule = command.Set.Schedule,
             IncludeRules = command.Set.IncludeRules,
             ExcludeRules = command.Set.ExcludeRules,
-            Retention = existing?.Retention,
-            Destinations = [.. command.Set.Destinations.Select(name =>
-                existing?.Destinations.FirstOrDefault(reference =>
-                    string.Equals(reference.Ref, name, StringComparison.Ordinal))
-                ?? new SetDestinationReference { Ref = name })],
+            Retention = ToRetention(command.Set.Retention, existing?.Retention),
+            Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
+            {
+                Ref = name,
+                Retention = command.Set.DestinationRetention is { } overrides
+                    // A carried map is the complete truth: named entries set
+                    // (empty clears), unnamed destinations carry no override.
+                    ? ToRetention(overrides.GetValueOrDefault(name), existing: null)
+                    // No map at all preserves whatever the set held, by name.
+                    : existing?.Destinations.FirstOrDefault(reference =>
+                        string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Retention,
+            })],
         };
 
-        var sets = configuration.BackupSets
-            .Where(set => !string.Equals(set.Id, replacement.Id, StringComparison.Ordinal))
-            .Append(replacement)
-            .ToList();
+        // Replace in place: the first set is the default RunBackupCommand
+        // runs, and status renders declaration order — an edit must not
+        // reshuffle either (ADR-0037 §5).
+        var sets = configuration.BackupSets.ToList();
+        var index = sets.FindIndex(set => string.Equals(set.Id, replacement.Id, StringComparison.Ordinal));
+        if (index >= 0)
+        {
+            sets[index] = replacement;
+        }
+        else
+        {
+            sets.Add(replacement);
+        }
 
         try
         {

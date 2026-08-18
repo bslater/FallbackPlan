@@ -583,6 +583,17 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 case ScanEvent.Leaf leaf:
+                    // The capture decision lives here, not in the scanner: a
+                    // source describes what exists and never decides what
+                    // happens to it (11 §2), so include rules are enforced
+                    // once, for every source alike (06 §7.1). Exclusions were
+                    // already pruned during the walk; this is the other half,
+                    // which was validated and recorded but never applied.
+                    if (!IsCaptured(leaf.Entry.RelativePath))
+                    {
+                        break;
+                    }
+
                     await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
                     break;
 
@@ -595,10 +606,29 @@ public sealed partial class PublicationOrchestrator
             }
         }
 
+        /// <summary>
+        /// Whether the include rules capture this path. NFC-normalised the way
+        /// the scanner normalises its own rule subjects, so both halves of the
+        /// dialect judge one spelling of the name.
+        /// </summary>
+        private bool IsCaptured(string relativePath) =>
+            options.Rules is not { } rules || rules.IsCaptured(relativePath.Normalize(NormalizationForm.FormC));
+
         private async ValueTask CloseDirectoryAsync(CancellationToken cancellationToken)
         {
             var frame = _frames.Pop();
             var isRoot = _frames.Count == 0;
+
+            // A directory that captured nothing and is not itself captured
+            // leaves no manifest: the tree records what the snapshot holds,
+            // not a skeleton of what it walked past. The cascade is natural —
+            // an empty child dropped here never reaches its parent's entries,
+            // so a subtree of nothing folds away bottom-up. The root always
+            // publishes; an empty snapshot is still a snapshot.
+            if (!isRoot && frame.Entries.Count == 0 && !IsCaptured(frame.Directory.RelativePath))
+            {
+                return;
+            }
 
             var name = isRoot ? "/"u8.ToArray() : frame.Directory.NameBytes;
             var headId = await TreeChainWriter.WriteAsync(

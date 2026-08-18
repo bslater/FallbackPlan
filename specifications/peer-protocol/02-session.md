@@ -251,6 +251,7 @@ A side that cannot continue sends `SessionRefuse` (or `PairRefuse` during pairin
 | 10 | `pairing_declined` | A human declined ([01 §2.4](01-identity-and-pairing.md#24-approval-and-pinning)) |
 | 11 | `authentication_failed` | The peer did not prove possession of the identity it presented (§3.3) |
 | 12 | `storage_exhausted` | The destination cannot store — disk trouble, not policy ([05 §4](05-quotas.md#4-disk-trouble-is-not-policy)) |
+| 13 | `invite_unknown` | The offered pairing invite is not redeemable — unknown, expired and consumed alike ([01 §2.7](01-identity-and-pairing.md#27-the-invite-authenticated-ceremony)) |
 
 The code is what a client branches on; the text is what a human reads. A conforming implementation MUST NOT parse the text.
 

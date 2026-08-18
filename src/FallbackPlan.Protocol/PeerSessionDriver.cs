@@ -87,6 +87,12 @@ public static class PeerSessionDriver
     /// in production passes anything but the default.
     /// </param>
     /// <param name="cancellationToken">Cancels the handshake.</param>
+    /// <param name="preread">
+    /// The connection's first frame, when a routing listener already read it
+    /// to decide whether it held a pairing or a session (ADR-0030 Amendment
+    /// 3). Consumed in place of the first wire read; everything after it is
+    /// unchanged.
+    /// </param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused; a refusal was sent before closing.</exception>
     public static ValueTask<PeerSession> AcceptAsync(
@@ -97,10 +103,11 @@ public static class PeerSessionDriver
         PeerTerms? terms = null,
         Func<PeerGrant, PeerTerms?>? termsForPeer = null,
         IReadOnlyList<string>? offeredFeatures = null,
+        (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null,
         CancellationToken cancellationToken = default) =>
         RunAsync(
             connection, keypair, grants, expected: null, agentVersion, terms, termsForPeer, offeredFeatures,
-            requiredFeatures: null, cancellationToken);
+            requiredFeatures: null, preread, cancellationToken);
 
     /// <summary>Dials a known peer: authenticate the one expected, then open.</summary>
     /// <param name="connection">The TLS connection, its bindings already known.</param>
@@ -133,7 +140,7 @@ public static class PeerSessionDriver
         ThrowHelper.ThrowIfNull(expected);
         return RunAsync(
             connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, offeredFeatures: null,
-            requiredFeatures, cancellationToken);
+            requiredFeatures, preread: null, cancellationToken);
     }
 
     private static async ValueTask<PeerSession> RunAsync(
@@ -146,6 +153,7 @@ public static class PeerSessionDriver
         Func<PeerGrant, PeerTerms?>? termsForPeer,
         IReadOnlyList<string>? offeredFeatures,
         IReadOnlyList<string>? requiredFeatures,
+        (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(connection);
@@ -163,7 +171,7 @@ public static class PeerSessionDriver
             await PeerFrame.WriteAsync(stream, authenticator.Offer(), cancellationToken).ConfigureAwait(false);
 
             var theirAuth = await ReadAsync<SessionAuth>(
-                stream, PeerMessageType.SessionAuth, authenticator, SessionAuth.Read, cancellationToken)
+                stream, PeerMessageType.SessionAuth, authenticator, SessionAuth.Read, cancellationToken, preread)
                 .ConfigureAwait(false);
             var ourProof = authenticator.Accept(theirAuth);
             await PeerFrame.WriteAsync(stream, ourProof, cancellationToken).ConfigureAwait(false);
@@ -215,9 +223,11 @@ public static class PeerSessionDriver
         PeerMessageType expected,
         PeerAuthenticator authenticator,
         Func<System.Formats.Cbor.CborReader, T> read,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
-        var frame = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+        var frame = preread
+            ?? await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
             ?? throw new PeerProtocolException(
                 PeerRefusalReason.Malformed, $"The peer closed before sending the expected {expected}.");
 

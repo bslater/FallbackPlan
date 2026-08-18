@@ -11,6 +11,17 @@ namespace FallbackPlan.Api;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "command")]
 [JsonDerivedType(typeof(ListBackupSetsCommand), "list_backup_sets")]
 [JsonDerivedType(typeof(UpsertBackupSetCommand), "upsert_backup_set")]
+[JsonDerivedType(typeof(DeleteBackupSetCommand), "delete_backup_set")]
+[JsonDerivedType(typeof(ListDestinationsCommand), "list_destinations")]
+[JsonDerivedType(typeof(UpsertDestinationCommand), "upsert_destination")]
+[JsonDerivedType(typeof(DeleteDestinationCommand), "delete_destination")]
+[JsonDerivedType(typeof(ListPairingsCommand), "list_pairings")]
+[JsonDerivedType(typeof(BrowseFoldersCommand), "browse_folders")]
+[JsonDerivedType(typeof(ValidateSetDraftCommand), "validate_set_draft")]
+[JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
+[JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
+[JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
+[JsonDerivedType(typeof(PairWithInviteCommand), "pair_with_invite")]
 [JsonDerivedType(typeof(RunBackupCommand), "run_backup")]
 [JsonDerivedType(typeof(CancelJobCommand), "cancel_job")]
 [JsonDerivedType(typeof(ListJobsCommand), "list_jobs")]
@@ -34,6 +45,98 @@ public sealed record ListBackupSetsCommand : ServiceCommand;
 /// <summary>Adds or replaces one backup set.</summary>
 /// <param name="Set">The set to store.</param>
 public sealed record UpsertBackupSetCommand(BackupSetDescriptor Set) : ServiceCommand;
+
+/// <summary>
+/// Removes one backup set from the configuration (ADR-0037 §4). Nothing else
+/// is touched: the set's staging archive stays on disk and every destination
+/// keeps what it holds — the result says so, because a removal that looked
+/// like an erasure would be the more dangerous misreading.
+/// </summary>
+/// <param name="Name">The set to remove.</param>
+public sealed record DeleteBackupSetCommand(string Name) : ServiceCommand;
+
+/// <summary>
+/// Enumerates every declared destination — referenced by a set or not — with
+/// its declaration and any address defect (ADR-0037). The status matrix shows
+/// only what sets reference; a configuration surface needs the rest.
+/// </summary>
+public sealed record ListDestinationsCommand : ServiceCommand;
+
+/// <summary>Adds or replaces one declared destination (ADR-0037).</summary>
+/// <param name="Destination">The declaration; a null id declares a new destination.</param>
+public sealed record UpsertDestinationCommand(DestinationDescriptor Destination) : ServiceCommand;
+
+/// <summary>
+/// Removes one declared destination (FR-DEST-007). Refused while any set
+/// references it, naming the sets; when it proceeds, the result names what
+/// remains at the address, because removal stops the hub managing the data —
+/// it deletes none of it.
+/// </summary>
+/// <param name="Name">The destination to remove.</param>
+public sealed record DeleteDestinationCommand(string Name) : ServiceCommand;
+
+/// <summary>
+/// Lists this device's paired peers (ADR-0030's grants) — what a peer
+/// destination declaration can point at.
+/// </summary>
+public sealed record ListPairingsCommand : ServiceCommand;
+
+/// <summary>
+/// Lists the directories under a path on the service's machine, for a client
+/// building a folder picker (ADR-0037 §6). Names and sizes only, never
+/// content; null lists the platform's roots.
+/// </summary>
+/// <param name="Path">The directory to list, or null for the roots.</param>
+/// <param name="IncludeFiles">
+/// Whether to list the files too — what a selection tree needs and a root
+/// picker does not.
+/// </param>
+public sealed record BrowseFoldersCommand(string? Path, bool IncludeFiles = false) : ServiceCommand;
+
+/// <summary>
+/// Validates a set draft without saving anything: rule defects named
+/// verbatim, and a parseable schedule answered with its next occurrences so
+/// an editor can show what it means rather than what it says (ADR-0037 §2).
+/// </summary>
+/// <param name="Schedule">The schedule expression, or null/empty for manual-only.</param>
+/// <param name="IncludeRules">rules-v1 include rules.</param>
+/// <param name="ExcludeRules">rules-v1 exclude rules.</param>
+public sealed record ValidateSetDraftCommand(
+    string? Schedule,
+    IReadOnlyList<string> IncludeRules,
+    IReadOnlyList<string> ExcludeRules) : ServiceCommand;
+
+/// <summary>
+/// Issues a one-time pairing invite (ADR-0030 Amendment 3): the code this
+/// returns, spoken to the other operator, is what authenticates their
+/// device's pairing dial. Issuing it is this side's approval — role, label
+/// and terms are committed here, not at connection time.
+/// </summary>
+/// <param name="Label">What to call the peer that redeems it.</param>
+/// <param name="Role">The role recorded for that peer: <c>stores-here</c>, <c>stores-for-us</c>, or <c>both</c>.</param>
+/// <param name="QuotaBytes">The storage ceiling offered when the peer stores here; null or 0 declares none.</param>
+/// <param name="TimeToLiveMinutes">How long the invite stays redeemable; null takes the default day.</param>
+public sealed record CreatePairingInviteCommand(
+    string Label, string Role, ulong? QuotaBytes, int? TimeToLiveMinutes) : ServiceCommand;
+
+/// <summary>Lists pending and consumed pairing invites — never their codes.</summary>
+public sealed record ListPairingInvitesCommand : ServiceCommand;
+
+/// <summary>Revokes one pending pairing invite.</summary>
+/// <param name="InviteId">The invite's identifier, from the listing.</param>
+public sealed record RevokePairingInviteCommand(string InviteId) : ServiceCommand;
+
+/// <summary>
+/// Pairs with a remote service using an invite its operator issued (ADR-0030
+/// Amendment 3): this service dials the endpoint, proves possession of the
+/// code, verifies the far side proves it too, and pins the grant. Entering
+/// the code is this side's approval.
+/// </summary>
+/// <param name="Code">The invite code, as spoken by the other operator.</param>
+/// <param name="Host">The remote service's host.</param>
+/// <param name="Port">The remote service's port.</param>
+/// <param name="Label">What to call the paired peer here.</param>
+public sealed record PairWithInviteCommand(string Code, string Host, int Port, string Label) : ServiceCommand;
 
 /// <summary>Runs a backup now, outside the schedule.</summary>
 /// <param name="SetName">The set to run; null runs the default set.</param>

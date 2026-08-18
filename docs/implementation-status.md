@@ -4,7 +4,7 @@
 
 ---
 
-Thirty-six decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Thirty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -54,13 +54,14 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Scheduling, job state, status, telemetry | **Built** | `FallbackPlan.Agent`, `Application/JobStateStore` · `Hosts.Tests/*` |
 | [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary | **Partly built** | `FallbackPlan.Api`, `Cli/OperationGateway` · [ADR §Implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) |
 | [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency | **Built** | `Repository/ArchiveSession` · [ADR §Implementation status](adr/0029-pipeline-and-service-concurrency.md#implementation-status-2026-08) |
-| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol` · [notes](#0030--the-socket-exists) |
+| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol`, `Protocol/PairingInvite.cs` · [notes](#0030--the-socket-exists) |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
 | [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager | **Partly built** | `Agent/ServiceProcessHost.cs`, `Agent/WindowsServiceHost.cs`, `Agent/ServiceUnit.cs` · [notes](#0033--the-os-can-own-the-process) |
 | [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations | **Built** | `FallbackPlan.Replication`, `Agent/FanOut`, `Application/DestinationSyncStore`, `Retention/StagingTrim` · `Repository.Tests/EndToEnd/AgentPassTests`, `InterruptionTests/StoreCopyOrderTests`, `Retention.Tests/StagingTrimTests` · [notes](#0034--the-hub-fans-out-ages-and-trims) |
 | [0035](adr/0035-destination-fitness.md) | Destination fitness | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
 | [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
+| [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
 
 ---
 
@@ -178,7 +179,7 @@ The arc is built end to end; the sections below walk it in the order it landed. 
 
 Three postures are accepted and worth finding here rather than re-deriving: a peer's trim-time ledger claim rests on `SyncedSequence` alone, not the pair's current state — the same trust the replication gate holds, since a later failure does not unmake a completed sync (and a pass whose clock sits behind the last sync refuses the claim outright); the restore PLAN reports absence, never damage — a manifest that is present but will not read is verify's finding, and the plan passes over it; and minor-version feature probing does not exist yet, so a newer console's `sync` against an older service dies as a disconnect rather than a clean "this service is too old" — a known pre-1.0 limitation.
 
-Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no `destination remove` surface exists yet, so nothing warns that a removed destination still holds data. Quotas are enforced with the peer slices — see [0030](#0030--the-socket-exists). The negotiated pairing role and the termination notices landed with the peer slices — either side's ending now surfaces durably on both ends, and a fan-out refused `revoked` raises the notice itself — see [0030](#0030--the-socket-exists).
+Nothing is still ahead in this arc: FR-DEST-007's destination-removal warnings, the last named remainder, landed with [ADR-0037](adr/0037-configuration-over-the-command-contract.md) — `delete_destination` refuses while referenced and otherwise names what remains at the address. Quotas are enforced with the peer slices — see [0030](#0030--the-socket-exists). The negotiated pairing role and the termination notices landed with the peer slices — either side's ending now surfaces durably on both ends, and a fan-out refused `revoked` raises the notice itself — see [0030](#0030--the-socket-exists).
 
 ---
 
@@ -240,10 +241,45 @@ drives it over real loopback HTTP against a fake client; the refusals are
 asserted on status codes and closed-set error codes, not prose.
 
 **What is deliberately not built:** notice acknowledgement (the contract has no
-verb for it — the page says so and names the agent verb that does it), a
-set-editing UI over `upsert_backup_set`, and anything Q18/Q19 gate — restored
-content never streams to the page, and the console serves the one operator who
-launched it. All three are stated on the ADR rather than left to be inferred.
+verb for it — the page says so and names the agent verb that does it) and
+anything Q18/Q19 gate — restored content never streams to the page, and the
+console serves the one operator who launched it. The set-editing UI, a stated
+non-goal at first shipping, has since landed with [ADR-0037](adr/0037-configuration-over-the-command-contract.md)
+— see the note below.
+
+### 0037 — the configuration lifecycle joins the contract
+
+Contract 1.7: set CRUD with retention and per-destination overrides riding the
+descriptor (null preserves, an empty policy clears — a 1.6 client's upsert
+changes nothing it cannot say), destination CRUD, `list_pairings`,
+`browse_folders` (names only, files on request for the selection tree),
+`validate_set_draft` (rule defects verbatim, schedules answered with their next
+occurrences), and ADR-0030 Amendment 4's invite verbs. The schedule is parsed
+at the boundary and refused with the parser's own defect — before this, a typo
+saved cleanly and failed permanently at the next pass. Deletes never cascade
+and never erase: a set removal names the staging archive and the copies each
+destination keeps (FR-DEST-007, met); a referenced destination refuses,
+naming its sets. Edits preserve list position; a destination rename follows
+through to referencing sets.
+
+Two things landed under this decision that are bigger than verbs. **Include
+rules are now enforced at capture** — `IsCaptured` had no production caller,
+so a set could say "photos/** only" in its signed policy manifest and capture
+everything; the filter now lives in `Repository/SnapshotPublication.cs`'s tree
+publisher, files skipped and empty non-captured directories folded away,
+proven by `Repository.Tests/SnapshotPublicationTests` failing first. And the
+**invite-authenticated pairing** of ADR-0030 Amendment 4: `PairingInviteStore`
+beside the grants, the ceremony's MAC-for-string substitution over transcript
+and channel bindings, the listener routing a first-frame `PairOffer` to it,
+and the whole path proven over real sockets — the Mallory relay defeated in
+invite mode, a spent code refused, nothing pinned on any failure
+(`Protocol.Tests/InvitePairingTests`, two real services in
+`Hosts.Tests/InvitePairingCommandTests`).
+
+The web console grew its Configuration surface over all of it: sets with the
+folder picker, the selection tree compiling to rules-v1, the schedule builder
+previewing real next runs, retention with full-replacement overrides,
+destination management, and the invite/pair-with-invite flows.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

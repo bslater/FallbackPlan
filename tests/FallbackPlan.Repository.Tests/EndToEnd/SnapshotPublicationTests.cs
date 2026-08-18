@@ -250,6 +250,68 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task TreePublication_IncludeRules_CaptureOnlyTheIncludedSubtree()
+    {
+        // Include rules are 06 §7.1 semantics, not decoration: a set that says
+        // "capture photos/**" and receives everything has silently backed up
+        // what the operator chose to leave out. The rules travel to the policy
+        // manifest either way; this holds the capture itself to them.
+        var source = new FakeFileSystemSource();
+        source.AddFile("photos/a.bin", Deterministic(9_000, 3));
+        source.AddFile("photos/deep/b.bin", Deterministic(7_000, 5));
+        source.AddFile("docs/c.bin", Deterministic(5_000, 7));
+        source.AddFile("d.bin", Deterministic(3_000, 9));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        var job = Job(source) with { IncludeRules = ["photos/**"] };
+        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+
+        SequenceAssert.AreEqual(
+            ["photos/a.bin", "photos/deep/b.bin"],
+            [.. published.Files.Select(file => file.RelativePath).Order(StringComparer.Ordinal)]);
+        Assert.IsEmpty(published.Failures);
+
+        // The tree graph carries no skeleton for what was not captured: the
+        // root names photos alone — no docs directory, no d.bin.
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var (_, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
+        var rootNames = rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)).ToList();
+        SequenceAssert.AreEqual(["photos"], rootNames);
+
+        // And the captured subtree is whole: photos holds its file and its
+        // child directory, which holds its own.
+        var (_, photosEntries) = await ReadTreeAsync(
+            reader, Assert.ContainsSingle(rootEntries).ObjectId);
+        SequenceAssert.AreEqual(
+            ["a.bin", "deep"],
+            [.. photosEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)).Order(StringComparer.Ordinal)]);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_IncludeAndExcludeTogether_ExcludeStillWins()
+    {
+        // 06 §7.1: exclusion beats inclusion at any depth. The include names
+        // the whole subtree; the exclude carves one child back out.
+        var source = new FakeFileSystemSource();
+        source.AddFile("work/keep.bin", Deterministic(4_000, 3));
+        source.AddFile("work/secret.bin", Deterministic(4_000, 5));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        var job = Job(source) with { IncludeRules = ["work/**"], ExcludeRules = ["work/secret.bin"] };
+        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+
+        var file = Assert.ContainsSingle(published.Files);
+        Assert.AreEqual("work/keep.bin", file.RelativePath);
+    }
+
+    [TestMethod]
     public async Task TreePublication_SomeFilesFail_ProducesAnErrorManifestAndCapturesTheRest()
     {
         var source = new FakeFileSystemSource();

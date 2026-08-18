@@ -151,6 +151,58 @@ public static class PairingTranscript
         }
     }
 
+    /// <summary>The HKDF label for the invite MAC key (00 §4, 01 §2.7).</summary>
+    private const string InviteKeyLabel = "fbp-peer-v1:invite-key";
+
+    /// <summary>The offerer's invite-proof label; distinct from the responder's so neither proof replays as the other.</summary>
+    private const string InviteOffererLabel = "fbp-peer-v1:invite:offerer";
+
+    /// <summary>The responder's invite-proof label.</summary>
+    private const string InviteResponderLabel = "fbp-peer-v1:invite:responder";
+
+    /// <summary>Derives the invite MAC key from a code's secret (01 §2.7).</summary>
+    /// <param name="secret">The code's secret half.</param>
+    /// <param name="inviteId">The code's public identifier, bound in as salt.</param>
+    /// <returns>The 32-byte key.</returns>
+    public static byte[] DeriveInviteKey(ReadOnlySpan<byte> secret, ReadOnlySpan<byte> inviteId)
+    {
+        var key = new byte[32];
+        System.Security.Cryptography.HKDF.DeriveKey(
+            HashAlgorithmName.SHA256, secret, key, inviteId,
+            System.Text.Encoding.ASCII.GetBytes(InviteKeyLabel));
+        return key;
+    }
+
+    /// <summary>
+    /// The invite proof one side sends on its confirmation (01 §2.7): HMAC
+    /// under the code-derived key over the whole transcript and the TLS
+    /// channel bindings. The transcript carries both identities, both
+    /// ephemerals, both nonces, the version and both declared roles; the
+    /// bindings tie the proof to this connection — so a relay holds two
+    /// different inputs and can satisfy neither side, exactly as it cannot
+    /// make two humans' strings agree.
+    /// </summary>
+    /// <param name="inviteKey">The key from <see cref="DeriveInviteKey"/>.</param>
+    /// <param name="offerer">Whether this proof is the offerer's.</param>
+    /// <param name="transcript">The transcript from <see cref="Build"/>.</param>
+    /// <param name="initiatorBinding">The TLS initiator's channel binding.</param>
+    /// <param name="responderBinding">The TLS responder's channel binding.</param>
+    /// <returns>The 32-byte proof.</returns>
+    public static byte[] InviteMac(
+        ReadOnlySpan<byte> inviteKey,
+        bool offerer,
+        ReadOnlySpan<byte> transcript,
+        ReadOnlySpan<byte> initiatorBinding,
+        ReadOnlySpan<byte> responderBinding)
+    {
+        using var mac = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA256, inviteKey);
+        mac.AppendData(System.Text.Encoding.ASCII.GetBytes(offerer ? InviteOffererLabel : InviteResponderLabel));
+        mac.AppendData(transcript);
+        mac.AppendData(initiatorBinding);
+        mac.AppendData(responderBinding);
+        return mac.GetHashAndReset();
+    }
+
     /// <summary>The bytes a side signs to confirm a pairing (01 §2.4).</summary>
     /// <param name="transcript">The transcript from <see cref="Build"/>.</param>
     /// <returns>The bytes to sign.</returns>

@@ -37,6 +37,9 @@ const S = {
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
   view: "overview",
   snapshotFilter: "",
+  destinations: [],         // DestinationDescriptor[]
+  pairings: [],             // PairingDescriptor[]
+  invites: [],              // PairingInviteDescriptor[]
   busy: new Set(),          // action keys currently running
 };
 
@@ -280,7 +283,7 @@ function scheduleJobsRender() {
 
 /* ---------------------------------------------------------------- views */
 
-const VIEWS = ["overview", "snapshots", "jobs", "notices", "maintenance"];
+const VIEWS = ["overview", "snapshots", "jobs", "notices", "config", "maintenance"];
 
 function route() {
   const view = location.hash.replace("#", "") || "overview";
@@ -292,7 +295,8 @@ function route() {
     link.classList.toggle("active", link.dataset.view === S.view);
   }
   ({ overview: renderOverview, snapshots: renderSnapshots, jobs: renderJobs,
-     notices: renderNotices, maintenance: renderMaintenance })[S.view]();
+     notices: renderNotices, config: renderConfig, maintenance: renderMaintenance })[S.view]();
+  if (S.view === "config") refreshConfigData();
 }
 
 /* ----- overview ----- */
@@ -555,7 +559,12 @@ function openDialog(html) {
   if (!dialog.open) dialog.showModal();
 }
 
-function closeDialog() { dialog.close(); dialog.innerHTML = ""; }
+function closeDialog() {
+  dialog.close();
+  dialog.innerHTML = "";
+  dialog.classList.remove("wide");
+  E = null;
+}
 
 dialog.addEventListener("click", event => {
   if (event.target === dialog) closeDialog(); // backdrop click
@@ -744,6 +753,820 @@ const actions = {
   "close-dialog"() { closeDialog(); },
 };
 
+/* ---------------------------------------------------------------- configuration */
+
+// The editor's draft. Rules are the source of truth; the tree and the chips
+// are two renderings of them, and the raw editor is the escape hatch for
+// anything the tree cannot say.
+let E = null;
+
+async function refreshConfigData() {
+  const [destinations, pairings, invites] = await Promise.all([
+    run({ command: "list_destinations" }),
+    run({ command: "list_pairings" }),
+    run({ command: "list_pairing_invites" }),
+  ]);
+  if (destinations?.result === "destinations") S.destinations = destinations.destinations;
+  if (pairings?.result === "pairings") S.pairings = pairings.pairings;
+  if (invites?.result === "pairing_invites") S.invites = invites.invites;
+  await refreshSets();
+  if (S.view === "config") renderConfigBody();
+}
+
+function renderConfig() {
+  const el = document.getElementById("view-config");
+  el.innerHTML = `
+    <h2>Configuration</h2>
+    <p class="view-sub">Sets, destinations and pairings — edited through the service, validated before anything is saved.
+       Removals never delete data, and they say so.</p>
+    <div id="config-body"><div class="card empty"><span class="big">⏳</span>Loading configuration…</div></div>`;
+  renderConfigBody();
+}
+
+function retentionSummary(policy) {
+  if (!policy) return "keeps everything";
+  const parts = [];
+  if (policy.keepDaily) parts.push(`${policy.keepDaily}d`);
+  if (policy.keepWeekly) parts.push(`${policy.keepWeekly}w`);
+  if (policy.keepMonthly) parts.push(`${policy.keepMonthly}m`);
+  if (policy.minGenerations) parts.push(`≥${policy.minGenerations}`);
+  return parts.length ? "retention " + parts.join("/") : "keeps everything";
+}
+
+function renderConfigBody() {
+  const host = document.getElementById("config-body");
+  if (!host) return;
+
+  const sets = S.sets.map(set => `
+    <div class="card">
+      <h3>${esc(set.name)} <span class="chip">${retentionSummary(set.retention)}</span></h3>
+      <p class="sub mono">${esc(set.root)}</p>
+      <p class="sub">${set.schedule ? "runs " + esc(set.schedule) : "manual only"}
+         ${set.includeRules.length ? `· ${set.includeRules.length} include rule(s)` : ""}
+         ${set.excludeRules.length ? `· ${set.excludeRules.length} exclude rule(s)` : ""}</p>
+      <div>${set.destinations.map(name => `<span class="chip">→ ${esc(name)}</span>`).join(" ")}</div>
+      <div class="actions-row">
+        <button type="button" class="btn small" data-action="cfg-edit-set" data-name="${esc(set.name)}">Edit</button>
+        <button type="button" class="btn small" data-action="cfg-delete-set" data-name="${esc(set.name)}">Delete…</button>
+      </div>
+    </div>`).join("");
+
+  const destinations = S.destinations.map(destination => `
+    <tr>
+      <td><b>${esc(destination.name)}</b>
+          ${destination.addressDefect ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "address defect")} ${esc(destination.addressDefect)}</div>` : ""}</td>
+      <td>${esc(destination.kind)}</td>
+      <td class="mono detail">${esc(destination.path ?? (destination.endpoint ? destination.endpoint + " · " + (destination.fingerprint ?? "").slice(0, 10) + "…" : "—"))}</td>
+      <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
+      <td>
+        <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
+        <button type="button" class="btn small" data-action="cfg-delete-dest" data-name="${esc(destination.name)}">Delete…</button>
+      </td>
+    </tr>`).join("");
+
+  const invites = S.invites.map(invite => `
+    <tr>
+      <td class="mono">${esc(invite.inviteId)}</td>
+      <td>${esc(invite.label)}</td>
+      <td class="detail">${esc(invite.role)}</td>
+      <td class="detail">${invite.consumedBy
+        ? `redeemed by <span class="mono">${esc(invite.consumedBy.slice(0, 10))}…</span>`
+        : Number(invite.expiresAt) < Date.now() ? "expired" : "expires " + esc(fmtWhen(invite.expiresAt))}</td>
+      <td>${invite.consumedBy ? "" : `<button type="button" class="btn small" data-action="invite-revoke" data-id="${esc(invite.inviteId)}">Revoke</button>`}</td>
+    </tr>`).join("");
+
+  host.innerHTML = `
+    <div class="cfg-section">
+      <div class="cfg-head"><h3>Backup sets</h3>
+        <button type="button" class="btn primary small" data-action="cfg-add-set" ${S.destinations.length ? "" : "disabled title='Declare a destination first (FR-DEST-001)'"}>＋ Add backup set</button>
+      </div>
+      ${S.sets.length ? `<div class="grid cols-2">${sets}</div>`
+        : `<div class="card empty"><span class="big">🗂</span>No backup sets yet.${S.destinations.length ? "" : "<br>Declare a destination below first — every set needs at least one."}</div>`}
+    </div>
+
+    <div class="cfg-section">
+      <div class="cfg-head"><h3>Destinations</h3>
+        <span>
+          <button type="button" class="btn small" data-action="dest-add-local">＋ Local folder</button>
+          <button type="button" class="btn small" data-action="dest-add-peer" ${S.pairings.length ? "" : "disabled title='Pair with a peer first'"}>＋ Peer destination</button>
+          <button type="button" class="btn small" data-action="invite-open">✉ Invite a peer</button>
+          <button type="button" class="btn small" data-action="pair-open">🔗 Pair with a remote service</button>
+        </span>
+      </div>
+      ${S.destinations.length ? `<div class="card"><div class="table-wrap"><table class="data">
+          <thead><tr><th>Name</th><th>Kind</th><th>Address</th><th>Failure domain</th><th></th></tr></thead>
+          <tbody>${destinations}</tbody></table></div></div>`
+        : `<div class="card empty"><span class="big">📦</span>No destinations declared. A local folder is the quickest start; a paired peer survives losing this machine.</div>`}
+    </div>
+
+    ${S.invites.length ? `<div class="cfg-section">
+      <div class="cfg-head"><h3>Pairing invites</h3></div>
+      <div class="card"><div class="table-wrap"><table class="data">
+        <thead><tr><th>Id</th><th>For</th><th>Role</th><th>State</th><th></th></tr></thead>
+        <tbody>${invites}</tbody></table></div></div>
+    </div>` : ""}`;
+}
+
+/* ----- the set editor ----- */
+
+function newDraft(set) {
+  return {
+    id: set?.id ?? Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(byte => byte.toString(16).padStart(2, "0")).join(""),
+    isNew: !set,
+    name: set?.name ?? "",
+    root: set?.root ?? "",
+    schedule: set?.schedule ?? null,
+    includeRules: [...(set?.includeRules ?? [])],
+    excludeRules: [...(set?.excludeRules ?? [])],
+    destinations: new Set(set?.destinations ?? []),
+    retention: set?.retention ?? null,
+    overrides: { ...(set?.destinationRetention ?? {}) },
+    tree: new Map(),          // full path -> {open, listing}
+    browsePath: null,         // the root picker's current directory
+  };
+}
+
+function openSetEditor(set) {
+  E = newDraft(set);
+  dialog.classList.add("wide");
+
+  const scheduleMode = !E.schedule ? "manual"
+    : /^every \d+[mhd]$/.test(E.schedule) ? "every"
+    : /^daily at /.test(E.schedule) ? "daily" : "custom";
+  const every = /^every (\d+)([mhd])$/.exec(E.schedule ?? "") ?? [null, "12", "h"];
+  const daily = /^daily at (.+)$/.exec(E.schedule ?? "")?.[1] ?? "02:30";
+
+  const policy = E.retention ?? {};
+  openDialog(`
+    <div id="set-editor">
+    <h3>${E.isNew ? "New backup set" : "Edit backup set"}</h3>
+
+    <div class="editor-section">
+      <label class="field" for="set-name">Name</label>
+      <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">
+      <label class="field" for="set-root">Folder to back up <span class="plain">— on the service's machine</span></label>
+      <div class="field-row">
+        <input type="text" id="set-root" class="mono" value="${esc(E.root)}" spellcheck="false" placeholder="/home/you/documents">
+        <button type="button" class="btn" data-action="root-browse" data-path="">Browse…</button>
+      </div>
+      <div id="root-browser" hidden></div>
+    </div>
+
+    <div class="editor-section">
+      <label class="field">Schedule</label>
+      <div class="radio-row">
+        <label><input type="radio" name="sched-mode" value="manual" ${scheduleMode === "manual" ? "checked" : ""}> manual only</label>
+        <label><input type="radio" name="sched-mode" value="every" ${scheduleMode === "every" ? "checked" : ""}> every
+          <input type="text" id="sched-n" class="num" value="${esc(every[1])}">
+          <select id="sched-unit">
+            <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
+            <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
+            <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
+          </select></label>
+        <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
+          <input type="time" id="sched-time" value="${esc(daily)}"></label>
+      </div>
+      <div id="sched-preview" class="subtle"></div>
+    </div>
+
+    <div class="editor-section">
+      <label class="field">What to capture</label>
+      <p class="subtle">Everything under the folder is captured unless you exclude it. "Only this" limits capture
+      to the chosen subtrees — new folders outside them will not be captured.</p>
+      <div id="sel-tree" class="tree"></div>
+      <div class="field-row">
+        <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
+        <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
+        <button type="button" class="btn small" data-action="rule-add-raw">Add rule</button>
+      </div>
+      <div id="rule-chips"></div>
+      <div id="draft-defects"></div>
+    </div>
+
+    <div class="editor-section">
+      <label class="field">Retention</label>
+      <p class="subtle">Absent fields are "no rule"; with no rules at all, every snapshot is kept. Retention selects —
+      deleting is a separate, confirmed act on the Maintenance page.</p>
+      <div class="field-row wrap">
+        <label class="mini">keep daily <input type="text" id="ret-daily" class="num" value="${policy.keepDaily ?? ""}"></label>
+        <label class="mini">weekly <input type="text" id="ret-weekly" class="num" value="${policy.keepWeekly ?? ""}"></label>
+        <label class="mini">monthly <input type="text" id="ret-monthly" class="num" value="${policy.keepMonthly ?? ""}"></label>
+        <label class="mini">min generations <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"></label>
+        <label class="mini">deferral days <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"></label>
+      </div>
+    </div>
+
+    <div class="editor-section">
+      <label class="field">Destinations</label>
+      <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
+      destination — unset fields do not fall back.</p>
+      <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>
+    </div>
+
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+      <button type="button" class="btn primary" data-action="set-save">${E.isNew ? "Create set" : "Save changes"}</button>
+    </div>
+    </div>`);
+
+  renderTree();
+  renderRuleChips();
+  validateDraftSoon();
+}
+
+function rerenderDestChoices() {
+  const host = document.getElementById("dest-list");
+  if (host && E) host.innerHTML = S.destinations.map(destination => renderDestChoice(destination)).join("");
+}
+
+function renderDestChoice(destination) {
+  const checked = E.destinations.has(destination.name);
+  const override = E.overrides[destination.name];
+  return `
+    <div class="dest-choice">
+      <label><input type="checkbox" data-dest-check="${esc(destination.name)}" ${checked ? "checked" : ""}>
+        <b>${esc(destination.name)}</b> <span class="detail">${esc(destination.kind)}</span></label>
+      ${checked ? `<label class="mini"><input type="checkbox" data-ovr-check="${esc(destination.name)}" ${override ? "checked" : ""}> override retention</label>` : ""}
+      ${checked && override ? `
+        <div class="field-row wrap ovr-fields" data-ovr-for="${esc(destination.name)}">
+          <label class="mini">daily <input type="text" class="num" data-ovr="${esc(destination.name)}:keepDaily" value="${override.keepDaily ?? ""}"></label>
+          <label class="mini">weekly <input type="text" class="num" data-ovr="${esc(destination.name)}:keepWeekly" value="${override.keepWeekly ?? ""}"></label>
+          <label class="mini">monthly <input type="text" class="num" data-ovr="${esc(destination.name)}:keepMonthly" value="${override.keepMonthly ?? ""}"></label>
+          <label class="mini">min gen <input type="text" class="num" data-ovr="${esc(destination.name)}:minGenerations" value="${override.minGenerations ?? ""}"></label>
+        </div>` : ""}
+    </div>`;
+}
+
+/* ----- selection tree ----- */
+
+function relFromFull(full) {
+  let file = String(full).replaceAll("\\", "/");
+  let root = String(E.root).replaceAll("\\", "/");
+  if (!root.endsWith("/")) root += "/";
+  return file.startsWith(root) ? file.slice(root.length) : null;
+}
+
+function ruleForPath(rel) {
+  // A name carrying glob metacharacters can only be said exactly with the
+  // regex form (rules-v1 has no glob escape).
+  return /[*?]/.test(rel)
+    ? "re:" + rel.replace(/[.^$|()[\]{}*+?\\]/g, match => "\\" + match)
+    : rel;
+}
+
+function isExcludedExact(rel) { return E.excludeRules.includes(ruleForPath(rel)); }
+
+function isExcludedByAncestor(rel) {
+  return E.excludeRules.some(rule =>
+    !rule.startsWith("re:") && !/[*?]/.test(rule) && rel !== rule && rel.startsWith(rule + "/"));
+}
+
+function isLimited(rel) { return E.includeRules.includes(rel + "/**"); }
+
+async function loadTreeDir(fullPath) {
+  if (E.tree.has(fullPath)) return E.tree.get(fullPath);
+  const listing = await run(
+    { command: "browse_folders", path: fullPath, includeFiles: true }, { errToast: "Listing refused" });
+  const node = { open: true, listing: listing?.result === "folder_listing" ? listing : null };
+  E.tree.set(fullPath, node);
+  return node;
+}
+
+function renderTree() {
+  const host = document.getElementById("sel-tree");
+  if (!host || !E) return;
+
+  if (!E.root.trim()) {
+    host.innerHTML = `<p class="subtle">Choose the folder first; its contents appear here.</p>`;
+    return;
+  }
+
+  host.innerHTML = `<div class="tree-inner">${renderTreeDir(E.root.trim(), 0)}</div>`;
+}
+
+function renderTreeDir(fullPath, depth) {
+  const node = E.tree.get(fullPath);
+  if (!node) {
+    // Root not loaded yet: kick the load and show a placeholder.
+    loadTreeDir(fullPath).then(renderTree);
+    return `<p class="subtle">Loading…</p>`;
+  }
+
+  if (!node.listing) return `<p class="subtle">This folder would not list.</p>`;
+
+  const rows = [];
+  for (const folder of node.listing.folders) {
+    const rel = relFromFull(folder.path);
+    if (rel === null) continue;
+    const excluded = isExcludedExact(rel);
+    const inherited = !excluded && isExcludedByAncestor(rel);
+    const limited = isLimited(rel);
+    const child = E.tree.get(folder.path);
+
+    rows.push(`
+      <div class="tree-row ${excluded || inherited ? "off" : ""}">
+        ${"<span class='indent'></span>".repeat(depth)}
+        <button type="button" class="twist" data-action="sel-open" data-path="${esc(folder.path)}">${child?.open ? "▾" : "▸"}</button>
+        <span class="kind-ico">📁</span>
+        <span class="tree-name">${esc(folder.name)}</span>
+        ${limited ? `<span class="badge accent">only this</span>` : ""}
+        ${excluded ? `<span class="badge warn">excluded</span>` : inherited ? `<span class="detail">excluded with parent</span>` : ""}
+        <span class="tree-actions">
+          ${inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-exclude" data-rel="${esc(rel)}">${excluded ? "include again" : "exclude"}</button>`}
+          ${excluded || inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-limit" data-rel="${esc(rel)}">${limited ? "not only this" : "only this"}</button>`}
+        </span>
+      </div>
+      ${child?.open ? renderTreeDir(folder.path, depth + 1) : ""}`);
+  }
+
+  for (const file of node.listing.files ?? []) {
+    const rel = relFromFull(
+      (node.listing.path.replaceAll("\\", "/").endsWith("/") ? node.listing.path : node.listing.path + "/") + file.name);
+    if (rel === null) continue;
+    const excluded = isExcludedExact(rel);
+    const inherited = !excluded && isExcludedByAncestor(rel);
+    rows.push(`
+      <div class="tree-row ${excluded || inherited ? "off" : ""}">
+        ${"<span class='indent'></span>".repeat(depth)}
+        <span class="twist"></span>
+        <span class="kind-ico">📄</span>
+        <span class="tree-name">${esc(file.name)}</span>
+        <span class="detail">${fmtBytes(file.length)}</span>
+        ${excluded ? `<span class="badge warn">excluded</span>` : ""}
+        <span class="tree-actions">
+          ${inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-exclude" data-rel="${esc(rel)}">${excluded ? "include again" : "exclude"}</button>`}
+        </span>
+      </div>`);
+  }
+
+  return rows.join("") || `<p class="subtle">${"<span class='indent'></span>".repeat(depth)}(empty)</p>`;
+}
+
+function renderRuleChips() {
+  const host = document.getElementById("rule-chips");
+  if (!host || !E) return;
+  const chip = (rule, list) => `
+    <span class="chip removable ${list === "exclude" ? "warn" : "accent"}">
+      ${list === "exclude" ? "− " : "＋ "}${esc(rule)}
+      <button type="button" class="chip-x" data-action="rule-remove" data-rule="${esc(rule)}" data-list="${list}" aria-label="Remove rule">×</button>
+    </span>`;
+  host.innerHTML =
+    E.includeRules.map(rule => chip(rule, "include")).join("")
+    + E.excludeRules.map(rule => chip(rule, "exclude")).join("")
+    || `<span class="subtle">No rules — everything under the folder is captured.</span>`;
+}
+
+let draftTimer = null;
+function validateDraftSoon() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(async () => {
+    if (!E) return;
+    const schedule = scheduleFromEditor();
+    const result = await run({
+      command: "validate_set_draft",
+      schedule,
+      includeRules: E.includeRules,
+      excludeRules: E.excludeRules,
+    });
+    if (result?.result !== "set_draft_validation" || !E) return;
+
+    const defects = document.getElementById("draft-defects");
+    if (defects) {
+      defects.innerHTML = result.defects.length
+        ? `<ul class="warnings">${result.defects.map(defect => `<li>${esc(defect)}</li>`).join("")}</ul>` : "";
+    }
+    const preview = document.getElementById("sched-preview");
+    if (preview) {
+      preview.textContent = !schedule
+        ? "Runs only when you press “Back up now”."
+        : result.nextRuns.length
+          ? "Next runs: " + result.nextRuns.map(when => fmtWhen(Date.parse(when))).join("  ·  ")
+          : "";
+    }
+  }, 350);
+}
+
+function scheduleFromEditor() {
+  const mode = document.querySelector("input[name=sched-mode]:checked")?.value ?? "manual";
+  if (mode === "manual") return null;
+  if (mode === "every") {
+    const n = document.getElementById("sched-n").value.trim() || "0";
+    const unit = document.getElementById("sched-unit").value;
+    return `every ${n}${unit}`;
+  }
+  if (mode === "daily") return `daily at ${document.getElementById("sched-time").value || "00:00"}`;
+  return E?.schedule ?? null; // custom: whatever the set already had
+}
+
+function readPolicyInputs(read) {
+  const value = id => {
+    const raw = read(id);
+    if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+    const parsed = Number(String(raw).trim());
+    return Number.isInteger(parsed) ? parsed : NaN;
+  };
+  return {
+    keepDaily: value("daily"), keepWeekly: value("weekly"), keepMonthly: value("monthly"),
+    minGenerations: value("min"), deferralDays: value("defer"),
+  };
+}
+
+/* ----- configuration actions ----- */
+
+Object.assign(actions, {
+  "cfg-add-set"() { openSetEditor(null); },
+
+  "cfg-edit-set"(el) {
+    const set = S.sets.find(candidate => candidate.name === el.dataset.name);
+    if (set) openSetEditor(set);
+  },
+
+  async "sel-open"(el) {
+    const node = E.tree.get(el.dataset.path);
+    if (node) node.open = !node.open;
+    else await loadTreeDir(el.dataset.path);
+    renderTree();
+  },
+
+  "sel-exclude"(el) {
+    const rule = ruleForPath(el.dataset.rel);
+    E.excludeRules = E.excludeRules.includes(rule)
+      ? E.excludeRules.filter(candidate => candidate !== rule)
+      : [...E.excludeRules, rule];
+    renderTree(); renderRuleChips(); validateDraftSoon();
+  },
+
+  "sel-limit"(el) {
+    const rule = el.dataset.rel + "/**";
+    E.includeRules = E.includeRules.includes(rule)
+      ? E.includeRules.filter(candidate => candidate !== rule)
+      : [...E.includeRules, rule];
+    renderTree(); renderRuleChips(); validateDraftSoon();
+  },
+
+  "rule-remove"(el) {
+    const list = el.dataset.list === "exclude" ? "excludeRules" : "includeRules";
+    E[list] = E[list].filter(rule => rule !== el.dataset.rule);
+    renderTree(); renderRuleChips(); validateDraftSoon();
+  },
+
+  "rule-add-raw"() {
+    const input = document.getElementById("rule-new");
+    const rule = input.value.trim();
+    if (!rule) return;
+    const list = document.getElementById("rule-list").value === "exclude" ? "excludeRules" : "includeRules";
+    if (!E[list].includes(rule)) E[list] = [...E[list], rule];
+    input.value = "";
+    renderTree(); renderRuleChips(); validateDraftSoon();
+  },
+
+  async "root-browse"(el) {
+    const path = el.dataset.path || document.getElementById("set-root").value.trim() || null;
+    await renderRootBrowser(path);
+  },
+
+  async "root-browse-to"(el) { await renderRootBrowser(el.dataset.path || null); },
+
+  "root-choose"(el) {
+    document.getElementById("set-root").value = el.dataset.path;
+    document.getElementById("root-browser").hidden = true;
+    E.root = el.dataset.path;
+    E.tree = new Map();
+    renderTree(); validateDraftSoon();
+  },
+
+  async "set-save"(el) {
+    E.name = document.getElementById("set-name").value.trim();
+    E.root = document.getElementById("set-root").value.trim();
+    if (!E.name || !E.root) { toast("warn", "A set needs a name and a folder."); return; }
+
+    const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
+    if (Object.values(retention).some(Number.isNaN)) {
+      toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
+      return;
+    }
+
+    const destinations = [...document.querySelectorAll("[data-dest-check]")]
+      .filter(box => box.checked).map(box => box.dataset.destCheck);
+
+    const overrides = {};
+    for (const name of destinations) {
+      if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
+      const policy = {};
+      for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
+        const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
+        policy[field] = raw === "" ? null : Number(raw);
+      }
+      if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
+        toast("warn", `The override for '${name}' has a non-numeric value.`); return;
+      }
+      overrides[name] = policy;
+    }
+
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "upsert_backup_set",
+        set: {
+          id: E.id, name: E.name, root: E.root,
+          schedule: scheduleFromEditor(),
+          includeRules: E.includeRules, excludeRules: E.excludeRules,
+          destinations,
+          retention,           // all-null clears; values set — always explicit from this editor
+          destinationRetention: overrides,
+        },
+      }, { errToast: "The service refused the set" });
+      if (result) {
+        toast("ok", E.isNew ? `Backup set '${E.name}' created.` : `Backup set '${E.name}' saved.`);
+        closeDialog();
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
+  "cfg-delete-set"(el) {
+    const name = el.dataset.name;
+    openDialog(`
+      <h3>Delete backup set</h3>
+      <p class="dlg-sub">This removes '<b>${esc(name)}</b>' from the configuration only. Its staging archive and
+      every destination's copies remain on disk — deleting data is retention's job, never a config edit's.</p>
+      <label class="field" for="confirm-word">Type <b>${esc(name)}</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="${esc(name.toLowerCase())}" data-enables="delete-set-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="delete-set-go" data-action="cfg-delete-set-go" data-name="${esc(name)}" disabled>Remove from configuration</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "cfg-delete-set-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "delete_backup_set", name: el.dataset.name }, { errToast: "Delete refused" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Backup set removed", result.lines);
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
+  "dest-add-local"() { openDestEditor("local-path", null); },
+  "dest-add-peer"() { openDestEditor("peer", null); },
+
+  "cfg-edit-dest"(el) {
+    const destination = S.destinations.find(candidate => candidate.id === el.dataset.id);
+    if (destination) openDestEditor(destination.kind, destination);
+  },
+
+  async "dest-save"(el) {
+    const kind = el.dataset.kind;
+    const descriptor = {
+      id: el.dataset.id || null,
+      name: document.getElementById("dest-name").value.trim(),
+      kind,
+      path: kind === "local-path" ? document.getElementById("dest-path").value.trim() : null,
+      fingerprint: kind === "peer" ? document.getElementById("dest-fp").value.trim() : null,
+      endpoint: kind === "peer" ? document.getElementById("dest-endpoint").value.trim() : null,
+      failureDomain: document.getElementById("dest-domain").value || null,
+      deepVerifyIntervalDays: Number(document.getElementById("dest-sweep").value.trim()) || null,
+    };
+    if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
+
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "upsert_destination", destination: descriptor }, { errToast: "The service refused the destination" });
+      if (result) {
+        toast("ok", `Destination '${descriptor.name}' saved.`);
+        closeDialog();
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
+  "cfg-delete-dest"(el) {
+    const name = el.dataset.name;
+    openDialog(`
+      <h3>Delete destination</h3>
+      <p class="dlg-sub">This stops the hub managing '<b>${esc(name)}</b>'. Nothing stored there is deleted —
+      the copies it holds stay until you deal with them where they live (FR-DEST-007).</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" data-action="cfg-delete-dest-go" data-name="${esc(name)}">Remove destination</button>
+      </div>`);
+  },
+
+  async "cfg-delete-dest-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "delete_destination", name: el.dataset.name }, { errToast: "Delete refused" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Destination removed", result.lines);
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
+  "invite-open"() {
+    openDialog(`
+      <h3>Invite a peer</h3>
+      <p class="dlg-sub">Issuing the invite is <b>your approval</b>: you choose now what the redeeming machine
+      will be to this one. Read the code to the other operator over a call — it is spoken once, never sent.</p>
+      <label class="field" for="inv-label">What to call them here</label>
+      <input type="text" id="inv-label" spellcheck="false" placeholder="anna's laptop">
+      <label class="field">Their role</label>
+      <div class="radio-row">
+        <label><input type="radio" name="inv-role" value="stores-here" checked> they back up <b>to</b> this machine</label>
+        <label><input type="radio" name="inv-role" value="stores-for-us"> this machine backs up <b>to them</b></label>
+        <label><input type="radio" name="inv-role" value="both"> both ways</label>
+      </div>
+      <div class="field-row wrap">
+        <label class="mini">quota (GiB, blank = none) <input type="text" id="inv-quota" class="num"></label>
+        <label class="mini">valid for (hours) <input type="text" id="inv-ttl" class="num" value="24"></label>
+      </div>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" data-action="invite-create">Issue invite</button>
+      </div>`);
+    document.getElementById("inv-label").focus();
+  },
+
+  async "invite-create"(el) {
+    const label = document.getElementById("inv-label").value.trim();
+    if (!label) { toast("warn", "Name the peer this invite is for."); return; }
+    const role = document.querySelector("input[name=inv-role]:checked").value;
+    const quotaGib = Number(document.getElementById("inv-quota").value.trim() || "0");
+    const ttlHours = Number(document.getElementById("inv-ttl").value.trim() || "24");
+
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "create_pairing_invite",
+        label, role,
+        quotaBytes: quotaGib > 0 ? Math.round(quotaGib * 1024 * 1024 * 1024) : null,
+        timeToLiveMinutes: Math.max(1, Math.round(ttlHours * 60)),
+      }, { errToast: "The service refused the invite" });
+      if (result?.result !== "pairing_invite") return;
+
+      openDialog(`
+        <h3>Invite issued</h3>
+        <p class="dlg-sub">Read this to the other operator. It is shown <b>once</b> — the service keeps only
+        what it needs to recognise it, not the code itself.</p>
+        <div class="code-display mono" id="invite-code">${esc(result.code)}</div>
+        <div class="actions-row">
+          <button type="button" class="btn small" data-action="invite-copy">⧉ Copy code</button>
+        </div>
+        <p class="dlg-sub">
+          ${result.listeningEndpoint
+            ? `They should pair against <b class="mono">${esc(result.listeningEndpoint)}</b> (use this machine's reachable address with that port).`
+            : ""}
+          Expires ${esc(fmtWhen(result.expiresAt))}.
+        </p>
+        ${result.warning ? `<ul class="warnings"><li>${esc(result.warning)}</li></ul>` : ""}
+        <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Done</button></div>`);
+      refreshConfigData();
+    });
+  },
+
+  async "invite-copy"() {
+    try {
+      await navigator.clipboard.writeText(document.getElementById("invite-code").textContent.trim());
+      toast("ok", "Code copied.");
+    } catch {
+      toast("warn", "The browser refused the clipboard — select the code and copy it by hand.");
+    }
+  },
+
+  async "invite-revoke"(el) {
+    const result = await run(
+      { command: "revoke_pairing_invite", inviteId: el.dataset.id }, { errToast: "Revoke refused" });
+    if (result) { toast("ok", "Invite revoked."); refreshConfigData(); }
+  },
+
+  "pair-open"() {
+    openDialog(`
+      <h3>Pair with a remote service</h3>
+      <p class="dlg-sub">Entering the code is <b>your approval</b>. This service dials theirs, both prove they
+      hold the invite, and each pins the other's key — the code is spent the moment it works.</p>
+      <label class="field" for="pair-code">Invite code <span class="plain">— as the other operator read it</span></label>
+      <input type="text" id="pair-code" class="mono" spellcheck="false" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx-xx">
+      <div class="field-row">
+        <span class="grow"><label class="field" for="pair-host">Their address</label>
+        <input type="text" id="pair-host" class="mono" spellcheck="false" placeholder="203.0.113.7 or vault.example"></span>
+        <span><label class="field" for="pair-port">Port</label>
+        <input type="text" id="pair-port" class="num" value=""></span>
+      </div>
+      <label class="field" for="pair-label">What to call them here</label>
+      <input type="text" id="pair-label" spellcheck="false" placeholder="the vault">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" data-action="pair-go">Pair</button>
+      </div>`);
+    document.getElementById("pair-code").focus();
+  },
+
+  async "pair-go"(el) {
+    const code = document.getElementById("pair-code").value.trim();
+    const host = document.getElementById("pair-host").value.trim();
+    const port = Number(document.getElementById("pair-port").value.trim());
+    const label = document.getElementById("pair-label").value.trim() || host;
+    if (!code || !host || !port) { toast("warn", "The code, the address and the port are all needed."); return; }
+
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "pair_with_invite", code, host, port, label }, { errToast: "Pairing failed" });
+      if (result?.result !== "pairing_completed") return;
+
+      openDialog(`
+        <h3>✔ Paired</h3>
+        <p class="dlg-sub"><b>${esc(result.label)}</b> is pinned as
+        <span class="mono">${esc(result.fingerprint)}</span>. They recorded this machine as
+        <b>${esc(result.theirRole)}</b>${result.quotaBytes ? ` with a ${fmtBytes(result.quotaBytes)} quota` : ""}.</p>
+        <p class="dlg-sub">To back up to them, add them as a destination and reference it from a set.</p>
+        <div class="dlg-actions">
+          <button type="button" class="btn" data-action="close-dialog">Later</button>
+          <button type="button" class="btn primary" data-action="pair-add-dest"
+                  data-label="${esc(result.label)}" data-fp="${esc(result.fingerprint)}"
+                  data-endpoint="${esc(host)}:${port}">Add as destination</button>
+        </div>`);
+      refreshConfigData();
+    });
+  },
+
+  "pair-add-dest"(el) {
+    openDestEditor("peer", {
+      id: null,
+      name: el.dataset.label,
+      kind: "peer",
+      fingerprint: el.dataset.fp,
+      endpoint: el.dataset.endpoint,
+      path: null, failureDomain: null, deepVerifyIntervalDays: null,
+    });
+  },
+});
+
+/* ----- destination editor & root browser ----- */
+
+function openDestEditor(kind, destination) {
+  const isNew = !destination?.id;
+  const domains = ["", "same-volume", "same-machine", "same-site", "independent"];
+  openDialog(`
+    <h3>${isNew ? (kind === "peer" ? "New peer destination" : "New local destination") : "Edit destination"}</h3>
+    ${kind === "peer" ? `<p class="dlg-sub">A peer destination points a set at a machine you have paired with.
+      The grant holds the key; this holds the address (FR-DEST-006).</p>` : ""}
+    <label class="field" for="dest-name">Name <span class="plain">— what sets reference</span></label>
+    <input type="text" id="dest-name" spellcheck="false" value="${esc(destination?.name ?? "")}">
+    ${kind === "local-path" ? `
+      <label class="field" for="dest-path">Folder — on the service's machine</label>
+      <div class="field-row">
+        <input type="text" id="dest-path" class="mono" spellcheck="false" value="${esc(destination?.path ?? "")}">
+      </div>` : `
+      <label class="field" for="dest-fp">Paired peer</label>
+      <select id="dest-fp">${S.pairings.map(pairing =>
+        `<option value="${esc(pairing.fingerprint)}" ${pairing.fingerprint === destination?.fingerprint ? "selected" : ""}>
+           ${esc(pairing.label)} — ${esc(pairing.fingerprint.slice(0, 12))}… (${esc(pairing.role)})</option>`).join("")}
+      </select>
+      <label class="field" for="dest-endpoint">Endpoint <span class="plain">host:port</span></label>
+      <input type="text" id="dest-endpoint" class="mono" spellcheck="false" value="${esc(destination?.endpoint ?? "")}">`}
+    <div class="field-row wrap">
+      <label class="mini">failure domain
+        <select id="dest-domain">${domains.map(domain =>
+          `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
+        </select></label>
+      <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num" value="${destination?.deepVerifyIntervalDays ?? ""}"></label>
+    </div>
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+      <button type="button" class="btn primary" data-action="dest-save" data-kind="${esc(kind)}" data-id="${esc(destination?.id ?? "")}">
+        ${isNew ? "Declare destination" : "Save changes"}</button>
+    </div>`);
+  document.getElementById("dest-name").focus();
+}
+
+async function renderRootBrowser(path) {
+  const host = document.getElementById("root-browser");
+  if (!host) return;
+  host.hidden = false;
+  const listing = await run({ command: "browse_folders", path }, { errToast: "Listing refused" });
+  if (listing?.result !== "folder_listing") { host.hidden = true; return; }
+
+  host.innerHTML = `
+    <div class="picker">
+      <div class="picker-head">
+        <span class="mono">${esc(listing.path ?? "This machine")}</span>
+        <span>
+          ${listing.path ? `<button type="button" class="btn tiny" data-action="root-browse-to" data-path="${esc(listing.parent ?? "")}">↑ up</button>
+          <button type="button" class="btn tiny" data-action="root-choose" data-path="${esc(listing.path)}">choose this folder</button>` : ""}
+        </span>
+      </div>
+      ${listing.folders.map(folder => `
+        <div class="picker-row ${folder.hidden ? "dim" : ""}">
+          <a data-action="root-browse-to" data-path="${esc(folder.path)}">📁 ${esc(folder.name)}</a>
+          ${folder.inaccessible ? `<span class="detail">not readable</span>`
+            : `<button type="button" class="btn tiny" data-action="root-choose" data-path="${esc(folder.path)}">choose</button>`}
+        </div>`).join("") || `<p class="subtle">No folders in here.</p>`}
+    </div>`;
+}
+
 /* ----- snapshot browser ----- */
 
 async function openBrowser(snapshotId, path) {
@@ -870,6 +1693,36 @@ function boot() {
       S.snapshotFilter = event.target.value;
       renderSnapshots();
     }
+
+    // The set editor's live pieces: schedule edits refresh the preview,
+    // destination toggles reshape the checklist.
+    if (!E || !event.target.closest("#set-editor")) return;
+    if (event.target.matches("[name=sched-mode], #sched-n, #sched-unit, #sched-time")) {
+      validateDraftSoon();
+    }
+    if (event.target.matches("[data-dest-check]")) {
+      const name = event.target.dataset.destCheck;
+      if (event.target.checked) E.destinations.add(name);
+      else { E.destinations.delete(name); delete E.overrides[name]; }
+      rerenderDestChoices();
+    }
+    if (event.target.matches("[data-ovr-check]")) {
+      const name = event.target.dataset.ovrCheck;
+      if (event.target.checked) E.overrides[name] = E.overrides[name] ?? {};
+      else delete E.overrides[name];
+      rerenderDestChoices();
+    }
+  });
+
+  document.addEventListener("keydown", event => {
+    if (event.key === "Enter" && event.target.matches("#rule-new")) {
+      event.preventDefault();
+      actions["rule-add-raw"]();
+    }
+  });
+
+  document.addEventListener("input", event => {
+    if (E && event.target.matches("#sched-n, #sched-time")) validateDraftSoon();
   });
 
   window.addEventListener("hashchange", route);

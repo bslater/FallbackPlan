@@ -106,6 +106,13 @@ public enum PeerRefusalReason : ushort
 
     /// <summary>The destination cannot store — disk trouble, not policy (05 §4).</summary>
     StorageExhausted = 12,
+
+    /// <summary>
+    /// The offered pairing invite is not redeemable here (01 §2.7). One code
+    /// for unknown, expired and consumed alike — which of the three it was is
+    /// nobody's business but the issuer's.
+    /// </summary>
+    InviteUnknown = 13,
 }
 
 /// <summary>

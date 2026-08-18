@@ -54,6 +54,14 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
+[JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
+[JsonDerivedType(typeof(DestinationsResult), "destinations")]
+[JsonDerivedType(typeof(PairingsResult), "pairings")]
+[JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
+[JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
+[JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
+[JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
+[JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -64,6 +72,30 @@ public sealed record ServiceError(ServiceErrorReason Reason, string Message) : S
 /// <summary>A command that succeeded and has nothing to report.</summary>
 public sealed record AcknowledgedResult : ServiceResult;
 
+/// <summary>
+/// One retention policy, as the contract carries it (ADR-0037). Every field
+/// optional; a declared value must be positive — zero is refused as a typo,
+/// absent is how "no rule" is said (FR-GC-001's never-destructive default).
+/// </summary>
+/// <param name="KeepDaily">Keep one snapshot per calendar day, this many days.</param>
+/// <param name="KeepWeekly">Keep one per ISO week, this many weeks.</param>
+/// <param name="KeepMonthly">Keep one per calendar month, this many months.</param>
+/// <param name="MinGenerations">The floor the other rules cannot override.</param>
+/// <param name="DeferralDays">How long retention may wait on a lagging destination before warning (FR-GC-009).</param>
+public sealed record RetentionPolicyDescriptor(
+    int? KeepDaily = null,
+    int? KeepWeekly = null,
+    int? KeepMonthly = null,
+    int? MinGenerations = null,
+    int? DeferralDays = null)
+{
+    /// <summary>Whether every field is absent — the "no policy" spelling.</summary>
+    [JsonIgnore]
+    public bool IsEmpty =>
+        KeepDaily is null && KeepWeekly is null && KeepMonthly is null
+        && MinGenerations is null && DeferralDays is null;
+}
+
 /// <summary>One configured backup set, as a client sees it.</summary>
 /// <param name="Id">The set's 32-hex identity.</param>
 /// <param name="Name">The set's name.</param>
@@ -72,6 +104,18 @@ public sealed record AcknowledgedResult : ServiceResult;
 /// <param name="IncludeRules">Include rules, in rules-v1 dialect.</param>
 /// <param name="ExcludeRules">Exclude rules, in rules-v1 dialect.</param>
 /// <param name="Destinations">The declared destination names the set replicates to (FR-DEST-001).</param>
+/// <param name="Retention">
+/// The set's retention policy. On an upsert, null preserves whatever the set
+/// already has (what a 1.6 client always sends), and a policy with every
+/// field absent clears it — the difference between not speaking and saying
+/// "none" (ADR-0037).
+/// </param>
+/// <param name="DestinationRetention">
+/// Per-destination overrides by destination name. An entry fully replaces the
+/// set policy for that destination (FR-GC-010) — there is no field merge. On
+/// an upsert, null preserves existing overrides; an empty-policy entry clears
+/// that destination's override.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -79,7 +123,123 @@ public sealed record BackupSetDescriptor(
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
     IReadOnlyList<string> ExcludeRules,
-    IReadOnlyList<string> Destinations);
+    IReadOnlyList<string> Destinations,
+    RetentionPolicyDescriptor? Retention = null,
+    IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null);
+
+/// <summary>
+/// One declared destination, as the configuration surface sees it
+/// (ADR-0037). Which fields apply depends on <paramref name="Kind"/>:
+/// <c>local-path</c> takes a path; <c>peer</c> takes a fingerprint and an
+/// endpoint; the schema-reserved cloud kinds take neither yet.
+/// </summary>
+/// <param name="Id">The destination's 32-hex identity; null on an upsert declares a new one.</param>
+/// <param name="Name">Its unique name — what sets reference.</param>
+/// <param name="Kind">Its kind, in the configuration's spelling.</param>
+/// <param name="Path">The directory, for <c>local-path</c>.</param>
+/// <param name="Fingerprint">The paired peer's fingerprint, for <c>peer</c>.</param>
+/// <param name="Endpoint">The peer's <c>host:port</c>, for <c>peer</c>.</param>
+/// <param name="FailureDomain">The declared failure domain, or null to derive by kind (ADR-0018).</param>
+/// <param name="DeepVerifyIntervalDays">How often the deep sweep re-reads it; null takes the default.</param>
+/// <param name="AddressDefect">
+/// What is syntactically wrong with the declared address, when anything is —
+/// reported, never a refusal to load (ADR-0035 §1). Ignored on an upsert.
+/// </param>
+public sealed record DestinationDescriptor(
+    string? Id,
+    string Name,
+    string Kind,
+    string? Path,
+    string? Fingerprint,
+    string? Endpoint,
+    string? FailureDomain = null,
+    int? DeepVerifyIntervalDays = null,
+    string? AddressDefect = null);
+
+/// <summary>Every declared destination, referenced by a set or not.</summary>
+/// <param name="Destinations">The declarations, in configuration order.</param>
+public sealed record DestinationsResult(IReadOnlyList<DestinationDescriptor> Destinations) : ServiceResult;
+
+/// <summary>A configuration change that succeeded and owes the operator facts.</summary>
+/// <param name="Lines">
+/// What the change did <em>not</em> do, mostly: the copies and archives that
+/// remain after a removal (FR-DEST-007), stated rather than inferred.
+/// </param>
+public sealed record ConfigurationChangeResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>One paired peer, as the grant store records it.</summary>
+/// <param name="Fingerprint">The peer's fingerprint.</param>
+/// <param name="Label">What this device calls it.</param>
+/// <param name="Role">The role recorded for it: <c>stores-here</c>, <c>stores-for-us</c>, or <c>both</c>.</param>
+/// <param name="PairedAt">When it was pinned, Unix milliseconds.</param>
+public sealed record PairingDescriptor(string Fingerprint, string Label, string Role, ulong PairedAt);
+
+/// <summary>This device's paired peers.</summary>
+/// <param name="Pairings">The grants, oldest first.</param>
+public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) : ServiceResult;
+
+/// <summary>One directory on the service's machine, for a folder picker.</summary>
+/// <param name="Name">The directory's name.</param>
+/// <param name="Path">Its full path, as a later command would use it.</param>
+/// <param name="Hidden">Whether the platform marks it hidden.</param>
+/// <param name="Inaccessible">Whether listing inside it failed; shown, never thrown.</param>
+public sealed record FolderDescriptor(string Name, string Path, bool Hidden, bool Inaccessible);
+
+/// <summary>One file on the service's machine, for a selection tree.</summary>
+/// <param name="Name">The file's name.</param>
+/// <param name="Length">Its length in bytes.</param>
+/// <param name="Hidden">Whether the platform marks it hidden.</param>
+public sealed record FileEntryDescriptor(string Name, long Length, bool Hidden);
+
+/// <summary>One directory listing on the service's machine (ADR-0037 §6).</summary>
+/// <param name="Path">The directory listed, or null when the roots were.</param>
+/// <param name="Parent">The directory above it, or null at a root.</param>
+/// <param name="Folders">The child directories, sorted by name.</param>
+/// <param name="Files">The files, when they were asked for; null otherwise.</param>
+public sealed record FolderListingResult(
+    string? Path,
+    string? Parent,
+    IReadOnlyList<FolderDescriptor> Folders,
+    IReadOnlyList<FileEntryDescriptor>? Files = null) : ServiceResult;
+
+/// <summary>What a set draft means, before anything is saved.</summary>
+/// <param name="Defects">Everything wrong, rules and schedule alike, named verbatim; empty when the draft is sound.</param>
+/// <param name="NextRuns">The schedule's next occurrences (ISO-8601, the service's clock frame); empty for manual-only or a defective schedule.</param>
+public sealed record SetDraftValidationResult(
+    IReadOnlyList<string> Defects, IReadOnlyList<string> NextRuns) : ServiceResult;
+
+/// <summary>A freshly issued pairing invite — the one time the code exists in the clear.</summary>
+/// <param name="Code">The code to speak to the other operator. Never persisted, never shown again.</param>
+/// <param name="InviteId">The invite's identifier, for the listing and revocation.</param>
+/// <param name="ExpiresAt">When it stops being redeemable, Unix milliseconds.</param>
+/// <param name="ListeningEndpoint">
+/// Where the peer should dial — the remote binding's endpoint, or null when
+/// the binding is off, in which case <paramref name="Warning"/> says what to do.
+/// </param>
+/// <param name="Warning">What stands between this invite and a successful dial, when anything does.</param>
+public sealed record PairingInviteResult(
+    string Code, string InviteId, ulong ExpiresAt, string? ListeningEndpoint, string? Warning) : ServiceResult;
+
+/// <summary>One pairing invite, as the listing shows it — never its code.</summary>
+/// <param name="InviteId">The invite's identifier.</param>
+/// <param name="Label">The label the redeemer will be recorded under.</param>
+/// <param name="Role">The role committed at issue time.</param>
+/// <param name="ExpiresAt">When it stops being redeemable, Unix milliseconds.</param>
+/// <param name="ConsumedBy">The fingerprint that redeemed it, when one has.</param>
+public sealed record PairingInviteDescriptor(
+    string InviteId, string Label, string Role, ulong ExpiresAt, string? ConsumedBy);
+
+/// <summary>The pending and consumed pairing invites.</summary>
+/// <param name="Invites">The invites, oldest first.</param>
+public sealed record PairingInvitesResult(IReadOnlyList<PairingInviteDescriptor> Invites) : ServiceResult;
+
+/// <summary>A pairing that completed over an invite (ADR-0030 Amendment 3).</summary>
+/// <param name="Fingerprint">The paired service's fingerprint, now pinned.</param>
+/// <param name="Label">What this device calls it.</param>
+/// <param name="TheirRole">The role the far side recorded for this device.</param>
+/// <param name="QuotaBytes">The storage ceiling the far side granted, when it stores for us; null or 0 is no ceiling.</param>
+public sealed record PairingCompletedResult(
+    string Fingerprint, string Label, string TheirRole, ulong? QuotaBytes) : ServiceResult;
 
 /// <summary>The configured backup sets.</summary>
 /// <param name="Sets">The sets.</param>
