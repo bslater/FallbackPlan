@@ -19,6 +19,9 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(BrowseFoldersCommand), "browse_folders")]
 [JsonDerivedType(typeof(ValidateSetDraftCommand), "validate_set_draft")]
 [JsonDerivedType(typeof(PreviewSetChangesCommand), "preview_set_changes")]
+[JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
+[JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
+[JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
 [JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
@@ -157,6 +160,41 @@ public sealed record RevokePairingInviteCommand(string InviteId) : ServiceComman
 /// <param name="Port">The remote service's port.</param>
 /// <param name="Label">What to call the paired peer here.</param>
 public sealed record PairWithInviteCommand(string Code, string Host, int Port, string Label) : ServiceCommand;
+
+/// <summary>
+/// Lists the durable notices — the events awaiting a person (FR-DEST-008),
+/// structured so a client can show age and acknowledge by identity rather
+/// than parsing the status strings.
+/// </summary>
+/// <param name="IncludeAcknowledged">
+/// Whether to include notices a person has already acknowledged — they stay
+/// on record; the default answers only what still awaits one.
+/// </param>
+public sealed record ListNoticesCommand(bool IncludeAcknowledged = false) : ServiceCommand;
+
+/// <summary>
+/// Acknowledges one notice (FR-DEST-008): a person has seen it. The notice
+/// stays on record; it merely stops demanding attention.
+/// </summary>
+/// <param name="Id">The notice's identifier, from the listing.</param>
+public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
+
+/// <summary>
+/// Ends a pairing (ADR-0030 Amendment 2): announces the termination to the
+/// peer when asked and reachable, then revokes the grant locally, leaving a
+/// tombstone so the peer's next dial is told <c>revoked</c> rather than
+/// <c>never paired</c>. Refused while a configured destination references
+/// the fingerprint — a revocation must not silently break what sets sync to.
+/// </summary>
+/// <param name="Fingerprint">The pairing's fingerprint, or an unambiguous prefix of it.</param>
+/// <param name="Notify">Whether to announce the ending to the peer before revoking.</param>
+/// <param name="Endpoint">
+/// Where to dial the announcement, as <c>host:port</c>; null consults the
+/// configured destinations — which the honest order (destination deleted
+/// first) has usually just emptied, so a caller that knows the address says
+/// it here, exactly as the agent verb's <c>--to</c> does.
+/// </param>
+public sealed record UnpairCommand(string Fingerprint, bool Notify = true, string? Endpoint = null) : ServiceCommand;
 
 /// <summary>Runs a backup now, outside the schedule.</summary>
 /// <param name="SetName">The set to run; null runs the default set.</param>

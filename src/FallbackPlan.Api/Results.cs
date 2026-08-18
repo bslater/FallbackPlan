@@ -60,6 +60,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
+[JsonDerivedType(typeof(NoticesResult), "notices")]
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
@@ -332,16 +333,49 @@ public sealed record SnapshotDescriptor(
 /// <param name="Snapshots">The snapshots, oldest first.</param>
 public sealed record SnapshotsResult(IReadOnlyList<SnapshotDescriptor> Snapshots) : ServiceResult;
 
+/// <summary>One durable notice, as the ledger holds it (FR-DEST-008).</summary>
+/// <param name="Id">The identifier acknowledgement acts on.</param>
+/// <param name="Key">The stable machine key — one notice per (kind, subject); a re-raise refreshes the message under the same key.</param>
+/// <param name="Message">The prose a person reads.</param>
+/// <param name="RaisedAt">When the condition was first seen, Unix milliseconds.</param>
+/// <param name="AcknowledgedAt">When a person acknowledged it, Unix milliseconds; null while it still awaits one.</param>
+public sealed record NoticeDescriptor(
+    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt);
+
+/// <summary>The notices, oldest first.</summary>
+/// <param name="Notices">The listed notices.</param>
+public sealed record NoticesResult(IReadOnlyList<NoticeDescriptor> Notices) : ServiceResult;
+
 /// <summary>One entry inside a snapshot directory.</summary>
 /// <param name="Name">The entry's name.</param>
 /// <param name="Kind">One of <c>file</c>, <c>directory</c>, <c>symlink</c>, <c>special</c>.</param>
 /// <param name="Length">The logical length, for files.</param>
-public sealed record DirectoryEntryDescriptor(string Name, string Kind, long Length);
+/// <param name="ModifiedAt">The recorded modification time, Unix milliseconds; null for directories and rebuilt catalogues.</param>
+/// <param name="Change">
+/// How this entry compares with the set's previous snapshot: <c>new</c>,
+/// <c>changed</c> (its recorded object differs — content, metadata, or a
+/// restated manifest), or <c>same</c>. Null when the snapshot has no
+/// predecessor — and always null for directories, whose recorded head mixes
+/// in access times the scan itself perturbs: a folder makes no claim, and
+/// its own listing answers instead.
+/// </param>
+public sealed record DirectoryEntryDescriptor(
+    string Name, string Kind, long Length, ulong? ModifiedAt = null, string? Change = null);
 
 /// <summary>One directory's contents.</summary>
 /// <param name="Path">The directory listed.</param>
 /// <param name="Entries">Its entries.</param>
-public sealed record DirectoryResult(string Path, IReadOnlyList<DirectoryEntryDescriptor> Entries) : ServiceResult;
+/// <param name="Deleted">
+/// Names present in the previous snapshot's same directory and absent here —
+/// deletion is absence between snapshots (FR-SNP-002), and this is where the
+/// absence is computed. Null when the snapshot has no predecessor.
+/// </param>
+/// <param name="PreviousSnapshotId">The snapshot the markers compare against, hex; null when there is none.</param>
+public sealed record DirectoryResult(
+    string Path,
+    IReadOnlyList<DirectoryEntryDescriptor> Entries,
+    IReadOnlyList<string>? Deleted = null,
+    string? PreviousSnapshotId = null) : ServiceResult;
 
 /// <summary>What a restore would do.</summary>
 /// <param name="Files">How many files the plan covers.</param>

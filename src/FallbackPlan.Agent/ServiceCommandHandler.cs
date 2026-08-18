@@ -323,6 +323,9 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         ListPairingInvitesCommand => ListPairingInvites(),
         RevokePairingInviteCommand revoke => RevokePairingInvite(revoke),
         PairWithInviteCommand pair => await PairWithInviteAsync(pair, cancellationToken).ConfigureAwait(false),
+        ListNoticesCommand listNotices => ListNotices(listNotices),
+        AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
+        UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
@@ -1337,13 +1340,92 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         using var catalogue = archive.OpenReadCatalogue();
         var path = command.Path ?? string.Empty;
         var entries = catalogue.ListDirectory(snapshotId, path);
+
+        // The set's previous snapshot, when one exists: EnumerateSnapshots is
+        // newest first, so the predecessor is the next same-set row after
+        // this one. Both listings name a path identically, so the comparison
+        // is a dictionary join — two queries, never one per entry.
+        var rows = catalogue.EnumerateSnapshots();
+        var current = rows.FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId));
+        Repository.Catalogue.CatalogueSnapshot? previous = null;
+        if (current is not null)
+        {
+            previous = rows
+                .SkipWhile(row => !row.SnapshotId.Span.SequenceEqual(snapshotId))
+                .Skip(1)
+                .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(current.BackupSetId.Span));
+        }
+
+        Dictionary<string, Repository.Catalogue.CatalogueTreeEntry>? before = null;
+        if (previous is not null)
+        {
+            before = catalogue.ListDirectory(previous.SnapshotId.Span, path)
+                .ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+        }
+
+        // What the entry's recorded object says: equal ids are the same
+        // statement — an unchanged file re-emits its prior manifest's id
+        // verbatim, so the comparison is exact. A directory makes no claim:
+        // its id is the tree chain head, whose recorded metadata mixes in
+        // access times the scan itself perturbs, so a folder-level marker
+        // would read "changed" as noise — open the folder and its own
+        // entries answer (ADR-0039).
+        string? ChangeOf(Repository.Catalogue.CatalogueTreeEntry entry) =>
+            before is null || entry.EntryKind == Domain.EntryKind.DirectoryPlaceholder ? null
+            : !before.TryGetValue(entry.Path, out var prior) ? "new"
+            : prior.ObjectId == entry.ObjectId ? "same"
+            : "changed";
+
+        List<string>? deleted = null;
+        if (before is not null)
+        {
+            var present = entries.Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal);
+            deleted = [.. before.Keys
+                .Where(priorPath => !present.Contains(priorPath))
+                .Select(priorPath => priorPath.Split('/')[^1])
+                .Order(StringComparer.Ordinal)];
+        }
+
+        // The documented vocabulary is file | directory | symlink | special —
+        // the enum's own name for a directory row is its internal
+        // "placeholder" framing, which leaked to the wire before ADR-0039 and
+        // matched no client's check.
+        static string KindOf(Domain.EntryKind kind) => kind switch
+        {
+            Domain.EntryKind.DirectoryPlaceholder => "directory",
+            _ => kind.ToString().ToLowerInvariant(),
+        };
+
         return new DirectoryResult(
             path,
             [.. entries.Select(entry => new DirectoryEntryDescriptor(
                 entry.Path.Split('/')[^1],
-                entry.EntryKind.ToString().ToLowerInvariant(),
-                (long)(entry.LogicalLength ?? 0)))]);
+                KindOf(entry.EntryKind),
+                (long)(entry.LogicalLength ?? 0),
+                entry.ModifiedAt,
+                ChangeOf(entry)))],
+            deleted,
+            previous is null ? null : Convert.ToHexStringLower(previous.SnapshotId.Span));
     }
+
+    /// <summary>
+    /// The notices, structured (FR-DEST-008, ADR-0039): identity for
+    /// acknowledgement, key for grouping, raised-at for age — everything the
+    /// status strings flatten away. Oldest first, so the longest-waiting
+    /// notice reads first.
+    /// </summary>
+    private NoticesResult ListNotices(ListNoticesCommand command) =>
+        new([.. (command.IncludeAcknowledged
+                ? runtime.Notices.Notices.OrderBy(notice => notice.RaisedAt)
+                : runtime.Notices.Unacknowledged.OrderBy(notice => notice.RaisedAt))
+            .Select(notice => new NoticeDescriptor(
+                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt))]);
+
+    /// <summary>A person has seen the notice; it stays on record (FR-DEST-008).</summary>
+    private ServiceResult AcknowledgeNotice(AcknowledgeNoticeCommand command) =>
+        runtime.Notices.Acknowledge(command.Id, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            ? new AcknowledgedResult()
+            : new ServiceError(ServiceErrorReason.NotFound, $"No unacknowledged notice '{command.Id}' exists.");
 
     private async ValueTask<ServiceResult> GetStatusAsync(CancellationToken cancellationToken)
     {

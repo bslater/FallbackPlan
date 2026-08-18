@@ -33,9 +33,13 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// (ADR-0037). 1.8 added preview_set_changes / set_change_preview, made
     /// upsert_backup_set answer a material root-or-rules edit with
     /// configuration_change, and honours run_backup's full flag over the
-    /// service (ADR-0038).
+    /// service (ADR-0038). 1.9 added the operator-loop verbs —
+    /// list_notices / acknowledge_notice over the notices ledger and unpair
+    /// for ending a pairing from a console — and enriched list_directory
+    /// with modification times, change markers against the set's previous
+    /// snapshot, and the names deleted since it (ADR-0039).
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 8);
+    public static ContractVersion Current { get; } = new(1, 9);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

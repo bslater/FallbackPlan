@@ -37,6 +37,31 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task NoticesVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.9's verbs reach the page through the same generic relay
+        // — the console never enumerates commands, so a new one needs no
+        // server change; this pins that for the notices pair.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new NoticesResult(
+            [new NoticeDescriptor("ab12cd34", "set-changed:x", "the message", 9UL, null)]);
+
+        using var request = harness.Command("""{"command":"list_notices","includeAcknowledged":true}""");
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var received = Assert.ContainsSingle(harness.Clients.Client.Received);
+        Assert.IsInstanceOfType<ListNoticesCommand>(received, out var list);
+        Assert.IsTrue(list.IncludeAcknowledged);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("notices", body.RootElement.GetProperty("result").GetString());
+        var notice = body.RootElement.GetProperty("notices")[0];
+        Assert.AreEqual("ab12cd34", notice.GetProperty("id").GetString());
+        Assert.AreEqual(9UL, notice.GetProperty("raisedAt").GetUInt64());
+    }
+
+    [TestMethod]
     public async Task ServiceRefusal_StaysAResult_WithTheReasonAName()
     {
         await using var harness = await ConsoleHarness.StartAsync();

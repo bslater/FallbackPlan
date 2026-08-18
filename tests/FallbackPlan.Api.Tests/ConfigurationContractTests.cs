@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheChangePreviewSurface_IsRecordedAtOneEight()
+    public void ContractVersion_TheOperatorLoopSurface_IsRecordedAtOneNine()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.8", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.9", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -56,6 +56,15 @@ public sealed class ConfigurationContractTests : IDisposable
                     "/srv", "/", [new FolderDescriptor("data", "/srv/data", false, false)]),
                 CreatePairingInviteCommand => new PairingInviteResult(
                     "code", "invite-1", 5UL, "127.0.0.1:9", null),
+                ListNoticesCommand => new NoticesResult(
+                    [new NoticeDescriptor("ab12cd34", "set-changed:x", "the message", 9UL, 11UL)]),
+                AcknowledgeNoticeCommand => new AcknowledgedResult(),
+                UnpairCommand => new ConfigurationChangeResult(["revoked"]),
+                ListDirectoryCommand => new DirectoryResult(
+                    "docs",
+                    [new DirectoryEntryDescriptor("a.txt", "file", 12, ModifiedAt: 5UL, Change: "changed")],
+                    Deleted: ["gone.txt"],
+                    PreviousSnapshotId: "ff00"),
                 PreviewSetChangesCommand => new SetChangePreviewResult(
                     "docs", "ab12", 7UL, 40,
                     New: new ChangeBucketDescriptor(2, ["a.txt", "b.txt"]),
@@ -102,6 +111,28 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.AreEqual("d.txt", Assert.ContainsSingle(preview.Deleted.Sample));
         Assert.AreEqual(5, preview.NoLongerIncluded.Count);
         Assert.AreEqual(1, preview.Failures);
+
+        Assert.IsInstanceOfType<NoticesResult>(
+            await client.ExecuteAsync(new ListNoticesCommand(IncludeAcknowledged: true), _timeout.Token),
+            out var notices);
+        var listed = Assert.ContainsSingle(notices.Notices);
+        Assert.AreEqual("set-changed:x", listed.Key);
+        Assert.AreEqual(11UL, listed.AcknowledgedAt);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await client.ExecuteAsync(new AcknowledgeNoticeCommand("ab12cd34"), _timeout.Token));
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await client.ExecuteAsync(
+                new UnpairCommand("fp99", Notify: false, Endpoint: "10.0.0.9:7777"), _timeout.Token));
+
+        Assert.IsInstanceOfType<DirectoryResult>(
+            await client.ExecuteAsync(new ListDirectoryCommand("ab", "docs"), _timeout.Token), out var directory);
+        var entry = Assert.ContainsSingle(directory.Entries);
+        Assert.AreEqual(5UL, entry.ModifiedAt);
+        Assert.AreEqual("changed", entry.Change);
+        Assert.AreEqual("gone.txt", Assert.ContainsSingle(directory.Deleted!));
+        Assert.AreEqual("ff00", directory.PreviousSnapshotId);
 
         // What the service received is what was sent — optional fields intact.
         Assert.IsInstanceOfType<UpsertBackupSetCommand>(service.Received[0], out var upsert);

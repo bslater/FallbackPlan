@@ -63,6 +63,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
 | [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
+| [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 
 ---
 
@@ -308,6 +309,31 @@ that reads `FilesReused == 0` off the progress channel. Recorded costs, not
 fixed: a re-included file re-captures with severed ancestry (manifests are
 immutable), a root change reads as delete-all-plus-new-all, and a hand-edit
 of `config.json` bypasses the rescan hook — the next backup still applies it.
+
+### 0039 — the loops close where the operator lives
+
+Contract 1.9. Notices are a contract surface at last: `list_notices` answers
+the ledger structured — id, key, message, raised-at, acknowledged-at, oldest
+first, history behind a flag — and `acknowledge_notice` stamps rather than
+erases; the console's Notices view acknowledges per row, and the agent's
+`notices --ack` now routes through a listening service's live store
+(falling back to the file only when nothing holds the state directory),
+ending the second-writer race on `notices.json`. A pairing can be **ended**
+from a console: `unpair` shares the agent verb's mechanics verbatim
+(`Agent/PeerUnpairing.cs` — resolve-or-refuse-ambiguity, best-effort
+15-second-bounded termination announcement, revoke, tombstone), is refused
+while a configured destination references the fingerprint, and carries an
+optional endpoint because the honest order deletes the address book first.
+And `list_directory` became a small time machine: per-entry modification
+times, new/changed/same markers by recorded object identity against the
+set's previous snapshot, the names deleted since it as their own list, and
+the predecessor's id — folders deliberately claim nothing, because access
+times ride the tree head and the scan itself moves them. The wire `kind`
+finally says `directory` (the enum's `directoryplaceholder` had leaked, and
+no client's check matched it). The console grew the Pairings table, the
+explorer's badges, times, deleted rows and older/newer rail, folder pickers
+for restore output and destination paths, a confirmed full re-capture, and
+"what changed?" on the overview card.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

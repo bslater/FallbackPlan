@@ -40,7 +40,8 @@ const S = {
   destinations: [],         // DestinationDescriptor[]
   pairings: [],             // PairingDescriptor[]
   invites: [],              // PairingInviteDescriptor[]
-  busy: new Set(),          // action keys currently running
+  notices: null,            // NoticeDescriptor[]; null until first list_notices
+  noticesHistory: false,    // whether the view includes acknowledged history
 };
 
 const SETTLED = new Set([
@@ -219,7 +220,7 @@ async function refreshStatus() {
   count.hidden = !result.notices?.length;
   count.textContent = result.notices?.length ?? 0;
   if (S.view === "overview") renderOverview();
-  if (S.view === "notices") renderNotices();
+  if (S.view === "notices") refreshNotices();
 }
 
 async function refreshSets() {
@@ -297,6 +298,7 @@ function route() {
   ({ overview: renderOverview, snapshots: renderSnapshots, jobs: renderJobs,
      notices: renderNotices, config: renderConfig, maintenance: renderMaintenance })[S.view]();
   if (S.view === "config") refreshConfigData();
+  if (S.view === "notices") refreshNotices();
 }
 
 /* ----- overview ----- */
@@ -316,7 +318,7 @@ function renderOverview() {
       <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}</p>
       <div class="card empty"><span class="big">🗂</span>
         No backup sets are configured yet.<br>
-        Sets, their destinations and their schedules live in the service's <code>config.json</code>.
+        Create one under <a href="#config">Configuration</a> — add a destination first; every set needs at least one.
       </div>`;
     return;
   }
@@ -360,6 +362,8 @@ function renderSetCard(set) {
     <div class="actions-row">
       <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}">⛊ Back up now</button>
       <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
+      <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
+      <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}">Full…</button>
     </div>
   </div>`;
 }
@@ -460,16 +464,32 @@ function renderLiveJob(job) {
 
 /* ----- notices ----- */
 
+async function refreshNotices() {
+  const result = await api({ command: "list_notices", includeAcknowledged: S.noticesHistory }).catch(() => null);
+  if (result?.result === "notices") { S.notices = result.notices; renderNotices(); }
+}
+
 function renderNotices() {
   const el = document.getElementById("view-notices");
-  const notices = S.status?.notices ?? [];
+  const notices = S.notices ?? [];
+  const pending = notices.filter(notice => !notice.acknowledgedAt);
   el.innerHTML = `
     <h2>Notices</h2>
-    <p class="view-sub">Durable events awaiting a person — a peering ended, terms narrowed, a hold outstayed its deferral. They stay until acknowledged.</p>
+    <p class="view-sub">Durable events awaiting a person — a peering ended, terms narrowed, a set reconfigured, a hold
+    outstayed its deferral. Acknowledging says you have seen one; it stays on record.</p>
+    <div class="actions-row">
+      ${pending.length > 1 ? `<button type="button" class="btn small" data-action="notice-ack-all">Acknowledge all</button>` : ""}
+      <button type="button" class="btn small" data-action="notice-history">${S.noticesHistory ? "Hide" : "Show"} acknowledged history</button>
+    </div>
     ${notices.length === 0
-      ? `<div class="card empty"><span class="big">✅</span>Nothing awaits you.</div>`
-      : `<div class="card notice-list">${notices.map(n => `<div class="notice"><span class="text">${esc(n)}</span></div>`).join("")}</div>
-         <p class="view-sub mt-s">Acknowledge with <code>fallbackplan-agent notices --ack &lt;id&gt;</code> — the command contract has no acknowledge verb yet.</p>`}`;
+      ? `<div class="card empty"><span class="big">✅</span>${S.noticesHistory ? "No notices have ever been raised." : "Nothing awaits you."}</div>`
+      : `<div class="card notice-list">${notices.map(notice => `
+          <div class="notice${notice.acknowledgedAt ? " done" : ""}">
+            <span class="text">${esc(notice.message)}
+              <span class="subtle" title="${esc(fmtWhen(notice.raisedAt))}">· raised ${esc(rel(notice.raisedAt))}
+              ${notice.acknowledgedAt ? `· acknowledged ${esc(rel(notice.acknowledgedAt))}` : ""}</span></span>
+            ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
+          </div>`).join("")}</div>`}`;
 }
 
 /* ----- maintenance ----- */
@@ -849,6 +869,111 @@ const actions = {
     });
   },
 
+  async "what-changed"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "preview_set_changes", setName: el.dataset.set },
+        { errToast: "The service could not compare" });
+      if (result?.result !== "set_change_preview") return;
+      const report = comparisonReport(result);
+      reportDialog(`What changed under '${el.dataset.set}'`,
+        [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
+        "Compared with the last backup — a dry scan; nothing was captured.");
+    });
+  },
+
+  "backup-full"(el) {
+    const name = el.dataset.set;
+    openDialog(`
+      <h3>Full backup of '${esc(name)}'</h3>
+      <p class="dlg-sub">Re-reads and re-captures every byte, ignoring prior versions — hours where an
+      incremental takes minutes. Use it after suspected source-side corruption or a disk swap; an ordinary
+      backup already catches every change.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" data-action="backup-full-go" data-set="${esc(name)}">Run the full backup</button>
+      </div>`);
+  },
+
+  async "backup-full-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "run_backup", setName: el.dataset.set, full: true },
+        { errToast: "Backup refused" });
+      if (result?.result === "job_accepted") {
+        closeDialog();
+        toast("ok", `Full backup of '${el.dataset.set}' queued as job ${result.jobId}.`);
+        refreshJobs();
+        location.hash = "#jobs";
+      }
+    });
+  },
+
+  "unpair-open"(el) {
+    const fingerprint = el.dataset.fingerprint;
+    const label = el.dataset.label;
+    const known = S.destinations.find(destination =>
+      destination.kind === "peer" && destination.fingerprint === fingerprint)?.endpoint ?? "";
+    openDialog(`
+      <h3>End the pairing with '${esc(label)}'</h3>
+      <p class="dlg-sub">The peer is told while the pairing still authenticates the session, then the grant is
+      revoked here with a tombstone — its next dial reads 'revoked', never 'never paired'. Nothing is deleted
+      anywhere: what it stores for you, and what you store for it, stays put. A destination that references
+      this peer must be deleted first — the service refuses otherwise.</p>
+      <label class="field" for="unpair-endpoint">Peer address for the announcement <span class="plain">— host:port, optional</span></label>
+      <input type="text" id="unpair-endpoint" class="mono" value="${esc(known)}" spellcheck="false" placeholder="192.168.1.20:9420">
+      <label class="check-row"><input type="checkbox" id="unpair-notify" checked> Tell the peer now — otherwise it learns at its next dial</label>
+      <label class="field" for="confirm-word">Type <b>${esc(label)}</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="${esc(label.toLowerCase())}" data-enables="unpair-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="unpair-go" data-action="unpair-go" data-fingerprint="${esc(fingerprint)}" disabled>End the pairing</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "unpair-go"(el) {
+    const endpoint = document.getElementById("unpair-endpoint").value.trim();
+    const notify = document.getElementById("unpair-notify").checked;
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "unpair",
+        fingerprint: el.dataset.fingerprint,
+        notify,
+        endpoint: endpoint || null,
+      }, { errToast: "The service refused to unpair" });
+      if (result?.result === "configuration_change") {
+        closeDialog();
+        reportDialog("Pairing ended", result.lines);
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
+  async "notice-ack"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "acknowledge_notice", id: el.dataset.id },
+        { errToast: "Could not acknowledge" });
+      if (result) { await refreshNotices(); refreshStatus(); }
+    });
+  },
+
+  async "notice-ack-all"(el) {
+    await withBusy(el, async () => {
+      for (const notice of (S.notices ?? []).filter(current => !current.acknowledgedAt)) {
+        await run({ command: "acknowledge_notice", id: notice.id }, { errToast: "Could not acknowledge" });
+      }
+      await refreshNotices(); refreshStatus();
+    });
+  },
+
+  async "notice-history"(el) {
+    S.noticesHistory = !S.noticesHistory;
+    await withBusy(el, refreshNotices);
+  },
+
   "close-dialog"() { closeDialog(); },
 };
 
@@ -923,6 +1048,16 @@ function renderConfigBody() {
       </td>
     </tr>`).join("");
 
+  const pairings = S.pairings.map(pairing => `
+    <tr>
+      <td class="mono" title="${esc(pairing.fingerprint)}">${esc(pairing.fingerprint.slice(0, 12))}…</td>
+      <td>${esc(pairing.label)}</td>
+      <td class="detail">${esc(pairing.role)}</td>
+      <td class="detail">${esc(rel(pairing.pairedAt))}</td>
+      <td><button type="button" class="btn small" data-action="unpair-open"
+            data-fingerprint="${esc(pairing.fingerprint)}" data-label="${esc(pairing.label)}">Unpair…</button></td>
+    </tr>`).join("");
+
   const invites = S.invites.map(invite => `
     <tr>
       <td class="mono">${esc(invite.inviteId)}</td>
@@ -957,6 +1092,13 @@ function renderConfigBody() {
           <tbody>${destinations}</tbody></table></div></div>`
         : `<div class="card empty"><span class="big">📦</span>No destinations declared. A local folder is the quickest start; a paired peer survives losing this machine.</div>`}
     </div>
+
+    ${S.pairings.length ? `<div class="cfg-section">
+      <div class="cfg-head"><h3>Pairings</h3></div>
+      <div class="card"><div class="table-wrap"><table class="data">
+        <thead><tr><th>Fingerprint</th><th>Label</th><th>Role</th><th>Paired</th><th></th></tr></thead>
+        <tbody>${pairings}</tbody></table></div></div>
+    </div>` : ""}
 
     ${S.invites.length ? `<div class="cfg-section">
       <div class="cfg-head"><h3>Pairing invites</h3></div>
@@ -1007,7 +1149,7 @@ function openSetEditor(set) {
       <label class="field" for="set-root">Folder to back up <span class="plain">— on the service's machine</span></label>
       <div class="field-row">
         <input type="text" id="set-root" class="mono" value="${esc(E.root)}" spellcheck="false" placeholder="/home/you/documents">
-        <button type="button" class="btn" data-action="root-browse" data-path="">Browse…</button>
+        <button type="button" class="btn" data-action="picker-browse" data-browser="root-browser" data-input="set-root">Browse…</button>
       </div>
       <div id="root-browser" hidden></div>
     </div>
@@ -1325,19 +1467,26 @@ Object.assign(actions, {
     renderTree(); renderRuleChips(); validateDraftSoon();
   },
 
-  async "root-browse"(el) {
-    const path = el.dataset.path || document.getElementById("set-root").value.trim() || null;
-    await renderRootBrowser(path);
+  async "picker-browse"(el) {
+    const path = document.getElementById(el.dataset.input)?.value.trim() || null;
+    await renderFolderPicker(el.dataset.browser, el.dataset.input, path);
   },
 
-  async "root-browse-to"(el) { await renderRootBrowser(el.dataset.path || null); },
+  async "picker-to"(el) {
+    await renderFolderPicker(el.dataset.browser, el.dataset.input, el.dataset.path || null);
+  },
 
-  "root-choose"(el) {
-    document.getElementById("set-root").value = el.dataset.path;
-    document.getElementById("root-browser").hidden = true;
-    E.root = el.dataset.path;
-    E.tree = new Map();
-    renderTree(); validateDraftSoon();
+  "picker-choose"(el) {
+    const input = document.getElementById(el.dataset.input);
+    if (input) input.value = el.dataset.path;
+    document.getElementById(el.dataset.browser).hidden = true;
+    if (el.dataset.input === "set-root" && E) {
+      // The set editor's root drives more than the input: the selection tree
+      // starts over from the new parent, and validation re-judges the rules.
+      E.root = el.dataset.path;
+      E.tree = new Map();
+      renderTree(); validateDraftSoon();
+    }
   },
 
   async "preview-changes"(el) {
@@ -1685,7 +1834,9 @@ function openDestEditor(kind, destination) {
       <label class="field" for="dest-path">Folder — on the service's machine</label>
       <div class="field-row">
         <input type="text" id="dest-path" class="mono" spellcheck="false" value="${esc(destination?.path ?? "")}">
-      </div>` : `
+        <button type="button" class="btn" data-action="picker-browse" data-browser="dest-browser" data-input="dest-path">Browse…</button>
+      </div>
+      <div id="dest-browser" hidden></div>` : `
       <label class="field" for="dest-fp">Paired peer</label>
       <select id="dest-fp">${S.pairings.map(pairing =>
         `<option value="${esc(pairing.fingerprint)}" ${pairing.fingerprint === destination?.fingerprint ? "selected" : ""}>
@@ -1708,27 +1859,32 @@ function openDestEditor(kind, destination) {
   document.getElementById("dest-name").focus();
 }
 
-async function renderRootBrowser(path) {
-  const host = document.getElementById("root-browser");
+// One picker serves every folder-shaped input — the set root, the restore
+// output, the local destination path — routed by data attributes so each
+// dialog can host its own browser div. Choosing fills the input; the input
+// stays editable, so naming a not-yet-existing subfolder still works.
+async function renderFolderPicker(browserId, inputId, path) {
+  const host = document.getElementById(browserId);
   if (!host) return;
   host.hidden = false;
   const listing = await run({ command: "browse_folders", path }, { errToast: "Listing refused" });
   if (listing?.result !== "folder_listing") { host.hidden = true; return; }
 
+  const ids = `data-browser="${esc(browserId)}" data-input="${esc(inputId)}"`;
   host.innerHTML = `
     <div class="picker">
       <div class="picker-head">
         <span class="mono">${esc(listing.path ?? "This machine")}</span>
         <span>
-          ${listing.path ? `<button type="button" class="btn tiny" data-action="root-browse-to" data-path="${esc(listing.parent ?? "")}">↑ up</button>
-          <button type="button" class="btn tiny" data-action="root-choose" data-path="${esc(listing.path)}">choose this folder</button>` : ""}
+          ${listing.path ? `<button type="button" class="btn tiny" data-action="picker-to" ${ids} data-path="${esc(listing.parent ?? "")}">↑ up</button>
+          <button type="button" class="btn tiny" data-action="picker-choose" ${ids} data-path="${esc(listing.path)}">choose this folder</button>` : ""}
         </span>
       </div>
       ${listing.folders.map(folder => `
         <div class="picker-row ${folder.hidden ? "dim" : ""}">
-          <a data-action="root-browse-to" data-path="${esc(folder.path)}">📁 ${esc(folder.name)}</a>
+          <a data-action="picker-to" ${ids} data-path="${esc(folder.path)}">📁 ${esc(folder.name)}</a>
           ${folder.inaccessible ? `<span class="detail">not readable</span>`
-            : `<button type="button" class="btn tiny" data-action="root-choose" data-path="${esc(folder.path)}">choose</button>`}
+            : `<button type="button" class="btn tiny" data-action="picker-choose" ${ids} data-path="${esc(folder.path)}">choose</button>`}
         </div>`).join("") || `<p class="subtle">No folders in here.</p>`}
     </div>`;
 }
@@ -1747,23 +1903,54 @@ async function openBrowser(snapshotId, path) {
     crumbs.push(`<span class="sep">/</span><a data-action="browse-to" data-snapshot="${esc(snapshotId)}" data-path="${esc(walked)}">${esc(part)}</a>`);
   }
 
+  // The set's own snapshots, newest first as the service lists them — the
+  // time machine's rail for the older/newer jumps at the same path.
+  const here = S.snapshots.find(row => row.snapshotId === snapshotId);
+  const rail = here ? S.snapshots.filter(row => row.backupSetId === here.backupSetId) : [];
+  const at = rail.findIndex(row => row.snapshotId === snapshotId);
+  const older = at >= 0 ? rail[at + 1] : null;
+  const newer = at > 0 ? rail[at - 1] : null;
+
+  const CHANGE = { new: ["accent", "new"], changed: ["warn", "changed"], same: ["", ""] };
   const icon = { directory: "📁", file: "📄", symlink: "🔗", special: "⚙️" };
   const rows = result.entries.map(entry => {
     const childPath = path ? path + "/" + entry.name : entry.name;
     const isDir = entry.kind === "directory";
+    const [changeCls, changeLabel] = CHANGE[entry.change] ?? ["", ""];
     return `<tr class="${isDir ? "rowlink" : ""}" ${isDir ? `data-action-row="browse-to" data-snapshot="${esc(snapshotId)}" data-path="${esc(childPath)}"` : ""}>
-      <td><span class="kind-ico">${icon[entry.kind] ?? "•"}</span> ${esc(entry.name)}${entry.kind === "symlink" ? ` <span class="detail">symlink</span>` : ""}</td>
+      <td><span class="kind-ico">${icon[entry.kind] ?? "•"}</span> ${esc(entry.name)}${entry.kind === "symlink" ? ` <span class="detail">symlink</span>` : ""}
+          ${changeLabel ? ` <span class="badge ${changeCls}">${changeLabel}</span>` : ""}</td>
+      <td class="detail">${entry.modifiedAt ? esc(fmtWhen(entry.modifiedAt)) : ""}</td>
       <td class="num">${entry.kind === "file" ? fmtBytes(entry.length) : ""}</td>
       <td><button type="button" class="btn small" data-action="restore" data-snapshot="${esc(snapshotId)}" data-path="${esc(childPath)}">Restore…</button></td>
     </tr>`;
   }).join("");
 
+  // What the previous snapshot held here and this one does not: absence is
+  // how a snapshot says "deleted" (FR-SNP-002), shown rather than implied.
+  const deleted = (result.deleted ?? []).map(name => `
+    <tr class="gone" title="present in the previous snapshot only">
+      <td><span class="kind-ico">🕓</span> <s>${esc(name)}</s> <span class="badge bad">deleted</span></td>
+      <td class="detail" colspan="2"></td>
+      <td>${result.previousSnapshotId ? `<button type="button" class="btn small" data-action="browse-to"
+        data-snapshot="${esc(result.previousSnapshotId)}" data-path="${esc(path)}">View in previous…</button>` : ""}</td>
+    </tr>`).join("");
+
+  const legend = result.previousSnapshotId
+    ? `changes are vs the previous snapshot of this set (${esc(result.previousSnapshotId.slice(0, 12))}…)`
+    : "the first snapshot of this set — nothing to compare against";
+
   openDialog(`
     <h3>Browse snapshot</h3>
-    <p class="dlg-sub mono">${esc(snapshotId.slice(0, 24))}…</p>
+    <p class="dlg-sub"><span class="mono">${esc(snapshotId.slice(0, 24))}…</span>
+      ${here ? ` · captured ${esc(fmtWhen(here.capturedAt))}` : ""} · ${legend}</p>
+    <div class="actions-row">
+      <button type="button" class="btn small" data-action="browse-to" ${older ? `data-snapshot="${esc(older.snapshotId)}" data-path="${esc(path)}"` : "disabled"}>‹ older${older ? ` (${esc(rel(older.capturedAt))})` : ""}</button>
+      <button type="button" class="btn small" data-action="browse-to" ${newer ? `data-snapshot="${esc(newer.snapshotId)}" data-path="${esc(path)}"` : "disabled"}>newer${newer ? ` (${esc(rel(newer.capturedAt))})` : ""} ›</button>
+    </div>
     <div class="crumbs">${crumbs.join("")}</div>
     <div class="table-wrap"><table class="data">
-      <tbody>${rows || `<tr><td class="detail">This directory is empty.</td></tr>`}</tbody>
+      <tbody>${(rows + deleted) || `<tr><td class="detail">This directory is empty.</td></tr>`}</tbody>
     </table></div>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="restore" data-snapshot="${esc(snapshotId)}" data-path="${esc(path)}">Restore this ${path ? "folder" : "snapshot"}…</button>
@@ -1781,7 +1968,11 @@ function openRestoreDialog(snapshotId, path) {
     <label class="field" for="restore-path">Path within the snapshot <span class="plain">(empty restores everything)</span></label>
     <input type="text" id="restore-path" class="mono" value="${esc(path)}" spellcheck="false">
     <label class="field" for="restore-output">Output directory — on the service's machine</label>
-    <input type="text" id="restore-output" class="mono" placeholder="/home/you/restore-2026-08-17" spellcheck="false">
+    <div class="field-row">
+      <input type="text" id="restore-output" class="mono" placeholder="/home/you/restore-2026-08-17" spellcheck="false">
+      <button type="button" class="btn" data-action="picker-browse" data-browser="restore-browser" data-input="restore-output">Browse…</button>
+    </div>
+    <div id="restore-browser" hidden></div>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="restore-plan-go" data-snapshot="${esc(snapshotId)}">Plan restore</button>

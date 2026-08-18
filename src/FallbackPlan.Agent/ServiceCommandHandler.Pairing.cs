@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using FallbackPlan.Api;
+using FallbackPlan.Application;
 using FallbackPlan.Protocol;
 
 namespace FallbackPlan.Agent;
@@ -156,5 +157,99 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(
                 ServiceErrorReason.Failed, $"The pairing failed: {exception.Message}");
         }
+    }
+
+    /// <summary>
+    /// A best-effort termination dial is bounded so a black-holed peer cannot
+    /// hang the caller — revocation never waits on the announcement anyway.
+    /// </summary>
+    private static readonly TimeSpan UnpairNotifyTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Ends a pairing over the contract (ADR-0039): the same mechanics as the
+    /// agent's unpair verb — resolve, announce best-effort, revoke, tombstone
+    /// — shared through <see cref="PeerUnpairing"/> so the two cannot drift.
+    /// </summary>
+    private async ValueTask<ServiceResult> UnpairAsync(UnpairCommand command, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(command.Fingerprint))
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, "Pass the pairing's fingerprint.");
+        }
+
+        var grants = PeerGrantStore.Open(runtime.Options.StateDirectory);
+        var (grant, matchCount) = PeerUnpairing.Resolve(grants, command.Fingerprint);
+        if (matchCount == 0)
+        {
+            return new ServiceError(ServiceErrorReason.NotFound, $"No pairing matches '{command.Fingerprint}'.");
+        }
+
+        if (grant is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"'{command.Fingerprint}' matches {matchCount} pairings; give more of the fingerprint.");
+        }
+
+        // A revocation must not silently break what sets sync to: while a
+        // configured destination references this peer, the grant stays and
+        // the refusal names the destination — the honest order is delete the
+        // destination first (ADR-0037 §4's no-cascade posture, pointed both
+        // ways: delete_destination's peer refusal names unpair, and unpair's
+        // names the destination). An unloadable configuration skips the
+        // check — an invalid file must not block a revocation.
+        List<string> referencing;
+        try
+        {
+            referencing = [.. runtime.Configuration.Destinations
+                .Where(destination => destination.Kind == DestinationKind.Peer
+                    && string.Equals(destination.Fingerprint, grant.Identity.Fingerprint, StringComparison.Ordinal))
+                .Select(destination => destination.Name)];
+        }
+        catch (ClientStateException)
+        {
+            referencing = [];
+        }
+
+        if (referencing.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Destination '{string.Join("', '", referencing)}' still points at this peer — delete the "
+                + "destination first, or sets that reference it would sync into a revoked grant.");
+        }
+
+        var lines = new List<string>();
+        if (command.Notify)
+        {
+            var endpoint = command.Endpoint
+                ?? PeerUnpairing.EndpointFor(runtime.Options.StateDirectory, grant.Identity.Fingerprint);
+            if (endpoint is null)
+            {
+                lines.Add("No endpoint is known for the peer — it will learn of the ending at its next dial.");
+            }
+            else
+            {
+                using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                bounded.CancelAfter(UnpairNotifyTimeout);
+                try
+                {
+                    lines.Add(await PeerUnpairing.TryNotifyTerminationAsync(
+                        runtime.Options.StateDirectory, grants, grant, endpoint, bounded.Token)
+                        .ConfigureAwait(false));
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    lines.Add("The peer did not answer in time — it will learn of the ending at its next dial.");
+                }
+            }
+        }
+
+        grants.Revoke(grant.Identity);
+        lines.Add(
+            $"Revoked the pairing with {grant.Label} ({grant.Identity.Fingerprint}). A tombstone remains, so "
+            + "its next dial is told 'revoked' rather than 'never paired'.");
+        lines.Add("Objects already stored at the peer are theirs to keep or evict — revocation deletes nothing anywhere.");
+        return new ConfigurationChangeResult(lines);
     }
 }

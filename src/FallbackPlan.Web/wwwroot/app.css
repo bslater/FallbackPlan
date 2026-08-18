@@ -373,7 +373,14 @@ input[type="text"]:focus, select:focus, .btn:focus-visible, .nav a:focus-visible
 }
 .notice + .notice { border-top: 1px solid var(--border); }
 .notice::before { content: "📌"; flex: none; }
-.notice .text { overflow-wrap: anywhere; }
+.notice .text { overflow-wrap: anywhere; flex: 1; }
+.notice.done { opacity: 0.55; }
+.notice.done::before { content: "✓"; }
+.notice .btn { flex: none; }
+
+.check-row { display: flex; gap: 8px; align-items: center; margin: 10px 0; font-size: 13.5px; }
+
+tr.gone td { opacity: 0.55; }
 
 /* ---------- snapshot browser ---------- */
 
