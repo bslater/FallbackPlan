@@ -66,6 +66,24 @@ public enum PeerMessageType : ushort
 
     /// <summary>The destination's proof of possession, or its honest inability (04 §4.2).</summary>
     VerificationProof = 265,
+
+    /// <summary>An owner asks to read back its replica (07 §3.1; feature-gated as "retrieval").</summary>
+    RetrieveOpen = 272,
+
+    /// <summary>The destination grants the retrieval session (07 §3.2).</summary>
+    RetrieveReady = 273,
+
+    /// <summary>A request for one page of the replica's listing (07 §3.3).</summary>
+    RetrieveList = 274,
+
+    /// <summary>One page of the listing (07 §3.3).</summary>
+    RetrieveListPage = 275,
+
+    /// <summary>A request for bytes of one object (07 §3.4).</summary>
+    RetrieveRead = 276,
+
+    /// <summary>The answer to one read (07 §3.4).</summary>
+    RetrieveData = 277,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

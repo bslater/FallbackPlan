@@ -129,10 +129,15 @@ public sealed partial class ServiceCommandHandler
                     break;
 
                 case Application.DestinationKind.Peer:
-                    // Phase 4 of ADR-0041 wires the retrieval session here.
-                    return new ServiceError(
-                        ServiceErrorReason.Failed,
-                        $"Restoring from peer destination '{destination.Name}' is not available yet.");
+                    var (peerOpened, peerRefusal) = await OpenPeerSourceAsync(
+                        sourceId, set, destination, warnings, cancellationToken).ConfigureAwait(false);
+                    if (peerOpened is null)
+                    {
+                        return peerRefusal!;
+                    }
+
+                    handle = peerOpened;
+                    break;
 
                 default:
                     return new ServiceError(
@@ -221,84 +226,196 @@ public sealed partial class ServiceCommandHandler
                 continue;
             }
 
-            var cacheDirectory = Path.Combine(runtime.RestoreCacheRoot, sourceId);
-            try
-            {
-                Directory.CreateDirectory(cacheDirectory);
-                var cataloguePath = Path.Combine(cacheDirectory, "catalogue.db");
-                var generation = Math.Max(
-                    repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
-
-                RebuildReport report;
-                using (var catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId))
-                {
-                    // The index plane rebuilds the locations; no blob
-                    // inventory is taken, because an entry naming a trimmed
-                    // blob is re-answered honestly by the plan probe, which
-                    // asks the store per blob (FR-RST-003).
-                    report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy))
-                        .RebuildAsync(
-                            catalogue, generation, gapPatienceGenerations: 2,
-                            isSequenceAccountedAsync: null, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    // The manifest plane — snapshots, tree paths, file
-                    // versions — projects from the repository's own objects,
-                    // so listings and plans work over a catalogue born a
-                    // moment ago (FR-MAN-002). Manifests all live in
-                    // metadata-class blobs, so only those footers are opened.
-                    using (var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store))
-                    {
-                        var metadataBlobs = new List<Storage.Abstractions.ObjectKey>();
-                        await foreach (var blob in store.ListAsync(
-                            Storage.Abstractions.ObjectPrefix.Parse("blobs/meta/"),
-                            Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
-                        {
-                            metadataBlobs.Add(blob.Key);
-                        }
-
-                        await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
-                        await CatalogueProjector.ProjectAsync(
-                            catalogue, reader, store, repository.RepositoryId, repository.Keys,
-                            repository.Hierarchy, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))
-                    {
-                        // Unlocked, but some other set's repository.
-                        repository.Dispose();
-                        TryDeleteCache(cacheDirectory);
-                        continue;
-                    }
-                }
-
-                warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
-                return (new OpenRestoreSourceHandle
-                {
-                    SourceId = sourceId,
-                    SetId = set.Id,
-                    SetName = set.Name,
-                    Location = destination.Name,
-                    Store = store,
-                    OwnedRepository = repository,
-                    RepositoryId = repository.RepositoryId,
-                    Keys = repository.Keys,
-                    CataloguePath = Path.Combine(cacheDirectory, "catalogue.db"),
-                    CacheDirectory = cacheDirectory,
-                }, null);
-            }
-            catch
+            var handle = await BuildSourceAsync(
+                sourceId, set, setId, destination.Name, store, repository, transport: null,
+                warnings, cancellationToken).ConfigureAwait(false);
+            if (handle is null)
             {
                 repository.Dispose();
-                TryDeleteCache(cacheDirectory);
-                throw;
+                continue;
             }
+
+            return (handle, null);
         }
 
         return (null, new ServiceError(
             ServiceErrorReason.NotFound,
             $"Destination '{destination.Name}' holds no readable replica of set '{set.Name}'."
             + (warnings.Count == 0 ? string.Empty : $" ({string.Join("; ", warnings)})")));
+    }
+
+    /// <summary>
+    /// Opens a peer destination's replica of one set over the retrieval
+    /// session (peer-protocol 07). The repository id comes from the staging
+    /// archive when one is alive; with staging lost, the destination's owner
+    /// inventory names what this hub owns there and each candidate is tried
+    /// until one holds the set's snapshots.
+    /// </summary>
+    private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenPeerSourceAsync(
+        string sourceId,
+        Application.BackupSetConfiguration set,
+        Application.DestinationConfiguration destination,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var setId = Convert.FromHexString(set.Id);
+        List<string> candidates;
+        try
+        {
+            var staging = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+            if (staging is not null)
+            {
+                candidates = [staging.Repository.RepositoryId.ToString()];
+            }
+            else
+            {
+                // The owner inventory (07 §3.5): what this hub owns there.
+                var inventory = await PeerRetrievalClient.DialAsync(
+                    runtime, destination, new byte[Protocol.RetrieveOpen.RepositoryIdLength], cancellationToken)
+                    .ConfigureAwait(false);
+                await using (inventory.ConfigureAwait(false))
+                {
+                    var page = await inventory.ListPageAsync(string.Empty, string.Empty, cancellationToken)
+                        .ConfigureAwait(false);
+                    candidates = [.. page.Keys];
+                }
+            }
+
+            foreach (var repositoryIdHex in candidates)
+            {
+                var client = await PeerRetrievalClient.DialAsync(
+                    runtime, destination, Convert.FromHexString(repositoryIdHex), cancellationToken)
+                    .ConfigureAwait(false);
+                var store = new PeerRetrievalObjectStore(client);
+                OpenedRepository repository;
+                try
+                {
+                    repository = await RepositoryLifecycle.OpenAsync(store, runtime.ArchivePassphrase, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)
+                {
+                    warnings.Add($"a replica '{repositoryIdHex}' at the peer would not open: {exception.Message}");
+                    await client.DisposeAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                var handle = await BuildSourceAsync(
+                    sourceId, set, setId, destination.Name, store, repository, client,
+                    warnings, cancellationToken).ConfigureAwait(false);
+                if (handle is null)
+                {
+                    repository.Dispose();
+                    await client.DisposeAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                return (handle, null);
+            }
+
+            return (null, new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"Peer '{destination.Name}' holds no readable replica of set '{set.Name}'."
+                + (warnings.Count == 0 ? string.Empty : $" ({string.Join("; ", warnings)})")));
+        }
+        catch (Protocol.PeerProtocolException refused)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Peer '{destination.Name}' refused the retrieval: {refused.Message}"));
+        }
+        catch (Exception unreachable) when (unreachable is IOException or System.Net.Sockets.SocketException)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Unavailable,
+                $"Peer '{destination.Name}' is not reachable: {unreachable.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// The shared tail of every non-staging open: a throwaway catalogue —
+    /// index-plane rebuild for locations, manifest projection for snapshots
+    /// and paths (FR-MAN-002), metadata-class footers only — then the
+    /// membership check that this repository really is the named set's.
+    /// Null (with the cache deleted) when it is some other set's; the caller
+    /// disposes what it opened.
+    /// </summary>
+    private async ValueTask<OpenRestoreSourceHandle?> BuildSourceAsync(
+        string sourceId,
+        Application.BackupSetConfiguration set,
+        byte[] setId,
+        string location,
+        Storage.Abstractions.IObjectStore store,
+        OpenedRepository repository,
+        IAsyncDisposable? transport,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var cacheDirectory = Path.Combine(runtime.RestoreCacheRoot, sourceId);
+        try
+        {
+            Directory.CreateDirectory(cacheDirectory);
+            var cataloguePath = Path.Combine(cacheDirectory, "catalogue.db");
+            var generation = Math.Max(
+                repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
+
+            RebuildReport report;
+            using (var catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId))
+            {
+                // The index plane rebuilds the locations; no blob inventory
+                // is taken, because an entry naming a trimmed blob is
+                // re-answered honestly by the plan probe, which asks the
+                // store per blob (FR-RST-003).
+                report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy))
+                    .RebuildAsync(
+                        catalogue, generation, gapPatienceGenerations: 2,
+                        isSequenceAccountedAsync: null, cancellationToken)
+                    .ConfigureAwait(false);
+
+                using (var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store))
+                {
+                    var metadataBlobs = new List<Storage.Abstractions.ObjectKey>();
+                    await foreach (var blob in store.ListAsync(
+                        Storage.Abstractions.ObjectPrefix.Parse("blobs/meta/"),
+                        Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+                    {
+                        metadataBlobs.Add(blob.Key);
+                    }
+
+                    await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
+                    await CatalogueProjector.ProjectAsync(
+                        catalogue, reader, store, repository.RepositoryId, repository.Keys,
+                        repository.Hierarchy, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))
+                {
+                    TryDeleteCache(cacheDirectory);
+                    return null;
+                }
+            }
+
+            warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
+            return new OpenRestoreSourceHandle
+            {
+                SourceId = sourceId,
+                SetId = set.Id,
+                SetName = set.Name,
+                Location = location,
+                Store = store,
+                OwnedRepository = repository,
+                RepositoryId = repository.RepositoryId,
+                Keys = repository.Keys,
+                CataloguePath = cataloguePath,
+                CacheDirectory = cacheDirectory,
+                Transport = transport,
+            };
+        }
+        catch
+        {
+            TryDeleteCache(cacheDirectory);
+            throw;
+        }
     }
 
     /// <summary>Closes a source. Idempotent: closing the closed acknowledges.</summary>

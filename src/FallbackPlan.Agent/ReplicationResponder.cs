@@ -31,13 +31,15 @@ internal static class ReplicationResponder
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
+    /// <param name="preread">The first payload frame, when the caller already read it to route the session (ADR-0041).</param>
     /// <returns>What was received.</returns>
     public static async Task<Outcome> ServeAsync(
         string replicasRoot, string spoolRoot, Stream stream,
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
         bool retentionNegotiated,
         bool verificationNegotiated,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(replicasRoot);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolRoot);
@@ -50,8 +52,11 @@ internal static class ReplicationResponder
             // The first frame is the offer — or, under the termination-notice
             // feature, the announcement that there will never be another
             // (ADR-0030 Amendment 2). The caller raises the durable notice;
-            // this layer only recognises the message.
-            var first = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+            // this layer only recognises the message. A caller that already
+            // read it to route the payload (retrieval vs replication) hands
+            // it in.
+            var first = preread
+                ?? await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
                 ?? throw new PeerProtocolException(
                     PeerRefusalReason.Malformed, "The peer closed before sending a replication offer.");
             if (first.Type == PeerMessageType.PeeringTermination)

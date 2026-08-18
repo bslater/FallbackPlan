@@ -251,9 +251,17 @@ public sealed class RestoreSourceTests : IDisposable
         await watching;
 
         // The fan-out to the vault destination rides the backup; the replica
-        // tests need it to have landed.
+        // tests need it to have LANDED. The explicit sync may meet the
+        // automatic one mid-flight ("already syncing"), so the wait is on
+        // the ledger, which whichever pass finishes will stamp.
         Assert.IsInstanceOfType<SyncResult>(
             await handler.ExecuteAsync(new SyncCommand("docs", null), _timeout.Token));
+        while (runtime.DestinationSync.Find(_harness.DocsSetId, "vault")
+            is not { State: FallbackPlan.Application.DestinationSyncState.InSync })
+        {
+            _timeout.Token.ThrowIfCancellationRequested();
+            await Task.Delay(50, _timeout.Token);
+        }
     }
 
     private async Task<ServiceRuntime> StartAsync()

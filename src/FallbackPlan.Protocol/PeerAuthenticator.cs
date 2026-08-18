@@ -202,7 +202,10 @@ public sealed class PeerAuthenticator
             or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
             or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
             or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck
-            or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof =>
+            or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
+            or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
+            or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
+            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData =>
             state == PeerSessionState.Open,
 
         _ => false,

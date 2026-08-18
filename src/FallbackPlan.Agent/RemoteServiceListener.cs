@@ -319,10 +319,32 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     return;
                 }
 
+                // The first payload frame routes the session: an owner asking
+                // to read its replica back speaks retrieval (peer-protocol
+                // 07, ADR-0041); everything else is the replication payload,
+                // handed its already-read first frame.
+                var payload = await PeerFrame.ReadAsync(session.Stream, _stopping.Token).ConfigureAwait(false);
+                if (payload is null)
+                {
+                    return;
+                }
+
+                if (payload.Value.Type == PeerMessageType.RetrieveOpen
+                    && session.Supports(PeerSessionNegotiation.RetrievalFeature))
+                {
+                    await RetrievalResponder.ServeAsync(
+                        _replicasRoot, session.Stream, session.Peer, _owners!,
+                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token)
+                        .ConfigureAwait(false);
+                    _log?.Invoke($"retrieval session served for {peer}");
+                    return;
+                }
+
                 var outcome = await ReplicationResponder.ServeAsync(
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
-                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token)
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token,
+                    preread: payload)
                     .ConfigureAwait(false);
 
                 if (outcome.Termination is { } termination)

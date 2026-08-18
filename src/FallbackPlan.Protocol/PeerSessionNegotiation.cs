@@ -37,9 +37,12 @@ public static class PeerSessionNegotiation
     /// <summary>A peer that offers this accepts <see cref="RetentionOffer"/> within its floor (06).</summary>
     public const string RetentionInstructionFeature = "retention-instruction";
 
+    /// <summary>An owner may read its replica back over the session (07; ADR-0041).</summary>
+    public const string RetrievalFeature = "retrieval";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
-        [DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature];
+        [DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature, RetrievalFeature];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>
