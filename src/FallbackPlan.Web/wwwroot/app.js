@@ -123,6 +123,17 @@ function setName(backupSetId) {
   return set ? set.name : (backupSetId ? backupSetId.slice(0, 12) + "…" : "—");
 }
 
+// A descriptor's capture roots: `roots` is the whole truth from a 1.10
+// service; `root` is the pre-multi-root single (ADR-0040).
+function rootsOf(set) {
+  return set.roots?.length ? set.roots.map(root => root.path) : set.root ? [set.root] : [];
+}
+
+function rootsSummary(set) {
+  const roots = rootsOf(set);
+  return roots.length === 1 ? roots[0] : `${roots.length} folders`;
+}
+
 function badge(meta, label) {
   return `<span class="badge ${meta.cls}">${meta.icon ?? ""} ${esc(label)}</span>`;
 }
@@ -355,7 +366,7 @@ function renderSetCard(set) {
 
   return `<div class="card">
     <h3>${esc(set.setName)} ${badge(meta, meta.label)} ${verification}</h3>
-    <p class="sub">${config ? esc(config.root) + " · " : ""}${esc(meta.blurb)}
+    <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${esc(meta.blurb)}
        ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}</p>
     ${destinations}
     ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
@@ -633,19 +644,31 @@ function renderSetSaveConfirm(saved, preview, previewError) {
   const editor = document.getElementById("set-editor");
   if (editor) editor.hidden = true;
 
+  const savedRoots = rootsOf(saved);
+  const draftRoots = (E.pendingSave?.roots ?? []).map(root => root.path);
+  const sortedEqual = (left, right) =>
+    JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+  const rootsChanged = !sortedEqual(savedRoots, draftRoots);
+  const draftIncludes = E.pendingSave?.includeRules ?? [];
+  const draftExcludes = E.pendingSave?.excludeRules ?? [];
+
   const edits = [];
-  if (saved.root !== E.root) edits.push(`folder: '${saved.root}' → '${E.root}'`);
-  if (JSON.stringify(saved.includeRules ?? []) !== JSON.stringify(E.includeRules)) {
-    edits.push(`include rules: ${(saved.includeRules ?? []).length} → ${E.includeRules.length}`);
+  if (rootsChanged) {
+    for (const path of draftRoots.filter(root => !savedRoots.includes(root))) edits.push(`folder added: '${path}'`);
+    for (const path of savedRoots.filter(root => !draftRoots.includes(root))) edits.push(`folder removed: '${path}'`);
   }
-  if (JSON.stringify(saved.excludeRules ?? []) !== JSON.stringify(E.excludeRules)) {
-    edits.push(`exclude rules: ${(saved.excludeRules ?? []).length} → ${E.excludeRules.length}`);
+  if (!sortedEqual(saved.includeRules ?? [], draftIncludes)) {
+    edits.push(`include rules: ${(saved.includeRules ?? []).length} → ${draftIncludes.length}`);
+  }
+  if (!sortedEqual(saved.excludeRules ?? [], draftExcludes)) {
+    edits.push(`exclude rules: ${(saved.excludeRules ?? []).length} → ${draftExcludes.length}`);
   }
 
   const warnings = [];
-  if (saved.root !== E.root) {
-    warnings.push("The folder changed: version history does not follow files across folders, and "
-      + "everything under the new folder is captured as new.");
+  if (rootsChanged) {
+    warnings.push("The folders changed: version history does not follow files across folders, and "
+      + "everything under a newly added folder is captured as new. Growing past one folder (or back "
+      + "to one) also moves paths in the snapshot — the service re-anchors the saved rules to match.");
   }
   if (preview?.noLongerIncluded.count > 0) {
     warnings.push(`${preview.noLongerIncluded.count} file(s) the last backup holds will no longer be `
@@ -657,7 +680,7 @@ function renderSetSaveConfirm(saved, preview, previewError) {
   }
 
   const report = preview ? comparisonReport(preview) : null;
-  const dropping = (preview?.noLongerIncluded.count ?? 0) > 0 || saved.root !== E.root;
+  const dropping = (preview?.noLongerIncluded.count ?? 0) > 0 || rootsChanged;
 
   const panel = document.createElement("div");
   panel.id = "set-confirm";
@@ -1024,7 +1047,7 @@ function renderConfigBody() {
   const sets = S.sets.map(set => `
     <div class="card">
       <h3>${esc(set.name)} <span class="chip">${retentionSummary(set.retention)}</span></h3>
-      <p class="sub mono">${esc(set.root)}</p>
+      <p class="sub mono">${rootsOf(set).map(esc).join("<br>")}</p>
       <p class="sub">${set.schedule ? "runs " + esc(set.schedule) : "manual only"}
          ${set.includeRules.length ? `· ${set.includeRules.length} include rule(s)` : ""}
          ${set.excludeRules.length ? `· ${set.excludeRules.length} exclude rule(s)` : ""}</p>
@@ -1111,20 +1134,35 @@ function renderConfigBody() {
 /* ----- the set editor ----- */
 
 function newDraft(set) {
+  // The tree's selection is a set of marks: full path -> "on"|"off", where
+  // an unmarked node inherits its nearest marked ancestor (default off).
+  // Saved roots become "on" marks; literal anchored excludes are consumed
+  // back into "off" marks; every other rule stays a hand-edited chip.
+  const roots = set?.roots?.length ? set.roots.map(r => ({ path: r.path, label: r.label ?? null }))
+    : set?.root ? [{ path: set.root, label: null }] : [];
+  const marks = new Map(roots.map(root => [root.path, "on"]));
+  const handIncludes = [...(set?.includeRules ?? [])];
+  const handExcludes = [];
+  for (const rule of set?.excludeRules ?? []) {
+    const consumed = consumeExcludeAsMark(rule, roots, marks);
+    if (!consumed) handExcludes.push(rule);
+  }
+
   return {
     id: set?.id ?? Array.from(crypto.getRandomValues(new Uint8Array(16)))
       .map(byte => byte.toString(16).padStart(2, "0")).join(""),
     isNew: !set,
     name: set?.name ?? "",
-    root: set?.root ?? "",
+    roots,                    // saved roots, for label continuity on save
+    marks,
+    handIncludes,
+    handExcludes,
     schedule: set?.schedule ?? null,
-    includeRules: [...(set?.includeRules ?? [])],
-    excludeRules: [...(set?.excludeRules ?? [])],
     destinations: new Set(set?.destinations ?? []),
     retention: set?.retention ?? null,
     overrides: { ...(set?.destinationRetention ?? {}) },
-    tree: new Map(),          // full path -> {open, listing}
-    browsePath: null,         // the root picker's current directory
+    tree: new Map(),          // full path -> {open, listing}; "" is the machine's drive list
+    lastPreviewKey: null,     // what the live preview last compared, to skip no-op walks
   };
 }
 
@@ -1146,12 +1184,6 @@ function openSetEditor(set) {
     <div class="editor-section">
       <label class="field" for="set-name">Name</label>
       <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">
-      <label class="field" for="set-root">Folder to back up <span class="plain">— on the service's machine</span></label>
-      <div class="field-row">
-        <input type="text" id="set-root" class="mono" value="${esc(E.root)}" spellcheck="false" placeholder="/home/you/documents">
-        <button type="button" class="btn" data-action="picker-browse" data-browser="root-browser" data-input="set-root">Browse…</button>
-      </div>
-      <div id="root-browser" hidden></div>
     </div>
 
     <div class="editor-section">
@@ -1172,10 +1204,11 @@ function openSetEditor(set) {
     </div>
 
     <div class="editor-section">
-      <label class="field">What to capture</label>
-      <p class="subtle">Everything under the folder is captured unless you exclude it. "Only this" limits capture
-      to the chosen subtrees — new folders outside them will not be captured.</p>
+      <label class="field">What to capture <span class="plain">— on the service's machine</span></label>
+      <p class="subtle">Tick any folders — several, on any drive, in one set. Untick a child to leave it out;
+      everything ticked is captured, including what appears there later. Pattern rules refine further.</p>
       <div id="sel-tree" class="tree"></div>
+      <div id="sel-summary" class="subtle"></div>
       <div class="field-row">
         <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
         <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
@@ -1183,11 +1216,10 @@ function openSetEditor(set) {
       </div>
       <div id="rule-chips"></div>
       <div id="draft-defects"></div>
-      ${E.isNew ? "" : `
       <div class="field-row">
-        <button type="button" class="btn small" data-action="preview-changes" data-set="${esc(set.name)}">Preview changes since last backup</button>
+        <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
       </div>
-      <div id="change-preview"></div>`}
+      <div id="change-preview"></div>
     </div>
 
     <div class="editor-section">
@@ -1218,7 +1250,9 @@ function openSetEditor(set) {
 
   renderTree();
   renderRuleChips();
+  renderSelectionSummary();
   validateDraftSoon();
+  expandToMarks();
 }
 
 function rerenderDestChoices() {
@@ -1244,13 +1278,31 @@ function renderDestChoice(destination) {
     </div>`;
 }
 
-/* ----- selection tree ----- */
+/* ----- selection tree (ADR-0040) ----- */
+//
+// The whole machine is the tree; checkboxes are the selection. A mark on a
+// node overrides everything it inherits; unmarked nodes follow their nearest
+// marked ancestor and default to off. The compiler below turns marks into
+// what the contract speaks — roots plus exclude rules, never includes: the
+// deepest fully-checked folder IS the root, so one root's selection can
+// never force blanket includes on a sibling root.
 
-function relFromFull(full) {
-  let file = String(full).replaceAll("\\", "/");
-  let root = String(E.root).replaceAll("\\", "/");
-  if (!root.endsWith("/")) root += "/";
-  return file.startsWith(root) ? file.slice(root.length) : null;
+function isUnder(child, parent) {
+  if (child === parent) return false;
+  return parent.endsWith("/") || parent.endsWith("\\")
+    ? child.startsWith(parent)
+    : child.startsWith(parent + "/") || child.startsWith(parent + "\\");
+}
+
+function relOf(child, parent) {
+  const skip = parent.endsWith("/") || parent.endsWith("\\") ? parent.length : parent.length + 1;
+  return child.slice(skip).replaceAll("\\", "/");
+}
+
+function joinPath(parent, rel) {
+  const sep = parent.includes("\\") || /^[A-Za-z]:$/.test(parent) ? "\\" : "/";
+  const base = parent.endsWith("/") || parent.endsWith("\\") ? parent : parent + sep;
+  return base + rel.replaceAll("/", sep);
 }
 
 function ruleForPath(rel) {
@@ -1261,92 +1313,295 @@ function ruleForPath(rel) {
     : rel;
 }
 
-function isExcludedExact(rel) { return E.excludeRules.includes(ruleForPath(rel)); }
-
-function isExcludedByAncestor(rel) {
-  return E.excludeRules.some(rule =>
-    !rule.startsWith("re:") && !/[*?]/.test(rule) && rel !== rule && rel.startsWith(rule + "/"));
+// The service materialises labels the same way at upsert (leaf name,
+// fallback "root", numeric-suffix dedupe); mirrored here only so compiled
+// exclude rules can speak the label-prefixed coordinates a multi-root set
+// saves under. Explicit labels (from an already-saved set) win untouched.
+function labelledRoots(paths) {
+  const savedLabels = new Map((E?.roots ?? []).map(root => [root.path, root.label]));
+  if (paths.length <= 1) return paths.map(path => ({ path, label: savedLabels.get(path) ?? null }));
+  const taken = new Set();
+  const explicit = paths.filter(path => savedLabels.get(path));
+  for (const path of explicit) taken.add(savedLabels.get(path).toLowerCase());
+  return paths.map(path => {
+    const saved = savedLabels.get(path);
+    if (saved) return { path, label: saved };
+    const leaf = path.replace(/[/\\]+$/, "").split(/[/\\]/).filter(Boolean).pop() ?? "";
+    let base = [...leaf].filter(ch => !"/\\:*?".includes(ch)).join("").trim();
+    if (!base || base === "." || base === "..") base = "root";
+    base = base.normalize("NFC");
+    let candidate = base;
+    for (let suffix = 2; taken.has(candidate.toLowerCase()); suffix++) candidate = `${base}-${suffix}`;
+    taken.add(candidate.toLowerCase());
+    return { path, label: candidate };
+  });
 }
 
-function isLimited(rel) { return E.includeRules.includes(rel + "/**"); }
+// A saved exclude that is a plain anchored path (no glob, no regex, has a
+// separator) is the tree's own dialect — consume it back into an "off" mark
+// so the checkboxes show it. Everything else keeps its exact meaning as a
+// hand chip. Multi-root rules shed their label prefix to find their root.
+function consumeExcludeAsMark(rule, roots, marks) {
+  if (rule.startsWith("re:") || /[*?]/.test(rule) || !rule.includes("/")) return false;
+  if (roots.length > 1) {
+    const root = roots.find(candidate => candidate.label && rule.startsWith(candidate.label + "/"));
+    if (!root) return false;
+    marks.set(joinPath(root.path, rule.slice(root.label.length + 1)), "off");
+    return true;
+  }
+  if (roots.length === 1) {
+    marks.set(joinPath(roots[0].path, rule), "off");
+    return true;
+  }
+  return false;
+}
+
+function effectiveState(path) {
+  let best = null;
+  for (const [key, state] of E.marks) {
+    if (key === path || isUnder(path, key)) {
+      if (!best || key.length > best.key.length) best = { key, state };
+    }
+  }
+  return best?.state ?? "off";
+}
+
+// marks + loaded listings -> { roots, excludeRules, warnings }. Pure of the
+// DOM, so the summary, the live preview and the save all agree by
+// construction. The exclude-wins wall: a re-checked node under an unchecked
+// parent cannot compile as exclude-parent + include-child (rules-v1 has no
+// negation), so the parent's OTHER children become the excludes — and new
+// arrivals under that parent will be captured, which the warning says.
+function compileMarks() {
+  const marks = [...E.marks.entries()].map(([path, state]) => ({ path, state }));
+  const on = marks.filter(mark => mark.state === "on");
+  const warnings = [];
+
+  const rootPaths = on
+    .filter(mark => !on.some(other => other.path !== mark.path && isUnder(mark.path, other.path)))
+    .map(mark => mark.path)
+    .sort();
+  const roots = labelledRoots(rootPaths);
+
+  const subjectFor = (root, rel) =>
+    ruleForPath(roots.length > 1 ? root.label + "/" + rel : rel);
+
+  const nearestMarked = path => {
+    let best = null;
+    for (const mark of marks) {
+      if (mark.path !== path && isUnder(path, mark.path)) {
+        if (!best || mark.path.length > best.path.length) best = mark;
+      }
+    }
+    return best;
+  };
+
+  const excludeRules = [];
+  for (const mark of marks) {
+    if (mark.state !== "off") continue;
+    const near = nearestMarked(mark.path);
+    if (near?.state !== "on") continue; // off outside any selection needs no rule
+    const root = roots.find(candidate => isUnder(mark.path, candidate.path));
+    if (!root) continue;
+
+    const reChecked = on.filter(other =>
+      isUnder(other.path, mark.path)
+      && nearestMarked(other.path)?.path === mark.path);
+    if (reChecked.length === 0) {
+      excludeRules.push(subjectFor(root, relOf(mark.path, root.path)));
+      continue;
+    }
+
+    // The wall: enumerate the unchecked parent's other children as
+    // excludes, recursing along the paths that lead to what was re-checked.
+    let complete = true;
+    const walk = dir => {
+      const listing = E.tree.get(dir)?.listing;
+      if (!listing) { complete = false; return; }
+      const children = [
+        ...listing.folders.map(folder => folder.path),
+        ...(listing.files ?? []).map(file => joinPath(dir, file.name)),
+      ];
+      for (const child of children) {
+        if (reChecked.some(keep => keep.path === child)) continue;
+        if (reChecked.some(keep => isUnder(keep.path, child))) { walk(child); continue; }
+        excludeRules.push(subjectFor(root, relOf(child, root.path)));
+      }
+    };
+    walk(mark.path);
+    warnings.push(`'${relOf(mark.path, root.path)}' is unticked but something inside it is kept, so its `
+      + `current contents are excluded by name — anything NEW appearing there will be captured.`
+      + (complete ? "" : " (Some of it is not listed yet — expand it so every sibling is seen.)"));
+  }
+
+  return { roots, excludeRules, warnings };
+}
 
 async function loadTreeDir(fullPath) {
   if (E.tree.has(fullPath)) return E.tree.get(fullPath);
   const listing = await run(
-    { command: "browse_folders", path: fullPath, includeFiles: true }, { errToast: "Listing refused" });
+    { command: "browse_folders", path: fullPath || null, includeFiles: true }, { errToast: "Listing refused" });
   const node = { open: true, listing: listing?.result === "folder_listing" ? listing : null };
   E.tree.set(fullPath, node);
   return node;
 }
 
+// Best-effort: open the tree down to every mark, so a reopened editor shows
+// its selection instead of a collapsed machine.
+async function expandToMarks() {
+  if (!E) return;
+  const chains = new Set([""]);
+  for (const [path, state] of E.marks) {
+    const sep = path.includes("\\") ? "\\" : "/";
+    const parts = path.split(sep).filter(Boolean);
+    let current = sep === "/" ? "/" : parts.shift() + "\\";
+    chains.add(current);
+    const stop = state === "on" ? parts.length : parts.length - 1; // an off mark may be a file
+    for (let index = 0; index < stop; index++) {
+      current = joinPath(current, parts[index]);
+      chains.add(current);
+    }
+  }
+  for (const path of chains) {
+    if (!E) return; // the dialog closed mid-expansion
+    const node = await loadTreeDir(path);
+    node.open = true;
+  }
+  renderTree();
+  renderSelectionSummary();
+}
+
 function renderTree() {
   const host = document.getElementById("sel-tree");
   if (!host || !E) return;
+  host.innerHTML = `<div class="tree-inner">${renderTreeDir("", 0)}</div>`;
 
-  if (!E.root.trim()) {
-    host.innerHTML = `<p class="subtle">Choose the folder first; its contents appear here.</p>`;
-    return;
+  // Tri-state is a property, not an attribute — painted after the fact.
+  for (const box of host.querySelectorAll("input[data-mark-path]")) {
+    const path = box.dataset.markPath;
+    const state = effectiveState(path);
+    box.indeterminate = [...E.marks].some(([key, mark]) => isUnder(key, path) && mark !== state);
   }
-
-  host.innerHTML = `<div class="tree-inner">${renderTreeDir(E.root.trim(), 0)}</div>`;
 }
 
 function renderTreeDir(fullPath, depth) {
   const node = E.tree.get(fullPath);
   if (!node) {
-    // Root not loaded yet: kick the load and show a placeholder.
-    loadTreeDir(fullPath).then(renderTree);
+    loadTreeDir(fullPath).then(() => { renderTree(); renderSelectionSummary(); });
     return `<p class="subtle">Loading…</p>`;
   }
 
-  if (!node.listing) return `<p class="subtle">This folder would not list.</p>`;
+  if (!node.listing) return `<p class="subtle">${"<span class='indent'></span>".repeat(depth)}This folder would not list.</p>`;
 
   const rows = [];
   for (const folder of node.listing.folders) {
-    const rel = relFromFull(folder.path);
-    if (rel === null) continue;
-    const excluded = isExcludedExact(rel);
-    const inherited = !excluded && isExcludedByAncestor(rel);
-    const limited = isLimited(rel);
+    const state = effectiveState(folder.path);
+    const excludedHere = E.marks.get(folder.path) === "off" && state === "off";
     const child = E.tree.get(folder.path);
 
     rows.push(`
-      <div class="tree-row ${excluded || inherited ? "off" : ""}">
+      <div class="tree-row ${state === "off" ? "off" : ""}">
         ${"<span class='indent'></span>".repeat(depth)}
         <button type="button" class="twist" data-action="sel-open" data-path="${esc(folder.path)}">${child?.open ? "▾" : "▸"}</button>
+        <input type="checkbox" class="mark" data-mark-path="${esc(folder.path)}" ${state === "on" ? "checked" : ""}
+               aria-label="Capture ${esc(folder.name)}">
         <span class="kind-ico">📁</span>
         <span class="tree-name">${esc(folder.name)}</span>
-        ${limited ? `<span class="badge accent">only this</span>` : ""}
-        ${excluded ? `<span class="badge warn">excluded</span>` : inherited ? `<span class="detail">excluded with parent</span>` : ""}
-        <span class="tree-actions">
-          ${inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-exclude" data-rel="${esc(rel)}">${excluded ? "include again" : "exclude"}</button>`}
-          ${excluded || inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-limit" data-rel="${esc(rel)}">${limited ? "not only this" : "only this"}</button>`}
-        </span>
+        ${excludedHere && nearestOnAbove(folder.path) ? `<span class="badge warn">excluded</span>` : ""}
       </div>
       ${child?.open ? renderTreeDir(folder.path, depth + 1) : ""}`);
   }
 
   for (const file of node.listing.files ?? []) {
-    const rel = relFromFull(
-      (node.listing.path.replaceAll("\\", "/").endsWith("/") ? node.listing.path : node.listing.path + "/") + file.name);
-    if (rel === null) continue;
-    const excluded = isExcludedExact(rel);
-    const inherited = !excluded && isExcludedByAncestor(rel);
+    const path = joinPath(node.listing.path, file.name);
+    const state = effectiveState(path);
     rows.push(`
-      <div class="tree-row ${excluded || inherited ? "off" : ""}">
+      <div class="tree-row ${state === "off" ? "off" : ""}">
         ${"<span class='indent'></span>".repeat(depth)}
         <span class="twist"></span>
+        <input type="checkbox" class="mark" data-mark-path="${esc(path)}" ${state === "on" ? "checked" : ""}
+               aria-label="Capture ${esc(file.name)}">
         <span class="kind-ico">📄</span>
         <span class="tree-name">${esc(file.name)}</span>
         <span class="detail">${fmtBytes(file.length)}</span>
-        ${excluded ? `<span class="badge warn">excluded</span>` : ""}
-        <span class="tree-actions">
-          ${inherited ? "" : `<button type="button" class="btn tiny" data-action="sel-exclude" data-rel="${esc(rel)}">${excluded ? "include again" : "exclude"}</button>`}
-        </span>
+        ${E.marks.get(path) === "off" && nearestOnAbove(path) ? `<span class="badge warn">excluded</span>` : ""}
       </div>`);
   }
 
   return rows.join("") || `<p class="subtle">${"<span class='indent'></span>".repeat(depth)}(empty)</p>`;
+}
+
+function nearestOnAbove(path) {
+  return [...E.marks].some(([key, state]) => state === "on" && isUnder(path, key));
+}
+
+function toggleMark(path) {
+  const target = effectiveState(path) === "on" ? "off" : "on";
+  // A fresh decision about a subtree supersedes every finer one inside it.
+  for (const key of [...E.marks.keys()]) {
+    if (isUnder(key, path)) E.marks.delete(key);
+  }
+  E.marks.delete(path);
+  if (effectiveState(path) !== target) E.marks.set(path, target);
+  renderTree();
+  renderSelectionSummary();
+  validateDraftSoon();
+  scheduleLivePreview();
+}
+
+function renderSelectionSummary() {
+  const host = document.getElementById("sel-summary");
+  if (!host || !E) return;
+  const { roots, excludeRules, warnings } = compileMarks();
+  if (roots.length === 0) {
+    host.innerHTML = `Nothing selected yet — tick the folders to capture.`;
+    return;
+  }
+  const named = roots.map(root => root.label ?? root.path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() ?? root.path);
+  const parts = [
+    `<b>${roots.length}</b> folder${roots.length === 1 ? "" : "s"} selected (${named.map(esc).join(", ")})`,
+  ];
+  if (excludeRules.length) parts.push(`<b>${excludeRules.length}</b> exclusion${excludeRules.length === 1 ? "" : "s"} from the tree`);
+  if (E.handExcludes.length || E.handIncludes.length) {
+    parts.push(`${E.handExcludes.length + E.handIncludes.length} pattern rule(s)`);
+  }
+  host.innerHTML = parts.join(" · ")
+    + (warnings.length ? `<ul class="warnings">${warnings.map(text => `<li>${esc(text)}</li>`).join("")}</ul>` : "");
+}
+
+// The authoritative feedback: a debounced dry walk over the service,
+// classifying the draft selection against the set's last backup — or, for a
+// brand-new set, against nothing (contract 1.10's draft mode). Skipped when
+// the compiled output has not changed since the last walk.
+let livePreviewTimer = null;
+function scheduleLivePreview() {
+  clearTimeout(livePreviewTimer);
+  livePreviewTimer = setTimeout(async () => {
+    if (!E) return;
+    const { roots, excludeRules } = compileMarks();
+    const host = document.getElementById("change-preview");
+    if (!host || roots.length === 0) return;
+
+    const includeRules = [...E.handIncludes];
+    const allExcludes = [...excludeRules, ...E.handExcludes];
+    const key = JSON.stringify([roots, includeRules, allExcludes]);
+    if (key === E.lastPreviewKey) return;
+
+    const result = await run({
+      command: "preview_set_changes",
+      setName: E.isNew ? (document.getElementById("set-name")?.value.trim() || "(draft)") : E.name,
+      roots: roots.map(root => ({ path: root.path, label: root.label })),
+      includeRules,
+      excludeRules: allExcludes,
+    });
+    if (!E || !document.getElementById("change-preview")) return;
+    if (result?.result !== "set_change_preview") return;
+    E.lastPreviewKey = key;
+    const report = comparisonReport(result);
+    document.getElementById("change-preview").innerHTML =
+      `<p class="subtle">${esc(report.summary)}</p>`
+      + (report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : "");
+  }, 1200);
 }
 
 function renderRuleChips() {
@@ -1358,9 +1613,9 @@ function renderRuleChips() {
       <button type="button" class="chip-x" data-action="rule-remove" data-rule="${esc(rule)}" data-list="${list}" aria-label="Remove rule">×</button>
     </span>`;
   host.innerHTML =
-    E.includeRules.map(rule => chip(rule, "include")).join("")
-    + E.excludeRules.map(rule => chip(rule, "exclude")).join("")
-    || `<span class="subtle">No rules — everything under the folder is captured.</span>`;
+    E.handIncludes.map(rule => chip(rule, "include")).join("")
+    + E.handExcludes.map(rule => chip(rule, "exclude")).join("")
+    || `<span class="subtle">No pattern rules — the checkboxes alone say what is captured.</span>`;
 }
 
 let draftTimer = null;
@@ -1369,11 +1624,12 @@ function validateDraftSoon() {
   draftTimer = setTimeout(async () => {
     if (!E) return;
     const schedule = scheduleFromEditor();
+    const compiled = compileMarks();
     const result = await run({
       command: "validate_set_draft",
       schedule,
-      includeRules: E.includeRules,
-      excludeRules: E.excludeRules,
+      includeRules: [...E.handIncludes],
+      excludeRules: [...compiled.excludeRules, ...E.handExcludes],
     });
     if (result?.result !== "set_draft_validation" || !E) return;
 
@@ -1433,38 +1689,23 @@ Object.assign(actions, {
     if (node) node.open = !node.open;
     else await loadTreeDir(el.dataset.path);
     renderTree();
-  },
-
-  "sel-exclude"(el) {
-    const rule = ruleForPath(el.dataset.rel);
-    E.excludeRules = E.excludeRules.includes(rule)
-      ? E.excludeRules.filter(candidate => candidate !== rule)
-      : [...E.excludeRules, rule];
-    renderTree(); renderRuleChips(); validateDraftSoon();
-  },
-
-  "sel-limit"(el) {
-    const rule = el.dataset.rel + "/**";
-    E.includeRules = E.includeRules.includes(rule)
-      ? E.includeRules.filter(candidate => candidate !== rule)
-      : [...E.includeRules, rule];
-    renderTree(); renderRuleChips(); validateDraftSoon();
+    renderSelectionSummary(); // a fresh listing can complete a wall's siblings
   },
 
   "rule-remove"(el) {
-    const list = el.dataset.list === "exclude" ? "excludeRules" : "includeRules";
+    const list = el.dataset.list === "exclude" ? "handExcludes" : "handIncludes";
     E[list] = E[list].filter(rule => rule !== el.dataset.rule);
-    renderTree(); renderRuleChips(); validateDraftSoon();
+    renderRuleChips(); renderSelectionSummary(); validateDraftSoon(); scheduleLivePreview();
   },
 
   "rule-add-raw"() {
     const input = document.getElementById("rule-new");
     const rule = input.value.trim();
     if (!rule) return;
-    const list = document.getElementById("rule-list").value === "exclude" ? "excludeRules" : "includeRules";
+    const list = document.getElementById("rule-list").value === "exclude" ? "handExcludes" : "handIncludes";
     if (!E[list].includes(rule)) E[list] = [...E[list], rule];
     input.value = "";
-    renderTree(); renderRuleChips(); validateDraftSoon();
+    renderRuleChips(); renderSelectionSummary(); validateDraftSoon(); scheduleLivePreview();
   },
 
   async "picker-browse"(el) {
@@ -1480,32 +1721,26 @@ Object.assign(actions, {
     const input = document.getElementById(el.dataset.input);
     if (input) input.value = el.dataset.path;
     document.getElementById(el.dataset.browser).hidden = true;
-    if (el.dataset.input === "set-root" && E) {
-      // The set editor's root drives more than the input: the selection tree
-      // starts over from the new parent, and validation re-judges the rules.
-      E.root = el.dataset.path;
-      E.tree = new Map();
-      renderTree(); validateDraftSoon();
-    }
   },
 
   async "preview-changes"(el) {
     const host = document.getElementById("change-preview");
     if (!host) return;
-    const root = document.getElementById("set-root").value.trim();
-    if (!root) { toast("warn", "Choose a folder first."); return; }
+    const { roots, excludeRules } = compileMarks();
+    if (roots.length === 0) { toast("warn", "Tick at least one folder first."); return; }
 
     await withBusy(el, async () => {
       host.innerHTML = `<p class="subtle">Walking the source…</p>`;
       const result = await run({
         command: "preview_set_changes",
-        setName: el.dataset.set,
-        root,
-        includeRules: E.includeRules,
-        excludeRules: E.excludeRules,
+        setName: E.isNew ? (document.getElementById("set-name").value.trim() || "(draft)") : E.name,
+        roots: roots.map(root => ({ path: root.path, label: root.label })),
+        includeRules: [...E.handIncludes],
+        excludeRules: [...excludeRules, ...E.handExcludes],
       }, { errToast: "The service could not compare" });
       if (!result || result.result !== "set_change_preview") { host.innerHTML = ""; return; }
 
+      E.lastPreviewKey = JSON.stringify([roots, [...E.handIncludes], [...excludeRules, ...E.handExcludes]]);
       const report = comparisonReport(result);
       host.innerHTML = `
         <p class="subtle">${esc(report.summary)}</p>
@@ -1515,8 +1750,11 @@ Object.assign(actions, {
 
   async "set-save"(el) {
     E.name = document.getElementById("set-name").value.trim();
-    E.root = document.getElementById("set-root").value.trim();
-    if (!E.name || !E.root) { toast("warn", "A set needs a name and a folder."); return; }
+    const compiled = compileMarks();
+    if (!E.name || compiled.roots.length === 0) {
+      toast("warn", "A set needs a name and at least one ticked folder.");
+      return;
+    }
 
     const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
     if (Object.values(retention).some(Number.isNaN)) {
@@ -1541,25 +1779,32 @@ Object.assign(actions, {
       overrides[name] = policy;
     }
 
+    const includeRules = [...E.handIncludes];
+    const excludeRules = [...compiled.excludeRules, ...E.handExcludes];
     const payload = {
-      id: E.id, name: E.name, root: E.root,
+      id: E.id, name: E.name,
+      root: compiled.roots[0].path, // back-fill for anything pre-1.10 reading it
+      roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
       schedule: scheduleFromEditor(),
-      includeRules: E.includeRules, excludeRules: E.excludeRules,
+      includeRules, excludeRules,
       destinations,
       retention,           // all-null clears; values set — always explicit from this editor
       destinationRetention: overrides,
     };
 
-    // A material edit — the root or the rules — changes what future backups
+    // A material edit — the roots or the rules — changes what future backups
     // hold: files can silently leave the backup. So it is never applied on
     // one click: step one compares the draft against the last backup and
     // shows the consequences; only the explicit Apply in that step saves
-    // (ADR-0038). Everything else (name, schedule, retention) saves directly.
+    // (ADR-0038). Compared as sorted sets, so mere reordering is not
+    // material. Everything else (name, schedule, retention) saves directly.
     const saved = E.isNew ? null : S.sets.find(set => set.id === E.id);
+    const sortedEqual = (left, right) =>
+      JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
     const material = saved && (
-      saved.root !== E.root
-      || JSON.stringify(saved.includeRules ?? []) !== JSON.stringify(E.includeRules)
-      || JSON.stringify(saved.excludeRules ?? []) !== JSON.stringify(E.excludeRules));
+      !sortedEqual(rootsOf(saved), payload.roots.map(root => root.path))
+      || !sortedEqual(saved.includeRules ?? [], includeRules)
+      || !sortedEqual(saved.excludeRules ?? [], excludeRules));
 
     if (!material) {
       await withBusy(el, () => applySetUpsert(payload));
@@ -1572,8 +1817,9 @@ Object.assign(actions, {
       try {
         const result = await api({
           command: "preview_set_changes",
-          setName: saved.name, root: E.root,
-          includeRules: E.includeRules, excludeRules: E.excludeRules,
+          setName: saved.name,
+          roots: payload.roots,
+          includeRules, excludeRules,
         });
         if (result.result === "set_change_preview") preview = result;
         else previewError = result.message ?? "the service answered unexpectedly";
@@ -2051,9 +2297,14 @@ function boot() {
       renderSnapshots();
     }
 
-    // The set editor's live pieces: schedule edits refresh the preview,
-    // destination toggles reshape the checklist.
+    // The set editor's live pieces: selection checkboxes update marks,
+    // schedule edits refresh the preview, destination toggles reshape the
+    // checklist.
     if (!E || !event.target.closest("#set-editor")) return;
+    if (event.target.matches("[data-mark-path]")) {
+      toggleMark(event.target.dataset.markPath);
+      return;
+    }
     if (event.target.matches("[name=sched-mode], #sched-n, #sched-unit, #sched-time")) {
       validateDraftSoon();
     }

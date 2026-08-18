@@ -478,6 +478,9 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 .tree-actions { margin-left: auto; display: none; gap: 4px; flex: none; }
 .tree-row:hover .tree-actions { display: inline-flex; }
 .tree .subtle { margin: 2px 0; }
+.tree .mark { flex: none; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+#sel-summary { margin-bottom: 10px; }
+#sel-summary .warnings { margin-top: 6px; }
 
 /* rule chips */
 .chip.removable { gap: 4px; padding-right: 4px; margin: 2px 4px 2px 0; font-family: var(--mono); }
