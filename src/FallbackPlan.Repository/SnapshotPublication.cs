@@ -655,7 +655,7 @@ public sealed partial class PublicationOrchestrator
             // create (architecture 06 §1) — both for the content
             // short-circuits below and for the ancestry the manifest records.
             var prior = FindPriorVersion(entry);
-            var unchanged = IsContentUnchanged(entry, prior);
+            var unchanged = ChangeDetection.IsContentUnchanged(entry, prior);
             var metadataDigest = FileVersionManifestCodec.MetadataDigest(entry.Metadata);
 
             // The NFR-PERF-003 short-circuit: nothing about the file changed
@@ -670,7 +670,7 @@ public sealed partial class PublicationOrchestrator
             // extended attributes — a fidelity loss the surveyed changelog
             // records as a shipped fix, and one that only shows up at restore.
             if (unchanged &&
-                IsMetadataUnchanged(metadataDigest, prior!) &&
+                ChangeDetection.IsMetadataUnchanged(metadataDigest, prior!) &&
                 string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
@@ -745,40 +745,6 @@ public sealed partial class PublicationOrchestrator
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
         }
-
-        /// <summary>
-        /// Whether the prior version states the same metadata this entry now
-        /// carries.
-        /// </summary>
-        /// <remarks>
-        /// A prior row with no digest is treated as changed. That is the
-        /// conservative direction and it is cheap: the consequence is one
-        /// manifest rewrite with no content read, whereas the other default
-        /// would silently drop a metadata change to save it.
-        /// </remarks>
-        private static bool IsMetadataUnchanged(ReadOnlyMemory<byte> digest, CatalogueTreeEntry prior) =>
-            prior.MetadataDigest is { } recorded && recorded.Span.SequenceEqual(digest.Span);
-
-        /// <summary>
-        /// Whether <paramref name="entry"/>'s content is provably the same as
-        /// <paramref name="prior"/>'s — identity, size, and modification time
-        /// all present and all equal.
-        /// </summary>
-        /// <remarks>
-        /// All three must be present, not merely non-contradictory. A rebuilt
-        /// catalogue holds no identities, so it disables both short-circuits
-        /// rather than weakening either: without identity, size and time alone
-        /// cannot tell an unchanged file from a different file at the same
-        /// path.
-        /// </remarks>
-        private static bool IsContentUnchanged(ScanEntry entry, CatalogueTreeEntry? prior) =>
-            entry.Kind == ScanEntryKind.File &&
-            prior is { EntryKind: EntryKind.File } &&
-            prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
-            prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
-            prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
-            entry.Identity is { } identity &&
-            identity.Device == priorDevice && identity.FileId == priorFileId;
 
         /// <summary>
         /// The prior version's manifest, when this publication can read one

@@ -59,6 +59,10 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                     $"check {check.Level}",
                     token => CheckAsync(check, token),
                     cancellationToken).ConfigureAwait(false),
+                PreviewSetChangesCommand preview => await OnReaderLaneAsync(
+                    $"rescan {preview.SetName ?? "(default set)"}",
+                    token => PreviewSetChangesAsync(preview, token),
+                    cancellationToken).ConfigureAwait(false),
                 RetentionCommand retention => await OnWriterLaneAsync(
                     retention.Apply ? "retention apply" : "retention plan",
                     token => RetentionAsync(retention, token),
@@ -890,8 +894,53 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        // A material edit — the root or the rules — changes what the next
+        // snapshot will hold, so it is answered with what changed and, when
+        // there is a last backup to compare with, a rescan is queued whose
+        // finding stands as a notice until that next backup completes
+        // (ADR-0038). Schedule and retention edits change when and how long,
+        // not what, and stay a plain acknowledgement.
+        if (existing is not null && IsMaterialChange(existing, replacement))
+        {
+            var lines = new List<string>();
+            if (!string.Equals(existing.Root, replacement.Root, StringComparison.Ordinal))
+            {
+                lines.Add($"root changed: '{existing.Root}' -> '{replacement.Root}'");
+            }
+
+            if (!existing.IncludeRules.SequenceEqual(replacement.IncludeRules, StringComparer.Ordinal))
+            {
+                lines.Add($"include rules changed ({existing.IncludeRules.Count} -> {replacement.IncludeRules.Count})");
+            }
+
+            if (!existing.ExcludeRules.SequenceEqual(replacement.ExcludeRules, StringComparer.Ordinal))
+            {
+                lines.Add($"exclude rules changed ({existing.ExcludeRules.Count} -> {replacement.ExcludeRules.Count})");
+            }
+
+            if (runtime.ArchiveExists(replacement.Id))
+            {
+                SetChangeScan.Enqueue(runtime, replacement);
+                lines.Add(
+                    "A rescan against the last backup was queued; its findings will stand as a notice " +
+                    "until the next backup completes.");
+            }
+            else
+            {
+                lines.Add("This set has not backed up yet; its first backup captures under these settings.");
+            }
+
+            return new ConfigurationChangeResult(lines);
+        }
+
         return new AcknowledgedResult();
     }
+
+    /// <summary>Whether an edit changed what the next snapshot will hold — the root or the rules.</summary>
+    private static bool IsMaterialChange(BackupSetConfiguration existing, BackupSetConfiguration replacement) =>
+        !string.Equals(existing.Root, replacement.Root, StringComparison.Ordinal)
+        || !existing.IncludeRules.SequenceEqual(replacement.IncludeRules, StringComparer.Ordinal)
+        || !existing.ExcludeRules.SequenceEqual(replacement.ExcludeRules, StringComparer.Ordinal);
 
     private ServiceResult RunBackup(RunBackupCommand command)
     {
@@ -918,7 +967,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         // durable stamp goes through ToUnixTimeMilliseconds, which is
         // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
-        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true);
+        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
 
         // A committed snapshot starts its fan-out promptly rather than waiting
         // for the next pass (ADR-0034 §3); the pass still catches up anything
@@ -1220,7 +1269,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                     Convert.ToHexString(row.BackupSetId.Span).ToLowerInvariant(),
                     row.CapturedAt,
                     row.CaptureStatus,
-                    0,
+                    catalogue.CountFiles(row.SnapshotId.Span),
                     destinations));
             }
         }

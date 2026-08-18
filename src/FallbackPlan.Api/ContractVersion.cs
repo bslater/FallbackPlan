@@ -30,9 +30,12 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// <remarks>
     /// 1.7 added the configuration surface: set and destination CRUD, the
     /// folder browser, draft validation, and the pairing-invite verbs
-    /// (ADR-0037).
+    /// (ADR-0037). 1.8 added preview_set_changes / set_change_preview, made
+    /// upsert_backup_set answer a material root-or-rules edit with
+    /// configuration_change, and honours run_backup's full flag over the
+    /// service (ADR-0038).
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 7);
+    public static ContractVersion Current { get; } = new(1, 8);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

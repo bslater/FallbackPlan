@@ -228,6 +228,11 @@ internal static class Strings
     internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));
 
     /// <summary>
+    /// Previewing changes is the service's job — the rescan reads a staging catalogue the running service holds open. Connect to it with --connect.
+    /// </summary>
+    internal static string DirectGateway_ChangesNeedsTheService => Get(nameof(DirectGateway_ChangesNeedsTheService));
+
+    /// <summary>
     /// The service answered a backup with {0}.
     /// </summary>
     private static string ServiceGateway_ServiceAnsweredBackupWith => Get(nameof(ServiceGateway_ServiceAnsweredBackupWith));

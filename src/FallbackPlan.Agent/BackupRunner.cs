@@ -32,6 +32,7 @@ public static class BackupRunner
     /// <param name="set">The set to run.</param>
     /// <param name="jobId">The journal entry to transition.</param>
     /// <param name="now">The clock, passed in so the caller decides it.</param>
+    /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
     /// <param name="cancellationToken">Cancels the backup.</param>
     /// <returns>What happened.</returns>
     public static async ValueTask<BackupOutcome> RunAsync(
@@ -39,7 +40,8 @@ public static class BackupRunner
         BackupSetConfiguration set,
         string jobId,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        bool full = false,
+        CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
@@ -67,9 +69,14 @@ public static class BackupRunner
             // is internal, so nobody runs `init` for it (ADR-0034 §1).
             var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
 
+            // A full run empties both the parent list and the incremental
+            // baseline, exactly as direct mode does — the flag was accepted
+            // over the service and silently dropped before ADR-0038.
             var backupSetId = Convert.FromHexString(set.Id);
-            var prior = archive.Catalogue.EnumerateSnapshots()
-                .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
+            var prior = full
+                ? null
+                : archive.Catalogue.EnumerateSnapshots()
+                    .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
             var generation =
                 archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
@@ -136,6 +143,11 @@ public static class BackupRunner
                 detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
             progress.Enter(outcome);
+
+            // The set-changed notice's condition is "the last backup predates
+            // the settings", and this backup just captured under them
+            // (ADR-0038). A no-op when no such notice stands.
+            runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs);
 
             return new BackupOutcome(
                 set.Name,

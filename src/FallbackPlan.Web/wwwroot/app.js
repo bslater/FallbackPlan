@@ -942,6 +942,11 @@ function openSetEditor(set) {
       </div>
       <div id="rule-chips"></div>
       <div id="draft-defects"></div>
+      ${E.isNew ? "" : `
+      <div class="field-row">
+        <button type="button" class="btn small" data-action="preview-changes" data-set="${esc(set.name)}">Preview changes since last backup</button>
+      </div>
+      <div id="change-preview"></div>`}
     </div>
 
     <div class="editor-section">
@@ -1236,6 +1241,45 @@ Object.assign(actions, {
     renderTree(); validateDraftSoon();
   },
 
+  async "preview-changes"(el) {
+    const host = document.getElementById("change-preview");
+    if (!host) return;
+    const root = document.getElementById("set-root").value.trim();
+    if (!root) { toast("warn", "Choose a folder first."); return; }
+
+    await withBusy(el, async () => {
+      host.innerHTML = `<p class="subtle">Walking the source…</p>`;
+      const result = await run({
+        command: "preview_set_changes",
+        setName: el.dataset.set,
+        root,
+        includeRules: E.includeRules,
+        excludeRules: E.excludeRules,
+      }, { errToast: "The service could not compare" });
+      if (!result || result.result !== "set_change_preview") { host.innerHTML = ""; return; }
+
+      const buckets = [
+        ["new", result.new], ["updated", result.updated], ["metadata-only", result.metadataOnly],
+        ["moved", result.moved], ["deleted", result.deleted],
+        ["no longer included by these rules", result.noLongerIncluded],
+      ].filter(([, bucket]) => bucket.count > 0);
+
+      const baseline = result.baselineSnapshotId
+        ? `vs the last backup: ${result.unchanged} unchanged`
+        : "never backed up — everything is new";
+      const detail = buckets.map(([label, bucket]) => {
+        const more = bucket.count > bucket.sample.length
+          ? `\n  … and ${bucket.count - bucket.sample.length} more` : "";
+        return `${bucket.count} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
+      }).join("\n");
+      const failures = result.failures > 0 ? ` · ${result.failures} unreadable` : "";
+
+      host.innerHTML = `
+        <p class="subtle">${esc(baseline)}${buckets.length === 0 ? " — nothing else changed" : ""}${esc(failures)}</p>
+        ${buckets.length > 0 ? `<pre class="report">${esc(detail)}</pre>` : ""}`;
+    });
+  },
+
   async "set-save"(el) {
     E.name = document.getElementById("set-name").value.trim();
     E.root = document.getElementById("set-root").value.trim();
@@ -1276,7 +1320,15 @@ Object.assign(actions, {
           destinationRetention: overrides,
         },
       }, { errToast: "The service refused the set" });
-      if (result) {
+      if (result?.result === "configuration_change") {
+        // A material edit: the service says what it means and has queued a
+        // rescan whose finding lands under Notices (ADR-0038).
+        const savedName = E.name;
+        closeDialog();
+        reportDialog(`Backup set '${savedName}' saved`, result.lines,
+          "The next backup captures under the new settings.");
+        refreshConfigData(); refreshStatus();
+      } else if (result) {
         toast("ok", E.isNew ? `Backup set '${E.name}' created.` : `Backup set '${E.name}' saved.`);
         closeDialog();
         refreshConfigData(); refreshStatus();

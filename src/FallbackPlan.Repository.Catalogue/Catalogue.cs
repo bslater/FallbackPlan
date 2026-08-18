@@ -530,6 +530,46 @@ public sealed class Catalogue : IDisposable
         return entries;
     }
 
+    /// <summary>
+    /// Every non-directory entry of one snapshot, in path order — the
+    /// baseline a source comparison walks against (FR-SVC-009).
+    /// </summary>
+    public IReadOnlyList<CatalogueTreeEntry> EnumerateLeaves(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+            FROM tree_entries t
+            LEFT JOIN file_versions f ON f.object_id = t.object_id
+            WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
+            ORDER BY t.path;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+
+        var entries = new List<CatalogueTreeEntry>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            entries.Add(ReadTreeEntry(reader));
+        }
+
+        return entries;
+    }
+
+    /// <summary>How many non-directory entries one snapshot holds.</summary>
+    public long CountFiles(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM tree_entries
+            WHERE snapshot_id = $snapshot AND entry_kind <> $directory;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+        return (long)(command.ExecuteScalar() ?? 0L);
+    }
+
     private static CatalogueTreeEntry ReadTreeEntry(SqliteDataReader reader) => new(
         reader.GetString(0),
         (EntryKind)reader.GetInt64(1),

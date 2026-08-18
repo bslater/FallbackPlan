@@ -62,6 +62,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0035](adr/0035-destination-fitness.md) | Destination fitness | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
 | [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
 | [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
+| [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 
 ---
 
@@ -282,6 +283,28 @@ The web console grew its Configuration surface over all of it: sets with the
 folder picker, the selection tree compiling to rules-v1, the schedule builder
 previewing real next runs, retention with full-replacement overrides,
 destination management, and the invite/pair-with-invite flows.
+
+### 0038 — a set edit answers with its meaning
+
+Contract 1.8. `preview_set_changes` walks a set's source — under its saved
+root and rules or a draft's — and diffs it against the last snapshot using
+the tree publisher's **own** unchanged predicates (`Repository/ChangeDetection.cs`,
+extracted, not copied), so the preview and the next backup are one judgement:
+new, updated, metadata-only, moved, deleted, and — kept deliberately apart —
+`no_longer_included`, the file a rule edit stopped capturing, which is not a
+loss the next backup would even see. Counts are exact; paths sample up to a
+cap because the result crosses the contract. A material `upsert_backup_set`
+(root or rules changed) answers `configuration_change` naming the edit and
+queues a fire-and-forget reader-lane rescan whose counts land as one durable
+per-set notice (`set-changed:{id}`), refreshed by later edits and resolved by
+the next backup that completes for the set. The CLI grew `changes`, the web
+set editor a preview button and a saved-with-meaning dialog. And `run_backup`'s
+`full` flag — accepted and **silently dropped by the service** while direct
+mode honoured it — is plumbed through scheduler and runner, proven by a test
+that reads `FilesReused == 0` off the progress channel. Recorded costs, not
+fixed: a re-included file re-captures with severed ancestry (manifests are
+immutable), a root change reads as delete-all-plus-new-all, and a hand-edit
+of `config.json` bypasses the rescan hook — the next backup still applies it.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

@@ -254,9 +254,11 @@ public static class Scheduler
     /// <param name="set">The set to back up.</param>
     /// <param name="now">The clock.</param>
     /// <param name="userInitiated">Whether a person is waiting for it.</param>
+    /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
     /// <returns>The job's outcome, when it finishes.</returns>
     public static Task<BackupOutcome> Enqueue(
-        ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated)
+        ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated,
+        bool full = false)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
@@ -274,7 +276,8 @@ public static class Scheduler
                 try
                 {
                     completion.SetResult(
-                        await BackupRunner.RunAsync(runtime, set, job.Id, now, cancellationToken).ConfigureAwait(false));
+                        await BackupRunner.RunAsync(runtime, set, job.Id, now, full, cancellationToken)
+                            .ConfigureAwait(false));
                 }
                 catch (Exception exception)
                 {

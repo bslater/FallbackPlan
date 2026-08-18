@@ -18,6 +18,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListPairingsCommand), "list_pairings")]
 [JsonDerivedType(typeof(BrowseFoldersCommand), "browse_folders")]
 [JsonDerivedType(typeof(ValidateSetDraftCommand), "validate_set_draft")]
+[JsonDerivedType(typeof(PreviewSetChangesCommand), "preview_set_changes")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
 [JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
@@ -105,6 +106,25 @@ public sealed record ValidateSetDraftCommand(
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
     IReadOnlyList<string> ExcludeRules) : ServiceCommand;
+
+/// <summary>
+/// Walks a set's source now — under its saved root and rules, or a draft's —
+/// and reports what changed against the set's latest snapshot: new, updated,
+/// metadata-only, moved, deleted, and no-longer-included files, counts always
+/// exact and paths sampled per bucket (ADR-0038, FR-SVC-009). A dry scan on
+/// the reader lane; no content is opened and nothing is captured.
+/// </summary>
+/// <param name="SetName">The set to compare; null compares the default (first) set.</param>
+/// <param name="Root">A draft root to walk instead of the saved one; null walks the saved root.</param>
+/// <param name="IncludeRules">Draft include rules; null compares under the saved rules.</param>
+/// <param name="ExcludeRules">Draft exclude rules; null compares under the saved rules.</param>
+/// <param name="SampleLimit">The most paths any bucket carries; null takes 20, capped at 200.</param>
+public sealed record PreviewSetChangesCommand(
+    string? SetName,
+    string? Root = null,
+    IReadOnlyList<string>? IncludeRules = null,
+    IReadOnlyList<string>? ExcludeRules = null,
+    int? SampleLimit = null) : ServiceCommand;
 
 /// <summary>
 /// Issues a one-time pairing invite (ADR-0030 Amendment 3): the code this

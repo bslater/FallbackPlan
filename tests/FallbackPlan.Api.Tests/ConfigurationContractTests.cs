@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheConfigurationSurface_IsRecordedAtOneSeven()
+    public void ContractVersion_TheChangePreviewSurface_IsRecordedAtOneEight()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.7", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.8", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -56,6 +56,16 @@ public sealed class ConfigurationContractTests : IDisposable
                     "/srv", "/", [new FolderDescriptor("data", "/srv/data", false, false)]),
                 CreatePairingInviteCommand => new PairingInviteResult(
                     "code", "invite-1", 5UL, "127.0.0.1:9", null),
+                PreviewSetChangesCommand => new SetChangePreviewResult(
+                    "docs", "ab12", 7UL, 40,
+                    New: new ChangeBucketDescriptor(2, ["a.txt", "b.txt"]),
+                    Updated: new ChangeBucketDescriptor(1, ["c.txt"]),
+                    MetadataOnly: new ChangeBucketDescriptor(0, []),
+                    Moved: new ChangeBucketDescriptor(0, []),
+                    Deleted: new ChangeBucketDescriptor(3, ["d.txt"]),
+                    NoLongerIncluded: new ChangeBucketDescriptor(5, ["e.txt"]),
+                    Failures: 1,
+                    SampleLimit: 20),
                 _ => new AcknowledgedResult(),
             },
         };
@@ -83,6 +93,15 @@ public sealed class ConfigurationContractTests : IDisposable
                 new CreatePairingInviteCommand("laptop", "stores-here", 1024, 60), _timeout.Token),
             out var invite);
         Assert.AreEqual("invite-1", invite.InviteId);
+
+        Assert.IsInstanceOfType<SetChangePreviewResult>(
+            await client.ExecuteAsync(
+                new PreviewSetChangesCommand("docs", ExcludeRules: ["photos"], SampleLimit: 5), _timeout.Token),
+            out var preview);
+        Assert.AreEqual(2, preview.New.Count);
+        Assert.AreEqual("d.txt", Assert.ContainsSingle(preview.Deleted.Sample));
+        Assert.AreEqual(5, preview.NoLongerIncluded.Count);
+        Assert.AreEqual(1, preview.Failures);
 
         // What the service received is what was sent — optional fields intact.
         Assert.IsInstanceOfType<UpsertBackupSetCommand>(service.Received[0], out var upsert);

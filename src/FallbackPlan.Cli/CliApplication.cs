@@ -1038,6 +1038,32 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // -------------------------------------------------------------- changes
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Compare only this backup set; the default (first) set otherwise.",
+            };
+            var limitOption = new Option<int?>("--limit")
+            {
+                Description = "The most paths listed per bucket; counts stay exact past it.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "changes",
+                "What changed under a set's source since its last backup (ADR-0038): new, updated, moved, "
+                + "deleted, and files the rules no longer include. Read-only; nothing is captured."));
+            command.Options.Add(setOption);
+            command.Options.Add(limitOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.PreviewSetChangesAsync(
+                    parse.GetValue(setOption), parse.GetValue(limitOption), token),
+                cancellationToken)));
+        }
+
         // -------------------------------------------------- verify-destination
 
         {

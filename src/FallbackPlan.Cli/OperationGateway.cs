@@ -105,6 +105,20 @@ public interface IOperationGateway : IAsyncDisposable
     ValueTask<OperationReport> SyncAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Reports what changed under a set's source since its last backup —
+    /// new, updated, moved, deleted, and files the rules no longer include
+    /// (ADR-0038, FR-SVC-009). Only a service can serve this — the rescan
+    /// reads the set's staging catalogue under the service's runtime — so
+    /// direct mode refuses with directions.
+    /// </summary>
+    /// <param name="setName">The set to compare, or null for the default set.</param>
+    /// <param name="sampleLimit">The most paths listed per bucket; null takes the service default.</param>
+    /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <returns>The comparison, one line per finding.</returns>
+    ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Runs a retention pass per configured set (architecture 07). Only a
     /// service can serve this — retention needs the whole configuration, the
     /// sync ledger and the writer role — so direct mode refuses with
@@ -440,6 +454,57 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
             new SyncCommand(setName, destinationName), "a sync", cancellationToken).ConfigureAwait(false);
 
         return new OperationReport(true, result.Lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<SetChangePreviewResult>(
+            new PreviewSetChangesCommand(setName, SampleLimit: sampleLimit), "a change preview", cancellationToken)
+            .ConfigureAwait(false);
+
+        var lines = new List<string>
+        {
+            result.BaselineSnapshotId is { } baseline
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"set '{result.SetName}' vs snapshot {baseline} captured {DateTimeOffset.FromUnixTimeMilliseconds((long)(result.BaselineCapturedAt ?? 0)):u}")
+                : $"set '{result.SetName}' has never backed up — everything below is new",
+            string.Create(CultureInfo.InvariantCulture, $"{result.Unchanged} unchanged"),
+        };
+
+        AppendBucket(lines, "new", result.New);
+        AppendBucket(lines, "updated", result.Updated);
+        AppendBucket(lines, "metadata-only", result.MetadataOnly);
+        AppendBucket(lines, "moved", result.Moved);
+        AppendBucket(lines, "deleted", result.Deleted);
+        AppendBucket(lines, "no longer included by the rules", result.NoLongerIncluded);
+        if (result.Failures > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"{result.Failures} unreadable"));
+        }
+
+        return new OperationReport(true, lines);
+
+        static void AppendBucket(List<string> lines, string label, ChangeBucketDescriptor bucket)
+        {
+            if (bucket.Count == 0)
+            {
+                return;
+            }
+
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"{bucket.Count} {label}"));
+            foreach (var path in bucket.Sample)
+            {
+                lines.Add($"  {path}");
+            }
+
+            if (bucket.Count > bucket.Sample.Count)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"  … and {bucket.Count - bucket.Sample.Count} more"));
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -815,6 +880,13 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // stamp live in the service's ledger, so a direct-mode pass would read
         // the same objects forever and never record that it had.
         throw new CliFailureException(Strings.DirectGateway_VerifyDestinationNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken) =>
+        // The rescan reads a set's staging catalogue, which the running
+        // service holds open — a second direct open would race its writer.
+        throw new CliFailureException(Strings.DirectGateway_ChangesNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken) =>

@@ -323,6 +323,67 @@ public sealed partial class ServiceCommandHandler
         return roots;
     }
 
+    /// <summary>
+    /// The preview verb's work (ADR-0038, FR-SVC-009): resolve the set,
+    /// overlay any draft root and rules, and answer the source-versus-last-
+    /// snapshot comparison. Runs on the reader lane; nothing is captured.
+    /// </summary>
+    private async ValueTask<ServiceResult> PreviewSetChangesAsync(
+        PreviewSetChangesCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+        var set = command.SetName is null
+            ? configuration.BackupSets.Count > 0 ? configuration.BackupSets[0] : null
+            : configuration.FindSet(command.SetName);
+
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                command.SetName is null
+                    ? "No backup set is configured."
+                    : $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        var root = command.Root ?? set.Root;
+        var includes = command.IncludeRules ?? set.IncludeRules;
+        var excludes = command.ExcludeRules ?? set.ExcludeRules;
+
+        // Refused here as a stated error rather than downstream as a thrown
+        // guard — the draft may be mid-edit, and a defect is its answer.
+        if (!PathRuleSet.TryCreate(includes, excludes, caseSensitive: true, out _, out var ruleDefects))
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join("; ", ruleDefects));
+        }
+
+        if (!Directory.Exists(root))
+        {
+            return new ServiceError(ServiceErrorReason.NotFound, $"root '{root}' does not exist");
+        }
+
+        var limit = Math.Clamp(
+            command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
+        var (comparison, baseline) = await SetChangeScan.CompareAsync(
+            runtime, set, root, includes, excludes, limit, cancellationToken).ConfigureAwait(false);
+
+        return new SetChangePreviewResult(
+            set.Name,
+            baseline is null ? null : Convert.ToHexStringLower(baseline.SnapshotId.Span),
+            baseline?.CapturedAt,
+            comparison.Unchanged,
+            ToBucket(comparison.New),
+            ToBucket(comparison.Updated),
+            ToBucket(comparison.MetadataOnly),
+            ToBucket(comparison.Moved),
+            ToBucket(comparison.Deleted),
+            ToBucket(comparison.NoLongerIncluded),
+            comparison.Failures,
+            limit);
+
+        static ChangeBucketDescriptor ToBucket(Repository.SourceChangeBucket bucket) =>
+            new(bucket.Count, bucket.Sample);
+    }
+
     private static SetDraftValidationResult ValidateSetDraft(ValidateSetDraftCommand command)
     {
         List<string> defects = [];

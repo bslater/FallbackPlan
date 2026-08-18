@@ -59,6 +59,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
+[JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
@@ -207,6 +208,43 @@ public sealed record FolderListingResult(
 /// <param name="NextRuns">The schedule's next occurrences (ISO-8601, the service's clock frame); empty for manual-only or a defective schedule.</param>
 public sealed record SetDraftValidationResult(
     IReadOnlyList<string> Defects, IReadOnlyList<string> NextRuns) : ServiceResult;
+
+/// <summary>One bucket of a set-change preview: the exact count, and at most the sample cap of paths.</summary>
+/// <param name="Count">Every file the bucket matched — exact, never truncated.</param>
+/// <param name="Sample">The first paths encountered, capped by <see cref="SetChangePreviewResult.SampleLimit"/>.</param>
+public sealed record ChangeBucketDescriptor(long Count, IReadOnlyList<string> Sample);
+
+/// <summary>
+/// What the source holds now versus the set's latest snapshot (ADR-0038,
+/// FR-SVC-009). Deletion keeps its two honest faces apart: <paramref name="Deleted"/>
+/// is a file the disk lost; <paramref name="NoLongerIncluded"/> is a file the
+/// rules stopped capturing.
+/// </summary>
+/// <param name="SetName">The set compared.</param>
+/// <param name="BaselineSnapshotId">The snapshot compared against, hex; null when the set has never backed up — everything reads as new.</param>
+/// <param name="BaselineCapturedAt">When that snapshot was captured, Unix milliseconds; null with no baseline.</param>
+/// <param name="Unchanged">Files identical in content and metadata.</param>
+/// <param name="New">Files the last snapshot does not hold.</param>
+/// <param name="Updated">Files whose content changed.</param>
+/// <param name="MetadataOnly">Files whose bytes are unchanged but whose metadata moved — a chmod, an owner change.</param>
+/// <param name="Moved">Files found at a different path by stable identity.</param>
+/// <param name="Deleted">Files the last snapshot holds that are gone from disk and still captured by the rules.</param>
+/// <param name="NoLongerIncluded">Files the last snapshot holds that the rules no longer capture — they leave future snapshots because of the rules, not the disk.</param>
+/// <param name="Failures">Paths the walk could not read.</param>
+/// <param name="SampleLimit">The per-bucket sample cap that was applied.</param>
+public sealed record SetChangePreviewResult(
+    string SetName,
+    string? BaselineSnapshotId,
+    ulong? BaselineCapturedAt,
+    long Unchanged,
+    ChangeBucketDescriptor New,
+    ChangeBucketDescriptor Updated,
+    ChangeBucketDescriptor MetadataOnly,
+    ChangeBucketDescriptor Moved,
+    ChangeBucketDescriptor Deleted,
+    ChangeBucketDescriptor NoLongerIncluded,
+    long Failures,
+    int SampleLimit) : ServiceResult;
 
 /// <summary>A freshly issued pairing invite — the one time the code exists in the clear.</summary>
 /// <param name="Code">The code to speak to the other operator. Never persisted, never shown again.</param>
