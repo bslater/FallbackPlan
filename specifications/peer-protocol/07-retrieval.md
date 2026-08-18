@@ -45,8 +45,8 @@ that role stored.
 ## 3 Messages
 
 All messages are CBOR maps with integer keys, framed as every other peer
-message ([00 §2](00-conventions.md#2-encoding)). Limits are those of
-[00 §2.3](00-conventions.md#23-limits); the chunk bound is `ReplicationChunk`'s
+message ([00 §2](00-conventions.md#2-what-differs)). Limits are those of
+[00 §2.3](00-conventions.md#23-limits-are-the-protocols-own); the chunk bound is `ReplicationChunk`'s
 1 MiB.
 
 ### 3.1 `retrieve_open` (272)
@@ -97,7 +97,7 @@ lost its staging learns what to ask for. `retrieve_read` is refused
 ## 4 Authorization
 
 The destination MUST serve a replica only when **both** hold: the attribution
-ledger ([05 §2](05-quotas.md#2-attribution)) assigns the named repository to
+ledger ([05 §2](05-quotas.md#2-ownership)) assigns the named repository to
 the dialling peer's pinned identity, and the replica exists on disk. Both
 failure shapes — someone else's replica, and one never stored here — MUST
 refuse identically (`terms_refused`, one message), because which of the two it
@@ -130,7 +130,7 @@ post-acknowledgement phase ends. There is no goodbye frame to lose.
 `terms_refused` — not this owner's replica (§4); `malformed` — a frame that
 violates this document or arrives outside its state; every refusal is a
 `session_refuse` written before the destination closes, per
-[02 §8](02-session.md#8-refusals).
+[02 §8](02-session.md#8-errors-and-refusal).
 
 ## 7 Security considerations
 

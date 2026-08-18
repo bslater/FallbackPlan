@@ -6,7 +6,8 @@ using FallbackPlan.Repository.Crypto;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// Restore sources over the service (ADR-0041, FR-RST-001/003/004/006): a
+/// Restore sources over the service (ADR-0041; FR-RST-001, FR-RST-003,
+/// FR-RST-004, FR-RST-006): a
 /// source handle opens the set's staging archive or a destination's replica,
 /// answers its snapshots, and feeds the source-aware listing, plan and run;
 /// the guided options — several paths, the original-location target, the

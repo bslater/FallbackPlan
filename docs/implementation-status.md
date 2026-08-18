@@ -65,6 +65,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
+| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 
 ---
 
@@ -361,6 +362,34 @@ under an unticked parent triggers the exclude-wins wall (sibling
 enumeration plus the new-arrivals warning), and feedback is an instant
 summary plus a debounced draft-roots preview walk. Proven live end to end:
 reopen, second root, wall, save, backup, labelled browse.
+
+### 0041 — restore walks in through the front door
+
+Contract 1.11, receipt schema 4. Restore became a guided wizard — passphrase,
+source, effective date, files, target, run — and every step landed as engine
+or contract surface rather than page logic. The passphrase gate runs **in the
+console process** against the staging archive's own key files
+(`Web/ConsoleRestoreGate.cs`, a real KEK derivation), so NFR-SEC-009's wall
+stands untouched; the console dependency rule gained exactly one named
+exception for that class. Restore **sources** are server-side handles
+(`open_restore_source`): the staging archive, a local-path destination's
+replica, or a **paired peer's replica over the wire** — the latter via the
+new peer-protocol retrieval feature ([spec 07](../specifications/peer-protocol/07-retrieval.md),
+messages 272–277, owner inventory, identical refusals), with
+`Agent/PeerRetrievalObjectStore.cs` adapting the session so the repository
+open, catalogue rebuild-plus-projection and restore run over the wire
+unchanged — proven by a service-level drill that deletes the staging archive
+outright and restores byte-identical files from the peer. The planner takes a
+prefix **list** (one run, one receipt, ancestor subsumption); the run options
+finally reach the wire: `target: original` maps label slices back onto the
+set's configured roots, `existing: rename` is the new `WriteBeside` policy
+(`name (restored 2026-08-18).ext`, existing file untouched), `overwrite` is
+`Replace`, and absent options reproduce the old behaviour byte for byte. The
+receipt persists to `<state>/receipts/<run>.json` on every run. Runs against
+a source load only the plan's own blobs — a restore-sized transfer, not a
+repository-sized one. Proven live: a Playwright walk of all six steps,
+wrong-passphrase refusal included, ending on restored bytes and the receipt
+path.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

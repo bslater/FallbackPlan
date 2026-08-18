@@ -14,7 +14,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// The restore-breadth debt (phase-2 pickup item 11): the two
 /// <see cref="ExistingDestinationPolicy"/> values no test had ever set, and
 /// the NFR-PERF-009 GET budget measured honestly against what the read path
-/// actually issues.
+/// actually issues. ADR-0041 widened it: the write-beside policy that keeps
+/// both files under a dated name (FR-RST-006's explicit-choice posture), the
+/// receipt pinned whole at schema 4 with <c>written_as</c> (FR-RST-004),
+/// several prefixes in one plan, and the targeted blob load.
 /// </summary>
 [TestClass]
 public sealed class RestoreBreadthTests : ArchiveTestHarness
