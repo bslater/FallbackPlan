@@ -57,6 +57,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private readonly Passphrase _passphrase;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
+    private bool _disposed;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _setGates =
         new(StringComparer.Ordinal);
 
@@ -296,6 +297,14 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <returns>A task that completes when everything is closed.</returns>
     public async ValueTask DisposeAsync()
     {
+        // A host that stopped the runtime deliberately and then leaves an
+        // await-using scope disposes twice; the second call must be a no-op.
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         await Queue.DisposeAsync().ConfigureAwait(false);
         Progress.Complete();
 
