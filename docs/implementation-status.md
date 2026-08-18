@@ -298,7 +298,10 @@ cap because the result crosses the contract. A material `upsert_backup_set`
 queues a fire-and-forget reader-lane rescan whose counts land as one durable
 per-set notice (`set-changed:{id}`), refreshed by later edits and resolved by
 the next backup that completes for the set. The CLI grew `changes`, the web
-set editor a preview button and a saved-with-meaning dialog. And `run_backup`'s
+set editor a preview button and a saved-with-meaning dialog — and a material
+edit saves only through a two-step confirmation: the comparison shown first,
+files that would stop being included called out with a danger-styled Apply,
+Back returning to the editor with the draft intact. And `run_backup`'s
 `full` flag — accepted and **silently dropped by the service** while direct
 mode honoured it — is plumbed through scheduler and runner, proven by a test
 that reads `FilesReused == 0` off the progress channel. Recorded costs, not

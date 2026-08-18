@@ -578,6 +578,105 @@ function reportDialog(title, lines, sub) {
     <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`);
 }
 
+/* ----- the set-change comparison, shared by the preview and the confirm step ----- */
+
+function comparisonReport(result) {
+  const buckets = [
+    ["new", result.new], ["updated", result.updated], ["metadata-only", result.metadataOnly],
+    ["moved", result.moved], ["deleted", result.deleted],
+    ["no longer included by these rules", result.noLongerIncluded],
+  ].filter(([, bucket]) => bucket.count > 0);
+
+  const baseline = result.baselineSnapshotId
+    ? `vs the last backup: ${result.unchanged} unchanged`
+    : "never backed up — everything is new";
+  const detail = buckets.map(([label, bucket]) => {
+    const more = bucket.count > bucket.sample.length
+      ? `\n  … and ${bucket.count - bucket.sample.length} more` : "";
+    return `${bucket.count} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
+  }).join("\n");
+  const failures = result.failures > 0 ? ` · ${result.failures} unreadable` : "";
+
+  return {
+    summary: `${baseline}${buckets.length === 0 ? " — nothing else changed" : ""}${failures}`,
+    detail,
+  };
+}
+
+// Step two of the material-edit save (ADR-0038): the editor stays in the
+// dialog, hidden, so Back loses nothing; only the Apply here performs the
+// upsert. Rendered even when the comparison failed — the operator may be
+// pointing at a drive that is not mounted yet — but then it says so
+// instead of pretending to know the consequences.
+function renderSetSaveConfirm(saved, preview, previewError) {
+  document.getElementById("set-confirm")?.remove();
+  const editor = document.getElementById("set-editor");
+  if (editor) editor.hidden = true;
+
+  const edits = [];
+  if (saved.root !== E.root) edits.push(`folder: '${saved.root}' → '${E.root}'`);
+  if (JSON.stringify(saved.includeRules ?? []) !== JSON.stringify(E.includeRules)) {
+    edits.push(`include rules: ${(saved.includeRules ?? []).length} → ${E.includeRules.length}`);
+  }
+  if (JSON.stringify(saved.excludeRules ?? []) !== JSON.stringify(E.excludeRules)) {
+    edits.push(`exclude rules: ${(saved.excludeRules ?? []).length} → ${E.excludeRules.length}`);
+  }
+
+  const warnings = [];
+  if (saved.root !== E.root) {
+    warnings.push("The folder changed: version history does not follow files across folders, and "
+      + "everything under the new folder is captured as new.");
+  }
+  if (preview?.noLongerIncluded.count > 0) {
+    warnings.push(`${preview.noLongerIncluded.count} file(s) the last backup holds will no longer be `
+      + "included — future backups skip them, and retention will eventually age their old versions out.");
+  }
+  if (previewError) {
+    warnings.push(`The source could not be compared (${previewError}), so the consequences below are unknown. `
+      + "Apply only if you expected that — for example, a drive that is not mounted yet.");
+  }
+
+  const report = preview ? comparisonReport(preview) : null;
+  const dropping = (preview?.noLongerIncluded.count ?? 0) > 0 || saved.root !== E.root;
+
+  const panel = document.createElement("div");
+  panel.id = "set-confirm";
+  panel.innerHTML = `
+    <h3>Confirm changes to '${esc(saved.name)}'</h3>
+    <p class="dlg-sub">Step two of two — nothing is saved yet. This is what the edit means, compared with
+    the last backup.</p>
+    <pre class="report">${esc(edits.join("\n"))}</pre>
+    ${warnings.length ? `<ul class="warnings">${warnings.map(text => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
+    ${report ? `
+      <p class="subtle">${esc(report.summary)}</p>
+      ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}` : ""}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="set-save-back">Back to editing</button>
+      <button type="button" class="btn ${dropping ? "danger" : "primary"}" data-action="set-save-apply">Apply these changes</button>
+    </div>`;
+  dialog.append(panel);
+}
+
+// The actual upsert — reached directly for non-material edits, and only
+// through the confirm step's Apply for material ones.
+async function applySetUpsert(payload) {
+  const result = await run(
+    { command: "upsert_backup_set", set: payload }, { errToast: "The service refused the set" });
+  if (result?.result === "configuration_change") {
+    // A material edit: the service says what it means and has queued a
+    // rescan whose finding lands under Notices (ADR-0038).
+    const savedName = payload.name;
+    closeDialog();
+    reportDialog(`Backup set '${savedName}' saved`, result.lines,
+      "The next backup captures under the new settings.");
+    refreshConfigData(); refreshStatus();
+  } else if (result) {
+    toast("ok", E.isNew ? `Backup set '${payload.name}' created.` : `Backup set '${payload.name}' saved.`);
+    closeDialog();
+    refreshConfigData(); refreshStatus();
+  }
+}
+
 /* ---------------------------------------------------------------- actions */
 
 async function withBusy(button, work) {
@@ -1258,25 +1357,10 @@ Object.assign(actions, {
       }, { errToast: "The service could not compare" });
       if (!result || result.result !== "set_change_preview") { host.innerHTML = ""; return; }
 
-      const buckets = [
-        ["new", result.new], ["updated", result.updated], ["metadata-only", result.metadataOnly],
-        ["moved", result.moved], ["deleted", result.deleted],
-        ["no longer included by these rules", result.noLongerIncluded],
-      ].filter(([, bucket]) => bucket.count > 0);
-
-      const baseline = result.baselineSnapshotId
-        ? `vs the last backup: ${result.unchanged} unchanged`
-        : "never backed up — everything is new";
-      const detail = buckets.map(([label, bucket]) => {
-        const more = bucket.count > bucket.sample.length
-          ? `\n  … and ${bucket.count - bucket.sample.length} more` : "";
-        return `${bucket.count} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
-      }).join("\n");
-      const failures = result.failures > 0 ? ` · ${result.failures} unreadable` : "";
-
+      const report = comparisonReport(result);
       host.innerHTML = `
-        <p class="subtle">${esc(baseline)}${buckets.length === 0 ? " — nothing else changed" : ""}${esc(failures)}</p>
-        ${buckets.length > 0 ? `<pre class="report">${esc(detail)}</pre>` : ""}`;
+        <p class="subtle">${esc(report.summary)}</p>
+        ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}`;
     });
   },
 
@@ -1308,32 +1392,62 @@ Object.assign(actions, {
       overrides[name] = policy;
     }
 
+    const payload = {
+      id: E.id, name: E.name, root: E.root,
+      schedule: scheduleFromEditor(),
+      includeRules: E.includeRules, excludeRules: E.excludeRules,
+      destinations,
+      retention,           // all-null clears; values set — always explicit from this editor
+      destinationRetention: overrides,
+    };
+
+    // A material edit — the root or the rules — changes what future backups
+    // hold: files can silently leave the backup. So it is never applied on
+    // one click: step one compares the draft against the last backup and
+    // shows the consequences; only the explicit Apply in that step saves
+    // (ADR-0038). Everything else (name, schedule, retention) saves directly.
+    const saved = E.isNew ? null : S.sets.find(set => set.id === E.id);
+    const material = saved && (
+      saved.root !== E.root
+      || JSON.stringify(saved.includeRules ?? []) !== JSON.stringify(E.includeRules)
+      || JSON.stringify(saved.excludeRules ?? []) !== JSON.stringify(E.excludeRules));
+
+    if (!material) {
+      await withBusy(el, () => applySetUpsert(payload));
+      return;
+    }
+
     await withBusy(el, async () => {
-      const result = await run({
-        command: "upsert_backup_set",
-        set: {
-          id: E.id, name: E.name, root: E.root,
-          schedule: scheduleFromEditor(),
+      let preview = null;
+      let previewError = null;
+      try {
+        const result = await api({
+          command: "preview_set_changes",
+          setName: saved.name, root: E.root,
           includeRules: E.includeRules, excludeRules: E.excludeRules,
-          destinations,
-          retention,           // all-null clears; values set — always explicit from this editor
-          destinationRetention: overrides,
-        },
-      }, { errToast: "The service refused the set" });
-      if (result?.result === "configuration_change") {
-        // A material edit: the service says what it means and has queued a
-        // rescan whose finding lands under Notices (ADR-0038).
-        const savedName = E.name;
-        closeDialog();
-        reportDialog(`Backup set '${savedName}' saved`, result.lines,
-          "The next backup captures under the new settings.");
-        refreshConfigData(); refreshStatus();
-      } else if (result) {
-        toast("ok", E.isNew ? `Backup set '${E.name}' created.` : `Backup set '${E.name}' saved.`);
-        closeDialog();
-        refreshConfigData(); refreshStatus();
+        });
+        if (result.result === "set_change_preview") preview = result;
+        else previewError = result.message ?? "the service answered unexpectedly";
+      } catch (error) {
+        previewError = error.message;
       }
+
+      E.pendingSave = payload;
+      renderSetSaveConfirm(saved, preview, previewError);
     });
+  },
+
+  "set-save-back"() {
+    document.getElementById("set-confirm")?.remove();
+    const editor = document.getElementById("set-editor");
+    if (editor) editor.hidden = false;
+    E.pendingSave = null;
+  },
+
+  async "set-save-apply"(el) {
+    const payload = E.pendingSave;
+    if (!payload) return;
+    await withBusy(el, () => applySetUpsert(payload));
   },
 
   "cfg-delete-set"(el) {

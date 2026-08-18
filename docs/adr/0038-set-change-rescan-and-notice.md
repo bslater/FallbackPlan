@@ -63,6 +63,16 @@ answers to one flag.
 6. **Progress stays counts-only.** The per-job progress channel's privacy
    posture (no path ever rides it) is untouched: paths cross only as a
    command result the caller asked for; the automatic notice carries counts.
+7. **The console never applies a material edit on one click.** Saving a
+   root or rules change is two steps: the editor first runs the comparison
+   and shows what the edit means — with an explicit warning, and a
+   danger-styled Apply, when files the last backup holds would stop being
+   included — and only the Apply in that step performs the upsert; Back
+   returns to the editor with the draft intact. A comparison that fails
+   (an unmounted new root, say) says so and still allows Apply, because
+   refusing would make the honest case impossible. The gate is the
+   client's: the contract stays one verb, so a script that knows what it
+   is doing is not made to say so twice.
 
 ## Consequences
 
