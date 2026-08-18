@@ -46,6 +46,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DirectoryResult), "directory")]
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
 [JsonDerivedType(typeof(RestoreResult), "restore")]
+[JsonDerivedType(typeof(RestoreSourceOpenedResult), "restore_source")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
 [JsonDerivedType(typeof(RetentionResult), "retention")]
@@ -400,7 +401,20 @@ public sealed record DirectoryResult(
 /// <param name="Files">How many files the plan covers.</param>
 /// <param name="Bytes">How many logical bytes it would write.</param>
 /// <param name="MissingObjects">Objects the plan needs and cannot find.</param>
-public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<string> MissingObjects) : ServiceResult;
+/// <param name="Conflicts">
+/// How many plan-time conflicts need an operator decision — case collisions
+/// on a case-folding target, path-length overruns, prefixes the snapshot
+/// does not hold (FR-RST-003; ADR-0041).
+/// </param>
+/// <param name="ConflictSample">At most twenty conflicts, as <c>path — reason</c> lines.</param>
+/// <param name="Degradations">Declared metadata shortfalls on this target, one line each.</param>
+public sealed record RestorePlanResult(
+    long Files,
+    long Bytes,
+    IReadOnlyList<string> MissingObjects,
+    long Conflicts = 0,
+    IReadOnlyList<string>? ConflictSample = null,
+    IReadOnlyList<string>? Degradations = null) : ServiceResult;
 
 /// <summary>What a restore did.</summary>
 /// <param name="Restored">Files written.</param>
@@ -413,7 +427,45 @@ public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<str
 /// required item failed nothing yet is not complete, and a remote client told
 /// only <c>Failed = 0</c> would report success for it.
 /// </param>
-public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory, string Outcome) : ServiceResult;
+/// <param name="Skipped">Items recorded but not materialised on this target (declared in the plan).</param>
+/// <param name="Degraded">Files restored short of what was captured — main stream only.</param>
+/// <param name="Displaced">Existing files moved into the displaced store to make room.</param>
+/// <param name="WrittenBeside">Restored copies written beside a kept existing file under the rename policy (ADR-0041).</param>
+/// <param name="ReceiptPath">The persisted machine-readable receipt (FR-RST-004), on the service's machine.</param>
+/// <param name="FailedSample">At most twenty failures, as <c>path — detail</c> lines.</param>
+public sealed record RestoreResult(
+    long Restored,
+    long Failed,
+    string OutputDirectory,
+    string Outcome,
+    long Skipped = 0,
+    long Degraded = 0,
+    long Displaced = 0,
+    long WrittenBeside = 0,
+    string? ReceiptPath = null,
+    IReadOnlyList<string>? FailedSample = null) : ServiceResult;
+
+/// <summary>
+/// An opened restore source (ADR-0041): the handle the source-aware verbs
+/// take, and the snapshots the source holds — which is everything the guided
+/// flow's effective-date step needs, resolved client-side against
+/// <see cref="SnapshotDescriptor.CapturedAt"/>.
+/// </summary>
+/// <param name="SourceId">The handle; expires after idle disuse, closed by <c>close_restore_source</c>.</param>
+/// <param name="SetName">The set whose repository this is.</param>
+/// <param name="Location"><c>staging</c>, or the destination's declared name.</param>
+/// <param name="Snapshots">The snapshots this source holds, oldest first.</param>
+/// <param name="Warnings">
+/// What opening had to note — catalogue-rebuild findings, blobs that would
+/// not open. A warned source still answers; the operator decides with the
+/// facts in view.
+/// </param>
+public sealed record RestoreSourceOpenedResult(
+    string SourceId,
+    string SetName,
+    string Location,
+    IReadOnlyList<SnapshotDescriptor> Snapshots,
+    IReadOnlyList<string> Warnings) : ServiceResult;
 
 /// <summary>What a verification run found.</summary>
 /// <param name="ObjectsChecked">How many objects were examined.</param>
@@ -502,10 +554,17 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// <param name="StateDirectory">The state directory whose writer role it holds.</param>
 /// <param name="RemoteBindingEnabled">Whether the remote binding is on.</param>
 /// <param name="ActiveJobs">How many jobs are running now.</param>
+/// <param name="ArchivesRoot">
+/// The root holding the per-set staging archives (ADR-0034), on the
+/// service's machine. A path, not a secret — a console on the same machine
+/// uses it to verify a restore passphrase locally, without the passphrase
+/// ever crossing this contract (ADR-0041, NFR-SEC-009).
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
     string MachineName,
     string StateDirectory,
     bool RemoteBindingEnabled,
-    int ActiveJobs) : ServiceResult;
+    int ActiveJobs,
+    string? ArchivesRoot = null) : ServiceResult;

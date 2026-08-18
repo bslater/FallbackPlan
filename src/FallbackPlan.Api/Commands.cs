@@ -33,6 +33,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListDirectoryCommand), "list_directory")]
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
+[JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
+[JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
@@ -226,12 +228,24 @@ public sealed record ListSnapshotsCommand : ServiceCommand;
 /// <summary>Lists one directory inside a snapshot.</summary>
 /// <param name="SnapshotId">The snapshot, hex-encoded.</param>
 /// <param name="Path">The directory within the snapshot; null lists the root.</param>
-public sealed record ListDirectoryCommand(string SnapshotId, string? Path) : ServiceCommand;
+/// <param name="Source">An open restore source to read from (ADR-0041); null reads the staging archives.</param>
+public sealed record ListDirectoryCommand(
+    string SnapshotId, string? Path, string? Source = null) : ServiceCommand;
 
 /// <summary>Plans a restore without performing it.</summary>
 /// <param name="SnapshotId">The snapshot, hex-encoded.</param>
 /// <param name="Path">The subtree to restore; null plans the whole snapshot.</param>
-public sealed record PlanRestoreCommand(string SnapshotId, string? Path) : ServiceCommand;
+/// <param name="Source">An open restore source to read from (ADR-0041); null reads the staging archives.</param>
+/// <param name="Paths">
+/// Several subtrees in one plan — one run, one receipt (ADR-0041). Wins over
+/// <paramref name="Path"/> when present, exactly as the set descriptor's
+/// roots win over its root.
+/// </param>
+public sealed record PlanRestoreCommand(
+    string SnapshotId,
+    string? Path,
+    string? Source = null,
+    IReadOnlyList<string>? Paths = null) : ServiceCommand;
 
 /// <summary>
 /// Performs a restore. The output directory is a path <b>on the machine running
@@ -241,7 +255,56 @@ public sealed record PlanRestoreCommand(string SnapshotId, string? Path) : Servi
 /// <param name="SnapshotId">The snapshot, hex-encoded.</param>
 /// <param name="Path">The subtree to restore; null restores the whole snapshot.</param>
 /// <param name="OutputDirectory">Where to write, on the service's machine.</param>
-public sealed record RunRestoreCommand(string SnapshotId, string? Path, string OutputDirectory) : ServiceCommand;
+/// <param name="Source">An open restore source to read from (ADR-0041); null reads the staging archives.</param>
+/// <param name="Paths">Several subtrees in one run; wins over <paramref name="Path"/> when present.</param>
+/// <param name="Target">
+/// <c>folder</c> (default) writes under <paramref name="OutputDirectory"/>;
+/// <c>original</c> writes each subtree back where it was captured — the set's
+/// configured root folders, label-mapped for a multi-root set (ADR-0040) —
+/// and ignores <paramref name="OutputDirectory"/>. Original is in-place by
+/// definition.
+/// </param>
+/// <param name="Existing">
+/// What to do about a file already at a destination: null preserves it into
+/// the displaced store (today's default), <c>rename</c> keeps it untouched
+/// and writes the restored copy beside it with a dated suffix, and
+/// <c>overwrite</c> replaces it — destructive, and never a default
+/// (FR-RST-006's explicit choice).
+/// </param>
+/// <param name="InPlace">
+/// Whether restored content lands directly where pointed rather than under
+/// the quarantine directory. False keeps today's quarantine default; the
+/// wizard's confirmed flow sends true.
+/// </param>
+public sealed record RunRestoreCommand(
+    string SnapshotId,
+    string? Path,
+    string OutputDirectory,
+    string? Source = null,
+    IReadOnlyList<string>? Paths = null,
+    string? Target = null,
+    string? Existing = null,
+    bool InPlace = false) : ServiceCommand;
+
+/// <summary>
+/// Opens a restore source (ADR-0041): the place a guided restore reads from —
+/// the set's own staging archive, a local-path destination's replica, or a
+/// paired peer's replica over the retrieval session. The service opens the
+/// repository, prepares a catalogue for it, and answers a handle plus the
+/// snapshots it holds; the handle feeds the source-aware verbs until closed
+/// or idle-expired.
+/// </summary>
+/// <param name="SetName">The backup set whose repository to open — sources are per-set, one repository each (ADR-0034).</param>
+/// <param name="DestinationName">The destination whose replica to read; null opens the set's staging archive.</param>
+public sealed record OpenRestoreSourceCommand(string SetName, string? DestinationName = null) : ServiceCommand;
+
+/// <summary>
+/// Closes a restore source. Idempotent — closing an unknown or already-closed
+/// handle acknowledges rather than errors, because a page unloading fires
+/// this without awaiting anything.
+/// </summary>
+/// <param name="SourceId">The handle to release.</param>
+public sealed record CloseRestoreSourceCommand(string SourceId) : ServiceCommand;
 
 /// <summary>Verifies stored objects.</summary>
 /// <param name="Level">One of <c>locator</c>, <c>digest</c>, <c>records</c>.</param>

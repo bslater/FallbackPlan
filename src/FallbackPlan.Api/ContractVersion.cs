@@ -41,9 +41,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// multi-root sets (ADR-0040): roots on the set descriptor and on
     /// preview_set_changes — upsert accepts roots or root, roots winning —
     /// and the preview answers a draft with no saved set against an empty
-    /// baseline.
+    /// baseline. 1.11 added the guided restore (ADR-0041):
+    /// open_restore_source / close_restore_source over per-set staging,
+    /// replica and peer sources; source, several paths, target, existing
+    /// and in-place options on the restore verbs; plan conflicts and the
+    /// persisted-receipt summary on their results; and the archives root on
+    /// describe_service.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 10);
+    public static ContractVersion Current { get; } = new(1, 11);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

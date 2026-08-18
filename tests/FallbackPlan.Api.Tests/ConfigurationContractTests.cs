@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheMultiRootSurface_IsRecordedAtOneTen()
+    public void ContractVersion_TheGuidedRestoreSurface_IsRecordedAtOneEleven()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.10", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.11", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -65,6 +65,16 @@ public sealed class ConfigurationContractTests : IDisposable
                     [new DirectoryEntryDescriptor("a.txt", "file", 12, ModifiedAt: 5UL, Change: "changed")],
                     Deleted: ["gone.txt"],
                     PreviousSnapshotId: "ff00"),
+                OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
+                    "ab12cd34ef56ab78", "docs", "vault",
+                    [new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3)],
+                    ["one blob would not open"]),
+                CloseRestoreSourceCommand => new AcknowledgedResult(),
+                RunRestoreCommand => new RestoreResult(
+                    3, 1, "/out", "failed",
+                    Skipped: 2, Degraded: 1, Displaced: 0, WrittenBeside: 1,
+                    ReceiptPath: "/state/receipts/r1.json",
+                    FailedSample: ["docs/a.txt — the store does not hold this blob"]),
                 PreviewSetChangesCommand => new SetChangePreviewResult(
                     "docs", "ab12", 7UL, 40,
                     New: new ChangeBucketDescriptor(2, ["a.txt", "b.txt"]),
@@ -141,15 +151,52 @@ public sealed class ConfigurationContractTests : IDisposable
                     null, Roots: [new BackupRootDescriptor("/a", "A"), new BackupRootDescriptor("/b", "B")]),
                 _timeout.Token));
 
+        // The guided-restore verbs (1.11, ADR-0041): the source handle and
+        // its snapshots come back typed, and the run's options — several
+        // paths, the target and existing policies, in-place — arrive intact.
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await client.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
+            out var opened);
+        Assert.AreEqual("vault", opened.Location);
+        Assert.AreEqual(42UL, Assert.ContainsSingle(opened.Snapshots).CapturedAt);
+        Assert.ContainsSingle(opened.Warnings);
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await client.ExecuteAsync(
+                new RunRestoreCommand(
+                    new string('e', 32), null, "/ignored",
+                    Source: opened.SourceId,
+                    Paths: ["docs/a.txt", "media"],
+                    Target: "original",
+                    Existing: "rename",
+                    InPlace: true),
+                _timeout.Token),
+            out var ran);
+        Assert.AreEqual(1L, ran.WrittenBeside);
+        Assert.AreEqual("/state/receipts/r1.json", ran.ReceiptPath);
+        Assert.AreEqual("failed", ran.Outcome);
+        Assert.ContainsSingle(ran.FailedSample!);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await client.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), _timeout.Token));
+
         // What the service received is what was sent — optional fields intact.
         Assert.IsInstanceOfType<UpsertBackupSetCommand>(service.Received[0], out var upsert);
         Assert.AreEqual(7, upsert.Set.Retention?.KeepDaily);
         Assert.AreEqual(4, upsert.Set.DestinationRetention?["vault"].KeepWeekly);
         Assert.AreEqual("Photos", upsert.Set.Roots?[1].Label);
-        Assert.IsInstanceOfType<PreviewSetChangesCommand>(service.Received[^1], out var previewSent);
+        Assert.IsInstanceOfType<PreviewSetChangesCommand>(
+            service.Received.Last(command => command is PreviewSetChangesCommand), out var previewSent);
         Assert.AreEqual("B", Assert.ContainsSingle(
             previewSent.Roots!.Where(root => root.Path == "/b")).Label);
         Assert.IsInstanceOfType<CreatePairingInviteCommand>(service.Received[3], out var create);
         Assert.AreEqual(60, create.TimeToLiveMinutes);
+
+        Assert.IsInstanceOfType<RunRestoreCommand>(
+            Assert.ContainsSingle(service.Received.OfType<RunRestoreCommand>()), out var restoreSent);
+        Assert.AreEqual("original", restoreSent.Target);
+        Assert.AreEqual("rename", restoreSent.Existing);
+        Assert.IsTrue(restoreSent.InPlace);
+        Assert.AreEqual("media", restoreSent.Paths?[1]);
     }
 }
