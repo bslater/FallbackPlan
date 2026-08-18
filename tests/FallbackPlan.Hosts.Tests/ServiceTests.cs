@@ -580,7 +580,7 @@ public sealed class ServiceTests : IDisposable
                 {
                     Id = _harness.DocsSetId,
                     Name = "docs",
-                    Root = _harness.SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                     Schedule = "every 1h",
                     Retention = new RetentionConfiguration { KeepDaily = 7, MinGenerations = 2 },
                     Destinations = [new SetDestinationReference { Ref = "vault", Retention = overridden }],

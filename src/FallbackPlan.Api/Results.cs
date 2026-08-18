@@ -98,10 +98,23 @@ public sealed record RetentionPolicyDescriptor(
         && MinGenerations is null && DeferralDays is null;
 }
 
+/// <summary>One capture root of a backup set (ADR-0040).</summary>
+/// <param name="Path">The folder to capture.</param>
+/// <param name="Label">
+/// The root's name inside multi-root snapshots and the first component of
+/// its rule subjects; the service materialises one at save time when the
+/// caller does not choose.
+/// </param>
+public sealed record BackupRootDescriptor(string Path, string? Label = null);
+
 /// <summary>One configured backup set, as a client sees it.</summary>
 /// <param name="Id">The set's 32-hex identity.</param>
 /// <param name="Name">The set's name.</param>
-/// <param name="Root">The directory it captures.</param>
+/// <param name="Root">
+/// The first captured directory — the pre-1.10 single root, kept for older
+/// clients. On an upsert it is read only when <paramref name="Roots"/> is
+/// absent.
+/// </param>
 /// <param name="Schedule">Its schedule expression, or null for manual-only.</param>
 /// <param name="IncludeRules">Include rules, in rules-v1 dialect.</param>
 /// <param name="ExcludeRules">Exclude rules, in rules-v1 dialect.</param>
@@ -118,6 +131,11 @@ public sealed record RetentionPolicyDescriptor(
 /// an upsert, null preserves existing overrides; an empty-policy entry clears
 /// that destination's override.
 /// </param>
+/// <param name="Roots">
+/// The capture roots (ADR-0040). Listings always carry them; on an upsert
+/// they win over <paramref name="Root"/> when present, and at least one of
+/// the two forms must be spoken.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -127,7 +145,8 @@ public sealed record BackupSetDescriptor(
     IReadOnlyList<string> ExcludeRules,
     IReadOnlyList<string> Destinations,
     RetentionPolicyDescriptor? Retention = null,
-    IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null);
+    IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
+    IReadOnlyList<BackupRootDescriptor>? Roots = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it

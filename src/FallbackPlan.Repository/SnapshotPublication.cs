@@ -30,8 +30,14 @@ public sealed record SnapshotJob
     /// <summary>The filesystem to capture from.</summary>
     public required IFileSystemSource Source { get; init; }
 
-    /// <summary>The capture root.</summary>
-    public required string RootPath { get; init; }
+    /// <summary>
+    /// The capture roots (ADR-0040). Exactly one root publishes the
+    /// pre-multi-root shape — the tree's root is the folder itself, the
+    /// label ignored. Several roots publish a synthetic root whose
+    /// top-level entries are the roots, each named by its label; labels are
+    /// then required, plain NFC components, and unique by raw bytes.
+    /// </summary>
+    public required IReadOnlyList<ScanRoot> Roots { get; init; }
 
     /// <summary>Scanner switches; <see cref="ScanOptions.Rules"/> is ignored — rules come from the strings below.</summary>
     public ScanOptions ScanOptions { get; init; } = new();
@@ -147,8 +153,13 @@ public sealed partial class PublicationOrchestrator
         var publicationStarted = Stopwatch.GetTimestamp();
 
         // Probe first: rule case-sensitivity is the filesystem's, and the
-        // snapshot records what was actually observed.
-        var filesystem = job.Source.Probe(job.RootPath);
+        // snapshot records what was actually observed. Several roots record
+        // the conservative intersection, because source_filesystem is one
+        // signed statement per snapshot (ADR-0040).
+        var filesystem = job.Roots.Count == 1
+            ? job.Source.Probe(job.Roots[0].Path)
+            : SourceFilesystemIntersection.Intersect(
+                [.. job.Roots.Select(root => job.Source.Probe(root.Path))]);
 
         if (!PathRuleSet.TryCreate(
                 job.IncludeRules, job.ExcludeRules, caseSensitive: filesystem.CaseSensitive,
@@ -254,8 +265,8 @@ public sealed partial class PublicationOrchestrator
             var reporter = new PublicationProgress(_progress, job.SnapshotId);
             reporter.Enter(JobState.Scanning);
 
-            await foreach (var scanEvent in job.Source
-                .ScanAsync(job.RootPath, options, cancellationToken).ConfigureAwait(false))
+            await foreach (var scanEvent in MultiRootScan
+                .ScanAsync(job.Source, job.Roots, options, cancellationToken).ConfigureAwait(false))
             {
                 await walker.ConsumeAsync(scanEvent, cancellationToken).ConfigureAwait(false);
                 reporter.Observe(JobState.Packing, walker.Files, walker.Failures.Count);

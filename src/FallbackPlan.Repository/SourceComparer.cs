@@ -47,9 +47,9 @@ public sealed record SourceComparison(
 /// </summary>
 public static class SourceComparer
 {
-    /// <summary>Compares the source tree under <paramref name="rootPath"/> with a baseline snapshot.</summary>
+    /// <summary>Compares the source trees under <paramref name="roots"/> with a baseline snapshot.</summary>
     /// <param name="source">The filesystem to walk.</param>
-    /// <param name="rootPath">The capture root.</param>
+    /// <param name="roots">The capture roots; several walk exactly as a multi-root publication would (ADR-0040).</param>
     /// <param name="includeRules">rules-v1 include rules (specification 06 §7.1).</param>
     /// <param name="excludeRules">rules-v1 exclude rules.</param>
     /// <param name="catalogue">The set's catalogue, opened read-side; the caller owns it. Null compares against nothing.</param>
@@ -60,7 +60,7 @@ public static class SourceComparer
     /// <exception cref="ArgumentException">The rules are invalid — the same refusal a writer gives them.</exception>
     public static async ValueTask<SourceComparison> CompareAsync(
         IFileSystemSource source,
-        string rootPath,
+        IReadOnlyList<ScanRoot> roots,
         IReadOnlyList<string> includeRules,
         IReadOnlyList<string> excludeRules,
         CatalogueDb? catalogue,
@@ -69,14 +69,18 @@ public static class SourceComparer
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(source);
-        ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
+        ThrowHelper.ThrowIfNull(roots);
+        ThrowHelper.ThrowIfZeroOrNegative(roots.Count);
         ThrowHelper.ThrowIfNull(includeRules);
         ThrowHelper.ThrowIfNull(excludeRules);
 
         // Probe first: rule case-sensitivity is the filesystem's, exactly as
         // publication compiles them (specification 06 §7.1: writers MUST
-        // refuse invalid rules, and a preview must refuse what a writer would).
-        var filesystem = source.Probe(rootPath);
+        // refuse invalid rules, and a preview must refuse what a writer
+        // would). Several roots intersect conservatively, as publication does.
+        var filesystem = roots.Count == 1
+            ? source.Probe(roots[0].Path)
+            : SourceFilesystemIntersection.Intersect([.. roots.Select(root => source.Probe(root.Path))]);
         if (!PathRuleSet.TryCreate(
                 includeRules, excludeRules, caseSensitive: filesystem.CaseSensitive,
                 out var rules, out var ruleDefects))
@@ -115,8 +119,8 @@ public static class SourceComparer
         var metadataOnly = new BucketBuilder(limit);
         var moved = new BucketBuilder(limit);
 
-        await foreach (var scanEvent in source.ScanAsync(
-            rootPath, new ScanOptions { Rules = rules }, cancellationToken).ConfigureAwait(false))
+        await foreach (var scanEvent in MultiRootScan.ScanAsync(
+            source, roots, new ScanOptions { Rules = rules }, cancellationToken).ConfigureAwait(false))
         {
             switch (scanEvent)
             {

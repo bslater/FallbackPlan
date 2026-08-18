@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheOperatorLoopSurface_IsRecordedAtOneNine()
+    public void ContractVersion_TheMultiRootSurface_IsRecordedAtOneTen()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.9", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.10", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -86,7 +86,8 @@ public sealed class ConfigurationContractTests : IDisposable
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('a', 32), "docs", "/data", "every 4h", ["photos/**"], ["*.iso"], ["vault"],
                 new RetentionPolicyDescriptor(KeepDaily: 7, MinGenerations: 2),
-                new Dictionary<string, RetentionPolicyDescriptor> { ["vault"] = new(KeepWeekly: 4) })),
+                new Dictionary<string, RetentionPolicyDescriptor> { ["vault"] = new(KeepWeekly: 4) },
+                Roots: [new BackupRootDescriptor("/data", "data"), new BackupRootDescriptor("/pics", "Photos")])),
             _timeout.Token));
 
         Assert.IsInstanceOfType<ConfigurationChangeResult>(
@@ -134,10 +135,20 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.AreEqual("gone.txt", Assert.ContainsSingle(directory.Deleted!));
         Assert.AreEqual("ff00", directory.PreviousSnapshotId);
 
+        Assert.IsInstanceOfType<SetChangePreviewResult>(
+            await client.ExecuteAsync(
+                new PreviewSetChangesCommand(
+                    null, Roots: [new BackupRootDescriptor("/a", "A"), new BackupRootDescriptor("/b", "B")]),
+                _timeout.Token));
+
         // What the service received is what was sent — optional fields intact.
         Assert.IsInstanceOfType<UpsertBackupSetCommand>(service.Received[0], out var upsert);
         Assert.AreEqual(7, upsert.Set.Retention?.KeepDaily);
         Assert.AreEqual(4, upsert.Set.DestinationRetention?["vault"].KeepWeekly);
+        Assert.AreEqual("Photos", upsert.Set.Roots?[1].Label);
+        Assert.IsInstanceOfType<PreviewSetChangesCommand>(service.Received[^1], out var previewSent);
+        Assert.AreEqual("B", Assert.ContainsSingle(
+            previewSent.Roots!.Where(root => root.Path == "/b")).Label);
         Assert.IsInstanceOfType<CreatePairingInviteCommand>(service.Received[3], out var create);
         Assert.AreEqual(60, create.TimeToLiveMinutes);
     }

@@ -305,7 +305,7 @@ public sealed class DestinationVerificationTests : IDisposable
             {
                 Id = _source.DocsSetId,
                 Name = "docs",
-                Root = _source.SourceRoot,
+                Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
                 Schedule = "every 4h",
                 Destinations = [new SetDestinationReference { Ref = "friend" }],
             },

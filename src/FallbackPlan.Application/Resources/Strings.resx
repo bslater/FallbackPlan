@@ -73,6 +73,18 @@
   <data name="ClientConfiguration_BackupSetRootMustNot" xml:space="preserve">
     <value>Backup set '{0}': root must not be empty.</value>
   </data>
+  <data name="ClientConfiguration_BackupSetRootAndRoots" xml:space="preserve">
+    <value>Backup set '{0}' speaks both 'root' and 'roots'; a set carries exactly one of the two forms.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetRootPathsMustUnique" xml:space="preserve">
+    <value>Backup set '{0}' names the root '{1}' more than once.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetLabelInvalid" xml:space="preserve">
+    <value>Backup set '{0}': root label '{1}' is invalid — {2}.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetLabelsMustUnique" xml:space="preserve">
+    <value>Backup set '{0}': root label '{1}' is used more than once — labels name folders inside the snapshot, so they must stay distinct even case-insensitively.</value>
+  </data>
   <data name="ClientConfiguration_BackupSetUnknownDestination" xml:space="preserve">
     <value>Backup set '{0}' references destination '{1}', which is not declared.</value>
   </data>

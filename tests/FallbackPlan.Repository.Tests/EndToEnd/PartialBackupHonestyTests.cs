@@ -84,7 +84,7 @@ public sealed class PartialBackupHonestyTests : IDisposable
             {
                 Id = new string('a', 32),
                 Name = "docs",
-                Root = SourceRoot,
+                Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                 Schedule = "every 4h",
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
             },

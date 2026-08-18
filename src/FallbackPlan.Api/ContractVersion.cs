@@ -37,9 +37,13 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// list_notices / acknowledge_notice over the notices ledger and unpair
     /// for ending a pairing from a console — and enriched list_directory
     /// with modification times, change markers against the set's previous
-    /// snapshot, and the names deleted since it (ADR-0039).
+    /// snapshot, and the names deleted since it (ADR-0039). 1.10 added
+    /// multi-root sets (ADR-0040): roots on the set descriptor and on
+    /// preview_set_changes — upsert accepts roots or root, roots winning —
+    /// and the preview answers a draft with no saved set against an empty
+    /// baseline.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 9);
+    public static ContractVersion Current { get; } = new(1, 10);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

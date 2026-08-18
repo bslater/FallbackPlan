@@ -9,6 +9,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 using FallbackPlan.TestSupport;
+using FallbackPlan.Filesystem;
 
 /// <summary>
 /// E2/E3/E4 (specification 07 §10, 05 §8, 06 §4.2; FR-MAN-009/010/011/012/014,
@@ -346,7 +347,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             new SnapshotJob
             {
                 Source = treeSource,
-                RootPath = "/",
+                Roots = [new ScanRoot("/")],
                 DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
                 BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
                 SnapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray(),

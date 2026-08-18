@@ -42,7 +42,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     private static SnapshotJob Job(FakeFileSystemSource source) => new()
     {
         Source = source,
-        RootPath = "/",
+        Roots = [new ScanRoot("/")],
         DeviceId = DeviceId,
         BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = Enumerable.Repeat((byte)0x11, 16).ToArray(),

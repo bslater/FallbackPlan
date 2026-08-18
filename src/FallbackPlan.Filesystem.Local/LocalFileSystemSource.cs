@@ -174,7 +174,9 @@ public sealed class LocalFileSystemSource : IFileSystemSource
                 continue;
             }
 
-            var rulesSubject = relativePath.Normalize(NormalizationForm.FormC);
+            var rulesSubject = options.SubjectPrefix is null
+                ? relativePath.Normalize(NormalizationForm.FormC)
+                : options.SubjectPrefix + "/" + relativePath.Normalize(NormalizationForm.FormC);
 
             if (options.Rules?.IsExcluded(rulesSubject) == true)
             {

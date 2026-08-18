@@ -66,7 +66,7 @@ public sealed class AgentPassTests : IDisposable
             {
                 Id = new string('a', 32),
                 Name = "docs",
-                Root = SourceRoot,
+                Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                 Schedule = schedule,
                 Destinations = [VaultRef],
             },
@@ -149,12 +149,14 @@ public sealed class AgentPassTests : IDisposable
             [
                 new BackupSetConfiguration
                 {
-                    Id = new string('a', 32), Name = "docs", Root = SourceRoot,
+                    Id = new string('a', 32), Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h", Destinations = [VaultRef],
                 },
                 new BackupSetConfiguration
                 {
-                    Id = new string('f', 32), Name = "pics", Root = secondSource,
+                    Id = new string('f', 32), Name = "pics",
+                    Roots = [new BackupRootConfiguration { Path = secondSource }],
                     Schedule = "every 4h", Destinations = [VaultRef],
                 },
             ],
@@ -282,7 +284,7 @@ public sealed class AgentPassTests : IDisposable
             [
                 new BackupSetConfiguration
                 {
-                    Id = new string('a', 32), Name = "docs", Root = SourceRoot,
+                    Id = new string('a', 32), Name = "docs", Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h",
                     Destinations = [VaultRef, new SetDestinationReference { Ref = "vault-2" }],
                 },
@@ -321,13 +323,14 @@ public sealed class AgentPassTests : IDisposable
                 new BackupSetConfiguration
                 {
                     Id = new string('b', 32), Name = "gone",
-                    Root = Path.Combine(_root, "unmounted"), Schedule = "every 1h",
+                    Roots = [new BackupRootConfiguration { Path = Path.Combine(_root, "unmounted") }],
+                    Schedule = "every 1h",
                     Destinations = [VaultRef],
                 },
                 new BackupSetConfiguration
                 {
                     Id = new string('c', 32), Name = "typo",
-                    Root = SourceRoot, Schedule = "hourly",
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }], Schedule = "hourly",
                     Destinations = [VaultRef],
                 },
             ],

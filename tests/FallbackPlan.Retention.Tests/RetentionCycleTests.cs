@@ -55,7 +55,7 @@ public sealed class RetentionCycleTests : IDisposable
                 {
                     Id = SetId,
                     Name = "docs",
-                    Root = SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h",
                     Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
                     Destinations = [new SetDestinationReference { Ref = "vault" }],

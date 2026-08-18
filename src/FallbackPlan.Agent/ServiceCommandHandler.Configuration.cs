@@ -336,7 +336,26 @@ public sealed partial class ServiceCommandHandler
             ? configuration.BackupSets.Count > 0 ? configuration.BackupSets[0] : null
             : configuration.FindSet(command.SetName);
 
-        if (set is null)
+        // Draft roots make an unresolvable set answerable (ADR-0040): the
+        // walk classifies against an empty baseline, which is what an editor
+        // building a brand-new set needs. Without draft roots, an unknown
+        // set stays a stated miss.
+        IReadOnlyList<FallbackPlan.Filesystem.ScanRoot> roots;
+        if (command.Roots is { Count: > 0 } draftRoots)
+        {
+            var labelled = ClientConfiguration.DeriveLabels(
+                [.. draftRoots.Select(root => new BackupRootConfiguration { Path = root.Path, Label = root.Label })]);
+            roots = [.. labelled.Select(root => new FallbackPlan.Filesystem.ScanRoot(root.Path, root.Label))];
+        }
+        else if (command.Root is { } draftRoot)
+        {
+            roots = [new FallbackPlan.Filesystem.ScanRoot(draftRoot)];
+        }
+        else if (set is not null)
+        {
+            roots = SetChangeScan.ScanRootsOf(set);
+        }
+        else
         {
             return new ServiceError(
                 ServiceErrorReason.NotFound,
@@ -345,9 +364,8 @@ public sealed partial class ServiceCommandHandler
                     : $"No backup set named '{command.SetName}' is configured.");
         }
 
-        var root = command.Root ?? set.Root;
-        var includes = command.IncludeRules ?? set.IncludeRules;
-        var excludes = command.ExcludeRules ?? set.ExcludeRules;
+        var includes = command.IncludeRules ?? set?.IncludeRules ?? [];
+        var excludes = command.ExcludeRules ?? set?.ExcludeRules ?? [];
 
         // Refused here as a stated error rather than downstream as a thrown
         // guard — the draft may be mid-edit, and a defect is its answer.
@@ -356,18 +374,28 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join("; ", ruleDefects));
         }
 
-        if (!Directory.Exists(root))
+        var missing = roots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path).ToList();
+        if (missing.Count > 0)
         {
-            return new ServiceError(ServiceErrorReason.NotFound, $"root '{root}' does not exist");
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                missing.Count == 1
+                    ? $"root '{missing[0]}' does not exist"
+                    : $"roots do not exist: '{string.Join("', '", missing)}'");
         }
 
         var limit = Math.Clamp(
             command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
-        var (comparison, baseline) = await SetChangeScan.CompareAsync(
-            runtime, set, root, includes, excludes, limit, cancellationToken).ConfigureAwait(false);
+        var (comparison, baseline) = set is null
+            ? (await Repository.SourceComparer.CompareAsync(
+                new FallbackPlan.Filesystem.Local.LocalFileSystemSource(), roots, includes, excludes,
+                catalogue: null, baselineSnapshotId: null, limit, cancellationToken).ConfigureAwait(false),
+                (Repository.Catalogue.CatalogueSnapshot?)null)
+            : await SetChangeScan.CompareAsync(
+                runtime, set, roots, includes, excludes, limit, cancellationToken).ConfigureAwait(false);
 
         return new SetChangePreviewResult(
-            set.Name,
+            set?.Name ?? command.SetName ?? "(draft)",
             baseline is null ? null : Convert.ToHexStringLower(baseline.SnapshotId.Span),
             baseline?.CapturedAt,
             comparison.Unchanged,

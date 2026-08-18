@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
 
@@ -50,11 +51,16 @@ public static class BackupRunner
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
         var progress = new BackupProgress(runtime.Progress, jobId);
 
-        if (!Directory.Exists(set.Root))
+        // Every root must be there, or the run refuses: capturing a snapshot
+        // silently missing a whole labelled subtree would make everything
+        // under it read "deleted" (ADR-0040). A vanished root may be an
+        // unmounted drive — recoverable; the next pass retries (10 §3).
+        var missing = set.Roots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path).ToList();
+        if (missing.Count > 0)
         {
-            // A vanished root may be an unmounted drive — recoverable; the next
-            // pass retries (10 §3).
-            var detail = $"root '{set.Root}' does not exist";
+            var detail = missing.Count == 1
+                ? $"root '{missing[0]}' does not exist"
+                : $"roots do not exist: '{string.Join("', '", missing)}'";
             jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail);
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", detail);
@@ -104,7 +110,7 @@ public static class BackupRunner
                 new SnapshotJob
                 {
                     Source = new LocalFileSystemSource(),
-                    RootPath = set.Root,
+                    Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,
                     DeviceId = runtime.State.DeviceId,

@@ -89,6 +89,50 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetRootMustNot, arg0);
 
     /// <summary>
+    /// Backup set '{0}' speaks both 'root' and 'roots'; a set carries exactly one of the two forms.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetRootAndRoots => Get(nameof(ClientConfiguration_BackupSetRootAndRoots));
+
+    /// <summary>
+    /// Backup set '{0}' speaks both 'root' and 'roots'; a set carries exactly one of the two forms.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetRootAndRoots(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetRootAndRoots, arg0);
+
+    /// <summary>
+    /// Backup set '{0}' names the root '{1}' more than once.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetRootPathsMustUnique => Get(nameof(ClientConfiguration_BackupSetRootPathsMustUnique));
+
+    /// <summary>
+    /// Backup set '{0}' names the root '{1}' more than once.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetRootPathsMustUnique(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetRootPathsMustUnique, arg0, arg1);
+
+    /// <summary>
+    /// Backup set '{0}': root label '{1}' is invalid — {2}.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetLabelInvalid => Get(nameof(ClientConfiguration_BackupSetLabelInvalid));
+
+    /// <summary>
+    /// Backup set '{0}': root label '{1}' is invalid — {2}.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetLabelInvalid(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetLabelInvalid, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Backup set '{0}': root label '{1}' is used more than once — labels name folders inside the snapshot, so they must stay distinct even case-insensitively.
+    /// </summary>
+    private static string ClientConfiguration_BackupSetLabelsMustUnique => Get(nameof(ClientConfiguration_BackupSetLabelsMustUnique));
+
+    /// <summary>
+    /// Backup set '{0}': root label '{1}' is used more than once — labels name folders inside the snapshot, so they must stay distinct even case-insensitively.
+    /// </summary>
+    internal static string FormatClientConfiguration_BackupSetLabelsMustUnique(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetLabelsMustUnique, arg0, arg1);
+
+    /// <summary>
     /// Backup set '{0}' references destination '{1}', which is not declared.
     /// </summary>
     private static string ClientConfiguration_BackupSetUnknownDestination => Get(nameof(ClientConfiguration_BackupSetUnknownDestination));

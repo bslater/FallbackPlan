@@ -1317,7 +1317,7 @@ public static class CliApplication
                     ? configuration.BackupSets
                     : [new BackupSetConfiguration
                        {
-                           Id = Hex(session.BackupSetId), Name = "(default)", Root = string.Empty,
+                           Id = Hex(session.BackupSetId), Name = "(default)", Roots = [],
                        }];
 
                 foreach (var set in sets)
@@ -1337,7 +1337,7 @@ public static class CliApplication
                         destinations.Add(DestinationStatus.Describe(
                             reference.Ref,
                             configuration.FindDestination(reference.Ref),
-                            set.Root,
+                            [.. set.Roots.Select(root => root.Path)],
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
                             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

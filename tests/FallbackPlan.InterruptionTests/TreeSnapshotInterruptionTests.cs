@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using FallbackPlan.Filesystem.Local;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
@@ -44,7 +45,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     private SnapshotJob TreeJob(byte snapshotSeed) => new()
     {
         Source = new LocalFileSystemSource(),
-        RootPath = _sourceRoot,
+        Roots = [new ScanRoot(_sourceRoot)],
         DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
         BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = Enumerable.Repeat(snapshotSeed, 16).ToArray(),

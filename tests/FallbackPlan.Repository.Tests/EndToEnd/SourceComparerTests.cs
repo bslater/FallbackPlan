@@ -42,7 +42,7 @@ public sealed class SourceComparerTests : ArchiveTestHarness
     private static SnapshotJob Job(FakeFileSystemSource source) => new()
     {
         Source = source,
-        RootPath = "/",
+        Roots = [new ScanRoot("/")],
         DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
         BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray(),
@@ -81,7 +81,8 @@ public sealed class SourceComparerTests : ArchiveTestHarness
         IReadOnlyList<string>? excludes = null,
         int sampleLimit = 20) =>
         SourceComparer.CompareAsync(
-            source, "/", includes ?? [], excludes ?? [], catalogue, baseline, sampleLimit, CancellationToken.None);
+            source, [new ScanRoot("/")], includes ?? [], excludes ?? [], catalogue, baseline, sampleLimit,
+            CancellationToken.None);
 
     [TestMethod]
     public async Task Compare_EveryKindOfChangeAtOnce_LandsEachInItsOwnBucket()

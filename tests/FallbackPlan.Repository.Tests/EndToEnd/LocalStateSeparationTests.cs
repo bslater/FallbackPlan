@@ -62,7 +62,7 @@ public sealed class LocalStateSeparationTests : IDisposable
             }],
             BackupSets = [new BackupSetConfiguration
             {
-                Id = new string('a', 32), Name = "docs", Root = "/data/docs",
+                Id = new string('a', 32), Name = "docs", Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
             }],
         }.Save(ConfigPath);
@@ -91,7 +91,7 @@ public sealed class LocalStateSeparationTests : IDisposable
             }],
             BackupSets = [new BackupSetConfiguration
             {
-                Id = new string('b', 32), Name = "home", Root = "/home/user",
+                Id = new string('b', 32), Name = "home", Roots = [new BackupRootConfiguration { Path = "/home/user" }],
                 ExcludeRules = ["**/*.tmp"],
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
             }],

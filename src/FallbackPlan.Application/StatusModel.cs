@@ -55,7 +55,7 @@ public static class DestinationStatus
     /// </summary>
     /// <param name="reference">The set's reference to the destination, by name.</param>
     /// <param name="declared">The destination's declaration, or null when the reference dangles.</param>
-    /// <param name="setRoot">The set's capture root, for the failure-domain comparison.</param>
+    /// <param name="setRoots">The set's capture roots, for the failure-domain comparison (ADR-0040).</param>
     /// <param name="record">The pair's sync ledger row, or null when never attempted.</param>
     /// <param name="lastCompletedAt">When the set last completed a backup, Unix milliseconds; 0 when never.</param>
     /// <param name="nowUnixMilliseconds">
@@ -72,13 +72,14 @@ public static class DestinationStatus
     public static DestinationStatusInput Describe(
         string reference,
         DestinationConfiguration? declared,
-        string setRoot,
+        IReadOnlyList<string> setRoots,
         DestinationSyncRecord? record,
         ulong lastCompletedAt,
         ulong nowUnixMilliseconds,
         Func<string, ulong?> deviceIdOf)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(reference);
+        ThrowHelper.ThrowIfNull(setRoots);
         ThrowHelper.ThrowIfNull(deviceIdOf);
 
         if (declared is null)
@@ -109,7 +110,7 @@ public static class DestinationStatus
             Name = declared.Name,
             Kind = declared.Kind,
             Sync = sync,
-            Domain = DomainOf(declared, setRoot, deviceIdOf),
+            Domain = DomainOf(declared, setRoots, deviceIdOf),
             RequiresVerification = declared.RequiresVerification,
             LastSuccessAt = record?.LastSuccessAt,
             Detail = record?.LastError,
@@ -152,9 +153,10 @@ public static class DestinationStatus
     /// conservatively (FR-SNP-007, ADR-0018 Amendment 2).
     /// </summary>
     public static FailureDomain DomainOf(
-        DestinationConfiguration destination, string setRoot, Func<string, ulong?> deviceIdOf)
+        DestinationConfiguration destination, IReadOnlyList<string> setRoots, Func<string, ulong?> deviceIdOf)
     {
         ThrowHelper.ThrowIfNull(destination);
+        ThrowHelper.ThrowIfNull(setRoots);
         ThrowHelper.ThrowIfNull(deviceIdOf);
 
         if (destination.FailureDomain is { } declared)
@@ -165,14 +167,17 @@ public static class DestinationStatus
         return destination.Kind switch
         {
             // A different volume on this machine survives losing the disk and
-            // nothing more. The same volume, or a platform that will not say,
-            // survives nothing.
+            // nothing more. With several roots the claim must hold for every
+            // one (ADR-0040): a destination sharing ANY root's volume — or a
+            // platform that will not say for any of them — survives nothing.
             DestinationKind.LocalPath =>
-                setRoot.Length > 0
-                && deviceIdOf(setRoot) is { } rootDevice
+                setRoots.Count > 0
                 && destination.Path is { Length: > 0 } path
                 && deviceIdOf(path) is { } destinationDevice
-                && rootDevice != destinationDevice
+                && setRoots.All(root =>
+                    root.Length > 0
+                    && deviceIdOf(root) is { } rootDevice
+                    && rootDevice != destinationDevice)
                     ? FailureDomain.SameMachine
                     : FailureDomain.SameVolume,
             DestinationKind.Peer => FailureDomain.SameSite,

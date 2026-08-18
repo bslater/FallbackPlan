@@ -32,7 +32,7 @@ internal static class SetChangeScan
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set whose archive holds the baseline.</param>
-    /// <param name="root">The root to walk — the saved one, or a draft's.</param>
+    /// <param name="roots">The roots to walk — the saved ones, or a draft's (ADR-0040).</param>
     /// <param name="includeRules">The include rules to judge under.</param>
     /// <param name="excludeRules">The exclude rules to judge under.</param>
     /// <param name="sampleLimit">The most paths any bucket carries.</param>
@@ -41,7 +41,7 @@ internal static class SetChangeScan
     internal static async ValueTask<(SourceComparison Comparison, CatalogueSnapshot? Baseline)> CompareAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
-        string root,
+        IReadOnlyList<FallbackPlan.Filesystem.ScanRoot> roots,
         IReadOnlyList<string> includeRules,
         IReadOnlyList<string> excludeRules,
         int sampleLimit,
@@ -51,7 +51,7 @@ internal static class SetChangeScan
         if (archive is null)
         {
             var fresh = await SourceComparer.CompareAsync(
-                new LocalFileSystemSource(), root, includeRules, excludeRules,
+                new LocalFileSystemSource(), roots, includeRules, excludeRules,
                 catalogue: null, baselineSnapshotId: null, sampleLimit, cancellationToken).ConfigureAwait(false);
             return (fresh, null);
         }
@@ -64,7 +64,7 @@ internal static class SetChangeScan
             .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
         var comparison = await SourceComparer.CompareAsync(
-            new LocalFileSystemSource(), root, includeRules, excludeRules,
+            new LocalFileSystemSource(), roots, includeRules, excludeRules,
             catalogue, baseline?.SnapshotId, sampleLimit, cancellationToken).ConfigureAwait(false);
         return (comparison, baseline);
     }
@@ -91,7 +91,7 @@ internal static class SetChangeScan
                 try
                 {
                     var (comparison, _) = await CompareAsync(
-                        runtime, set, set.Root, set.IncludeRules, set.ExcludeRules,
+                        runtime, set, ScanRootsOf(set), set.IncludeRules, set.ExcludeRules,
                         sampleLimit: 0, cancellationToken).ConfigureAwait(false);
 
                     runtime.Notices.Raise(NoticeKey(set.Id), Summarise(set.Name, comparison), nowMs);
@@ -111,6 +111,10 @@ internal static class SetChangeScan
                 }
             }));
     }
+
+    /// <summary>A set's configured roots as the engine's scan roots.</summary>
+    internal static IReadOnlyList<FallbackPlan.Filesystem.ScanRoot> ScanRootsOf(BackupSetConfiguration set) =>
+        [.. set.Roots.Select(root => new FallbackPlan.Filesystem.ScanRoot(root.Path, root.Label))];
 
     /// <summary>One line of counts — what the edit means, for the notice a status line carries.</summary>
     private static string Summarise(string setName, SourceComparison comparison) =>

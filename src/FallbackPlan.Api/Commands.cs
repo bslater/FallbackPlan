@@ -117,17 +117,24 @@ public sealed record ValidateSetDraftCommand(
 /// exact and paths sampled per bucket (ADR-0038, FR-SVC-009). A dry scan on
 /// the reader lane; no content is opened and nothing is captured.
 /// </summary>
-/// <param name="SetName">The set to compare; null compares the default (first) set.</param>
-/// <param name="Root">A draft root to walk instead of the saved one; null walks the saved root.</param>
+/// <param name="SetName">
+/// The set to compare; null compares the default (first) set. A name that
+/// resolves to no set is still answered when draft roots are given — the
+/// walk classifies against an empty baseline, which is what an editor
+/// building a brand-new set needs (ADR-0040).
+/// </param>
+/// <param name="Root">A draft root to walk instead of the saved ones; null walks the saved roots.</param>
 /// <param name="IncludeRules">Draft include rules; null compares under the saved rules.</param>
 /// <param name="ExcludeRules">Draft exclude rules; null compares under the saved rules.</param>
 /// <param name="SampleLimit">The most paths any bucket carries; null takes 20, capped at 200.</param>
+/// <param name="Roots">Draft roots (ADR-0040); wins over <paramref name="Root"/> when present.</param>
 public sealed record PreviewSetChangesCommand(
     string? SetName,
     string? Root = null,
     IReadOnlyList<string>? IncludeRules = null,
     IReadOnlyList<string>? ExcludeRules = null,
-    int? SampleLimit = null) : ServiceCommand;
+    int? SampleLimit = null,
+    IReadOnlyList<BackupRootDescriptor>? Roots = null) : ServiceCommand;
 
 /// <summary>
 /// Issues a one-time pairing invite (ADR-0030 Amendment 3): the code this

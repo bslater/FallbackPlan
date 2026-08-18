@@ -825,10 +825,15 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(
             [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
-                set.Id, set.Name, set.Root, set.Schedule, set.IncludeRules, set.ExcludeRules,
+                set.Id, set.Name,
+                // Root carries the first root for pre-1.10 clients; Roots is
+                // the whole truth (ADR-0040).
+                set.Roots[0].Path,
+                set.Schedule, set.IncludeRules, set.ExcludeRules,
                 [.. set.Destinations.Select(reference => reference.Ref)],
                 ToPolicyDescriptor(set.Retention),
-                ToOverrideDescriptors(set.Destinations)))]);
+                ToOverrideDescriptors(set.Destinations),
+                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))]))]);
 
     private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
     {
@@ -844,19 +849,46 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             return new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect);
         }
 
+        // The roots (ADR-0040): a 1.10 client speaks `roots`, older ones the
+        // single `root`; the labels a multi-root set needs are materialised
+        // HERE, once, and persisted — deriving them on read would let a later
+        // sibling silently shift an existing root's coordinates.
+        IReadOnlyList<BackupRootConfiguration> requestedRoots =
+            command.Set.Roots is { Count: > 0 } draftRoots
+                ? [.. draftRoots.Select(root => new BackupRootConfiguration { Path = root.Path, Label = root.Label })]
+                : !string.IsNullOrWhiteSpace(command.Set.Root)
+                    ? [new BackupRootConfiguration { Path = command.Set.Root }]
+                    : [];
+        if (requestedRoots.Count == 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, "A backup set needs at least one root folder.");
+        }
+
+        var resolvedRoots = ClientConfiguration.DeriveLabels(requestedRoots);
+
         // What the command does not carry is preserved, never zeroed: a 1.6
         // client's upsert leaves retention exactly as it stood. A carried
         // policy with every field absent is the explicit "none" (ADR-0037).
         var existing = configuration.BackupSets
             .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
+
+        // The 1↔N transitions change the rule coordinate system (ADR-0040):
+        // growing past one root prefixes the old root's anchored rules with
+        // its new label; shrinking back strips the survivor's. Only rules the
+        // set already had are rewritten — a rule the client just sent is
+        // trusted to speak the new coordinates.
+        var (includeRules, excludeRules, reanchored) = ReanchorRules(
+            existing, resolvedRoots, command.Set.IncludeRules, command.Set.ExcludeRules);
+
         var replacement = new BackupSetConfiguration
         {
             Id = command.Set.Id,
             Name = command.Set.Name,
-            Root = command.Set.Root,
+            Roots = resolvedRoots,
             Schedule = command.Set.Schedule,
-            IncludeRules = command.Set.IncludeRules,
-            ExcludeRules = command.Set.ExcludeRules,
+            IncludeRules = includeRules,
+            ExcludeRules = excludeRules,
             Retention = ToRetention(command.Set.Retention, existing?.Retention),
             Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
             {
@@ -906,9 +938,18 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         if (existing is not null && IsMaterialChange(existing, replacement))
         {
             var lines = new List<string>();
-            if (!string.Equals(existing.Root, replacement.Root, StringComparison.Ordinal))
+            var oldRoots = existing.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
+            var newRoots = replacement.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
+            foreach (var added in replacement.Roots.Where(root => !oldRoots.Contains(root.Path)))
             {
-                lines.Add($"root changed: '{existing.Root}' -> '{replacement.Root}'");
+                lines.Add(replacement.Roots.Count > 1
+                    ? $"root added: '{added.Path}' as '{added.Label}'"
+                    : $"root changed to: '{added.Path}'");
+            }
+
+            foreach (var removed in existing.Roots.Where(root => !newRoots.Contains(root.Path)))
+            {
+                lines.Add($"root removed: '{removed.Path}'");
             }
 
             if (!existing.IncludeRules.SequenceEqual(replacement.IncludeRules, StringComparer.Ordinal))
@@ -919,6 +960,13 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             if (!existing.ExcludeRules.SequenceEqual(replacement.ExcludeRules, StringComparer.Ordinal))
             {
                 lines.Add($"exclude rules changed ({existing.ExcludeRules.Count} -> {replacement.ExcludeRules.Count})");
+            }
+
+            if (reanchored)
+            {
+                lines.Add(
+                    "Saved rules were re-anchored to the new root coordinates — anchored rules gained or "
+                    + "lost the root's label prefix so they keep meaning what they meant.");
             }
 
             if (runtime.ArchiveExists(replacement.Id))
@@ -939,11 +987,119 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         return new AcknowledgedResult();
     }
 
-    /// <summary>Whether an edit changed what the next snapshot will hold — the root or the rules.</summary>
+    /// <summary>
+    /// Whether an edit changed what the next snapshot will hold — the roots
+    /// or the rules, compared as sets so mere reordering is not material.
+    /// </summary>
     private static bool IsMaterialChange(BackupSetConfiguration existing, BackupSetConfiguration replacement) =>
-        !string.Equals(existing.Root, replacement.Root, StringComparison.Ordinal)
-        || !existing.IncludeRules.SequenceEqual(replacement.IncludeRules, StringComparer.Ordinal)
-        || !existing.ExcludeRules.SequenceEqual(replacement.ExcludeRules, StringComparer.Ordinal);
+        !existing.Roots.Select(root => (root.Path, root.Label))
+            .ToHashSet()
+            .SetEquals(replacement.Roots.Select(root => (root.Path, root.Label)))
+        || !existing.IncludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.IncludeRules)
+        || !existing.ExcludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.ExcludeRules);
+
+    /// <summary>
+    /// The 1↔N coordinate transitions (ADR-0040), applied per rule and only
+    /// to rules the set already carried: growing past one root prefixes the
+    /// old root's anchored rules (those containing <c>/</c>) with its new
+    /// label; shrinking to one strips the survivor's prefix — a stripped rule
+    /// left with no <c>/</c> becomes an exact-path regex, because a bare name
+    /// is the any-depth shorthand and would silently widen. Shorthand rules
+    /// are depth-independent and never touched.
+    /// </summary>
+    private static (IReadOnlyList<string> Includes, IReadOnlyList<string> Excludes, bool Reanchored) ReanchorRules(
+        BackupSetConfiguration? existing,
+        IReadOnlyList<BackupRootConfiguration> resolvedRoots,
+        IReadOnlyList<string> includeRules,
+        IReadOnlyList<string> excludeRules)
+    {
+        if (existing is null)
+        {
+            return (includeRules, excludeRules, false);
+        }
+
+        Func<string, string>? transform = null;
+        if (existing.Roots.Count == 1 && resolvedRoots.Count > 1
+            && resolvedRoots.FirstOrDefault(root =>
+                string.Equals(root.Path, existing.Roots[0].Path, StringComparison.Ordinal)) is { Label: { } label })
+        {
+            transform = rule =>
+                !rule.StartsWith("re:", StringComparison.Ordinal) && rule.Contains('/', StringComparison.Ordinal)
+                    ? label + "/" + rule
+                    : rule;
+        }
+        else if (existing.Roots.Count > 1 && resolvedRoots.Count == 1
+            && existing.Roots.FirstOrDefault(root =>
+                string.Equals(root.Path, resolvedRoots[0].Path, StringComparison.Ordinal)) is { Label: { } survivor })
+        {
+            var prefix = survivor + "/";
+            transform = rule =>
+            {
+                if (rule.StartsWith("re:", StringComparison.Ordinal)
+                    || !rule.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return rule;
+                }
+
+                var stripped = rule[prefix.Length..];
+                if (stripped.Contains('/', StringComparison.Ordinal))
+                {
+                    return stripped;
+                }
+
+                // A single component would read as **/<name>; an exact-path
+                // regex keeps the top-level anchoring — unless it carries
+                // glob syntax, which has no mechanical regex twin, where the
+                // glob stays and honestly widens. Escaped by hand: the
+                // dialect's subset refuses backslash-alphanumeric escapes,
+                // which Regex.Escape emits for whitespace.
+                return stripped.AsSpan().IndexOfAny('*', '?') >= 0
+                    ? stripped
+                    : "re:" + EscapeRegexLiteral(stripped);
+            };
+        }
+
+        if (transform is null)
+        {
+            return (includeRules, excludeRules, false);
+        }
+
+        var oldIncludes = existing.IncludeRules.ToHashSet(StringComparer.Ordinal);
+        var oldExcludes = existing.ExcludeRules.ToHashSet(StringComparer.Ordinal);
+        var reanchored = false;
+
+        List<string> Apply(IReadOnlyList<string> rules, HashSet<string> saved)
+        {
+            var result = new List<string>(rules.Count);
+            foreach (var rule in rules)
+            {
+                var next = saved.Contains(rule) ? transform(rule) : rule;
+                reanchored |= !string.Equals(next, rule, StringComparison.Ordinal);
+                result.Add(next);
+            }
+
+            return result;
+        }
+
+        return (Apply(includeRules, oldIncludes), Apply(excludeRules, oldExcludes), reanchored);
+    }
+
+    /// <summary>Escapes a literal for a rules-v1 regex rule — metacharacters only, staying inside the pinned subset.</summary>
+    private static string EscapeRegexLiteral(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length + 4);
+        foreach (var character in text)
+        {
+            if (character is '\\' or '.' or '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '|' or '^' or '$')
+            {
+                builder.Append('\\');
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
+    }
 
     private ServiceResult RunBackup(RunBackupCommand command)
     {
@@ -1490,7 +1646,8 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         {
             var destination = configuration.FindDestination(reference.Ref);
             var input = DestinationStatus.Describe(
-                reference.Ref, destination, set.Root, runtime.DestinationSync.Find(set.Id, reference.Ref),
+                reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
+                runtime.DestinationSync.Find(set.Id, reference.Ref),
                 lastCompleted, nowMs, DeviceIdOf);
 
             inputs.Add(input);

@@ -94,7 +94,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     public RevalidationProbe? Revalidate(ScanEntry entry)
     {
-        if (!_nodes.TryGetValue(entry.RelativePath, out var node))
+        if (!_nodes.TryGetValue(entry.FullPath, out var node))
         {
             return null;
         }
@@ -129,7 +129,12 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         yield return new ScanEvent.EnterDirectory(root);
 
-        foreach (var scanEvent in WalkDirectory(string.Empty, options))
+        // A root other than "/" scopes the walk to that subtree, with
+        // relative paths stripped of it — how a multi-root job sees several
+        // subtrees of one fake through separate per-root scans.
+        var start = rootPath is "/" or "" ? string.Empty : rootPath.Trim('/');
+        var strip = start.Length == 0 ? 0 : start.Length + 1;
+        foreach (var scanEvent in WalkDirectory(start, strip, options))
         {
             yield return scanEvent;
         }
@@ -142,7 +147,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         yield return new ScanEvent.LeaveDirectory(root);
     }
 
-    private IEnumerable<ScanEvent> WalkDirectory(string directory, ScanOptions options)
+    private IEnumerable<ScanEvent> WalkDirectory(string directory, int strip, ScanOptions options)
     {
         var prefix = directory.Length == 0 ? string.Empty : directory + "/";
 
@@ -161,8 +166,13 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         foreach (var name in children)
         {
             var childPath = prefix + name;
+            var relativePath = childPath[strip..];
 
-            if (options.Rules is { } rules && rules.IsExcluded(childPath))
+            // The same subject spelling the real scanner uses (ADR-0040): the
+            // label prefix joins for the rules' benefit only.
+            var subject = options.SubjectPrefix is null ? relativePath : options.SubjectPrefix + "/" + relativePath;
+
+            if (options.Rules is { } rules && rules.IsExcluded(subject))
             {
                 continue;
             }
@@ -171,7 +181,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
             {
                 yield return new ScanEvent.Leaf(new ScanEntry
                 {
-                    RelativePath = childPath,
+                    RelativePath = relativePath,
                     NameBytes = Encoding.UTF8.GetBytes(name),
                     NameNormalisation = NameNormalisation.Nfc,
                     Kind = node.Kind,
@@ -190,7 +200,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
             {
                 var entry = new ScanEntry
                 {
-                    RelativePath = childPath,
+                    RelativePath = relativePath,
                     NameBytes = Encoding.UTF8.GetBytes(name),
                     NameNormalisation = NameNormalisation.Nfc,
                     Kind = ScanEntryKind.Directory,
@@ -201,9 +211,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
                 yield return new ScanEvent.EnterDirectory(entry);
 
-                if (options.Rules is null || options.Rules.MayDescend(childPath))
+                if (options.Rules is null || options.Rules.MayDescend(subject))
                 {
-                    foreach (var scanEvent in WalkDirectory(childPath, options))
+                    foreach (var scanEvent in WalkDirectory(childPath, strip, options))
                     {
                         yield return scanEvent;
                     }
@@ -216,18 +226,21 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     public Stream OpenRead(ScanEntry entry)
     {
-        var node = _nodes[entry.RelativePath];
+        // Keyed by FullPath — the node's own key — because a multi-root
+        // adapter rewrites RelativePath with the label, exactly as the real
+        // source opens by path or handle rather than by the rules subject.
+        var node = _nodes[entry.FullPath];
         if (node.OpenFailure is not null)
         {
             throw node.OpenFailure;
         }
 
-        OpenedPaths.Add(entry.RelativePath);
+        OpenedPaths.Add(entry.FullPath);
         return new MemoryStream(node.Content, writable: false);
     }
 
     public Stream OpenAlternateStream(ScanEntry entry, string streamName) =>
-        new MemoryStream(_nodes[entry.RelativePath].AlternateStreams[streamName], writable: false);
+        new MemoryStream(_nodes[entry.FullPath].AlternateStreams[streamName], writable: false);
 
     private sealed class ByteArrayComparer : IComparer<byte[]>
     {

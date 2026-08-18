@@ -7,6 +7,7 @@ using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Format.Manifests;
@@ -598,7 +599,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     {
         ThrowHelper.ThrowIfNull(request);
 
-        string rootPath;
+        IReadOnlyList<ScanRoot> roots;
         IReadOnlyList<string> include, exclude;
         byte[] backupSetId;
 
@@ -607,22 +608,23 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             var configuration = ClientConfiguration.Load(session.ConfigurationPath);
             var set = configuration.FindSet(setName)
                 ?? throw new CliFailureException(Strings.FormatDirectGateway_NoBackupSetNamedExists(setName, session.ConfigurationPath));
-            rootPath = set.Root;
+            roots = [.. set.Roots.Select(root => new ScanRoot(root.Path, root.Label))];
             include = set.IncludeRules;
             exclude = set.ExcludeRules;
             backupSetId = Convert.FromHexString(set.Id);
         }
         else
         {
-            rootPath = request.Root ?? throw new CliFailureException(Strings.DirectGateway_PassRootDirectorySetName);
+            var rootPath = request.Root ?? throw new CliFailureException(Strings.DirectGateway_PassRootDirectorySetName);
+            roots = [new ScanRoot(rootPath)];
             include = request.IncludeRules;
             exclude = request.ExcludeRules;
             backupSetId = session.BackupSetId;
         }
 
-        if (!Directory.Exists(rootPath))
+        foreach (var root in roots.Where(root => !Directory.Exists(root.Path)))
         {
-            throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(rootPath));
+            throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(root.Path));
         }
 
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
@@ -654,7 +656,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             new SnapshotJob
             {
                 Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
-                RootPath = rootPath,
+                Roots = roots,
                 IncludeRules = include,
                 ExcludeRules = exclude,
                 DeviceId = session.DeviceId,

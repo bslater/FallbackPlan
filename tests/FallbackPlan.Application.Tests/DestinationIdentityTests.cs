@@ -55,7 +55,7 @@ public sealed class DestinationIdentityTests
             {
                 Id = new string('a', 32),
                 Name = "docs",
-                Root = "/data/docs",
+                Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
                 Destinations = [.. destinations.Select(d => new SetDestinationReference { Ref = d.Name })],
             },
         ],
@@ -121,7 +121,7 @@ public sealed class DestinationIdentityTests
                 {
                     Id = new string('a', 32),
                     Name = "docs",
-                    Root = "/data/docs",
+                    Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
                     Destinations = [new SetDestinationReference { Ref = "VAULT" }],
                 },
             ],
@@ -181,7 +181,7 @@ public sealed class DestinationIdentityTests
                 {
                     Id = new string('a', 32),
                     Name = "docs",
-                    Root = "/data/docs",
+                    Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
                     Destinations = [new SetDestinationReference { Ref = "alice" }],
                 },
             ],

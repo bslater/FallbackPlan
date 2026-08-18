@@ -6,7 +6,27 @@ using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
 
-/// <summary>One configured backup set: a root, its rules, and a name.</summary>
+/// <summary>
+/// One capture root of a backup set (ADR-0040): the folder, and the label
+/// that names it inside multi-root snapshots and anchors its rule subjects.
+/// </summary>
+public sealed record BackupRootConfiguration
+{
+    /// <summary>The folder to capture.</summary>
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    /// <summary>
+    /// The root's name inside the snapshot; required (and validated as a
+    /// plain NFC path component, unique within the set) when the set has
+    /// more than one root. Persisted rather than derived, so adding a
+    /// sibling root can never silently re-coordinate this one's paths.
+    /// </summary>
+    [JsonPropertyName("label")]
+    public string? Label { get; init; }
+}
+
+/// <summary>One configured backup set: its roots, rules, and a name.</summary>
 public sealed record BackupSetConfiguration
 {
     /// <summary>The set's 16-byte identity, lowercase hex.</summary>
@@ -17,9 +37,21 @@ public sealed record BackupSetConfiguration
     [JsonPropertyName("name")]
     public required string Name { get; init; }
 
-    /// <summary>The capture root path.</summary>
+    /// <summary>
+    /// The schema-2 capture root. Read for migration only —
+    /// <see cref="ClientConfiguration.Load"/> rewrites it into
+    /// <see cref="Roots"/> and nulls it; it is never written.
+    /// </summary>
     [JsonPropertyName("root")]
-    public required string Root { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Root { get; init; }
+
+    /// <summary>
+    /// The capture roots (ADR-0040): one keeps the pre-multi-root snapshot
+    /// shape exactly; several capture into one snapshot under their labels.
+    /// </summary>
+    [JsonPropertyName("roots")]
+    public IReadOnlyList<BackupRootConfiguration> Roots { get; init; } = [];
 
     /// <summary>rules-v1 include rules (specification 06 §7.1).</summary>
     [JsonPropertyName("include_rules")]
@@ -55,7 +87,7 @@ public sealed record BackupSetConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -100,8 +132,39 @@ public sealed record ClientConfiguration
             throw new ClientStateException(Strings.FormatClientConfiguration_NotValidConfigurationFile(path, exception.Message), exception);
         }
 
+        configuration = Migrate(configuration, path);
         configuration.Validate(path);
         return configuration;
+    }
+
+    /// <summary>
+    /// Normalises a schema-2 file in memory (ADR-0040): each set's single
+    /// <c>root</c> becomes a one-entry <c>roots</c> list, and the file reads
+    /// as schema 3 from here on — the next <see cref="Save"/> writes it so.
+    /// A set speaking both forms, or neither, is a misread rather than a
+    /// guess.
+    /// </summary>
+    private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
+    {
+        if (configuration.SchemaVersion is not (2 or CurrentSchemaVersion))
+        {
+            return configuration; // Validate names the version defect
+        }
+
+        var sets = new List<BackupSetConfiguration>(configuration.BackupSets.Count);
+        foreach (var set in configuration.BackupSets)
+        {
+            if (set.Root is not null && set.Roots.Count > 0)
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootAndRoots(set.Name));
+            }
+
+            sets.Add(set.Root is { } root
+                ? set with { Root = null, Roots = [new BackupRootConfiguration { Path = root }] }
+                : set);
+        }
+
+        return configuration with { SchemaVersion = CurrentSchemaVersion, BackupSets = sets };
     }
 
     /// <summary>
@@ -158,10 +221,7 @@ public sealed record ClientConfiguration
                 throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetNamesMustNon(set.Name));
             }
 
-            if (string.IsNullOrWhiteSpace(set.Root))
-            {
-                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootMustNot(set.Name));
-            }
+            ValidateRoots(set);
 
             // Rule validity is dialect-level and case-independent — a writer
             // MUST refuse invalid rules (06 §7.1), and refusing at load time
@@ -173,6 +233,147 @@ public sealed record ClientConfiguration
 
             ValidateSetDestinations(set, destinationNames);
         }
+    }
+
+    /// <summary>
+    /// The roots' shape (ADR-0040): at least one, paths unique; several
+    /// require labels — plain NFC components a snapshot can name and a
+    /// restore can lay out on any filesystem, unique both by raw bytes and
+    /// case-insensitively because a case-insensitive restore target would
+    /// collapse two labels differing only in case into one folder.
+    /// </summary>
+    private static void ValidateRoots(BackupSetConfiguration set)
+    {
+        if (set.Root is not null)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootAndRoots(set.Name));
+        }
+
+        if (set.Roots.Count == 0)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootMustNot(set.Name));
+        }
+
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in set.Roots)
+        {
+            if (string.IsNullOrWhiteSpace(root.Path))
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetRootMustNot(set.Name));
+            }
+
+            if (!paths.Add(root.Path))
+            {
+                throw new ClientStateException(
+                    Strings.FormatClientConfiguration_BackupSetRootPathsMustUnique(set.Name, root.Path));
+            }
+        }
+
+        if (set.Roots.Count == 1)
+        {
+            return; // a single root's label is ignored by capture; anything goes
+        }
+
+        var labels = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+        foreach (var root in set.Roots)
+        {
+            if (root.Label is not { } label || LabelDefect(label) is { } defect)
+            {
+                throw new ClientStateException(Strings.FormatClientConfiguration_BackupSetLabelInvalid(
+                    set.Name, root.Label ?? "(none)", root.Label is null ? "every root of a multi-root set needs one" : LabelDefect(root.Label)!));
+            }
+
+            if (!labels.Add(label))
+            {
+                throw new ClientStateException(
+                    Strings.FormatClientConfiguration_BackupSetLabelsMustUnique(set.Name, label));
+            }
+        }
+    }
+
+    /// <summary>What is wrong with a root label, or null when nothing is.</summary>
+    public static string? LabelDefect(string label)
+    {
+        ThrowHelper.ThrowIfNull(label);
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return "it is empty";
+        }
+
+        if (label is "." or "..")
+        {
+            return "'.' and '..' are path steps, not names";
+        }
+
+        if (label.AsSpan().IndexOfAny('/', '\\', ':') >= 0 || label.AsSpan().IndexOfAny('*', '?') >= 0)
+        {
+            return "it may not contain / \\ : * or ?";
+        }
+
+        if (!label.IsNormalized(System.Text.NormalizationForm.FormC))
+        {
+            return "it must be NFC-normalised, the spelling rules and trees speak";
+        }
+
+        if (System.Text.Encoding.UTF8.GetByteCount(label) > 255)
+        {
+            return "it exceeds 255 UTF-8 bytes, the smallest component limit a restore may meet";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Fills in the labels a multi-root set needs (ADR-0040): each unlabelled
+    /// root gets its folder's leaf name, sanitised to a plain component, with
+    /// a numeric suffix where leaves collide. Run once at edit time and
+    /// persisted — never derived on read, so a later sibling cannot shift an
+    /// existing root's coordinates.
+    /// </summary>
+    public static IReadOnlyList<BackupRootConfiguration> DeriveLabels(IReadOnlyList<BackupRootConfiguration> roots)
+    {
+        ThrowHelper.ThrowIfNull(roots);
+        if (roots.Count <= 1)
+        {
+            return roots;
+        }
+
+        var taken = new HashSet<string>(
+            roots.Where(root => root.Label is not null).Select(root => root.Label!),
+            StringComparer.InvariantCultureIgnoreCase);
+
+        var result = new List<BackupRootConfiguration>(roots.Count);
+        foreach (var root in roots)
+        {
+            if (root.Label is not null)
+            {
+                result.Add(root);
+                continue;
+            }
+
+            var leaf = root.Path
+                .TrimEnd('/', '\\')
+                .Split('/', '\\')
+                .LastOrDefault(part => part.Length > 0) ?? string.Empty;
+            var sanitised = new string([.. leaf.Where(ch => ch is not ('/' or '\\' or ':' or '*' or '?'))])
+                .Trim();
+            if (sanitised.Length == 0 || sanitised is "." or "..")
+            {
+                sanitised = "root";
+            }
+
+            sanitised = sanitised.Normalize(System.Text.NormalizationForm.FormC);
+
+            var candidate = sanitised;
+            for (var suffix = 2; !taken.Add(candidate); suffix++)
+            {
+                candidate = $"{sanitised}-{suffix}";
+            }
+
+            result.Add(root with { Label = candidate });
+        }
+
+        return result;
     }
 
     private static void ValidateDestination(DestinationConfiguration destination, HashSet<string> names)
