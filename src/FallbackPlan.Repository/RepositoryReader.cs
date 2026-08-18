@@ -60,7 +60,7 @@ public sealed class RepositoryReader : IDisposable
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
-    /// <summary>Creates a reader; call <see cref="LoadBlobsAsync"/> before reading.</summary>
+    /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
     public RepositoryReader(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
     {
         ThrowHelper.ThrowIfNull(keys);
@@ -141,6 +141,62 @@ public sealed class RepositoryReader : IDisposable
         }
 
         return _blobReaders.Count;
+    }
+
+    /// <summary>
+    /// Opens only the named blobs — the targeted load (ADR-0041). The full
+    /// load reads every blob footer in the store, which over a remote
+    /// retrieval session would download footers for blobs the restore never
+    /// touches; a caller that already knows the blob set a plan needs (the
+    /// plan probe computes exactly that) hands it here instead. Skips and
+    /// duplicate handling are identical to the full load; a named blob that
+    /// is absent lands in <see cref="SkippedBlobs"/>, and its records read as
+    /// missing downstream — loudly, as always.
+    /// </summary>
+    /// <returns>The number of blobs opened, skips excluded.</returns>
+    public async ValueTask<int> LoadBlobsAsync(
+        IReadOnlyCollection<ObjectKey> blobStoreKeys, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(blobStoreKeys);
+
+        var opened = 0;
+        foreach (var key in blobStoreKeys)
+        {
+            var metadata = await _store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+            if (metadata.Metadata is not { } found)
+            {
+                _skipped.Add(new SkippedBlob(key, "the store does not hold this blob"));
+                continue;
+            }
+
+            BlobReader reader;
+            try
+            {
+                reader = await BlobReader.OpenAsync(
+                    _store,
+                    key,
+                    found.Length,
+                    _repositoryId,
+                    _keys.DeriveClassKey,
+                    _objectIdDeriver,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (BlobFormatException exception)
+            {
+                _skipped.Add(new SkippedBlob(key, exception.Message));
+                continue;
+            }
+
+            _blobReaders.Add(reader);
+            opened++;
+
+            foreach (var record in reader.RecordTable)
+            {
+                _records.TryAdd(record.ObjectId, (reader, record));
+            }
+        }
+
+        return opened;
     }
 
     /// <summary>

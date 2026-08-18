@@ -71,6 +71,14 @@ public enum ExistingDestinationPolicy
 
     /// <summary>Overwrite it. Destructive, and never the default.</summary>
     Replace = 2,
+
+    /// <summary>
+    /// Leave it, and write the restored copy beside it as
+    /// <c>name (restored 2026-08-18).ext</c> (ADR-0041). The live file is
+    /// untouched and nothing is displaced; the receipt item records where
+    /// the copy landed.
+    /// </summary>
+    WriteBeside = 3,
 }
 
 /// <summary>One item's outcome in the receipt.</summary>
@@ -87,6 +95,16 @@ public sealed record ReceiptItem
 
     [JsonPropertyName("detail")]
     public string? Detail { get; init; }
+
+    /// <summary>
+    /// Where the content actually landed when it is not <see cref="Path"/> —
+    /// the beside-suffixed name under
+    /// <see cref="ExistingDestinationPolicy.WriteBeside"/>. Null when the
+    /// item landed at its own path.
+    /// </summary>
+    [JsonPropertyName("written_as")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WrittenAs { get; init; }
 }
 
 /// <summary>
@@ -107,9 +125,12 @@ public sealed record RestoreReceipt
     /// the readers most likely to trust it. Version 3 added the
     /// <c>degraded</c> item outcome (RR-6): a file whose alternate data
     /// streams were captured and not written back is not <c>restored</c>,
-    /// and a run containing one is not <c>Complete</c>.
+    /// and a run containing one is not <c>Complete</c>. Version 4 added the
+    /// optional per-item <c>written_as</c> (ADR-0041): under the write-beside
+    /// policy the content lands at a suffixed name, and a receipt that could
+    /// not say where would fail the only question it exists to answer.
     /// </remarks>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -343,6 +364,8 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                         continue;
                     }
 
+                    var landing = destination;
+                    string? writtenAs = null;
                     if (File.Exists(destination))
                     {
                         if (options.ExistingDestination == ExistingDestinationPolicy.Fail)
@@ -376,14 +399,34 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                             File.Move(destination, refuge);
                             displaced.Add(item.Path);
                         }
+
+                        if (options.ExistingDestination == ExistingDestinationPolicy.WriteBeside)
+                        {
+                            // The live file is kept and the restored copy lands
+                            // beside it under a dated name (ADR-0041). Built as
+                            // the resolved destination's directory plus a new
+                            // final component, so containment holds by
+                            // construction.
+                            if (!TryBesideName(destination, options.NowUnixMilliseconds, out landing, out var besideRefusal))
+                            {
+                                File.Delete(spool);
+                                items.Add(new ReceiptItem
+                                {
+                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = besideRefusal,
+                                });
+                                continue;
+                            }
+
+                            writtenAs = BesidePath(item.Path, landing);
+                        }
                     }
 
-                    File.Move(spool, destination, overwrite: true);
+                    File.Move(spool, landing, overwrite: true);
 
                     // Metadata strictly AFTER content (architecture 08 §3):
                     // a crash between the two leaves verified content with
                     // default metadata — recoverable — never the reverse.
-                    ApplyMetadata(destination, manifest.Metadata);
+                    ApplyMetadata(landing, manifest.Metadata);
 
                     // The main stream restored and verified; alternate data
                     // streams the manifest carries did not (RR-6's honesty
@@ -395,27 +438,95 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                     {
                         items.Add(new ReceiptItem
                         {
-                            Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length,
+                            Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
                             Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
                                 + "and not written back on this target (declared in the plan)",
                         });
                         break;
                     }
 
-                    items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length });
+                    items.Add(new ReceiptItem
+                    {
+                        Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
+                    });
                     break;
                 }
 
                 case EntryKind.Symlink when target.SupportsSymlinks && manifest.LinkTarget is { } linkTarget:
                 {
+                    // The existing-destination policy applies here exactly as
+                    // it does to files — this case once deleted whatever stood
+                    // at the destination unconditionally, which made Preserve
+                    // a policy the run only mostly followed.
                     var targetText = System.Text.Encoding.UTF8.GetString(linkTarget.Span);
-                    if (File.Exists(destination) || Directory.Exists(destination))
+                    var linkLanding = destination;
+                    string? linkWrittenAs = null;
+                    try
                     {
-                        File.Delete(destination);
+                        if (File.Exists(destination) || Directory.Exists(destination))
+                        {
+                            switch (options.ExistingDestination)
+                            {
+                                case ExistingDestinationPolicy.Fail:
+                                    items.Add(new ReceiptItem
+                                    {
+                                        Path = item.Path, Outcome = "failed", Bytes = 0,
+                                        Detail = "something is already at this destination and the policy is to fail",
+                                    });
+                                    continue;
+
+                                case ExistingDestinationPolicy.Preserve:
+                                    if (!TryResolve(displacedRoot, item.Path, out var linkRefuge, out var linkRefusal))
+                                    {
+                                        items.Add(new ReceiptItem
+                                        {
+                                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = linkRefusal,
+                                        });
+                                        continue;
+                                    }
+
+                                    Directory.CreateDirectory(Path.GetDirectoryName(linkRefuge)!);
+                                    File.Move(destination, linkRefuge);
+                                    displaced.Add(item.Path);
+                                    break;
+
+                                case ExistingDestinationPolicy.WriteBeside:
+                                    if (!TryBesideName(destination, options.NowUnixMilliseconds, out linkLanding, out var linkBesideRefusal))
+                                    {
+                                        items.Add(new ReceiptItem
+                                        {
+                                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = linkBesideRefusal,
+                                        });
+                                        continue;
+                                    }
+
+                                    linkWrittenAs = BesidePath(item.Path, linkLanding);
+                                    break;
+
+                                default: // Replace
+                                    File.Delete(destination);
+                                    break;
+                            }
+                        }
+
+                        File.CreateSymbolicLink(linkLanding, targetText);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        // A directory (or an undeletable entry) at a link's
+                        // destination is contained to this item, like every
+                        // other write fault.
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                        });
+                        continue;
                     }
 
-                    File.CreateSymbolicLink(destination, targetText);
-                    items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = 0 });
+                    items.Add(new ReceiptItem
+                    {
+                        Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
+                    });
                     break;
                 }
 
@@ -478,6 +589,49 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
         return items.Any(item => item.Outcome is "skipped" or "degraded")
             ? RestoreOutcome.Partial
             : RestoreOutcome.Complete;
+    }
+
+    /// <summary>
+    /// The beside-name for a restored copy the write-beside policy keeps next
+    /// to an existing file: <c>name (restored 2026-08-18).ext</c>, deduped
+    /// with <c>-2</c>, <c>-3</c>… and capped rather than unbounded. Built
+    /// from the already-resolved destination's directory plus one new final
+    /// component — no repository text enters it, so containment holds by
+    /// construction.
+    /// </summary>
+    private static bool TryBesideName(
+        string destination, ulong nowUnixMilliseconds, out string landing, out string refusal)
+    {
+        landing = string.Empty;
+        refusal = string.Empty;
+
+        var directory = Path.GetDirectoryName(destination)!;
+        var stem = Path.GetFileNameWithoutExtension(destination);
+        var extension = Path.GetExtension(destination);
+        var date = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds)
+            .UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+        for (var attempt = 1; attempt <= 100; attempt++)
+        {
+            var suffix = attempt == 1 ? $" (restored {date})" : $" (restored {date}-{attempt})";
+            var candidate = Path.Combine(directory, stem + suffix + extension);
+            if (!File.Exists(candidate) && !Directory.Exists(candidate))
+            {
+                landing = candidate;
+                return true;
+            }
+        }
+
+        refusal = "refused: a hundred beside-named copies already sit at this destination";
+        return false;
+    }
+
+    /// <summary>The receipt's repository-relative rendering of a beside landing.</summary>
+    private static string BesidePath(string itemPath, string landing)
+    {
+        var leaf = Path.GetFileName(landing);
+        var separator = itemPath.LastIndexOf('/');
+        return separator < 0 ? leaf : itemPath[..(separator + 1)] + leaf;
     }
 
     /// <summary>

@@ -207,7 +207,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
     private const string GoldenReceipt = """
         {
-          "schema_version": 3,
+          "schema_version": 4,
           "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
           "started_at": 1722700000000,
           "completed_at": 1722700000000,
@@ -230,6 +230,181 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
           "outcome": "Complete"
         }
         """;
+
+    [TestMethod]
+    public async Task RestoreExecution_AnExistingFileUnderWriteBeside_KeepsBothAndNamesTheCopy()
+    {
+        var content = Deterministic(50_000, 5);
+        var (plan, target, store, keys) = await PublishOneFileAsync("beside", content, 0xE5);
+        using var _ = keys;
+
+        var output = Path.Combine(SpoolDirectory, "beside-out");
+        var destination = Path.Combine(output, "data", "file.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.WriteAllText(destination, "the live file, kept");
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                ExistingDestination = ExistingDestinationPolicy.WriteBeside,
+                RunId = "beside-run",
+                NowUnixMilliseconds = 1_722_700_000_000, // 2024-08-03 UTC
+            },
+            CancellationToken.None);
+
+        // Both survive: the live file byte-untouched, the restored copy
+        // beside it under the dated name, and the receipt says exactly where
+        // (ADR-0041). Nothing was displaced — displacement is Preserve's
+        // mechanism, not this policy's.
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual("the live file, kept", File.ReadAllText(destination));
+        var beside = Path.Combine(output, "data", "file (restored 2024-08-03).bin");
+        SequenceAssert.AreEqual(content, File.ReadAllBytes(beside));
+        Assert.IsEmpty(receipt.Displaced);
+
+        var item = Assert.ContainsSingle(receipt.Items.Where(current => current.Path == "data/file.bin"));
+        Assert.AreEqual("restored", item.Outcome);
+        Assert.AreEqual("data/file (restored 2024-08-03).bin", item.WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_WriteBesideAgain_DedupesTheBesideName()
+    {
+        var content = Deterministic(50_000, 5);
+        var (plan, target, store, keys) = await PublishOneFileAsync("beside2", content, 0xE6);
+        using var _ = keys;
+
+        var output = Path.Combine(SpoolDirectory, "beside2-out");
+        var destination = Path.Combine(output, "data", "file.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.WriteAllText(destination, "the live file, kept");
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var options = new RestoreExecutionOptions
+        {
+            DestinationMode = RestoreDestinationMode.InPlace,
+            ExistingDestination = ExistingDestinationPolicy.WriteBeside,
+            RunId = "beside2-run",
+            NowUnixMilliseconds = 1_722_700_000_000,
+        };
+        var executor = new RestoreExecutor(reader, target);
+        await executor.ExecuteAsync(plan, output, options, CancellationToken.None);
+        var second = await executor.ExecuteAsync(plan, output, options, CancellationToken.None);
+
+        // The first run's copy is not this run's to destroy: the second run
+        // takes the next numbered name rather than overwriting it.
+        Assert.AreEqual(RestoreOutcome.Complete, second.Outcome);
+        SequenceAssert.AreEqual(
+            content, File.ReadAllBytes(Path.Combine(output, "data", "file (restored 2024-08-03).bin")));
+        SequenceAssert.AreEqual(
+            content, File.ReadAllBytes(Path.Combine(output, "data", "file (restored 2024-08-03-2).bin")));
+        Assert.AreEqual(
+            "data/file (restored 2024-08-03-2).bin",
+            Assert.ContainsSingle(second.Items.Where(current => current.Path == "data/file.bin")).WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task RestorePlanner_SeveralPrefixes_UnionInOnePlanWithSubsumptionAndHonestMisses()
+    {
+        var one = Deterministic(30_000, 3);
+        var two = Deterministic(30_000, 9);
+        var three = Deterministic(30_000, 17);
+
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/a.bin", one, fileId: 9_001);
+        source.AddFile("data/b.bin", two, fileId: 9_002);
+        source.AddFile("docs/c.bin", three, fileId: 9_003);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var catalogue = OpenCatalogue("multi-prefix");
+        await CreateOrchestrator(store, keys, hierarchy, catalogue, "multi-prefix")
+            .PublishAsync(Job(source, 0xE7), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var snapshotId = Enumerable.Repeat((byte)0xE7, 16).ToArray();
+
+        // A file and a folder in one plan — one run, one receipt (ADR-0041).
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, ["docs", "data/a.bin"], target);
+        SequenceAssert.AreEqual(
+            new[] { "data/a.bin", "docs", "docs/c.bin" },
+            [.. plan.Items.Select(item => item.Path)]);
+        Assert.IsEmpty(plan.Conflicts);
+
+        // A prefix under another prefix is subsumed, not walked twice.
+        var subsumed = RestorePlanner.Plan(catalogue, snapshotId, ["data", "data/a.bin"], target);
+        SequenceAssert.AreEqual(
+            new[] { "data", "data/a.bin", "data/b.bin" },
+            [.. subsumed.Items.Select(item => item.Path)]);
+
+        // A miss is a per-prefix conflict, never a silent shrink.
+        var missing = RestorePlanner.Plan(catalogue, snapshotId, ["docs", "gone/nowhere.bin"], target);
+        Assert.AreEqual("gone/nowhere.bin", Assert.ContainsSingle(missing.Conflicts).Path);
+
+        // The union restores in one run: both subtrees land, nothing else.
+        using var reader = new RepositoryReader(Repo, keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "multi-prefix-out"),
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "multi-prefix-run",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        var restoredRoot = Path.Combine(SpoolDirectory, "multi-prefix-out");
+        SequenceAssert.AreEqual(one, File.ReadAllBytes(Path.Combine(restoredRoot, "data", "a.bin")));
+        SequenceAssert.AreEqual(three, File.ReadAllBytes(Path.Combine(restoredRoot, "docs", "c.bin")));
+        Assert.IsFalse(File.Exists(Path.Combine(restoredRoot, "data", "b.bin")),
+            "data/b.bin was in neither prefix and must not restore");
+    }
+
+    [TestMethod]
+    public async Task RepositoryReader_TargetedLoad_OpensOnlyTheNamedBlobsAndNamesTheAbsent()
+    {
+        var content = Deterministic(50_000, 5);
+        var (plan, target, store, keys) = await PublishOneFileAsync("targeted", content, 0xE8);
+        using var _ = keys;
+
+        // The full load knows every blob; the targeted load is handed that
+        // set and must restore identically without listing the namespace.
+        List<ObjectKey> everyBlob;
+        using (var census = new RepositoryReader(Repo, keys, store))
+        {
+            await census.LoadBlobsAsync(CancellationToken.None);
+            everyBlob = [.. census.Blobs.Select(blob => blob.StoreKey)];
+        }
+
+        using var reader = new RepositoryReader(Repo, keys, store);
+        var opened = await reader.LoadBlobsAsync(everyBlob, CancellationToken.None);
+        Assert.AreEqual(everyBlob.Count, opened);
+        Assert.IsEmpty(reader.SkippedBlobs);
+
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "targeted-out"),
+            new RestoreExecutionOptions { RunId = "targeted-run", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+
+        // A named blob the store does not hold is a skip the caller can see,
+        // and the records it would have carried read as missing downstream —
+        // loudly, per item — never as a quietly narrower world.
+        using var partial = new RepositoryReader(Repo, keys, store);
+        var absent = ObjectKey.Parse("blobs/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        await partial.LoadBlobsAsync([absent], CancellationToken.None);
+        Assert.AreEqual(absent, Assert.ContainsSingle(partial.SkippedBlobs).Key);
+    }
 
     private async Task<(RestorePlan Plan, RestoreTargetProfile Target, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys)>
         PublishOneFileAsync(string name, byte[] content, byte seed)

@@ -91,8 +91,25 @@ public static class RestorePlanner
         string pathPrefix,
         RestoreTargetProfile target)
     {
-        ThrowHelper.ThrowIfNull(catalogue);
         ThrowHelper.ThrowIfNull(pathPrefix);
+        return Plan(catalogue, snapshotIdSpan, pathPrefix.Length == 0 ? [] : [pathPrefix], target);
+    }
+
+    /// <summary>
+    /// Plans the restore of several subtrees from one snapshot in one plan —
+    /// one run, one quarantine, one receipt (ADR-0041). An empty list plans
+    /// everything. Prefixes subsumed by an ancestor prefix are dropped
+    /// before walking, so the walks are disjoint and the conflict passes run
+    /// over the union exactly once.
+    /// </summary>
+    public static RestorePlan Plan(
+        Catalogue catalogue,
+        ReadOnlySpan<byte> snapshotIdSpan,
+        IReadOnlyList<string> pathPrefixes,
+        RestoreTargetProfile target)
+    {
+        ThrowHelper.ThrowIfNull(catalogue);
+        ThrowHelper.ThrowIfNull(pathPrefixes);
         ThrowHelper.ThrowIfNull(target);
 
         var snapshotId = snapshotIdSpan.ToArray();
@@ -115,19 +132,22 @@ public static class RestorePlanner
             }
         }
 
-        if (pathPrefix.Length == 0)
+        var prefixes = Normalise(pathPrefixes);
+        if (prefixes.Count == 0)
         {
             Walk(string.Empty);
         }
         else
         {
-            var entry = catalogue.LookupPath(snapshotId, pathPrefix);
-            if (entry is null)
+            foreach (var prefix in prefixes)
             {
-                conflicts.Add(new RestoreConflict(pathPrefix, "The path does not exist in this snapshot."));
-            }
-            else
-            {
+                var entry = catalogue.LookupPath(snapshotId, prefix);
+                if (entry is null)
+                {
+                    conflicts.Add(new RestoreConflict(prefix, "The path does not exist in this snapshot."));
+                    continue;
+                }
+
                 items.Add(new RestorePlanItem(
                     entry.Path, entry.EntryKind, entry.ObjectId, entry.LogicalLength ?? 0,
                     entry.HasAlternateStreams));
@@ -202,5 +222,30 @@ public static class RestorePlanner
             Conflicts = conflicts,
             Degradations = degradations,
         };
+    }
+
+    /// <summary>
+    /// Sorted, deduplicated prefixes with descendants of another prefix
+    /// removed; a whole-snapshot request (an empty entry) collapses the list
+    /// to "everything".
+    /// </summary>
+    private static List<string> Normalise(IReadOnlyList<string> pathPrefixes)
+    {
+        if (pathPrefixes.Any(prefix => prefix.Length == 0))
+        {
+            return [];
+        }
+
+        var sorted = pathPrefixes.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var kept = new List<string>(sorted.Count);
+        foreach (var prefix in sorted)
+        {
+            if (!kept.Any(ancestor => prefix.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+            {
+                kept.Add(prefix);
+            }
+        }
+
+        return kept;
     }
 }
