@@ -64,6 +64,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
+| [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 
 ---
 
@@ -334,6 +335,32 @@ no client's check matched it). The console grew the Pairings table, the
 explorer's badges, times, deleted rows and older/newer rail, folder pickers
 for restore output and destination paths, a confirmed full re-capture, and
 "what changed?" on the overview card.
+
+### 0040 — several folders, one snapshot
+
+Contract 1.10, configuration schema 3. A backup set now captures **several
+folders into one snapshot**: one root keeps the pre-multi-root byte shape
+exactly, and past one, `Filesystem/MultiRootScan.cs` stitches per-root scans
+under a synthetic `/` whose children are label-named directories in raw
+UTF-8 byte order, with rule subjects `<label>/<relative>` fed through
+`ScanOptions.SubjectPrefix` so walk pruning still works. The snapshot's one
+`source_filesystem` map is the conservative intersection of the per-root
+probes. Labels are materialised **once, at upsert** (leaf name, `root`
+fallback, numeric dedupe) and persisted — never derived on read — and the
+1↔N transitions re-anchor the saved rules (label prefix gained or lost; a
+stripped single component becomes an exact-path regex rather than widening
+to the any-depth shorthand), narrated in the material-change answer. The
+runner refuses recoverably naming every missing root; the preview verb
+gained draft `roots` and answers a brand-new set against an empty baseline;
+the failure domain answers for the weakest root. Restore needed no change:
+`<output>/<label>/…` through the existing planner. The console's editor
+became a machine-wide checkbox tree — marks inherit from the nearest marked
+ancestor, tri-state where a subtree disagrees — compiling to roots plus
+excludes only (the deepest fully-ticked folder *is* the root); re-ticking
+under an unticked parent triggers the exclude-wins wall (sibling
+enumeration plus the new-arrivals warning), and feedback is an instant
+summary plus a debounced draft-roots preview walk. Proven live end to end:
+reopen, second root, wall, save, backup, labelled browse.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

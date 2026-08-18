@@ -10,11 +10,11 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Multi-root publication (ADR-0040): several folders capture into one
-/// snapshot under a synthetic root whose top-level entries are the roots,
-/// each named by its label — labels in raw-byte order because the tree
-/// codec's MUST enforces it, rules speaking label-prefixed subjects, and a
-/// single-root job keeping the pre-multi-root shape exactly.
+/// Multi-root publication (ADR-0040, FR-SNP-008): several folders capture
+/// into one snapshot under a synthetic root whose top-level entries are the
+/// roots, each named by its label — labels in raw-byte order because the
+/// tree codec's MUST enforces it, rules speaking label-prefixed subjects,
+/// and a single-root job keeping the pre-multi-root shape exactly.
 /// </summary>
 [TestClass]
 public sealed class MultiRootPublicationTests : ArchiveTestHarness

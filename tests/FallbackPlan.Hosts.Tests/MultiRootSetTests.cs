@@ -7,11 +7,12 @@ using FallbackPlan.Repository.Crypto;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// Multi-root backup sets over the service (ADR-0040): an upsert that grows a
-/// set past one root materialises labels and re-anchors the saved rules to
-/// the new coordinates, the captured snapshot lists the labels at its top,
-/// a vanished root refuses the run naming itself, and the preview verb
-/// answers a draft that matches no saved set against an empty baseline.
+/// Multi-root backup sets over the service (ADR-0040, FR-SNP-008): an upsert
+/// that grows a set past one root materialises labels and re-anchors the
+/// saved rules to the new coordinates, the captured snapshot lists the
+/// labels at its top, a vanished root refuses the run naming itself, and the
+/// preview verb answers a draft that matches no saved set against an empty
+/// baseline.
 /// </summary>
 [TestClass]
 public sealed class MultiRootSetTests : IDisposable
