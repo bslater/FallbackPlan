@@ -1,0 +1,326 @@
+using FallbackPlan.Api;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Catalogue;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
+using FallbackPlan.Storage.Local;
+using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+
+namespace FallbackPlan.Agent;
+
+/// <summary>
+/// The restore-source surface (ADR-0041): opening a per-set repository —
+/// staging archive, local-path replica, or a peer's replica — as a handle
+/// the source-aware restore verbs read through, and closing it again. The
+/// open carries no passphrase: the runtime unlocks sources with the secret
+/// it already holds (NFR-SEC-009 — nothing passphrase-shaped crosses the
+/// contract), and the wizard's operator gate is the console's own local
+/// verification.
+/// </summary>
+public sealed partial class ServiceCommandHandler
+{
+    /// <summary>
+    /// What a restore verb reads through: either an open source handle or
+    /// the legacy staging lookup, reduced to one shape so the plan probe and
+    /// the run body exist once.
+    /// </summary>
+    private sealed record RestoreContext(
+        Storage.Abstractions.IObjectStore Store,
+        Domain.Identifiers.RepositoryId RepositoryId,
+        RepositoryKeySet Keys,
+        Func<CatalogueDb> OpenCatalogue,
+        OpenRestoreSourceHandle? Source);
+
+    /// <summary>
+    /// Resolves the context a restore verb runs against. With a source id,
+    /// the handle answers (touched, so the idle sweep sees a live wizard);
+    /// without one, the staging archives are searched for the snapshot —
+    /// today's path, byte for byte.
+    /// </summary>
+    private async ValueTask<(RestoreContext? Context, ServiceError? Error)> ResolveRestoreContextAsync(
+        string? sourceId, byte[] snapshotId, string snapshotHex, CancellationToken cancellationToken)
+    {
+        if (sourceId is null)
+        {
+            var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
+            return archive is null
+                ? (null, new ServiceError(
+                    ServiceErrorReason.NotFound, $"No set's archive holds snapshot {snapshotHex}."))
+                : (new RestoreContext(
+                    archive.Store, archive.Repository.RepositoryId, archive.Repository.Keys,
+                    archive.OpenReadCatalogue, Source: null), null);
+        }
+
+        var handle = runtime.RestoreSources.Find(sourceId);
+        return handle is null
+            ? (null, new ServiceError(
+                ServiceErrorReason.NotFound, "This restore source has expired — unlock it again."))
+            : (new RestoreContext(
+                handle.Store, handle.RepositoryId, handle.Keys, handle.OpenReadCatalogue, handle), null);
+    }
+
+    /// <summary>
+    /// Opens a restore source and answers its snapshots. On the reader lane:
+    /// a replica open costs an Argon2 derivation plus a catalogue rebuild,
+    /// which is heavy read work exactly like a restore.
+    /// </summary>
+    private async ValueTask<ServiceResult> OpenRestoreSourceAsync(
+        OpenRestoreSourceCommand command, CancellationToken cancellationToken)
+    {
+        // Abandoned wizards are reclaimed on the verbs that touch the
+        // registry — cheap, and always before growing it.
+        await runtime.RestoreSources.SweepAsync().ConfigureAwait(false);
+
+        var set = runtime.Configuration.FindSet(command.SetName);
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        var sourceId = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+
+        OpenRestoreSourceHandle handle;
+        var warnings = new List<string>();
+        if (command.DestinationName is null)
+        {
+            var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+            if (archive is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"Backup set '{set.Name}' has never backed up — its staging archive does not exist.");
+            }
+
+            handle = new OpenRestoreSourceHandle
+            {
+                SourceId = sourceId,
+                SetId = set.Id,
+                SetName = set.Name,
+                Location = "staging",
+                Store = archive.Store,
+                OwnedRepository = null,
+                RepositoryId = archive.Repository.RepositoryId,
+                Keys = archive.Repository.Keys,
+                CataloguePath = archive.CataloguePath,
+                CacheDirectory = null,
+            };
+        }
+        else
+        {
+            var destination = runtime.Configuration.FindDestination(command.DestinationName);
+            if (destination is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+            }
+
+            switch (destination.Kind)
+            {
+                case Application.DestinationKind.LocalPath:
+                    var (opened, refusal) = await OpenReplicaSourceAsync(
+                        sourceId, set, destination, warnings, cancellationToken).ConfigureAwait(false);
+                    if (opened is null)
+                    {
+                        return refusal!;
+                    }
+
+                    handle = opened;
+                    break;
+
+                case Application.DestinationKind.Peer:
+                    // Phase 4 of ADR-0041 wires the retrieval session here.
+                    return new ServiceError(
+                        ServiceErrorReason.Failed,
+                        $"Restoring from peer destination '{destination.Name}' is not available yet.");
+
+                default:
+                    return new ServiceError(
+                        ServiceErrorReason.InvalidArgument,
+                        $"Destination '{destination.Name}' ({destination.Kind}) cannot serve restores.");
+            }
+        }
+
+        var snapshots = new List<SnapshotDescriptor>();
+        using (var catalogue = handle.OpenReadCatalogue())
+        {
+            // Oldest first, matching list_snapshots — the wizard's
+            // effective-date step resolves against CapturedAt client-side.
+            foreach (var row in catalogue.EnumerateSnapshots().Reverse())
+            {
+                snapshots.Add(new SnapshotDescriptor(
+                    Convert.ToHexStringLower(row.SnapshotId.Span),
+                    Convert.ToHexStringLower(row.BackupSetId.Span),
+                    row.CapturedAt,
+                    row.CaptureStatus,
+                    catalogue.CountFiles(row.SnapshotId.Span)));
+            }
+        }
+
+        runtime.RestoreSources.Add(handle);
+        return new RestoreSourceOpenedResult(sourceId, set.Name, handle.Location, snapshots, warnings);
+    }
+
+    /// <summary>
+    /// Opens a local-path destination's replica of one set as a source: the
+    /// replica directory is a complete repository (the owner's own bytes),
+    /// opened with the runtime's passphrase and given a throwaway catalogue
+    /// rebuilt from its own index plane — checkpoint plus deltas, metadata
+    /// reads only.
+    /// </summary>
+    private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenReplicaSourceAsync(
+        string sourceId,
+        Application.BackupSetConfiguration set,
+        Application.DestinationConfiguration destination,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(destination.Path) || !Directory.Exists(destination.Path))
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Unavailable,
+                $"Destination '{destination.Name}' is not reachable at '{destination.Path}'."));
+        }
+
+        // The replica lives under the destination at the REPOSITORY id
+        // (ADR-0034; FanOut composes the same path). The staging archive
+        // names it directly; with staging lost — the very scenario replica
+        // restore exists for — each candidate directory is tried until one
+        // both unlocks and holds this set's snapshots.
+        var candidates = new List<string>();
+        var staging = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+        if (staging is not null)
+        {
+            candidates.Add(Path.Combine(destination.Path, staging.Repository.RepositoryId.ToString()));
+        }
+        else
+        {
+            candidates.AddRange(Directory.GetDirectories(destination.Path));
+        }
+
+        var setId = Convert.FromHexString(set.Id);
+        foreach (var replicaRoot in candidates)
+        {
+            if (!File.Exists(Path.Combine(replicaRoot, RepositoryLifecycle.DescriptorKey.Value)))
+            {
+                continue;
+            }
+
+            var store = new LocalFileSystemObjectStore(replicaRoot);
+            OpenedRepository repository;
+            try
+            {
+                repository = await RepositoryLifecycle.OpenAsync(store, runtime.ArchivePassphrase, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)
+            {
+                // Another owner's replica, or damage — either way not this
+                // set's; keep looking rather than failing the open.
+                warnings.Add($"a replica at '{Path.GetFileName(replicaRoot)}' would not open: {exception.Message}");
+                continue;
+            }
+
+            var cacheDirectory = Path.Combine(runtime.RestoreCacheRoot, sourceId);
+            try
+            {
+                Directory.CreateDirectory(cacheDirectory);
+                var cataloguePath = Path.Combine(cacheDirectory, "catalogue.db");
+                var generation = Math.Max(
+                    repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
+
+                RebuildReport report;
+                using (var catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId))
+                {
+                    // The index plane rebuilds the locations; no blob
+                    // inventory is taken, because an entry naming a trimmed
+                    // blob is re-answered honestly by the plan probe, which
+                    // asks the store per blob (FR-RST-003).
+                    report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy))
+                        .RebuildAsync(
+                            catalogue, generation, gapPatienceGenerations: 2,
+                            isSequenceAccountedAsync: null, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    // The manifest plane — snapshots, tree paths, file
+                    // versions — projects from the repository's own objects,
+                    // so listings and plans work over a catalogue born a
+                    // moment ago (FR-MAN-002). Manifests all live in
+                    // metadata-class blobs, so only those footers are opened.
+                    using (var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store))
+                    {
+                        var metadataBlobs = new List<Storage.Abstractions.ObjectKey>();
+                        await foreach (var blob in store.ListAsync(
+                            Storage.Abstractions.ObjectPrefix.Parse("blobs/meta/"),
+                            Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+                        {
+                            metadataBlobs.Add(blob.Key);
+                        }
+
+                        await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
+                        await CatalogueProjector.ProjectAsync(
+                            catalogue, reader, store, repository.RepositoryId, repository.Keys,
+                            repository.Hierarchy, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))
+                    {
+                        // Unlocked, but some other set's repository.
+                        repository.Dispose();
+                        TryDeleteCache(cacheDirectory);
+                        continue;
+                    }
+                }
+
+                warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
+                return (new OpenRestoreSourceHandle
+                {
+                    SourceId = sourceId,
+                    SetId = set.Id,
+                    SetName = set.Name,
+                    Location = destination.Name,
+                    Store = store,
+                    OwnedRepository = repository,
+                    RepositoryId = repository.RepositoryId,
+                    Keys = repository.Keys,
+                    CataloguePath = Path.Combine(cacheDirectory, "catalogue.db"),
+                    CacheDirectory = cacheDirectory,
+                }, null);
+            }
+            catch
+            {
+                repository.Dispose();
+                TryDeleteCache(cacheDirectory);
+                throw;
+            }
+        }
+
+        return (null, new ServiceError(
+            ServiceErrorReason.NotFound,
+            $"Destination '{destination.Name}' holds no readable replica of set '{set.Name}'."
+            + (warnings.Count == 0 ? string.Empty : $" ({string.Join("; ", warnings)})")));
+    }
+
+    /// <summary>Closes a source. Idempotent: closing the closed acknowledges.</summary>
+    private async ValueTask<ServiceResult> CloseRestoreSourceAsync(CloseRestoreSourceCommand command)
+    {
+        await runtime.RestoreSources.CloseAsync(command.SourceId).ConfigureAwait(false);
+        await runtime.RestoreSources.SweepAsync().ConfigureAwait(false);
+        return new AcknowledgedResult();
+    }
+
+    private static void TryDeleteCache(string cacheDirectory)
+    {
+        try
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(cacheDirectory))
+            {
+                Directory.Delete(cacheDirectory, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+}

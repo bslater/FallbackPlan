@@ -51,6 +51,10 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                     $"restore {restore.SnapshotId}",
                     token => RunRestoreAsync(restore, token),
                     cancellationToken).ConfigureAwait(false),
+                OpenRestoreSourceCommand openSource => await OnReaderLaneAsync(
+                    $"open restore source {openSource.SetName}",
+                    token => OpenRestoreSourceAsync(openSource, token),
+                    cancellationToken).ConfigureAwait(false),
                 VerifyCommand verify => await OnReaderLaneAsync(
                     $"verify {verify.Level}",
                     token => VerifyAsync(verify, token),
@@ -331,6 +335,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         ListJobsCommand list => ListJobs(list),
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
+        CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -394,6 +399,12 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         return null;
     }
 
+    /// <summary>The subtree prefixes a restore command names; several win over one (ADR-0041).</summary>
+    private static IReadOnlyList<string> PrefixesOf(IReadOnlyList<string>? paths, string? path) =>
+        paths is { Count: > 0 } ? paths
+        : path is { Length: > 0 } ? [path]
+        : [];
+
     /// <summary>Plans a restore without performing it — a catalogue walk plus one store probe per located blob.</summary>
     private async ValueTask<ServiceResult> PlanRestoreAsync(PlanRestoreCommand command, CancellationToken cancellationToken)
     {
@@ -402,40 +413,97 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             return invalid!;
         }
 
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, error) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+            return error!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
-        var plan = RestorePlanner.Plan(
-            catalogue, snapshotId, command.Path ?? string.Empty, RestoreTargetProfile.ForLocalPlatform());
-
-        if (plan.Items.Count == 0)
+        if (context.Source is { } source)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"The catalogue knows nothing under snapshot {command.SnapshotId}"
-                + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        // What a plan is for: the objects it needs and cannot find, reported
-        // before any byte moves rather than discovered part-way through. The
-        // catalogue alone cannot answer this — it is a cache, and a cache
-        // ahead of the store says "nothing missing" about the very objects
-        // the store has lost — so each located blob is probed against the
-        // store, one memoized metadata call per distinct blob. The manifest
-        // blob alone is not enough: an item's SEGMENTS live in other blobs —
-        // after a staging trim, precisely the ones no longer here (ADR-0034
-        // §6) — so each manifest is read (metadata never trims) and its
-        // referenced blobs are probed too (FR-RST-003).
-        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
-        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(archive.Repository.Keys.ContentIdKey);
+        try
+        {
+            using var catalogue = context.OpenCatalogue();
+            var plan = RestorePlanner.Plan(
+                catalogue, snapshotId, PrefixesOf(command.Paths, command.Path),
+                RestoreTargetProfile.ForLocalPlatform());
+
+            if (plan.Items.Count == 0)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"The catalogue knows nothing under snapshot {command.SnapshotId}"
+                    + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
+            }
+
+            var (missing, _) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+            return new RestorePlanResult(
+                plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
+                (long)plan.SpaceEstimateBytes,
+                missing,
+                plan.Conflicts.Count,
+                plan.Conflicts.Count == 0
+                    ? null
+                    : [.. plan.Conflicts.Take(20).Select(conflict => $"{conflict.Path} — {conflict.Reason}")],
+                plan.Degradations.Count == 0
+                    ? null
+                    : [.. plan.Degradations.Select(degradation => degradation.Detail)]);
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// What a plan is for: the objects it needs and cannot find, reported
+    /// before any byte moves rather than discovered part-way through. The
+    /// catalogue alone cannot answer this — it is a cache, and a cache
+    /// ahead of the store says "nothing missing" about the very objects
+    /// the store has lost — so each located blob is probed against the
+    /// store, one memoized metadata call per distinct blob. The manifest
+    /// blob alone is not enough: an item's SEGMENTS live in other blobs —
+    /// after a staging trim, precisely the ones no longer here (ADR-0034
+    /// §6) — so each manifest is read (metadata never trims) and its
+    /// referenced blobs are probed too (FR-RST-003). The keys that answered
+    /// are returned too: they are exactly the blob set a run needs, which is
+    /// what the targeted load opens instead of every footer in the store.
+    /// </summary>
+    private static async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
+        RestoreContext context,
+        Repository.Catalogue.Catalogue catalogue,
+        RestorePlan plan,
+        CancellationToken cancellationToken)
+    {
+        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(context.Keys.KeyIdKey);
+        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(context.Keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
-        var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
+        var blobKeys = new Dictionary<Domain.Identifiers.BlobId, ObjectKey?>();
         var missing = new List<string>();
+        var needed = new HashSet<ObjectKey>();
+
+        async ValueTask<bool> PresentAsync(Repository.Catalogue.ResolvedLocation location)
+        {
+            if (!blobKeys.TryGetValue(location.BlobId, out var key))
+            {
+                key = await FindBlobKeyAsync(
+                    context.Store, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId), cancellationToken)
+                    .ConfigureAwait(false);
+                blobKeys[location.BlobId] = key;
+            }
+
+            if (key is { } found)
+            {
+                needed.Add(found);
+                return true;
+            }
+
+            return false;
+        }
 
         foreach (var item in plan.Items)
         {
@@ -450,16 +518,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 continue;
             }
 
-            if (!blobPresent.TryGetValue(location.BlobId, out var present))
-            {
-                var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
-                present =
-                    await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
-                    || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
-                blobPresent[location.BlobId] = present;
-            }
-
-            if (!present)
+            if (!await PresentAsync(location).ConfigureAwait(false))
             {
                 missing.Add(item.Path);
                 continue;
@@ -469,7 +528,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             // absence — verify's business, and nothing this plan can name
             // segments from.
             var manifest = await ReadManifestAsync(
-                archive, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                context, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
                 .ConfigureAwait(false);
             if (manifest is null)
             {
@@ -480,32 +539,16 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
             foreach (var referenced in references)
             {
-                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation)
-                {
-                    missing.Add(item.Path);
-                    break;
-                }
-
-                if (!blobPresent.TryGetValue(segmentLocation.BlobId, out var segmentPresent))
-                {
-                    var segmentBlobKey = segmentLocation.StoreBlobKey ?? keyDeriver.Derive(segmentLocation.BlobId);
-                    segmentPresent =
-                        await BlobExistsAsync(archive, BlobClass.Data, segmentBlobKey, cancellationToken).ConfigureAwait(false)
-                        || await BlobExistsAsync(archive, BlobClass.Metadata, segmentBlobKey, cancellationToken).ConfigureAwait(false);
-                    blobPresent[segmentLocation.BlobId] = segmentPresent;
-                }
-
-                if (!segmentPresent)
+                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
+                    || !await PresentAsync(segmentLocation).ConfigureAwait(false))
                 {
                     missing.Add(item.Path);
                     break;
                 }
             }
         }
-        return new RestorePlanResult(
-            plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
-            (long)plan.SpaceEstimateBytes,
-            missing);
+
+        return (missing, needed);
     }
 
     /// <summary>
@@ -514,7 +557,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
     /// snapshot's manifests cluster in a few metadata blobs.
     /// </summary>
     private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
-        ArchiveHandle archive,
+        RestoreContext context,
         Domain.Identifiers.ObjectId objectId,
         Repository.Catalogue.ResolvedLocation location,
         Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
@@ -530,12 +573,12 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             Repository.Packing.BlobReader? reader;
             try
             {
-                var metadata = await archive.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+                var metadata = await context.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
                 reader = metadata.Metadata is not { Length: > 0 }
                     ? null
                     : await Repository.Packing.BlobReader.OpenAsync(
-                        archive.Store, storeKey, metadata.Metadata.Length, archive.Repository.RepositoryId,
-                        archive.Repository.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
+                        context.Store, storeKey, metadata.Metadata.Length, context.RepositoryId,
+                        context.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
                         .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is Repository.Packing.BlobFormatException or IOException)
@@ -637,22 +680,34 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         }
     }
 
-    private static async ValueTask<bool> BlobExistsAsync(
-        ArchiveHandle archive, BlobClass blobClass, Domain.Identifiers.StoreBlobKey blobKey, CancellationToken cancellationToken)
+    /// <summary>
+    /// The store key a blob actually exists under, trying both classes — or
+    /// null. A store that cannot answer reads as missing: the plan's job is
+    /// to warn before bytes move, and "unreachable" warrants the warning as
+    /// much as "absent". The found key is what the run's targeted load opens.
+    /// </summary>
+    private static async ValueTask<ObjectKey?> FindBlobKeyAsync(
+        Storage.Abstractions.IObjectStore store,
+        Domain.Identifiers.StoreBlobKey blobKey,
+        CancellationToken cancellationToken)
     {
-        try
+        foreach (var blobClass in new[] { BlobClass.Metadata, BlobClass.Data })
         {
-            var metadata = await archive.Store.GetMetadataAsync(
-                Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey), cancellationToken).ConfigureAwait(false);
-            return metadata.Found && metadata.Metadata!.Length > 0;
+            var key = Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey);
+            try
+            {
+                var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+                if (metadata.Found && metadata.Metadata!.Length > 0)
+                {
+                    return key;
+                }
+            }
+            catch (IOException)
+            {
+            }
         }
-        catch (IOException)
-        {
-            // A store that cannot answer is reported as missing: the plan's
-            // job is to warn before bytes move, and "unreachable" warrants
-            // the warning as much as "absent".
-            return false;
-        }
+
+        return null;
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
@@ -663,40 +718,100 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             return invalid!;
         }
 
-        if (string.IsNullOrWhiteSpace(command.OutputDirectory))
+        var toOriginal = command.Target == "original";
+        if (command.Target is not (null or "folder" or "original"))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, $"'{command.Target}' is not a restore target (folder | original).");
+        }
+
+        if (!toOriginal && string.IsNullOrWhiteSpace(command.OutputDirectory))
         {
             return new ServiceError(ServiceErrorReason.InvalidArgument, "A restore needs an output directory.");
         }
 
+        ExistingDestinationPolicy existing;
+        switch (command.Existing)
+        {
+            case null:
+                existing = ExistingDestinationPolicy.Preserve;
+                break;
+            case "rename":
+                existing = ExistingDestinationPolicy.WriteBeside;
+                break;
+            case "overwrite":
+                existing = ExistingDestinationPolicy.Replace;
+                break;
+            default:
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"'{command.Existing}' is not an existing-file policy (rename | overwrite).");
+        }
+
         var target = RestoreTargetProfile.ForLocalPlatform();
-
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, error) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+            return error!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
-        var plan = RestorePlanner.Plan(catalogue, snapshotId, command.Path ?? string.Empty, target);
-        if (plan.Items.Count == 0)
+        if (context.Source is { } source)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        using var reader = new RepositoryReader(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-
-        // The output directory is a path on the machine running the service:
-        // a restore commanded from elsewhere writes here and the caller is told
-        // what happened, never sent the files (ADR-0028 §6).
-        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
-            plan,
-            command.OutputDirectory,
-            new RestoreExecutionOptions
+        try
+        {
+            using var catalogue = context.OpenCatalogue();
+            var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
+            if (plan.Items.Count == 0)
             {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
+            }
+
+            // The original-location mapping is resolved BEFORE anything is
+            // read or written (plan-before-transfer): every top-level slice
+            // must name a configured root, or the run is refused whole.
+            IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)> slices;
+            if (toOriginal)
+            {
+                var (resolved, refusal) = SliceForOriginal(catalogue, snapshotId, plan);
+                if (resolved is null)
+                {
+                    return refusal!;
+                }
+
+                slices = resolved;
+            }
+            else
+            {
+                slices = [(plan, command.OutputDirectory, string.Empty)];
+            }
+
+            using var reader = new RepositoryReader(context.RepositoryId, context.Keys, context.Store);
+            if (context.Source is null)
+            {
+                await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // A source may be remote: open only the blobs the plan needs,
+                // known exactly from the same probe the plan verb runs
+                // (ADR-0041).
+                var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+                await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
+            }
+
+            var options = new RestoreExecutionOptions
+            {
+                DestinationMode = command.InPlace || toOriginal
+                    ? RestoreDestinationMode.InPlace
+                    : RestoreDestinationMode.Quarantine,
+                ExistingDestination = existing,
+
                 // A fresh identifier per run, not per snapshot: two restores of
                 // one snapshot must displace into distinct stores, or the second
                 // overwrites the first's displaced copies — the single shared
@@ -704,31 +819,171 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 // made every restore of a snapshot share one.
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            },
-            cancellationToken).ConfigureAwait(false);
+            };
 
-        // Files, not entries. The receipt records a created directory as
-        // "restored" too, but the contract documents this field as files
-        // written — and PlanRestore counts the same way, so a caller comparing
-        // the plan against the outcome is comparing like with like.
-        var directories = plan.Items
-            .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
-            .Select(item => item.Path)
-            .ToHashSet(StringComparer.Ordinal);
+            // The output directory is a path on the machine running the
+            // service: a restore commanded from elsewhere writes here and the
+            // caller is told what happened, never sent the files (ADR-0028 §6).
+            var executor = new RestoreExecutor(reader, target);
+            var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
+            foreach (var (slice, outputDirectory, labelPrefix) in slices)
+            {
+                receipts.Add((
+                    await executor.ExecuteAsync(slice, outputDirectory, options, cancellationToken).ConfigureAwait(false),
+                    labelPrefix));
+            }
 
-        return new RestoreResult(
-            // A degraded file's content was written and verified, so it counts
-            // among the files written; the Outcome below carries the shortfall
-            // (Partial), exactly as it carries a skipped symlink's.
-            receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
-            receipt.Items.Count(item => item.Outcome == "failed"),
-            // Where the files actually are, not where the caller pointed.
-            // Historical content quarantines by default (FR-RST-006), so the
-            // two differ, and a caller told the wrong one cannot find its data.
-            receipt.WrittenTo,
-            // The outcome the executor computed — carried whole so a Partial
-            // restore is not reported to a remote client as success (FR-RST-005).
-            receipt.Outcome.ToString().ToLowerInvariant());
+            var receipt = MergeReceipts(receipts);
+            var receiptPath = PersistReceipt(receipt, options.RunId);
+
+            // Files, not entries. The receipt records a created directory as
+            // "restored" too, but the contract documents this field as files
+            // written — and PlanRestore counts the same way, so a caller
+            // comparing the plan against the outcome is comparing like with
+            // like.
+            var directories = plan.Items
+                .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+                .Select(item => item.Path)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
+            return new RestoreResult(
+                // A degraded file's content was written and verified, so it
+                // counts among the files written; the Outcome carries the
+                // shortfall (Partial), exactly as it carries a skipped
+                // symlink's.
+                receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
+                failures.Count,
+                // Where the files actually are, not where the caller pointed.
+                // Historical content quarantines by default (FR-RST-006), so
+                // the two differ, and a caller told the wrong one cannot find
+                // its data.
+                receipt.WrittenTo,
+                // The outcome the executor computed — carried whole so a
+                // Partial restore is not reported to a remote client as
+                // success (FR-RST-005).
+                receipt.Outcome.ToString().ToLowerInvariant(),
+                Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
+                Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
+                Displaced: receipt.Displaced.Count,
+                WrittenBeside: receipt.Items.Count(item => item.WrittenAs is not null),
+                ReceiptPath: receiptPath,
+                FailedSample: failures.Count == 0
+                    ? null
+                    : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")]);
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The per-root slices of an original-location restore (ADR-0041). A
+    /// single-root set restores the whole plan into its root; a multi-root
+    /// set's plan paths are label-prefixed (ADR-0040), so the items group by
+    /// first component, each slice's paths shed the label, and each runs
+    /// into its root — refused whole, naming the label, when any slice's
+    /// label no longer maps to a configured root.
+    /// </summary>
+    private (IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? Slices, ServiceError? Refusal)
+        SliceForOriginal(Repository.Catalogue.Catalogue catalogue, byte[] snapshotId, RestorePlan plan)
+    {
+        var row = catalogue.EnumerateSnapshots()
+            .FirstOrDefault(candidate => candidate.SnapshotId.Span.SequenceEqual(snapshotId));
+        var setId = row is null ? null : Convert.ToHexStringLower(row.BackupSetId.Span);
+        var set = setId is null
+            ? null
+            : runtime.Configuration.BackupSets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, setId, StringComparison.Ordinal));
+        if (set is null)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "This snapshot's set is no longer configured — restore to a chosen folder instead."));
+        }
+
+        if (set.Roots.Count == 1)
+        {
+            return ([(plan, set.Roots[0].Path, string.Empty)], null);
+        }
+
+        var byLabel = plan.Items
+            .GroupBy(item => item.Path.Split('/')[0], StringComparer.Ordinal)
+            .ToList();
+        var slices = new List<(RestorePlan, string, string)>();
+        foreach (var group in byLabel)
+        {
+            var root = set.Roots.FirstOrDefault(candidate =>
+                string.Equals(candidate.Label, group.Key, StringComparison.Ordinal));
+            if (root is null)
+            {
+                return (null, new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"'{group.Key}' is not one of the set's root labels any more — restore to a chosen folder instead."));
+            }
+
+            var prefix = group.Key + "/";
+            var items = group
+                .Where(item => item.Path.Length > prefix.Length)
+                .Select(item => item with { Path = item.Path[prefix.Length..] })
+                .ToList();
+            slices.Add((
+                new RestorePlan
+                {
+                    SnapshotId = plan.SnapshotId,
+                    Items = items,
+                    Conflicts = plan.Conflicts,
+                    Degradations = plan.Degradations,
+                },
+                root.Path,
+                prefix));
+        }
+
+        return (slices, null);
+    }
+
+    /// <summary>One receipt for the run, whichever way it was sliced.</summary>
+    private static RestoreReceipt MergeReceipts(List<(RestoreReceipt Receipt, string LabelPrefix)> receipts)
+    {
+        if (receipts.Count == 1 && receipts[0].LabelPrefix.Length == 0)
+        {
+            return receipts[0].Receipt;
+        }
+
+        static string Prefixed(string prefix, string path) => prefix.Length == 0 ? path : prefix + path;
+        var worst = receipts.Max(entry => entry.Receipt.Outcome);
+        return new RestoreReceipt
+        {
+            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+            SnapshotId = receipts[0].Receipt.SnapshotId,
+            StartedAt = receipts.Min(entry => entry.Receipt.StartedAt),
+            CompletedAt = receipts.Max(entry => entry.Receipt.CompletedAt),
+            Items = [.. receipts.SelectMany(entry => entry.Receipt.Items.Select(item => item with
+            {
+                Path = Prefixed(entry.LabelPrefix, item.Path),
+                WrittenAs = item.WrittenAs is null ? null : Prefixed(entry.LabelPrefix, item.WrittenAs),
+            }))],
+            Displaced = [.. receipts.SelectMany(entry =>
+                entry.Receipt.Displaced.Select(path => Prefixed(entry.LabelPrefix, path)))],
+            WrittenTo = string.Join("; ", receipts.Select(entry => entry.Receipt.WrittenTo)),
+            Outcome = worst,
+        };
+    }
+
+    /// <summary>
+    /// Persists the receipt (FR-RST-004): the executor builds it and until
+    /// now nobody kept it, which made "the restore succeeded" an impression
+    /// rather than a checkable claim once the dialog closed.
+    /// </summary>
+    private string PersistReceipt(RestoreReceipt receipt, string runId)
+    {
+        Directory.CreateDirectory(runtime.ReceiptsRoot);
+        var path = Path.Combine(runtime.ReceiptsRoot, $"{runId}.json");
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, receipt.ToJson());
+        File.Move(temporary, path, overwrite: true);
+        return path;
     }
 
     /// <summary>Verifies every stored blob of every set's archive at the requested level.</summary>
@@ -1487,13 +1742,23 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 ServiceErrorReason.InvalidArgument, $"'{command.SnapshotId}' is not a hex snapshot identifier.");
         }
 
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, contextError) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(ServiceErrorReason.NotFound, $"No snapshot '{command.SnapshotId}' exists.");
+            return command.Source is null
+                ? new ServiceError(ServiceErrorReason.NotFound, $"No snapshot '{command.SnapshotId}' exists.")
+                : contextError!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
+        if (context.Source is { } source)
+        {
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+        using var catalogue = context.OpenCatalogue();
         var path = command.Path ?? string.Empty;
         var entries = catalogue.ListDirectory(snapshotId, path);
 
@@ -1562,6 +1827,11 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 ChangeOf(entry)))],
             deleted,
             previous is null ? null : Convert.ToHexStringLower(previous.SnapshotId.Span));
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
     }
 
     /// <summary>
@@ -1703,7 +1973,8 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             Environment.MachineName,
             runtime.Options.StateDirectory,
             remoteBinding.Enabled,
-            runtime.Queue.ActiveCount);
+            runtime.Queue.ActiveCount,
+            runtime.Options.ArchivesRoot);
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

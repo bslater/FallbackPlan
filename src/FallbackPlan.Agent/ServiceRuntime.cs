@@ -98,6 +98,23 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>What is running and what is waiting.</summary>
     public JobScheduler Queue { get; }
 
+    /// <summary>The open restore sources (ADR-0041).</summary>
+    internal RestoreSourceRegistry RestoreSources { get; } = new();
+
+    /// <summary>
+    /// The passphrase the runtime unlocks archives with — the ADR-0028 §9
+    /// posture. Handed to the restore-source opens so a replica or peer
+    /// repository unlocks with the same secret its staging archive did;
+    /// never exposed on any contract surface (NFR-SEC-009).
+    /// </summary>
+    internal Passphrase ArchivePassphrase => _passphrase;
+
+    /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
+    internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
+
+    /// <summary>Where persisted restore receipts land (FR-RST-004).</summary>
+    internal string ReceiptsRoot => Path.Combine(Options.StateDirectory, "receipts");
+
     /// <summary>This device's writer identity — one per device, shared by every archive it writes.</summary>
     public WriterId Writer => WriterId.FromBytes(State.WriterId);
 
@@ -156,6 +173,20 @@ public sealed class ServiceRuntime : IAsyncDisposable
         {
             var state = LocalState.LoadOrCreate(options.StateDirectory);
             var jobs = JobStateStore.Open(options.StateDirectory);
+
+            // Crash leftovers: per-source catalogue caches are worthless
+            // without their (gone) handles, and a failed purge is only noise.
+            try
+            {
+                var restoreCache = Path.Combine(options.StateDirectory, "restore-cache");
+                if (Directory.Exists(restoreCache))
+                {
+                    Directory.Delete(restoreCache, recursive: true);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
 
             return ValueTask.FromResult(
                 new ServiceRuntime(options, writerRole, passphrase.Clone(), state, jobs)
@@ -307,6 +338,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         _disposed = true;
         await Queue.DisposeAsync().ConfigureAwait(false);
         Progress.Complete();
+        await RestoreSources.DisposeAsync().ConfigureAwait(false);
 
         foreach (var archive in _archives.Values)
         {
