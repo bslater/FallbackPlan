@@ -148,6 +148,7 @@ public static class WebConsoleHost
 
         app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth));
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
+        app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
@@ -204,6 +205,81 @@ public static class WebConsoleHost
         context.Response.Headers.CacheControl = "no-store";
         await JsonSerializer.SerializeAsync<ServiceResult>(
             context.Response.Body, result, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>What the restore-gate endpoint reads from the page.</summary>
+    /// <param name="Passphrase">The typed passphrase; verified locally, sent nowhere (ADR-0041).</param>
+    private sealed record GateRequest(string? Passphrase);
+
+    /// <summary>The gate's answer to the page.</summary>
+    /// <param name="Outcome"><c>verified</c>, <c>wrong</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">What an unavailable outcome met.</param>
+    private sealed record GateResponse(string Outcome, string? Detail);
+
+    /// <summary>
+    /// The restore wizard's passphrase gate (ADR-0041): the one endpoint that
+    /// handles a secret, and the secret goes no further than this process —
+    /// verification is <see cref="ConsoleRestoreGate"/> deriving against the
+    /// archive's key files on local disk. The service is consulted only for
+    /// WHERE the archives live (a path, not a secret), never given the
+    /// passphrase it already holds its own copy of.
+    /// </summary>
+    private static async Task RestoreGateAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        GateRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<GateRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request?.Passphrase is not { Length: > 0 } passphrase)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a passphrase is required")).ConfigureAwait(false);
+            return;
+        }
+
+        string? archivesRoot = null;
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is ServiceDescriptionResult description)
+            {
+                archivesRoot = description.ArchivesRoot;
+            }
+        }
+        catch (ServiceConnectionException)
+        {
+            // No service answering means no restore either; the gate's
+            // unavailable answer lets the page say so in one place.
+        }
+
+        var answer = await ConsoleRestoreGate.VerifyAsync(archivesRoot, passphrase, context.RequestAborted)
+            .ConfigureAwait(false);
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new GateResponse(answer.Outcome.ToString().ToLowerInvariant(), answer.Detail),
+            SerializerOptions,
+            context.RequestAborted).ConfigureAwait(false);
     }
 
     /// <summary>

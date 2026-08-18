@@ -595,6 +595,13 @@ function closeDialog() {
   dialog.innerHTML = "";
   dialog.classList.remove("wide");
   E = null;
+  if (W) {
+    // The wizard's server-side source handle is released best-effort; the
+    // idle sweep reclaims it anyway if this never lands. The passphrase
+    // lives only in W and dies here.
+    if (W.source) run({ command: "close_restore_source", sourceId: W.source.sourceId });
+    W = null;
+  }
 }
 
 dialog.addEventListener("click", event => {
@@ -856,40 +863,8 @@ const actions = {
 
   async "browse-to"(el) { await openBrowser(el.dataset.snapshot, el.dataset.path); },
 
-  "restore"(el) { openRestoreDialog(el.dataset.snapshot, el.dataset.path ?? ""); },
-
-  async "restore-plan-go"(el) {
-    const snapshotId = el.dataset.snapshot;
-    const path = document.getElementById("restore-path").value.trim();
-    const output = document.getElementById("restore-output").value.trim();
-    if (!output) { toast("warn", "Name an output directory — it is a path on the service's machine."); return; }
-    await withBusy(el, async () => {
-      const plan = await run({ command: "plan_restore", snapshotId, path: path || null }, { errToast: "Plan refused" });
-      if (plan?.result !== "restore_plan") return;
-      openDialog(renderRestoreConfirm(snapshotId, path, output, plan));
-      document.getElementById("confirm-word").focus();
-    });
-  },
-
-  async "restore-go"(el) {
-    const { snapshot, path, output } = el.dataset;
-    await withBusy(el, async () => {
-      const result = await run(
-        { command: "run_restore", snapshotId: snapshot, path: path || null, outputDirectory: output },
-        { errToast: "Restore refused" });
-      if (result?.result === "restore") {
-        const clean = result.outcome === "complete";
-        openDialog(`
-          <h3>${clean ? "✔ Restore complete" : "◐ Restore " + esc(result.outcome)}</h3>
-          <div class="plan-figures">
-            <div class="fig"><b>${fmtCount(result.restored)}</b><span>files written</span></div>
-            <div class="fig"><b>${fmtCount(result.failed)}</b><span>failures</span></div>
-          </div>
-          <p class="dlg-sub">Written on the service's machine to
-          <span class="mono">${esc(result.outputDirectory)}</span> — content never crosses to this page (Q18).</p>
-          <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`);
-      }
-    });
+  "restore"(el) {
+    openRestoreWizard({ snapshotId: el.dataset.snapshot, path: el.dataset.path ?? "" });
   },
 
   async "what-changed"(el) {
@@ -2204,50 +2179,522 @@ async function openBrowser(snapshotId, path) {
     </div>`);
 }
 
-/* ----- restore dialog ----- */
+/* ----- the guided restore wizard (ADR-0041) ----- */
+//
+// Six steps: unlock -> source -> effective date -> files -> target ->
+// review/run. The passphrase is verified by the CONSOLE PROCESS against the
+// archive's key files on this machine (/api/restore-gate) and never sent to
+// the service; the restore itself reads through a server-side source handle
+// — the staging archive, a local replica, or a peer's replica over the wire.
 
-function openRestoreDialog(snapshotId, path) {
-  openDialog(`
-    <h3>Restore</h3>
-    <p class="dlg-sub">The service writes the files on <b>its</b> machine; this page is told counts and a
-    path, never sent content. The plan is shown before anything is written.</p>
-    <label class="field" for="restore-path">Path within the snapshot <span class="plain">(empty restores everything)</span></label>
-    <input type="text" id="restore-path" class="mono" value="${esc(path)}" spellcheck="false">
-    <label class="field" for="restore-output">Output directory — on the service's machine</label>
-    <div class="field-row">
-      <input type="text" id="restore-output" class="mono" placeholder="/home/you/restore-2026-08-17" spellcheck="false">
-      <button type="button" class="btn" data-action="picker-browse" data-browser="restore-browser" data-input="restore-output">Browse…</button>
-    </div>
-    <div id="restore-browser" hidden></div>
-    <div class="dlg-actions">
-      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-      <button type="button" class="btn primary" data-action="restore-plan-go" data-snapshot="${esc(snapshotId)}">Plan restore</button>
-    </div>`);
-  document.getElementById("restore-output").focus();
+let W = null;
+
+function openRestoreWizard(prefill) {
+  W = {
+    step: 1,
+    passphrase: "",
+    gate: null,               // null | "verified" | "wrong" | "unavailable"
+    gateDetail: null,
+    gateAck: false,
+    sets: [], dests: [],
+    setName: null, destinationName: null,
+    source: null,             // RestoreSourceOpenedResult
+    date: new Date().toISOString().slice(0, 10),
+    snapshot: null,           // the resolved SnapshotDescriptor
+    tree: new Map(),          // snapshot path ("" = root) -> DirectoryResult|null, plus open flags
+    open: new Set([""]),
+    marks: new Map(),         // snapshot path -> "on"|"off"; unmarked inherit, default off
+    target: "folder",
+    output: "",
+    existing: "rename",
+    plan: null,
+    result: null,
+    prefill: prefill?.snapshotId ? prefill : null,
+  };
+  dialog.classList.add("wide");
+  rstRender();
+  document.getElementById("rst-passphrase")?.focus();
 }
 
-function renderRestoreConfirm(snapshotId, path, output, plan) {
-  const missing = plan.missingObjects?.length ?? 0;
+const RST_STEPS = ["Unlock", "Source", "Date", "Files", "Target", "Restore"];
+
+function rstHeader() {
+  return `<h3>Restore</h3>
+    <div class="rst-steps">${RST_STEPS.map((name, index) => `
+      <span class="rst-step ${index + 1 === W.step ? "now" : index + 1 < W.step ? "done" : ""}">${index + 1}. ${name}</span>`).join("")}
+    </div>`;
+}
+
+function rstNav(continueLabel = "Continue", danger = false) {
+  return `<div class="dlg-actions">
+    <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+    ${W.step > 1 ? `<button type="button" class="btn" data-action="rst-back">‹ Back</button>` : ""}
+    <button type="button" class="btn ${danger ? "danger" : "primary"}" data-action="rst-continue">${esc(continueLabel)}</button>
+  </div>`;
+}
+
+function rstRender() {
+  const body = [rstStep1, rstStep2, rstStep3, rstStep4, rstStep5, rstStep6][W.step - 1]();
+  openDialog(`<div id="rst">${rstHeader()}${body}</div>`);
+  if (W.step === 4) rstPaintTriState();
+}
+
+/* step 1 — unlock */
+function rstStep1() {
   return `
-    <h3>Confirm restore</h3>
-    <p class="dlg-sub">${path ? `<span class="mono">${esc(path)}</span> from snapshot` : "The whole snapshot"}
-      <span class="mono">${esc(snapshotId.slice(0, 16))}…</span> →
-      <span class="mono">${esc(output)}</span></p>
+    <p class="dlg-sub">Enter the repository passphrase. It is checked by <b>this console process</b> against the
+    archive's own key files on this machine and sent nowhere — not even to the service.</p>
+    <label class="field" for="rst-passphrase">Passphrase</label>
+    <input type="password" id="rst-passphrase" autocomplete="off" value="${esc(W.passphrase)}">
+    ${W.gate === "wrong" ? `<ul class="warnings"><li>That passphrase does not open the repository.</li></ul>` : ""}
+    ${W.gate === "unavailable" ? `
+      <ul class="warnings"><li>The passphrase cannot be verified from here${W.gateDetail ? ` — ${esc(W.gateDetail)}` : ""}.
+      You can continue; the service still decrypts with its own keys.</li></ul>
+      <label class="check-row"><input type="checkbox" id="rst-gate-ack" ${W.gateAck ? "checked" : ""}>
+        Continue without local verification</label>` : ""}
+    ${rstNav()}`;
+}
+
+/* step 2 — source */
+function rstStep2() {
+  const options = [];
+  options.push(`
+    <label class="radio-block"><input type="radio" name="rst-src" value="staging" ${W.destinationName === null ? "checked" : ""}>
+      <b>This machine's staging archive</b> <span class="detail">the service's own copy</span></label>`);
+  for (const destination of W.dests) {
+    if (destination.kind !== "local-path" && destination.kind !== "peer") continue;
+    const label = destination.kind === "local-path"
+      ? `replica at <span class="mono">${esc(destination.path ?? "")}</span>`
+      : `replica at peer <span class="mono">${esc(destination.endpoint ?? "")}</span>, over the network`;
+    options.push(`
+      <label class="radio-block"><input type="radio" name="rst-src" value="${esc(destination.name)}"
+        ${W.destinationName === destination.name ? "checked" : ""}>
+        <b>${esc(destination.name)}</b> <span class="detail">${label}</span></label>`);
+  }
+
+  return `
+    <p class="dlg-sub">Where to restore <b>from</b>. A destination's replica serves when this machine's own
+    archive is damaged or gone — a peer's travels the paired connection.</p>
+    <label class="field" for="rst-set">Backup set</label>
+    <select id="rst-set">${W.sets.map(set =>
+      `<option ${set.name === W.setName ? "selected" : ""}>${esc(set.name)}</option>`).join("")}</select>
+    <label class="field">Source</label>
+    ${options.join("")}
+    ${W.sourceError ? `<ul class="warnings"><li>${esc(W.sourceError)}</li></ul>` : ""}
+    ${rstNav("Open source")}`;
+}
+
+/* step 3 — effective date */
+function rstStep3() {
+  const resolved = rstResolveSnapshot();
+  const dates = [...new Set(W.source.snapshots.map(row =>
+    new Date(Number(row.capturedAt)).toISOString().slice(0, 10)))];
+  return `
+    <p class="dlg-sub">The restore uses the <b>last backup at or before</b> this date
+    ${W.source.warnings?.length ? `<br>Source notes: ${W.source.warnings.map(esc).join("; ")}` : ""}</p>
+    <label class="field" for="rst-date">Effective date</label>
+    <input type="date" id="rst-date" value="${esc(W.date)}">
+    <p class="subtle">Backups exist for: ${dates.map(esc).join(" · ") || "(none)"}</p>
+    ${resolved
+      ? `<p class="dlg-sub">Effective backup: <b>${esc(fmtWhen(resolved.capturedAt))}</b>
+         <span class="mono">${esc(resolved.snapshotId.slice(0, 16))}…</span> · ${fmtCount(resolved.files)} files
+         ${resolved.captureStatus === 1 ? "" : " · partial capture"}</p>`
+      : `<ul class="warnings"><li>No backup exists at or before this date — the earliest here is
+         ${esc(fmtWhen(W.source.snapshots[0]?.capturedAt))}.</li></ul>`}
+    ${rstNav()}`;
+}
+
+function rstResolveSnapshot() {
+  // End of the chosen day, in this browser's clock — snapshots are stamped
+  // in Unix ms, so the comparison is exact.
+  const cutoff = new Date(W.date + "T23:59:59.999").getTime();
+  const eligible = W.source.snapshots.filter(row => Number(row.capturedAt) <= cutoff);
+  return eligible.length ? eligible[eligible.length - 1] : null;
+}
+
+/* step 4 — files */
+function rstStep4() {
+  return `
+    <p class="dlg-sub">Tick the files and folders to restore from the backup of
+    <b>${esc(fmtWhen(W.snapshot.capturedAt))}</b>.</p>
+    <div id="rst-tree" class="tree">${rstRenderDir("", 0)}</div>
+    <div id="rst-summary" class="subtle">${rstSummary()}</div>
+    ${rstNav()}`;
+}
+
+function rstListing(path) {
+  if (W.tree.has(path)) return W.tree.get(path);
+  W.tree.set(path, null); // one fetch per path
+  run({ command: "list_directory", snapshotId: W.snapshot.snapshotId, path: path || null, source: W.source.sourceId })
+    .then(result => {
+      if (!W || W.snapshot === null) return;
+      W.tree.set(path, result?.result === "directory" ? result : { entries: [] });
+      if (W.step === 4) rstRender();
+    });
+  return null;
+}
+
+function rstIsUnder(child, parent) {
+  return parent === "" ? child !== "" : child !== parent && child.startsWith(parent + "/");
+}
+
+function rstEffective(path) {
+  let best = null;
+  for (const [key, state] of W.marks) {
+    if (key === path || (key === "" ? true : rstIsUnder(path, key))) {
+      if (best === null || key.length > best.key.length) best = { key, state };
+    }
+  }
+  return best?.state ?? "off";
+}
+
+function rstRenderDir(path, depth) {
+  const listing = rstListing(path);
+  if (listing === null) return `<p class="subtle">${"<span class='indent'></span>".repeat(depth)}Loading…</p>`;
+
+  const rows = [];
+  for (const entry of listing.entries) {
+    const childPath = path ? path + "/" + entry.name : entry.name;
+    const state = rstEffective(childPath);
+    const isDir = entry.kind === "directory";
+    rows.push(`
+      <div class="tree-row ${state === "off" ? "off" : ""}">
+        ${"<span class='indent'></span>".repeat(depth)}
+        ${isDir
+          ? `<button type="button" class="twist" data-action="rst-open" data-path="${esc(childPath)}">${W.open.has(childPath) ? "▾" : "▸"}</button>`
+          : `<span class="twist"></span>`}
+        <input type="checkbox" class="mark" data-rst-mark="${esc(childPath)}" ${state === "on" ? "checked" : ""}
+               aria-label="Restore ${esc(entry.name)}">
+        <span class="kind-ico">${isDir ? "📁" : entry.kind === "symlink" ? "🔗" : "📄"}</span>
+        <span class="tree-name">${esc(entry.name)}</span>
+        ${entry.kind === "file" ? `<span class="detail">${fmtBytes(entry.length)}</span>` : ""}
+      </div>
+      ${isDir && W.open.has(childPath) ? rstRenderDir(childPath, depth + 1) : ""}`);
+  }
+
+  return rows.join("") || `<p class="subtle">${"<span class='indent'></span>".repeat(depth)}(empty)</p>`;
+}
+
+function rstPaintTriState() {
+  for (const box of document.querySelectorAll("#rst-tree input[data-rst-mark]")) {
+    const path = box.dataset.rstMark;
+    const state = rstEffective(path);
+    box.indeterminate = [...W.marks].some(([key, mark]) => rstIsUnder(key, path) && mark !== state);
+  }
+}
+
+function rstToggle(path) {
+  const target = rstEffective(path) === "on" ? "off" : "on";
+  for (const key of [...W.marks.keys()]) {
+    if (rstIsUnder(key, path)) W.marks.delete(key);
+  }
+  W.marks.delete(path);
+  if (rstEffective(path) !== target) W.marks.set(path, target);
+  rstRender();
+}
+
+// marks + loaded listings -> the exact prefixes the plan takes. A folder
+// ticked whole becomes one prefix; unticking inside it recurses to the kept
+// siblings — exact, because the snapshot is frozen (unlike the set editor's
+// wall, nothing new can appear here).
+function rstCompile() {
+  const prefixes = [];
+  const walk = path => {
+    const listing = W.tree.get(path);
+    if (!listing) return; // not loaded: nothing below was ever marked
+    for (const entry of listing.entries) {
+      const childPath = path ? path + "/" + entry.name : entry.name;
+      const state = rstEffective(childPath);
+      const offBelow = [...W.marks].some(([key, mark]) => mark === "off" && rstIsUnder(key, childPath));
+      const onBelow = [...W.marks].some(([key, mark]) => mark === "on" && rstIsUnder(key, childPath));
+      if (state === "on") {
+        if (offBelow) walk(childPath);
+        else prefixes.push(childPath);
+      } else if (onBelow) {
+        walk(childPath);
+      }
+    }
+  };
+  walk("");
+  return prefixes;
+}
+
+function rstSummary() {
+  const prefixes = rstCompile();
+  return prefixes.length === 0
+    ? "Nothing selected yet — tick what to restore."
+    : `<b>${prefixes.length}</b> selection(s): ${prefixes.slice(0, 6).map(esc).join(", ")}${prefixes.length > 6 ? ` … and ${prefixes.length - 6} more` : ""}`;
+}
+
+/* step 5 — target */
+function rstStep5() {
+  const set = W.sets.find(candidate => candidate.name === W.setName);
+  const roots = set ? rootsOf(set) : [];
+  return `
+    <p class="dlg-sub">Where the files land — a path on the <b>service's</b> machine; content never crosses
+    to this page.</p>
+    <label class="radio-block"><input type="radio" name="rst-target" value="folder" ${W.target === "folder" ? "checked" : ""}>
+      <b>A folder I choose</b></label>
+    <div class="field-row rst-indent">
+      <input type="text" id="rst-output" class="mono" value="${esc(W.output)}" spellcheck="false"
+             placeholder="/home/you/restore-${esc(W.date)}">
+      <button type="button" class="btn" data-action="picker-browse" data-browser="rst-browser" data-input="rst-output">Browse…</button>
+    </div>
+    <div id="rst-browser" hidden></div>
+    <label class="radio-block"><input type="radio" name="rst-target" value="original" ${W.target === "original" ? "checked" : ""}
+      ${roots.length === 0 ? "disabled" : ""}>
+      <b>The original location</b>
+      <span class="detail">${roots.length ? roots.map(esc).join(", ") : "the set is no longer configured"}</span></label>
+    <label class="field">If a file already exists there</label>
+    <div class="radio-row">
+      <label><input type="radio" name="rst-existing" value="rename" ${W.existing === "rename" ? "checked" : ""}>
+        keep both — the restored copy is written beside it as <span class="mono">name (restored ${esc(W.date)}).ext</span></label>
+      <label><input type="radio" name="rst-existing" value="overwrite" ${W.existing === "overwrite" ? "checked" : ""}>
+        overwrite the existing file</label>
+    </div>
+    ${rstNav()}`;
+}
+
+/* step 6 — review, run, result */
+function rstStep6() {
+  if (W.result) {
+    const clean = W.result.outcome === "complete";
+    return `
+      <h3>${clean ? "✔ Restore complete" : "◐ Restore " + esc(W.result.outcome)}</h3>
+      <div class="plan-figures">
+        <div class="fig"><b>${fmtCount(W.result.restored)}</b><span>files written</span></div>
+        <div class="fig"><b>${fmtCount(W.result.failed)}</b><span>failures</span></div>
+        <div class="fig"><b>${fmtCount(W.result.writtenBeside)}</b><span>kept beside</span></div>
+        <div class="fig"><b>${fmtCount(W.result.displaced)}</b><span>moved aside</span></div>
+      </div>
+      <p class="dlg-sub">Written on the service's machine to
+        <span class="mono">${esc(W.result.outputDirectory)}</span>.
+        Receipt: <span class="mono">${esc(W.result.receiptPath ?? "—")}</span></p>
+      ${W.result.failedSample?.length ? `<pre class="report">${esc(W.result.failedSample.join("\n"))}</pre>` : ""}
+      <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`;
+  }
+
+  const plan = W.plan;
+  const figures = plan ? `
     <div class="plan-figures">
       <div class="fig"><b>${fmtCount(plan.files)}</b><span>files</span></div>
       <div class="fig"><b>${fmtBytes(plan.bytes)}</b><span>to write</span></div>
-      <div class="fig"><b>${fmtCount(missing)}</b><span>missing objects</span></div>
+      <div class="fig"><b>${fmtCount(plan.missingObjects?.length ?? 0)}</b><span>missing objects</span></div>
+      <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
     </div>
-    ${missing ? `<ul class="warnings"><li>${fmtCount(missing)} object(s) the plan needs cannot be found — those files will fail. The plan reports absence; verify reports damage.</li></ul>` : ""}
+    ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
+      needs cannot be found — those files will fail.</li></ul>` : ""}
+    ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
+    ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`
+    : `<p class="subtle">Planning…</p>`;
+
+  return `
+    <p class="dlg-sub">Restoring the backup of <b>${esc(fmtWhen(W.snapshot.capturedAt))}</b> from
+    <b>${esc(W.source.location)}</b> to
+    <b>${W.target === "original" ? "the original location" : `<span class="mono">${esc(W.output)}</span>`}</b>,
+    ${W.existing === "rename" ? "keeping existing files (restored copies beside them)" : "overwriting existing files"}.</p>
+    ${figures}
     <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
     <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-           data-action-input="confirm-word" data-word="restore" data-enables="restore-confirm-go">
+           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go">
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-      <button type="button" class="btn danger" id="restore-confirm-go" data-action="restore-go" disabled
-              data-snapshot="${esc(snapshotId)}" data-path="${esc(path)}" data-output="${esc(output)}">Restore</button>
+      <button type="button" class="btn" data-action="rst-back">‹ Back</button>
+      <button type="button" class="btn danger" id="rst-run-go" data-action="rst-run" disabled>Restore</button>
     </div>`;
 }
+
+async function rstGateCheck() {
+  W.passphrase = document.getElementById("rst-passphrase")?.value ?? W.passphrase;
+  if (!W.passphrase) { toast("warn", "Enter the passphrase."); return false; }
+  let response;
+  try {
+    response = await fetch("/api/restore-gate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify({ passphrase: W.passphrase }),
+    });
+  } catch {
+    toast("warn", "The console process stopped answering.");
+    return false;
+  }
+  const body = await safeJson(response);
+  if (!response.ok) { toast("bad", body?.message ?? "The gate refused."); return false; }
+  W.gate = body?.outcome ?? "unavailable";
+  W.gateDetail = body?.detail ?? null;
+  if (W.gate === "verified") return true;
+  if (W.gate === "unavailable") {
+    W.gateAck = document.getElementById("rst-gate-ack")?.checked ?? false;
+    return W.gateAck;
+  }
+  return false;
+}
+
+async function rstOpenSource() {
+  W.setName = document.getElementById("rst-set")?.value ?? W.setName;
+  const chosen = document.querySelector("input[name=rst-src]:checked")?.value ?? "staging";
+  W.destinationName = chosen === "staging" ? null : chosen;
+  W.sourceError = null;
+
+  if (W.source) {
+    run({ command: "close_restore_source", sourceId: W.source.sourceId });
+    W.source = null;
+  }
+
+  const result = await run({
+    command: "open_restore_source",
+    setName: W.setName,
+    destinationName: W.destinationName,
+  }, { errToast: "The source would not open" });
+  if (result?.result !== "restore_source") {
+    W.sourceError = "The source did not open — see the message above.";
+    return false;
+  }
+
+  W.source = result;
+  W.snapshot = null;
+  W.tree = new Map();
+  W.open = new Set([""]);
+  W.marks = new Map();
+  return true;
+}
+
+const rstActions = {
+  async continue1() {
+    // Collect ack state before the check so an already-shown warning's tick
+    // counts on this click.
+    W.gateAck = document.getElementById("rst-gate-ack")?.checked ?? W.gateAck;
+    if (!await rstGateCheck()) { rstRender(); return; }
+    // The wizard fetches its own data: S.sets/S.destinations belong to
+    // other views and may be stale or empty.
+    const [sets, dests] = await Promise.all([
+      run({ command: "list_backup_sets" }),
+      run({ command: "list_destinations" }),
+    ]);
+    W.sets = sets?.result === "backup_sets" ? sets.sets : [];
+    W.dests = dests?.result === "destinations" ? dests.destinations : [];
+    if (W.sets.length === 0) { toast("warn", "No backup sets are configured."); return; }
+    if (W.prefill) {
+      const row = S.snapshots.find(candidate => candidate.snapshotId === W.prefill.snapshotId);
+      const set = row ? W.sets.find(candidate => candidate.id === row.backupSetId) : null;
+      W.setName = set?.name ?? W.sets[0].name;
+    } else {
+      W.setName ??= W.sets[0].name;
+    }
+    W.step = 2;
+    rstRender();
+  },
+
+  async continue2() {
+    if (!await rstOpenSource()) { rstRender(); return; }
+    if (W.source.snapshots.length === 0) {
+      W.sourceError = "This source holds no backups of the set.";
+      rstRender();
+      return;
+    }
+    if (W.prefill && W.source.snapshots.some(row => row.snapshotId === W.prefill.snapshotId)) {
+      W.date = new Date(Number(
+        W.source.snapshots.find(row => row.snapshotId === W.prefill.snapshotId).capturedAt))
+        .toISOString().slice(0, 10);
+    }
+    W.step = 3;
+    rstRender();
+  },
+
+  continue3() {
+    W.date = document.getElementById("rst-date")?.value || W.date;
+    const resolved = rstResolveSnapshot();
+    if (!resolved) { rstRender(); return; }
+    if (W.snapshot?.snapshotId !== resolved.snapshotId) {
+      W.snapshot = resolved;
+      W.tree = new Map();
+      W.open = new Set([""]);
+      W.marks = new Map();
+      if (W.prefill?.path && W.prefill.snapshotId === resolved.snapshotId) {
+        W.marks.set(W.prefill.path, "on");
+      }
+    }
+    W.step = 4;
+    rstRender();
+  },
+
+  continue4() {
+    if (rstCompile().length === 0) { toast("warn", "Tick at least one file or folder."); return; }
+    W.step = 5;
+    rstRender();
+  },
+
+  async continue5() {
+    W.target = document.querySelector("input[name=rst-target]:checked")?.value ?? "folder";
+    W.existing = document.querySelector("input[name=rst-existing]:checked")?.value ?? "rename";
+    W.output = document.getElementById("rst-output")?.value.trim() ?? "";
+    if (W.target === "folder" && !W.output) {
+      toast("warn", "Choose an output folder — it is a path on the service's machine.");
+      return;
+    }
+    W.step = 6;
+    W.plan = null;
+    W.result = null;
+    rstRender();
+
+    const plan = await run({
+      command: "plan_restore",
+      snapshotId: W.snapshot.snapshotId,
+      path: null,
+      source: W.source.sourceId,
+      paths: rstCompile(),
+    }, { errToast: "The plan refused" });
+    if (!W || W.step !== 6) return;
+    if (plan?.result === "restore_plan") {
+      W.plan = plan;
+      rstRender();
+      // The typed word gates the button; re-enable path is the input event.
+      document.getElementById("confirm-word")?.focus();
+    }
+  },
+};
+
+Object.assign(actions, {
+  "rst-back"() {
+    W.step = Math.max(1, W.step - 1);
+    W.result = null;
+    rstRender();
+  },
+
+  async "rst-continue"(el) {
+    await withBusy(el, async () => {
+      await rstActions[`continue${W.step}`]();
+    });
+  },
+
+  "rst-open"(el) {
+    const path = el.dataset.path;
+    if (W.open.has(path)) W.open.delete(path);
+    else W.open.add(path);
+    rstRender();
+  },
+
+  async "rst-run"(el) {
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "run_restore",
+        snapshotId: W.snapshot.snapshotId,
+        path: null,
+        outputDirectory: W.target === "original" ? "" : W.output,
+        source: W.source.sourceId,
+        paths: rstCompile(),
+        target: W.target,
+        existing: W.existing,
+        inPlace: true,
+      }, { errToast: "Restore refused" });
+      if (result?.result === "restore") {
+        W.result = result;
+        rstRender();
+        refreshJobs();
+      }
+    });
+  },
+});
 
 /* ---------------------------------------------------------------- toast */
 
@@ -2295,6 +2742,14 @@ function boot() {
     if (event.target.matches("[data-action-change='filter-snapshots']")) {
       S.snapshotFilter = event.target.value;
       renderSnapshots();
+    }
+
+    // The restore wizard's file picker, before the set-editor guard below —
+    // the two trees are separate state machines behind one delegated
+    // listener.
+    if (W && event.target.matches("[data-rst-mark]")) {
+      rstToggle(event.target.dataset.rstMark);
+      return;
     }
 
     // The set editor's live pieces: selection checkboxes update marks,

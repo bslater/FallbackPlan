@@ -482,6 +482,19 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 #sel-summary { margin-bottom: 10px; }
 #sel-summary .warnings { margin-top: 6px; }
 
+/* restore wizard */
+.rst-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 14px; }
+.rst-step {
+  font-size: 12px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.rst-step.now { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.rst-step.done { color: var(--ok, var(--accent)); }
+.radio-block { display: block; padding: 6px 2px; }
+.radio-block .detail { margin-left: 6px; }
+.rst-indent { margin-left: 26px; }
+#rst-summary { margin: 8px 0 2px; }
+
 /* rule chips */
 .chip.removable { gap: 4px; padding-right: 4px; margin: 2px 4px 2px 0; font-family: var(--mono); }
 .chip.removable.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }

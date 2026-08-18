@@ -410,7 +410,9 @@
         "type": "Project",
         "dependencies": {
           "Bodu.Core": "[0.2.0, )",
-          "FallbackPlan.Api": "[1.0.0, )"
+          "FallbackPlan.Api": "[1.0.0, )",
+          "FallbackPlan.Repository": "[1.0.0, )",
+          "FallbackPlan.Storage.Local": "[1.0.0, )"
         }
       },
       "Bodu.Core": {

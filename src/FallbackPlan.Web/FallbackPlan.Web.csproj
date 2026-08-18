@@ -5,6 +5,8 @@
          reach the engine would be a second writer (11 §2, ADR-0036).
          ArchitectureTests holds this list to exactly one entry. -->
     <ProjectReference Include="..\FallbackPlan.Api\FallbackPlan.Api.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
   </ItemGroup>
 
   <ItemGroup>

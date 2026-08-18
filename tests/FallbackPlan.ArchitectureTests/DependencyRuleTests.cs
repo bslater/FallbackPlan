@@ -598,8 +598,16 @@ public sealed class DependencyRuleTests
     [TestMethod]
     public void WebConsole_DependencyClosure_ReachesOnlyTheClientContract()
     {
+        // ONE deliberate exception (ADR-0041): ConsoleRestoreGate verifies a
+        // restore passphrase locally — descriptor and wrapped key objects
+        // read off local disk, KEK derived where the person typed — so the
+        // passphrase never crosses the contract (NFR-SEC-009). It is scoped
+        // by name: every other console type must still reach only the
+        // contract, or the console stops being a client (11 §2, ADR-0036).
         AssertPasses(
             Types.InAssembly(Web)
+                .That()
+                .DoNotHaveName(nameof(FallbackPlan.Web.ConsoleRestoreGate))
                 .ShouldNot()
                 .HaveDependencyOnAny(
                     "FallbackPlan.Application",
@@ -616,7 +624,30 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Cli",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
-            "FallbackPlan.Web must reference the client contract and nothing below it (11 §2, ADR-0036).");
+            "FallbackPlan.Web must reference the client contract and nothing below it (11 §2, ADR-0036), "
+            + "except the restore gate (ADR-0041).");
+
+        // The gate itself may reach the crypto path and no further — never
+        // the engine, the protocol, or anything that could write.
+        AssertPasses(
+            Types.InAssembly(Web)
+                .That()
+                .HaveName(nameof(FallbackPlan.Web.ConsoleRestoreGate))
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Restore",
+                    "FallbackPlan.Recovery",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "The restore gate verifies a passphrase and nothing more (ADR-0041).");
 
         var project = Path.Combine(RepositoryRoot(), "src", "FallbackPlan.Web", "FallbackPlan.Web.csproj");
         var references = System.Text.RegularExpressions.Regex
@@ -625,7 +656,8 @@ public sealed class DependencyRuleTests
             .Order()
             .ToArray();
 
-        SequenceAssert.AreEqual(["FallbackPlan.Api"], references);
+        SequenceAssert.AreEqual(
+            ["FallbackPlan.Api", "FallbackPlan.Repository", "FallbackPlan.Storage.Local"], references);
     }
 
     /// <summary>

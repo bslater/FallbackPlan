@@ -62,6 +62,45 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task RestoreSourceVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.11's guided-restore verbs ride the same generic relay
+        // (ADR-0041) — including the source handle and the run options.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
+                "ab12cd34ef56ab78", "docs", "vault",
+                [new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3)],
+                []),
+            _ => new RestoreResult(2, 0, "/roots", "complete", WrittenBeside: 1, ReceiptPath: "/state/receipts/r.json"),
+        };
+
+        using var open = harness.Command("""{"command":"open_restore_source","setName":"docs","destinationName":"vault"}""");
+        using var opened = await harness.Http.SendAsync(open);
+        Assert.AreEqual(HttpStatusCode.OK, opened.StatusCode);
+        using (var body = JsonDocument.Parse(await opened.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("restore_source", body.RootElement.GetProperty("result").GetString());
+            Assert.AreEqual(42UL, body.RootElement.GetProperty("snapshots")[0].GetProperty("capturedAt").GetUInt64());
+        }
+
+        using var runRequest = harness.Command("""
+            {"command":"run_restore","snapshotId":"ee","path":null,"outputDirectory":"",
+             "source":"ab12cd34ef56ab78","paths":["docs/a.txt"],"target":"original","existing":"rename","inPlace":true}
+            """);
+        using var ran = await harness.Http.SendAsync(runRequest);
+        Assert.AreEqual(HttpStatusCode.OK, ran.StatusCode);
+
+        Assert.IsInstanceOfType<RunRestoreCommand>(
+            harness.Clients.Client.Received.Last(), out var sent);
+        Assert.AreEqual("original", sent.Target);
+        Assert.AreEqual("rename", sent.Existing);
+        Assert.IsTrue(sent.InPlace);
+        Assert.AreEqual("docs/a.txt", Assert.ContainsSingle(sent.Paths!));
+    }
+
+    [TestMethod]
     public async Task ServiceRefusal_StaysAResult_WithTheReasonAName()
     {
         await using var harness = await ConsoleHarness.StartAsync();
