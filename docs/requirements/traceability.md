@@ -99,6 +99,16 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-RST-006 | [08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default) | [0041](../adr/0041-guided-restore-and-peer-retrieval.md) | `Repository.Tests/RestorePlanTests`, `Repository.Tests/RestoreBreadthTests` (write-beside keeps both, dedupes the dated name; overwrite stays explicit and never a default); `Repository.Tests/RestoreOverwriteMatrixTests` — the full policy matrix over symlinks and over a directory in the way; `Hosts.Tests/RestoreSourceTests` — in-place and the original location (label-sliced on a multi-root set) are explicit choices behind the wizard's typed confirm | 1 |
 | FR-KIT-001..006 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-kit) | [0013](../adr/0013-recovery-kit.md) | `Cli.Tests/CommandTests`, `Hosts.Tests/RecoveryHostTests`, `Repository.ConformanceTests/RecoveryKitConformanceTests` | 1 |
 
+### Write-only repositories
+
+| ID | Arch | ADR | Test | Phase |
+|----|------|-----|------|-------|
+| FR-WOR-001 | [03 §2](../architecture/03-crypto.md#2-key-hierarchy) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
+| FR-WOR-002 | [03 §2](../architecture/03-crypto.md#2-key-hierarchy) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
+| FR-WOR-003 | [03 §2](../architecture/03-crypto.md#2-key-hierarchy) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
+| FR-WOR-004 | [08 §1](../architecture/08-restore-and-recovery.md#1-restore-paths) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
+| FR-WOR-005 | [03 §2](../architecture/03-crypto.md#2-key-hierarchy) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
+
 ### Destinations and fan-out
 
 | ID | Arch | ADR | Test | Phase |
@@ -169,7 +179,8 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | NFR-SEC-006 | [10 §4](../architecture/10-observability.md#4-diagnostics) | — | `Repository.Tests/LocalStateSeparationTests`, `Repository.Tests/TelemetryPrivacyTests` | 1 |
 | NFR-SEC-007 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/DedupTrustDomainTests` — a failed verification is re-written from this device's bytes and reported, in both the repository and device domains; cross-device *replication* scenarios remain phase 2 | 2 |
 | NFR-SEC-008 | [03 §3.1](../architecture/03-crypto.md#31-the-construction) | [0005](../adr/0005-aead-suite-and-nonce-construction.md) | `Repository.ConformanceTests/KeyHierarchyConformanceTests` | 0 |
-| NFR-SEC-009 | [00 §6.2](../architecture/00-overview.md#62-installation-topologies) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md) | `Api.Tests/KeyMaterialConfinementTests`, `ArchitectureTests/DependencyRuleTests` | 2 |
+| NFR-SEC-009 | [00 §6.2](../architecture/00-overview.md#62-installation-topologies) | [0028](../adr/0028-service-boundary-and-deployment-topologies.md), [0042](../adr/0042-write-only-repositories.md) | `Api.Tests/KeyMaterialConfinementTests`, `ArchitectureTests/DependencyRuleTests` | 2 |
+| NFR-SEC-010 | [03 §2](../architecture/03-crypto.md#2-key-hierarchy) | [0042](../adr/0042-write-only-repositories.md) | — *(untested; the ADR-0042 build owes it)* | 2 |
 | NFR-PRIV-001..003 | [10 §4](../architecture/10-observability.md#4-diagnostics), [§5](../architecture/10-observability.md#5-telemetry) | — | `Repository.Tests/TelemetryPrivacyTests` | 1 |
 | NFR-TIME-001, 002 | [04 §7](../architecture/04-concurrency-and-publication.md#7-time-and-clock-skew) | [0009](../adr/0009-garbage-collection-safety.md) | `Repository.Tests/ApplicationServiceTests`, `Application.Tests/ScheduleClockBoundaryTests` *(both DST directions, a months-long clock correction, and the interval form's absolute spacing)*, `Application.Tests/PartialCaptureJournalTests` *(the anchor arrives in the operator's frame, which is what the daily comparison requires)* | 4 |
 | NFR-COMP-001..003 | [02 §2](../architecture/02-repository-format.md#2-object-classes) | [0014](../adr/0014-format-versioning-and-stability.md) | `Repository.Tests/RepositoryDescriptorCodecTests` | 0 |

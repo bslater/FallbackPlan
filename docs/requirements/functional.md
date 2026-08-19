@@ -95,6 +95,18 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-KIT-005 **[new]** | Kit status — never generated, saved, stale — shall be surfaced continuously. | Changing destinations marks the kit stale. |
 | FR-KIT-006 **[new]** | A recovery drill restoring a file using only the kit shall be a supported, prompted workflow. | The drill runs without the catalogue or durable local state. |
 
+## Write-only repositories
+
+A format-v2 repository ([ADR-0042](../adr/0042-write-only-repositories.md)) severs writing from reading: the service seals file contents to an asymmetric public key and holds nothing that opens them.
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-WOR-001 **[new]** | A repository may be created write-only (format v2): every key derives from one user passphrase via a memory-hard KDF and one-way domains; file contents are sealed to the derived X25519 public key; the service holds only the write bundle and can add to history but never read file contents back. | A service holding a v2 set's complete state cannot produce a byte of restored file content; backup, browse, plan, trim and replication all succeed without the passphrase. |
+| FR-WOR-002 **[new]** | The passphrase shall be entered only at setup, at adoption of an existing repository onto a new service instance, and at restore. It shall never be persisted anywhere, and shall never transit any channel: derivation runs in the admin client, and only envelopes sealed to the service's published recipient key cross to the service. | No durable state on any machine contains the passphrase; the command surface carries only sealed envelopes on the two named verbs. |
+| FR-WOR-003 **[new]** | The structure plane — metadata records, blob footers and record tables — shall remain readable to the write-bundle holder, so browsing, planning, dedup bookkeeping, retention and structural verification work without the passphrase. | Every blob's record table opens under the write bundle while its record payloads do not; the restore wizard reaches its review step without a grant. |
+| FR-WOR-004 **[new]** | Restoring from a v2 repository shall require re-deriving the private key from the passphrase; the resulting grant shall live only in memory, bounded to a restore-source handle, and be zeroed on close or idle expiry. | A restore without a grant is refused naming the grant; after close or expiry the service again cannot produce content. |
+| FR-WOR-005 **[new]** | Loss of the passphrase shall be unrecoverable by design, and the passphrase shall not be changeable for a v2 repository; setup shall require an explicit acknowledgement of both before completing. | Setup cannot complete without the typed acknowledgement; no verb offers a v2 passphrase change. |
+
 ## Destinations and fan-out
 
 | ID | Requirement | Acceptance |

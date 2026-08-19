@@ -194,11 +194,15 @@ AES-GCM is **not key-committing**: a ciphertext can be constructed that authenti
 
 | Operation | Rewrites | Cost |
 |-----------|----------|------|
-| Change passphrase | `/keys/<key-id>` only | Trivial |
+| Change passphrase | `/keys/<key-id>`, and `/repository-format` when the KDF salt is refreshed (a new salt SHOULD be drawn) | Trivial |
 | New data-key generation | Nothing; new writes use it | Trivial |
 | Full data-key rotation | Every blob, in the background | Proportional to repository size |
 
 Changing the passphrase does **not** re-encrypt data. A user interface MUST say so plainly, because users routinely believe otherwise, and a user who thinks a password change has protected them from an attacker holding old blobs is worse off than one who knows it has not.
+
+An earlier revision of the table said the change rewrote `/keys/<key-id>` *only* — but the KDF salt lives in `/repository-format` (01 §3.3), so a passphrase change that draws a fresh salt rewrites the descriptor too. The row now says what the operation actually touches.
+
+**Write-only repositories (format v2, [ADR-0042](../../docs/adr/0042-write-only-repositories.md)) have no passphrase change.** Every v2 key derives directly from the passphrase; changing it would change every derived key and orphan every sealed blob. A v2 repository's passphrase is fixed for its life — the remedy for a passphrase the user wishes to retire is a new repository.
 
 ## 8 What is never written down
 

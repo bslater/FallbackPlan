@@ -66,6 +66,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
+| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | **Specified only** | `specifications/repository-format/03-keys.md` (§7 v2 rotation stance) · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 
 ---
 
@@ -390,6 +391,27 @@ a source load only the plan's own blobs — a restore-sized transfer, not a
 repository-sized one. Proven live: a Playwright walk of all six steps,
 wrong-passphrase refusal included, ending on restored bytes and the receipt
 path.
+
+### 0042 — the hub that cannot read what it keeps
+
+Decided, not yet built. Repository format v2 severs writing from
+reading: one passphrase — entered at setup, at adoption onto a new
+service instance, and at restore, and persisted nowhere — derives via
+Argon2id an X25519 public key that seals file contents, plus the
+symmetric write bundle (metadata, content-id, key-id, signing) the
+service keeps so browsing, planning, dedup bookkeeping, trim,
+replication and structural verification work without it. The private
+key is never stored in any form; restore re-derives it, and the grant
+lives only inside a restore-source handle. Data-blob footers move to
+the structure plane so a write-only holder still reads its own blobs'
+record tables. Sealed envelopes to a service-published recipient key
+are the one permitted transit shape (NFR-SEC-009 as amended); losing
+the passphrase loses the backup, acknowledged at setup, and v2 has no
+passphrase change. The build order is fixed in the ADR: crypto core,
+format v2 (descriptor, envelope, vectors, fixture), repository layer,
+service + contract 1.12, clients, docs. Until those land, this row is
+deliberately "specified only" — the spec edit that exists today is
+03 §7's corrected rotation table and the v2 no-rotation stance.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 
