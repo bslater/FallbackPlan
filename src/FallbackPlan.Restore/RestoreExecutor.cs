@@ -309,6 +309,15 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                 });
                 continue;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The token fired inside this item's read rather than between
+                // items. The posture is the same as the between-items check
+                // above: stop, and still produce the receipt — a cancelled
+                // restore that throws instead loses the account of what DID
+                // land, which is the receipt's whole reason to exist.
+                break;
+            }
 
             if (read.Outcome != RecordReadOutcome.Ok)
             {
@@ -353,6 +362,20 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                         });
                         continue;
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        // Mid-item cancellation, same posture as the manifest
+                        // read above: the spool never becomes the destination
+                        // and the receipt still accounts for what landed. The
+                        // break leaves the switch; the check at the top of the
+                        // loop ends the run.
+                        if (File.Exists(spool))
+                        {
+                            File.Delete(spool);
+                        }
+
+                        break;
+                    }
 
                     if (!result.Success)
                     {
@@ -360,6 +383,23 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                         items.Add(new ReceiptItem
                         {
                             Path = item.Path, Outcome = "failed", Bytes = 0, Detail = result.FailureDetail,
+                        });
+                        continue;
+                    }
+
+                    // A directory at the destination is no policy's to
+                    // resolve: Preserve would displace a subtree it never
+                    // planned, Replace would delete one. File.Exists is false
+                    // for a directory, so without this check the policies are
+                    // silently skipped and the final move throws — aborting
+                    // the run instead of failing the item.
+                    if (Directory.Exists(destination))
+                    {
+                        File.Delete(spool);
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0,
+                            Detail = "a directory occupies this destination; no existing-file policy applies to a directory",
                         });
                         continue;
                     }
@@ -421,12 +461,31 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
                         }
                     }
 
-                    File.Move(spool, landing, overwrite: true);
+                    try
+                    {
+                        File.Move(spool, landing, overwrite: true);
 
-                    // Metadata strictly AFTER content (architecture 08 §3):
-                    // a crash between the two leaves verified content with
-                    // default metadata — recoverable — never the reverse.
-                    ApplyMetadata(landing, manifest.Metadata);
+                        // Metadata strictly AFTER content (architecture 08 §3):
+                        // a crash between the two leaves verified content with
+                        // default metadata — recoverable — never the reverse.
+                        ApplyMetadata(landing, manifest.Metadata);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        // The landing itself can fault — something raced into
+                        // the checked path, or the platform refused the write.
+                        // Contained like every other per-item fault.
+                        if (File.Exists(spool))
+                        {
+                            File.Delete(spool);
+                        }
+
+                        items.Add(new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                        });
+                        continue;
+                    }
 
                     // The main stream restored and verified; alternate data
                     // streams the manifest carries did not (RR-6's honesty
