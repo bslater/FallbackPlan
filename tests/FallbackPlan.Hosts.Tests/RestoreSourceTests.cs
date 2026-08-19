@@ -230,6 +230,155 @@ public sealed class RestoreSourceTests : IDisposable
         Assert.Contains("never backed up", never.Message, StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public async Task RunRestore_AFileSpanningSeveralProductionSegments_ComesBackByteIdentical()
+    {
+        // Every earlier host-level restore payload was smaller than one
+        // production segment (1 MiB), so no integration test had ever
+        // restored a SEGMENTED file — through the contract, from staging or
+        // from a replica. This one spans four segments and is compared
+        // byte for byte from both.
+        var big = new byte[3 * 1024 * 1024 + 12_345];
+        new Random(41).NextBytes(big);
+
+        await _harness.CreateRepositoryAsync();
+        File.WriteAllBytes(Path.Combine(_harness.SourceRoot, "big.bin"), big);
+        _harness.WriteSourceFile("notes.txt", "the small companion");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunBackupAndWaitAsync(runtime, handler);
+
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var staging);
+        var snapshotId = Assert.ContainsSingle(staging.Snapshots).SnapshotId;
+
+        var stagingOut = Path.Combine(_harness.WorkPath, "big-from-staging");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, stagingOut, Source: staging.SourceId, Paths: ["big.bin"], InPlace: true),
+                _timeout.Token),
+            out var fromStaging);
+        Assert.AreEqual("complete", fromStaging.Outcome);
+        Assert.IsTrue(
+            big.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(stagingOut, "big.bin"))),
+            "the segmented file did not round-trip from the staging source");
+
+        // The same bytes from the replica source — the targeted blob load
+        // walking a multi-segment manifest against a second store.
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
+            out var replica);
+        var replicaOut = Path.Combine(_harness.WorkPath, "big-from-replica");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, replicaOut, Source: replica.SourceId, Paths: ["big.bin"], InPlace: true),
+                _timeout.Token),
+            out var fromReplica);
+        Assert.AreEqual("complete", fromReplica.Outcome);
+        Assert.IsTrue(
+            big.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(replicaOut, "big.bin"))),
+            "the segmented file did not round-trip from the replica source");
+    }
+
+    [TestMethod]
+    public async Task RunRestore_OriginalLocationOnAMultiRootSet_SlicesPerRootAndMergesTheReceipt()
+    {
+        // The label-sliced half of the original-location mapping (ADR-0041):
+        // a two-root set restores each label back into its own configured
+        // root — one run, one merged receipt with label-prefixed paths —
+        // and a label the configuration no longer carries is refused whole,
+        // by name, before anything moves.
+        await _harness.CreateRepositoryAsync();
+        var notes = _harness.WriteSourceFile("notes.txt", "as captured in source");
+        var media = Path.Combine(_harness.WorkPath, "media");
+        Directory.CreateDirectory(media);
+        var clip = Path.Combine(media, "clip.mp4");
+        File.WriteAllText(clip, "as captured in media");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"],
+                Roots:
+                [
+                    new BackupRootDescriptor(_harness.SourceRoot),
+                    new BackupRootDescriptor(media),
+                ])),
+            _timeout.Token));
+        await RunBackupAndWaitAsync(runtime, handler);
+
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+        var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
+
+        // Both live files have moved on since the capture.
+        File.WriteAllText(notes, "edited in source");
+        File.WriteAllText(clip, "edited in media");
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, string.Empty,
+                    Source: source.SourceId, Paths: ["source/notes.txt", "media/clip.mp4"],
+                    Target: "original", Existing: "rename", InPlace: true),
+                _timeout.Token),
+            out var result);
+        Assert.AreEqual("complete", result.Outcome);
+        Assert.AreEqual(2L, result.WrittenBeside);
+
+        // Each label landed in ITS root; both live edits kept; the captured
+        // versions sit beside them under the dated names.
+        Assert.AreEqual("edited in source", File.ReadAllText(notes));
+        Assert.AreEqual("edited in media", File.ReadAllText(clip));
+        Assert.AreEqual(
+            "as captured in source",
+            File.ReadAllText(Directory.GetFiles(_harness.SourceRoot, "notes (restored *").Single()));
+        Assert.AreEqual(
+            "as captured in media",
+            File.ReadAllText(Directory.GetFiles(media, "clip (restored *").Single()));
+
+        // One merged receipt for the whole run, its paths re-prefixed with
+        // the labels the operator selected by.
+        Assert.IsNotNull(result.ReceiptPath);
+        var receipt = File.ReadAllText(result.ReceiptPath);
+        Assert.Contains("source/notes.txt", receipt, StringComparison.Ordinal);
+        Assert.Contains("media/clip.mp4", receipt, StringComparison.Ordinal);
+
+        // The configuration moves on: still multi-root, but 'media' is no
+        // longer one of the labels — the refusal names it and offers the
+        // folder target, and nothing on disk changes.
+        var archive = Path.Combine(_harness.WorkPath, "archive");
+        Directory.CreateDirectory(archive);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"],
+                Roots:
+                [
+                    new BackupRootDescriptor(_harness.SourceRoot),
+                    new BackupRootDescriptor(archive),
+                ])),
+            _timeout.Token));
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, string.Empty,
+                    Source: source.SourceId, Paths: ["media/clip.mp4"],
+                    Target: "original", InPlace: true),
+                _timeout.Token),
+            out var refused);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
+        Assert.Contains("'media'", refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual("edited in media", File.ReadAllText(clip));
+    }
+
     /// <summary>Commands a backup and waits for completion — the SetChangeTests idiom.</summary>
     private async Task RunBackupAndWaitAsync(ServiceRuntime runtime, ServiceCommandHandler handler)
     {

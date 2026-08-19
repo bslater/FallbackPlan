@@ -37,10 +37,18 @@ public sealed class PeerRetrievalTests : IDisposable
     public async Task PeerRetrieval_AfterTotalStagingLoss_RestoresOverTheWire()
     {
         // ---- Site A: the data. Site B: a live service with its listener.
+        // The photo is 1.5 MiB of incompressible bytes: past the 1 MiB
+        // production segment size AND past one retrieval chunk, so the
+        // restore both walks a multi-segment manifest over the wire and
+        // pages `retrieve_read` more than once for a single record — the
+        // chunk loop no smaller payload ever exercised.
         await _siteOne.CreateRepositoryAsync();
         var notes = "the notes that must come back over the wire";
+        var photo = new byte[1_536 * 1024];
+        new Random(43).NextBytes(photo);
         _siteOne.WriteSourceFile("notes.txt", notes);
-        _siteOne.WriteSourceFile("photos/beach.jpg", new string('p', 64_000));
+        Directory.CreateDirectory(Path.Combine(_siteOne.SourceRoot, "photos"));
+        File.WriteAllBytes(Path.Combine(_siteOne.SourceRoot, "photos", "beach.jpg"), photo);
 
         await _siteTwo.CreateRepositoryAsync();
         await using var runtimeTwo = await StartAsync(_siteTwo);
@@ -125,8 +133,9 @@ public sealed class PeerRetrievalTests : IDisposable
             out var restored);
         Assert.AreEqual("complete", restored.Outcome);
         Assert.AreEqual(notes, File.ReadAllText(Path.Combine(output, "notes.txt")));
-        Assert.AreEqual(
-            new string('p', 64_000), File.ReadAllText(Path.Combine(output, "photos", "beach.jpg")));
+        Assert.IsTrue(
+            photo.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(output, "photos", "beach.jpg"))),
+            "the segmented photo did not round-trip over the wire");
 
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await handler.ExecuteAsync(new CloseRestoreSourceCommand(source.SourceId), _timeout.Token));
