@@ -211,6 +211,19 @@ public sealed class RecoverySession : IDisposable
                     var name = Encoding.UTF8.GetString(entry.Name.Span);
                     var path = prefix.Length == 0 ? name : prefix + "/" + name;
 
+                    // A tree entry's name is repository text, and this session
+                    // exists precisely for repositories in the worst state to
+                    // trust: a name that is not a plain component — '..', a
+                    // separator, a rooted form — would let Path.Combine below
+                    // write outside the chosen output. Refused per entry, with
+                    // the subtree it would have carried; the drill continues.
+                    if (!IsPlainName(name, out var why))
+                    {
+                        failed++;
+                        notes.Add($"FAILED {path}: refused — {why}");
+                        continue;
+                    }
+
                     if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                     {
                         Directory.CreateDirectory(
@@ -327,6 +340,50 @@ public sealed class RecoverySession : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Whether a tree-entry name is a single plain path component — the same
+    /// rule the full client's executor enforces, because both write
+    /// repository-supplied names under a chosen root.
+    /// </summary>
+    private static bool IsPlainName(string name, out string why)
+    {
+        why = string.Empty;
+
+        if (name.Length == 0)
+        {
+            why = "the tree names an empty component";
+            return false;
+        }
+
+        if (name is "." or "..")
+        {
+            why = $"the tree names a '{name}' component";
+            return false;
+        }
+
+        if (name.Contains('\0', StringComparison.Ordinal))
+        {
+            why = "the tree name contains a NUL";
+            return false;
+        }
+
+        if (name.Contains('/', StringComparison.Ordinal)
+            || name.Contains('\\', StringComparison.Ordinal)
+            || name.Contains(':', StringComparison.Ordinal))
+        {
+            why = "the tree name contains a separator or drive marker";
+            return false;
+        }
+
+        if (Path.IsPathRooted(name))
+        {
+            why = "the tree name is rooted";
+            return false;
+        }
+
+        return true;
     }
 
     private async ValueTask<byte[]?> ReadRecordAsync(
