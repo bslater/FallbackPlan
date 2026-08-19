@@ -90,4 +90,58 @@ internal static class Strings
     /// The key-ID key is exactly 32 bytes.
     /// </summary>
     internal static string StoreBlobKeyDeriver_KeyIDKeyExactlyBytes => Get(nameof(StoreBlobKeyDeriver_KeyIDKeyExactlyBytes));
+
+    /// <summary>
+    /// The content key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_ContentKeyExactlyBytes => Get(nameof(ContentSealing_ContentKeyExactlyBytes));
+
+    /// <summary>
+    /// The content key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_ContentKeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_ContentKeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// The sealed content key does not open with this repository's restore material.
+    /// </summary>
+    internal static string ContentSealing_DoesNotOpen => Get(nameof(ContentSealing_DoesNotOpen));
+
+    /// <summary>
+    /// An X25519 key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_KeyExactlyBytes => Get(nameof(ContentSealing_KeyExactlyBytes));
+
+    /// <summary>
+    /// An X25519 key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_KeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_KeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// The sealed share offers a low-order point and is refused.
+    /// </summary>
+    internal static string ContentSealing_LowOrderShare => Get(nameof(ContentSealing_LowOrderShare));
+
+    /// <summary>
+    /// A sealed content key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_SealedExactlyBytes => Get(nameof(ContentSealing_SealedExactlyBytes));
+
+    /// <summary>
+    /// A sealed content key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_SealedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_SealedExactlyBytes, arg0);
+
+    /// <summary>
+    /// A serialised write credential is exactly {0} bytes with its magic intact.
+    /// </summary>
+    private static string RepositoryWriteCredential_SerialisedExactlyBytes => Get(nameof(RepositoryWriteCredential_SerialisedExactlyBytes));
+
+    /// <summary>
+    /// A serialised write credential is exactly {0} bytes with its magic intact.
+    /// </summary>
+    internal static string FormatRepositoryWriteCredential_SerialisedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryWriteCredential_SerialisedExactlyBytes, arg0);
 }

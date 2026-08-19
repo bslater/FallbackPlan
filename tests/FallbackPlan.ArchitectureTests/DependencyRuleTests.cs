@@ -292,8 +292,9 @@ public sealed class DependencyRuleTests
                     .HaveDependencyOn("Bodu.Security.Cryptography")
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference third-party cryptography. " +
-                "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto; Ed25519 and " +
-                "X25519 to Protocol (ADR-0019 §3, §5).");
+                "Argon2id, XChaCha20-Poly1305 and X25519-for-content-sealing are confined to " +
+                "Repository.Crypto; Ed25519 and X25519-for-pairing to Protocol " +
+                "(ADR-0019 §3, §5, Amendment 3; ADR-0042).");
         }
     }
 

@@ -82,4 +82,22 @@
   <data name="StoreBlobKeyDeriver_KeyIDKeyExactlyBytes" xml:space="preserve">
     <value>The key-ID key is exactly 32 bytes.</value>
   </data>
+  <data name="ContentSealing_ContentKeyExactlyBytes" xml:space="preserve">
+    <value>The content key is exactly {0} bytes.</value>
+  </data>
+  <data name="ContentSealing_DoesNotOpen" xml:space="preserve">
+    <value>The sealed content key does not open with this repository's restore material.</value>
+  </data>
+  <data name="ContentSealing_KeyExactlyBytes" xml:space="preserve">
+    <value>An X25519 key is exactly {0} bytes.</value>
+  </data>
+  <data name="ContentSealing_LowOrderShare" xml:space="preserve">
+    <value>The sealed share offers a low-order point and is refused.</value>
+  </data>
+  <data name="ContentSealing_SealedExactlyBytes" xml:space="preserve">
+    <value>A sealed content key is exactly {0} bytes.</value>
+  </data>
+  <data name="RepositoryWriteCredential_SerialisedExactlyBytes" xml:space="preserve">
+    <value>A serialised write credential is exactly {0} bytes with its magic intact.</value>
+  </data>
 </root>
