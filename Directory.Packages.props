@@ -15,6 +15,20 @@
     <PackageVersion Include="Bodu.Text.Encoding" Version="0.2.0" />
     <PackageVersion Include="Bodu.Globalization.Recurrence" Version="0.2.0" />
   </ItemGroup>
+  <ItemGroup Label="Logging">
+    <!-- The abstraction only, in every shipped assembly: ILogger, NullLogger and
+         the [LoggerMessage] source generator. Managed-only and first-party, so it
+         clears ADR-0019's format-critical bar for Repository.Format's closure —
+         which is the standalone recovery tool's closure (ADR-0043 §1).
+
+         The concrete factory and level filtering are pinned to
+         FallbackPlan.Diagnostics by a project-file canary in DependencyRuleTests.
+         No provider, exporter or third-party sink package enters the tree: where
+         the bytes land is the host's business, exactly as ADR-0027 §3 decided for
+         metrics. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+  </ItemGroup>
   <ItemGroup Label="CLI">
     <PackageVersion Include="System.CommandLine" Version="2.0.10" />
   </ItemGroup>

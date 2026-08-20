@@ -33,4 +33,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- No logging package reference: the abstraction arrives with the
+       Microsoft.AspNetCore.App shared framework above, and an explicit one
+       is pruned (NU1510). The console still logs through ILogger like every
+       other assembly (ADR-0043). -->
+
 </Project>

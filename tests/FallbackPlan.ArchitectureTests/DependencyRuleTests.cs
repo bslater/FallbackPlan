@@ -416,6 +416,64 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// Libraries take the logging ABSTRACTION; the concrete factory, the level
+    /// filtering and the sinks live in one project and are composed by a host
+    /// (ADR-0043 §1). This is ADR-0027 §3's rule for a second signal: the
+    /// instrumentation API is in-box and the exporter is somebody else's
+    /// business, so a provider package in a library would be the same mistake
+    /// as vendoring a collector.
+    ///
+    /// It matters most at the bottom of the stack. Repository.Format's closure
+    /// is the standalone recovery tool's closure, and the abstraction was
+    /// judged at ADR-0019's format-critical bar on the strength of being
+    /// managed-only interfaces. A sink dragged down there — with its file
+    /// handles, its timers and its buffering — would not clear that bar and
+    /// would not have been asked to.
+    /// </summary>
+    [TestMethod]
+    public void Logging_EveryAssemblyBesidesDiagnostics_TakesOnlyTheAbstraction()
+    {
+        var offenders = new List<string>();
+
+        foreach (var project in Directory.EnumerateFiles(
+            Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileNameWithoutExtension(project);
+            if (string.Equals(name, "FallbackPlan.Diagnostics", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(project);
+            // The closing quote matters: without it this also matches
+            // "…Logging.Abstractions", which every library is supposed to have.
+            if (text.Contains(
+                "<PackageReference Include=\"Microsoft.Extensions.Logging\" ", StringComparison.Ordinal))
+            {
+                offenders.Add(name);
+            }
+        }
+
+        Assert.IsEmpty(
+            offenders,
+            "Only FallbackPlan.Diagnostics may reference the concrete logging package; "
+            + $"found it in {string.Join(", ", offenders)}.");
+    }
+
+    /// <summary>
+    /// The positive half of the canary above, in the shape the cryptography
+    /// and recurrence rules already use: a prohibition that passes because
+    /// nothing anywhere references the package would keep passing after
+    /// somebody removed the containment it claims to enforce.
+    /// </summary>
+    [TestMethod]
+    public void Logging_ProjectFileCanary_StaysInDiagnostics()
+    {
+        AssertProjectReferences(
+            "FallbackPlan.Diagnostics", "<PackageReference Include=\"Microsoft.Extensions.Logging\" />");
+    }
+
+    /// <summary>
     /// Application is the use-case layer: it "depends on domain
     /// abstractions, never on provider implementations" (11 §2). Hosts —
     /// the CLI and the Agent — compose engines and providers and pass

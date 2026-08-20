@@ -35,6 +35,7 @@
 "FallbackPlan.Api" = 73
 "FallbackPlan.Application" = 88
 "FallbackPlan.Cli" = 87
+"FallbackPlan.Diagnostics" = 60
 "FallbackPlan.Domain" = 97
 "FallbackPlan.Filesystem" = 98
 "FallbackPlan.Filesystem.Local" = 48

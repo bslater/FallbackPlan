@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FallbackPlan.Diagnostics\FallbackPlan.Diagnostics.csproj" />
     <ProjectReference Include="..\FallbackPlan.Api\FallbackPlan.Api.csproj" />
     <ProjectReference Include="..\FallbackPlan.Application\FallbackPlan.Application.csproj" />
     <ProjectReference Include="..\FallbackPlan.Protocol\FallbackPlan.Protocol.csproj" />
@@ -30,6 +31,13 @@
     <!-- The Windows SCM handshake (ADR-0033). Windows-only implementation,
          cross-platform reference; every use is guarded by OperatingSystem.IsWindows(). -->
     <PackageReference Include="System.ServiceProcess.ServiceController" />
+  </ItemGroup>
+
+  <!-- The logging abstraction only: ILogger, NullLogger and the
+       [LoggerMessage] source generator. Providers and sinks are the host's,
+       and a canary in DependencyRuleTests keeps them there (ADR-0043). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
 </Project>

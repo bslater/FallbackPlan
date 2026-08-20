@@ -8,7 +8,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// 03 §3). It is bound into the key object's unwrap AAD, so a key object
 /// renamed in the store fails authentication.
 /// </summary>
-public readonly struct KeyId : IEquatable<KeyId>
+public readonly struct KeyId : IEquatable<KeyId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a key identifier in bytes.</summary>
     public const int Size = 16;
@@ -72,6 +72,14 @@ public readonly struct KeyId : IEquatable<KeyId>
 
     /// <summary>Renders the identifier as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("keyid", ToString(), 8);
 
     public static bool operator ==(KeyId left, KeyId right) => left.Equals(right);
 
