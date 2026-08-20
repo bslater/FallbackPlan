@@ -148,8 +148,8 @@ public abstract class InterruptionHarness : IDisposable
 
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
         {
-            using var read = await store.OpenReadAsync(entry.Key, new ObjectRange(0, BlobEnvelope.Length), CancellationToken.None);
-            var envelopeBytes = new byte[BlobEnvelope.Length];
+            var envelopeBytes = new byte[Math.Min(BlobEnvelope.MaxLength, entry.Length)];
+            using var read = await store.OpenReadAsync(entry.Key, new ObjectRange(0, envelopeBytes.Length), CancellationToken.None);
             await read.Content!.ReadExactlyAsync(envelopeBytes);
             blobs.Add((entry.Key, BlobEnvelope.Parse(envelopeBytes).BlobId));
         }
@@ -192,9 +192,9 @@ public abstract class InterruptionHarness : IDisposable
             // The collector cannot map a store key back to a blob id (that
             // is the point of keyed store keys) — coverage is checked by
             // opening the envelope, exactly as a real collector must.
+            var envelopeBytes = new byte[Math.Min(BlobEnvelope.MaxLength, entry.Length)];
             using var read = await store.OpenReadAsync(
-                entry.Key, new ObjectRange(0, BlobEnvelope.Length), CancellationToken.None);
-            var envelopeBytes = new byte[BlobEnvelope.Length];
+                entry.Key, new ObjectRange(0, envelopeBytes.Length), CancellationToken.None);
             await read.Content!.ReadExactlyAsync(envelopeBytes);
             var envelope = BlobEnvelope.Parse(envelopeBytes);
 
@@ -222,6 +222,63 @@ public abstract class InterruptionHarness : IDisposable
     protected sealed class PublicationKilledException(PublicationStep step) : Exception($"killed after step {step}")
     {
         public PublicationStep Step { get; } = step;
+    }
+
+    /// <summary>A source that dies part-way through, the way a failing disk does.</summary>
+    protected sealed class FaultingStream(byte[] content, int failAfterBytes) : Stream
+    {
+        private readonly MemoryStream _inner = new(content);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => _inner.CanSeek;
+
+        public override bool CanWrite => false;
+
+        public override long Length => _inner.Length;
+
+        public override long Position
+        {
+            get => _inner.Position;
+            set => _inner.Position = value;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_inner.Position >= failAfterBytes)
+            {
+                throw new IOException("Injected fault: the source failed mid-file.");
+            }
+
+            return _inner.Read(buffer);
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+
+        public override void Flush() => _inner.Flush();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
     }
 
     /// <inheritdoc />

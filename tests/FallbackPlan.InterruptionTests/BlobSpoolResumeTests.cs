@@ -149,63 +149,6 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         return content;
     }
 
-    /// <summary>A source that dies part-way through, the way a failing disk does.</summary>
-    private sealed class FaultingStream(byte[] content, int failAfterBytes) : Stream
-    {
-        private readonly MemoryStream _inner = new(content);
-
-        public override bool CanRead => true;
-
-        public override bool CanSeek => _inner.CanSeek;
-
-        public override bool CanWrite => false;
-
-        public override long Length => _inner.Length;
-
-        public override long Position
-        {
-            get => _inner.Position;
-            set => _inner.Position = value;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count) =>
-            Read(buffer.AsSpan(offset, count));
-
-        public override int Read(Span<byte> buffer)
-        {
-            if (_inner.Position >= failAfterBytes)
-            {
-                throw new IOException("Injected fault: the source failed mid-file.");
-            }
-
-            return _inner.Read(buffer);
-        }
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(Read(buffer.Span));
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            Task.FromResult(Read(buffer.AsSpan(offset, count)));
-
-        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
-
-        public override void Flush() => _inner.Flush();
-
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                _inner.Dispose();
-            }
-
-            base.Dispose(disposing);
-        }
-    }
-
     /// <summary>Asserts the run restarted: no sealed blob carries the abandoned salt.</summary>
     private static async Task AssertNoBlobCarriesSaltAsync(IObjectStore store, byte[] abandonedSalt)
     {
@@ -250,5 +193,6 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         blob.Length >= prefix.Length && blob.AsSpan(0, prefix.Length).SequenceEqual(prefix);
 
     private static byte[] SaltOf(byte[] blobOrSpool) =>
-        BlobEnvelope.Parse(blobOrSpool.AsSpan(0, BlobEnvelope.Length)).BlobSalt.ToArray();
+        BlobEnvelope.Parse(blobOrSpool.AsSpan(0, Math.Min(BlobEnvelope.MaxLength, blobOrSpool.Length)))
+            .BlobSalt.ToArray();
 }
