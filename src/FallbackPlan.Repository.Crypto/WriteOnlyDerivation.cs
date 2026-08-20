@@ -40,7 +40,24 @@ public static class WriteOnlyDerivation
         // The KDF, its validation modes and its minimums are exactly v1's
         // (specification 03 §2): only what the output feeds differs.
         using var derivation = KekDerivation.Derive(passphrase, parameters, salt, mode);
-        var root = derivation.Kek.Bytes;
+        return FromRoot(derivation.Kek.Bytes);
+    }
+
+    /// <summary>
+    /// Expands an already-derived 32-byte root into the full authority —
+    /// the second half of <see cref="Derive"/>, exposed so conformance
+    /// vectors (which pin the root, Argon2id having no independent
+    /// implementation in the vector generator) can exercise the expansion
+    /// tree in isolation (specification 03 §9.1).
+    /// </summary>
+    /// <exception cref="ArgumentException">The root is not exactly 32 bytes.</exception>
+    public static RepositoryReadAuthority FromRoot(ReadOnlySpan<byte> root)
+    {
+        if (root.Length != KekDerivation.KekLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_RootExactlyBytes(KekDerivation.KekLength), nameof(root));
+        }
 
         var sealingScalar = Expand(root, "fbp/seal/v2"u8);
         byte[] sealingPublic;

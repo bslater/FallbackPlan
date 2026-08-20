@@ -40,6 +40,40 @@ public sealed class RepositoryDescriptorCodecTests
         SequenceAssert.AreEqual<ushort>([7], ok.Descriptor.OptionalFeatures);
     }
 
+    private static RepositoryDescriptor SampleV2() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatLimits.SealedFormatVersion,
+        RequiredFeatures = [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+        SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray(),
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_EncodedAndDecoded_RoundTripsTheSealingKey()
+    {
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV2());
+
+        // A format-v2 descriptor (ADR-0042 §1): the sealing public key rides
+        // key 9, the sealed-data-plane feature is required, and this reader
+        // implements it — so the parse proceeds rather than refusing.
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.SealedFormatVersion, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual(
+            SampleV2().SealingPublicKey.ToArray(), ok.Descriptor.SealingPublicKey.ToArray());
+        SequenceAssert.AreEqual<ushort>(
+            [RepositoryDescriptorCodec.FeatureSealedDataPlane], ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_TheKeyAndVersionDisagreeing_IsRefusedAtSerialize()
+    {
+        // A v2 descriptor without its verifier, or a v1 descriptor claiming
+        // one, is a caller bug — refused before anything is stored.
+        Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
+            SampleV2() with { SealingPublicKey = ReadOnlyMemory<byte>.Empty }));
+        Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
+            Sample() with { SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray() }));
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_EncodedTwice_ProducesIdenticalBytes()
     {

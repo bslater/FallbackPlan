@@ -297,4 +297,36 @@ internal static class Strings
     /// </summary>
     internal static string Formatstruct_FooterOffsetDoesNotFall(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, struct_FooterOffsetDoesNotFall, arg0, arg1);
+
+    /// <summary>
+    /// A v2 data blob's envelope carries exactly one 80-byte sealed content key; every other envelope carries none (ADR-0042).
+    /// </summary>
+    internal static string BlobEnvelope_SealedShareDisagrees => Get(nameof(BlobEnvelope_SealedShareDisagrees));
+
+    /// <summary>
+    /// This record's content key is sealed to the repository's public key — reading it requires a restore grant (ADR-0042).
+    /// </summary>
+    internal static string BlobReader_ContentKeySealed => Get(nameof(BlobReader_ContentKeySealed));
+
+    /// <summary>
+    /// A sealed data blob's envelope is at least {0} bytes; got {1}.
+    /// </summary>
+    private static string BlobEnvelope_SealedEnvelopeBytesGot => Get(nameof(BlobEnvelope_SealedEnvelopeBytesGot));
+
+    /// <summary>
+    /// A sealed data blob's envelope is at least {0} bytes; got {1}.
+    /// </summary>
+    internal static string FormatBlobEnvelope_SealedEnvelopeBytesGot(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, BlobEnvelope_SealedEnvelopeBytesGot, arg0, arg1);
+
+    /// <summary>
+    /// The sealed-share associated data is exactly {0} bytes.
+    /// </summary>
+    private static string SealedContentKey_AadExactlyBytes => Get(nameof(SealedContentKey_AadExactlyBytes));
+
+    /// <summary>
+    /// The sealed-share associated data is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatSealedContentKey_AadExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SealedContentKey_AadExactlyBytes, arg0);
 }

@@ -100,4 +100,7 @@
   <data name="RepositoryWriteCredential_SerialisedExactlyBytes" xml:space="preserve">
     <value>A serialised write credential is exactly {0} bytes with its magic intact.</value>
   </data>
+  <data name="WriteOnlyDerivation_RootExactlyBytes" xml:space="preserve">
+    <value>The derivation root is exactly {0} bytes.</value>
+  </data>
 </root>

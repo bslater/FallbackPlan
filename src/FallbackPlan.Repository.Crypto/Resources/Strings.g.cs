@@ -144,4 +144,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatRepositoryWriteCredential_SerialisedExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, RepositoryWriteCredential_SerialisedExactlyBytes, arg0);
+
+    /// <summary>
+    /// The derivation root is exactly {0} bytes.
+    /// </summary>
+    private static string WriteOnlyDerivation_RootExactlyBytes => Get(nameof(WriteOnlyDerivation_RootExactlyBytes));
+
+    /// <summary>
+    /// The derivation root is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatWriteOnlyDerivation_RootExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_RootExactlyBytes, arg0);
 }

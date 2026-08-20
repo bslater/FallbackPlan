@@ -153,11 +153,14 @@ public sealed class BlobWriterAndReaderTests : IDisposable
             counting, key, length, Repo, (_, _) => ClassKey, deriver, CancellationToken.None);
 
         // Read one: the locator. Read two: the footer. The envelope's small
-        // read for key-derivation selectors is deliberately third.
+        // read for key-derivation selectors is deliberately third — sized to
+        // the LARGEST envelope, because the version that decides an
+        // envelope's shape sits inside it (ADR-0042's sealed v2 data blobs
+        // carry 168 bytes; every other blob still parses from the first 88).
         Assert.AreEqual(3, counting.Ranges.Count);
         Assert.AreEqual((length - FooterLocator.Length, (long)FooterLocator.Length), counting.Ranges[0]);
         Assert.IsTrue(counting.Ranges[1].Offset >= BlobEnvelope.Length && counting.Ranges[1].Offset < length - FooterLocator.Length);
-        Assert.AreEqual((0L, (long)BlobEnvelope.Length), counting.Ranges[2]);
+        Assert.AreEqual((0L, Math.Min(BlobEnvelope.MaxLength, length - FooterLocator.Length)), counting.Ranges[2]);
     }
 
     [TestMethod]

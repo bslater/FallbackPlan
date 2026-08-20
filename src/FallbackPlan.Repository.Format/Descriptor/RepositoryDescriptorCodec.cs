@@ -31,8 +31,16 @@ public static class RepositoryDescriptorCodec
     /// <summary>The Argon2id KDF profile value (specification 01 §3.3).</summary>
     public const ushort KdfProfileArgon2id = 0x0001;
 
-    /// <summary>The feature identifiers this implementation understands — none are defined yet.</summary>
-    private static readonly HashSet<ushort> Implemented = [];
+    /// <summary>
+    /// The sealed-data-plane feature (ADR-0042): a format-v2 write-only
+    /// repository names it in <c>required_features</c>, so a reader that
+    /// predates it refuses through the 01 §3.2 path with the identifier
+    /// named, never by half-reading sealed blobs.
+    /// </summary>
+    public const ushort FeatureSealedDataPlane = 0x0001;
+
+    /// <summary>The feature identifiers this implementation understands.</summary>
+    private static readonly HashSet<ushort> Implemented = [FeatureSealedDataPlane];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
@@ -44,8 +52,19 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
+        // The sealing public key exists exactly for format v2 (ADR-0042 §1):
+        // a v2 descriptor without one, or a v1 descriptor with one, is a
+        // caller bug refused here rather than a stored contradiction.
+        var sealed2 = descriptor.FormatVersion >= FormatLimits.SealedFormatVersion;
+        if (sealed2 ? descriptor.SealingPublicKey.Length != 32 : !descriptor.SealingPublicKey.IsEmpty)
+        {
+            throw new ArgumentException(
+                "A format-v2 descriptor carries exactly a 32-byte sealing public key; a v1 descriptor carries none (ADR-0042).",
+                nameof(descriptor));
+        }
+
         var writer = new CanonicalCborWriter();
-        writer.WriteStartMap(8);
+        writer.WriteStartMap(sealed2 ? 9 : 8);
         writer.WriteKey(1);
         writer.WriteByteString(descriptor.RepositoryId.ToArray());
         writer.WriteKey(2);
@@ -85,6 +104,12 @@ public static class RepositoryDescriptorCodec
         writer.WriteTextString(descriptor.CreatedBy);
         writer.WriteKey(8);
         writer.WriteBoolean(descriptor.UnstableFormat);
+        if (sealed2)
+        {
+            writer.WriteKey(9);
+            writer.WriteByteString(descriptor.SealingPublicKey.Span);
+        }
+
         writer.WriteEndMap();
 
         var body = writer.Encode();
@@ -169,10 +194,10 @@ public static class RepositoryDescriptorCodec
         var reader = new CanonicalCborReader(body);
         var count = reader.ReadStartMap();
 
-        if (count != 8)
+        if (count is not (8 or 9))
         {
             return new DescriptorParseResult.FormatViolation(
-                $"The descriptor body carries {count} keys; specification 01 §3.2 defines exactly 8.");
+                $"The descriptor body carries {count} keys; specification 01 §3.2 defines 8, plus key 9 for a format-v2 repository.");
         }
 
         RepositoryId repositoryId = default;
@@ -184,6 +209,7 @@ public static class RepositoryDescriptorCodec
         ulong createdAt = 0;
         string? createdBy = null;
         var unstable = false;
+        byte[]? sealingPublicKey = null;
 
         for (var i = 0; i < count; i++)
         {
@@ -215,9 +241,12 @@ public static class RepositoryDescriptorCodec
                 case 8:
                     unstable = reader.ReadBoolean();
                     break;
+                case 9:
+                    sealingPublicKey = reader.ReadFixedByteString(32);
+                    break;
                 default:
                     return new DescriptorParseResult.FormatViolation(
-                        $"The descriptor body carries unknown key {key}; specification 01 §3.2 assigns keys 1-8 only.");
+                        $"The descriptor body carries unknown key {key}; specification 01 §3.2 assigns keys 1-9 only.");
             }
         }
 
@@ -236,6 +265,15 @@ public static class RepositoryDescriptorCodec
                 $"The body's format_version {formatVersion} disagrees with the framing's {framingVersion} — the corruption check specification 01 §3.2 defines this field for.");
         }
 
+        // Key 9's presence must agree with the version — a v2 repository
+        // without its sealing public key has lost its verifier, and a v1
+        // repository carrying one is claiming a shape it does not have.
+        if ((formatVersion >= FormatLimits.SealedFormatVersion) != (sealingPublicKey is not null))
+        {
+            return new DescriptorParseResult.FormatViolation(
+                "The sealing public key (key 9) is carried exactly by format-v2 descriptors (ADR-0042).");
+        }
+
         var unsupported = required.Where(feature => !Implemented.Contains(feature)).ToArray();
         if (unsupported.Length > 0)
         {
@@ -251,7 +289,8 @@ public static class RepositoryDescriptorCodec
             salt,
             createdAt,
             createdBy,
-            unstable));
+            unstable,
+            sealingPublicKey ?? ReadOnlyMemory<byte>.Empty));
     }
 
     private static List<ushort> ReadFeatureArray(CanonicalCborReader reader)

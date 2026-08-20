@@ -296,6 +296,87 @@ def _ed25519_self_test() -> None:
 
 
 # --------------------------------------------------------------------------
+# X25519 (RFC 7748), pure Python
+#
+# The write-only vectors (specification 03 section 9) need Curve25519 scalar
+# multiplication. It is modular arithmetic, so like Ed25519 above it is
+# implemented here from the RFC directly -- no reference implementation
+# involved -- and gated by the RFC's own test vectors.
+# --------------------------------------------------------------------------
+
+_X_P = 2**255 - 19
+_X_A24 = 121665
+
+
+def _x25519_clamp(k: bytes) -> int:
+    a = bytearray(k)
+    a[0] &= 248
+    a[31] &= 127
+    a[31] |= 64
+    return int.from_bytes(a, "little")
+
+
+def x25519(scalar: bytes, u: bytes) -> bytes:
+    """RFC 7748 section 5: the Montgomery ladder, constant-time not required here."""
+    x1 = int.from_bytes(bytearray(u[:31]) + bytes([u[31] & 127]), "little")
+    k = _x25519_clamp(scalar)
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+
+    for t in range(254, -1, -1):
+        bit = (k >> t) & 1
+        swap ^= bit
+        if swap:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+
+        a = (x2 + z2) % _X_P
+        aa = a * a % _X_P
+        b = (x2 - z2) % _X_P
+        bb = b * b % _X_P
+        e = (aa - bb) % _X_P
+        c = (x3 + z3) % _X_P
+        d = (x3 - z3) % _X_P
+        da = d * a % _X_P
+        cb = c * b % _X_P
+        x3 = (da + cb) % _X_P
+        x3 = x3 * x3 % _X_P
+        z3 = (da - cb) % _X_P
+        z3 = z3 * z3 % _X_P
+        z3 = z3 * x1 % _X_P
+        x2 = aa * bb % _X_P
+        z2 = e * (aa + _X_A24 * e) % _X_P
+
+    if swap:
+        x2, x3, z2, z3 = x3, x2, z3, z2
+
+    return (x2 * pow(z2, _X_P - 2, _X_P) % _X_P).to_bytes(32, "little")
+
+
+def x25519_public(scalar: bytes) -> bytes:
+    return x25519(scalar, (9).to_bytes(32, "little"))
+
+
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    """RFC 5869 section 2.2."""
+    return hmac.new(salt, ikm, hashlib.sha256).digest()
+
+
+def _x25519_self_test() -> None:
+    """RFC 7748 sections 5.2 and 6.1 gate every X25519 value emitted below."""
+    scalar = bytes.fromhex("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4")
+    u = bytes.fromhex("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+    if x25519(scalar, u).hex() != "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552":
+        sys.exit("FATAL: X25519 self-test failed (RFC 7748 section 5.2 vector 1).")
+
+    alice = bytes.fromhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    bob_public = bytes.fromhex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+    if x25519_public(alice).hex() != "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a":
+        sys.exit("FATAL: X25519 self-test failed (RFC 7748 section 6.1 public key).")
+    if x25519(alice, bob_public).hex() != "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742":
+        sys.exit("FATAL: X25519 self-test failed (RFC 7748 section 6.1 shared secret).")
+
+
+# --------------------------------------------------------------------------
 # Fixed inputs
 #
 # Every value here is a constant so the vectors are reproducible. Nothing is
@@ -392,6 +473,95 @@ def keys_vectors() -> dict:
             ),
             "blob_key_other_writer": blob_key_other_writer.hex(),
             "blob_key_other_counter": blob_key_other_counter.hex(),
+        },
+    }
+
+
+def write_only_vectors() -> dict:
+    """Specification 03 section 9 -- the write-only (format v2) derivation tree."""
+    _x25519_self_test()
+
+    # The root is Argon2id output and is PINNED here, exactly as
+    # argon2id.json pins the KDF (no independent implementation exists in
+    # this generator). Everything below it derives independently.
+    root = bytes(range(0xC0, 0xE0))
+
+    sealing_scalar = hkdf_expand(root, b"fbp/seal/v2", 32)
+    structure_root = hkdf_expand(root, b"fbp/metadata/v2", 32)
+    content_id_key = hkdf_expand(root, b"fbp/content-id/v2", 32)
+    key_id_key = hkdf_expand(root, b"fbp/key-id/v2", 32)
+    signing_root = hkdf_expand(root, b"fbp/signing/v2", 32)
+
+    metadata_key_0 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(0), 32)
+    metadata_key_1 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(1), 32)
+    signing_seed_0 = hkdf_expand(signing_root, b"fbp/signing-generation/v2" + u32(0), 32)
+
+    sealing_public = x25519_public(sealing_scalar)
+
+    # The content-key sealing's key agreement (05 section 2.1): a pinned
+    # ephemeral scalar stands in for the CSPRNG draw; the AEAD key is
+    # HKDF extract-then-expand over the shared secret, salted by both
+    # public shares. The final AES-256-GCM step is not vectored here --
+    # the generator cannot compute it (the aes-gcm.json posture); it is
+    # covered by the implementation's primitive tests and round-trips.
+    ephemeral_scalar = bytes(range(0x40, 0x60))
+    ephemeral_public = x25519_public(ephemeral_scalar)
+    shared_secret = x25519(ephemeral_scalar, sealing_public)
+    aead_key = hkdf_expand(
+        hkdf_extract(ephemeral_public + sealing_public, shared_secret),
+        b"fbp/seal-content/v2",
+        32,
+    )
+
+    # Opening from the other side must agree -- the recipient computes the
+    # same shared secret from its scalar and the ephemeral share.
+    assert x25519(sealing_scalar, ephemeral_public) == shared_secret
+
+    members = [
+        sealing_scalar, sealing_public, structure_root, content_id_key,
+        key_id_key, signing_root, metadata_key_0, metadata_key_1, signing_seed_0,
+    ]
+    assert len({m.hex() for m in members}) == len(members), "domains must be pairwise distinct"
+
+    return {
+        "description": (
+            "Write-only repository derivation (specification 03 section 9, "
+            "ADR-0042): the root's one-way expansion into the sealing keypair "
+            "and the write bundle, and the sealed-content-key key agreement."
+        ),
+        "independently_derived": True,
+        "inputs": {
+            "root": root.hex(),
+            "root_note": (
+                "root = Argon2id(passphrase, kdf_salt, kdf_parameters); pinned "
+                "here because Argon2id has no independent implementation in "
+                "this generator (see argon2id.json)."
+            ),
+        },
+        "derived": {
+            "sealing_scalar": sealing_scalar.hex(),
+            "sealing_public_key": sealing_public.hex(),
+            "structure_root": structure_root.hex(),
+            "content_id_key": content_id_key.hex(),
+            "key_id_key": key_id_key.hex(),
+            "signing_root": signing_root.hex(),
+            "metadata_key_generation_0": metadata_key_0.hex(),
+            "metadata_key_generation_1": metadata_key_1.hex(),
+            "signing_seed_generation_0": signing_seed_0.hex(),
+        },
+        "content_key_sealing": {
+            "ephemeral_scalar": ephemeral_scalar.hex(),
+            "ephemeral_public_key": ephemeral_public.hex(),
+            "shared_secret": shared_secret.hex(),
+            "hkdf_salt": (ephemeral_public + sealing_public).hex(),
+            "hkdf_info": "fbp/seal-content/v2",
+            "aead_key": aead_key.hex(),
+            "comment": (
+                "AEAD key = HKDF-SHA256(extract(salt=ephemeral_public || "
+                "sealing_public_key, ikm=shared_secret), info) -- the final "
+                "AES-256-GCM seal (zero nonce, AAD repository_id || blob_id) "
+                "is deliberately not vectored; see aes-gcm.json."
+            ),
         },
     }
 
@@ -1518,6 +1688,7 @@ def recovery_kit_vectors() -> dict:
 
 GROUPS = {
     "keys.json": keys_vectors,
+    "write-only.json": write_only_vectors,
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
     "segmentation.json": segmentation_vectors,
