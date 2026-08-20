@@ -5,6 +5,8 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -61,10 +63,12 @@ public sealed class RepositoryReader : IDisposable
     private readonly List<BlobReader> _blobReaders = [];
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
+    private readonly ILogger _logger;
 
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
-    public RepositoryReader(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
-        : this(repositoryId, keys, store, readAuthority: null)
+    public RepositoryReader(
+        RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store, ILogger? logger = null)
+        : this(repositoryId, keys, store, readAuthority: null, logger)
     {
     }
 
@@ -77,7 +81,11 @@ public sealed class RepositoryReader : IDisposable
     /// and zeroed on dispose; the authority stays the caller's to dispose.
     /// </summary>
     public RepositoryReader(
-        RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store, RepositoryReadAuthority? readAuthority)
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        IObjectStore store,
+        RepositoryReadAuthority? readAuthority,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(store);
@@ -85,6 +93,7 @@ public sealed class RepositoryReader : IDisposable
         _repositoryId = repositoryId;
         _keys = keys;
         _store = store;
+        _logger = logger ?? NullLogger.Instance;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
 
         if (readAuthority is not null)
@@ -151,6 +160,7 @@ public sealed class RepositoryReader : IDisposable
                 // caught here on purpose: a transient store fault is not a
                 // damage finding, and treating it as one would silently
                 // narrow the loaded world on a flaky connection.
+                Log.BlobSkipped(_logger, entry.Key, exception.Message);
                 _skipped.Add(new SkippedBlob(entry.Key, exception.Message));
                 continue;
             }
@@ -164,6 +174,8 @@ public sealed class RepositoryReader : IDisposable
                 _records.TryAdd(record.ObjectId, (reader, record));
             }
         }
+
+        Log.BlobsLoaded(_logger, _blobReaders.Count, _repositoryId, _skipped.Count);
 
         return _blobReaders.Count;
     }

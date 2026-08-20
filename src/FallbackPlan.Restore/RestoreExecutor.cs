@@ -5,6 +5,9 @@ using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Domain.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Restore;
 
@@ -224,8 +227,11 @@ public sealed record RestoreExecutionOptions
 /// file reaches its destination), metadata strictly after content, and a
 /// receipt that accounts for everything (FR-RST-004/005).
 /// </summary>
-public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfile target)
+public sealed class RestoreExecutor(
+    RepositoryReader reader, RestoreTargetProfile target, ILogger? logger = null)
 {
+    private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
     /// <summary>Runs <paramref name="plan"/> into <paramref name="outputDirectory"/>.</summary>
     public async ValueTask<RestoreReceipt> ExecuteAsync(
         RestorePlan plan,
@@ -607,7 +613,7 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             }
         }
 
-        return new RestoreReceipt
+        var receipt = new RestoreReceipt
         {
             SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
             SnapshotId = Convert.ToHexString(plan.SnapshotId.Span).ToLowerInvariant(),
@@ -618,6 +624,19 @@ public sealed class RestoreExecutor(RepositoryReader reader, RestoreTargetProfil
             WrittenTo = root,
             Outcome = Aggregate(items, plan.Items.Count),
         };
+
+        // Guarded, not hoisted: counting three ways over every restored item is
+        // real work, and CA1873 is right that an argument is evaluated whether
+        // or not anybody is listening.
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            var restored = items.Count(item => item.Outcome == "restored");
+            var failed = items.Count(item => item.Outcome == "failed");
+            var skipped = items.Count(item => item.Outcome is "skipped" or "degraded");
+            Log.RestoreComplete(_logger, receipt.Outcome, restored, failed, skipped);
+        }
+
+        return receipt;
     }
 
     /// <summary>Reduces the item outcomes to what the restore as a whole achieved.</summary>

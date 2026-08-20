@@ -6,6 +6,9 @@ using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
 using Microsoft.Win32.SafeHandles;
 using FallbackPlan.Filesystem.Local.Resources;
+using FallbackPlan.Domain.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Filesystem.Local;
 
@@ -24,8 +27,10 @@ namespace FallbackPlan.Filesystem.Local;
 /// Windows-specific capture (alternate streams, security descriptors) is
 /// implemented here and exercised by the CI matrix.
 /// </remarks>
-public sealed class LocalFileSystemSource : IFileSystemSource
+public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemSource
 {
+    private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
     /// <inheritdoc />
     public SourceFilesystemInfo Probe(string rootPath)
     {
@@ -145,6 +150,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
         if (listingFailure is not null)
         {
+            Log.ListingFailed(_logger, new LogPath(directory), listingFailure.Detail);
             yield return new ScanEvent.Failure(listingFailure);
             yield break;
         }
@@ -166,6 +172,8 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             // never read. Reported, not guessed at (06 §4.3).
             if (!RoundTrips(name, nameBytes))
             {
+                Log.EntryFailed(
+                    _logger, new LogPath(relativePath), "the name has no faithful UTF-8 representation");
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath,
                     CaptureFailureReason.NameNotRepresentable,
@@ -191,6 +199,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
             if (!stated)
             {
+                Log.EntryFailed(_logger, new LogPath(relativePath), "vanished between listing and stat");
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath, CaptureFailureReason.NotFound, "The entry vanished between listing and stat."));
                 continue;
