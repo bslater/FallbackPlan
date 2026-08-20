@@ -67,6 +67,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
+| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | **Specified only** | [notes](#0043--the-decision-is-made-the-abstraction-is-not-yet-threaded) |
 
 ---
 
@@ -187,6 +188,10 @@ Three postures are accepted and worth finding here rather than re-deriving: a pe
 Nothing is still ahead in this arc: FR-DEST-007's destination-removal warnings, the last named remainder, landed with [ADR-0037](adr/0037-configuration-over-the-command-contract.md) — `delete_destination` refuses while referenced and otherwise names what remains at the address. Quotas are enforced with the peer slices — see [0030](#0030--the-socket-exists). The negotiated pairing role and the termination notices landed with the peer slices — either side's ending now surfaces durably on both ends, and a fan-out refused `revoked` raises the notice itself — see [0030](#0030--the-socket-exists).
 
 ---
+
+### 0043 — the decision is made, the abstraction is not yet threaded
+
+ADR-0043 is accepted and nothing has been built against it. The repository has no logging today: no `ILogger`, no log file, and two untyped `Action` delegates in the Agent standing in for one. What is decided is the shape — the abstraction package in every library and the sinks in the hosts, `[LoggerMessage]` partials with allocated event-id ranges, redaction by declared type applied where a record crosses the trust boundary, and contract 1.13's diagnostics verbs with a local-full, remote-redacted split. The requirement rows (FR-SVC-010, NFR-OPS-007) name what has to become true, and their traceability rows carry an explicit unmet marker until it is.
 
 ## By phase
 
