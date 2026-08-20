@@ -1181,4 +1181,9 @@ internal static class Strings
     /// </summary>
     internal static string FormatTombstoneCodec_RequiredKeyMissing(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequiredKeyMissing, arg0);
+
+    /// <summary>
+    /// A write-only (format v2) kit carries the 32-byte sealing public key and no key object; every actual key re-derives from the passphrase (ADR-0042).
+    /// </summary>
+    internal static string RecoveryKitCodec_WriteOnlyKitShape => Get(nameof(RecoveryKitCodec_WriteOnlyKitShape));
 }

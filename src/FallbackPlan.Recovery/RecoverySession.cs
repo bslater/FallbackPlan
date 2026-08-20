@@ -33,15 +33,25 @@ public sealed class RecoverySession : IDisposable
     private readonly IObjectStore _store;
     private readonly KeyHierarchy _hierarchy;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly RepositoryReadAuthority? _authority;
+    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
     private readonly List<BlobReader> _readers = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
-    private RecoverySession(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    private RecoverySession(
+        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, RepositoryReadAuthority? authority = null)
     {
         _store = store;
         RepositoryId = repositoryId;
         _hierarchy = hierarchy;
         _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _authority = authority;
+
+        if (authority is not null)
+        {
+            _sealedContentKeyOpener = envelope => SealedContentKey.Open(
+                authority.SealingPrivateKey, envelope.SealedContentKey, RepositoryId, envelope.BlobId);
+        }
     }
 
     /// <summary>The repository identity the kit names.</summary>
@@ -64,6 +74,34 @@ public sealed class RecoverySession : IDisposable
             Iterations = kit.KdfIterations,
             Parallelism = kit.KdfParallelism,
         };
+
+        // A write-only (format v2) kit carries no key object at all — the
+        // passphrase and the kit's public salt and parameters re-derive
+        // everything, proven by comparing the derived public key against the
+        // kit's copy (ADR-0042 §8). The session keeps the authority: its
+        // scalar is what opens each sealed blob's content key.
+        if (kit.RepositoryFormatVersion >= 2)
+        {
+            var authority = WriteOnlyDerivation.Derive(
+                passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
+            {
+                authority.Dispose();
+                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+            }
+
+            try
+            {
+                return new RecoverySession(
+                    store, kit.RepositoryId, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+            }
+            catch
+            {
+                authority.Dispose();
+                throw;
+            }
+        }
 
         using var derivation = KekDerivation.Derive(
             passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
@@ -101,7 +139,8 @@ public sealed class RecoverySession : IDisposable
             try
             {
                 reader = await BlobReader.OpenAsync(
-                    _store, entry.Key, entry.Length, RepositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken)
+                    _store, entry.Key, entry.Length, RepositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken,
+                    _sealedContentKeyOpener)
                     .ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
@@ -415,6 +454,7 @@ public sealed class RecoverySession : IDisposable
 
         _objectIdDeriver.Dispose();
         _hierarchy.Dispose();
+        _authority?.Dispose();
     }
 
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>

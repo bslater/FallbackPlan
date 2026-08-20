@@ -126,7 +126,18 @@ public static class RecoveryKitCodec
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KdfSaltIssuingDeviceId);
         }
 
-        if (!kit.KeyObject.Span.StartsWith(Keys.KeyObjectFraming.Magic))
+        // A v2 kit carries the sealing public key and NO key object — every
+        // real key re-derives from the passphrase (ADR-0042 §8); a v1 kit
+        // carries the verbatim key object and no public key. Anything else
+        // is a contradiction refused before it is stored or trusted.
+        if (kit.RepositoryFormatVersion >= 2)
+        {
+            if (!kit.KeyObject.IsEmpty || kit.SealingPublicKey.Length != 32)
+            {
+                throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_WriteOnlyKitShape);
+            }
+        }
+        else if (!kit.SealingPublicKey.IsEmpty || !kit.KeyObject.Span.StartsWith(Keys.KeyObjectFraming.Magic))
         {
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey);
         }
@@ -135,7 +146,7 @@ public static class RecoveryKitCodec
     private static byte[] EncodeBody(RecoveryKit kit)
     {
         var writer = new CanonicalCborWriter();
-        writer.WriteStartMap(10);
+        writer.WriteStartMap(kit.SealingPublicKey.IsEmpty ? 10 : 11);
         writer.WriteKey(1);
         writer.WriteUnsignedInteger(kit.KitFormatVersion);
         writer.WriteKey(2);
@@ -180,6 +191,12 @@ public static class RecoveryKitCodec
         writer.WriteUnsignedInteger(kit.IssuedAt);
         writer.WriteKey(10);
         writer.WriteTextString(kit.Instructions);
+        if (!kit.SealingPublicKey.IsEmpty)
+        {
+            writer.WriteKey(11);
+            writer.WriteByteString(kit.SealingPublicKey.Span);
+        }
+
         writer.WriteEndMap();
         return writer.Encode();
     }
@@ -188,7 +205,7 @@ public static class RecoveryKitCodec
     {
         var reader = new CanonicalCborReader(body);
         var count = reader.ReadStartMap();
-        if (count != 10)
+        if (count is not (10 or 11))
         {
             throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_VKitBodyCarriesExactly(count));
         }
@@ -199,6 +216,7 @@ public static class RecoveryKitCodec
         uint? memory = null, iterations = null;
         byte? parallelism = null;
         ulong? issuedAt = null;
+        byte[]? sealingPublicKey = null;
         var destinations = new List<KitDestination>();
 
         for (var i = 0; i < count; i++)
@@ -297,6 +315,9 @@ public static class RecoveryKitCodec
                 case 10:
                     instructions = reader.ReadTextString(maxUtf8Length: 16 * 1024);
                     break;
+                case 11:
+                    sealingPublicKey = reader.ReadFixedByteString(32);
+                    break;
                 default:
                     throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitBodyCarriesUnknownKey);
             }
@@ -317,12 +338,7 @@ public static class RecoveryKitCodec
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_RepositoryIdKdfSaltIssuing);
         }
 
-        if (!keyObject.AsSpan().StartsWith(Keys.KeyObjectFraming.Magic))
-        {
-            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey);
-        }
-
-        return new RecoveryKit
+        var kit = new RecoveryKit
         {
             KitFormatVersion = version.Value,
             MinimumToolVersion = minimumTool,
@@ -337,6 +353,13 @@ public static class RecoveryKitCodec
             IssuingDeviceId = deviceId,
             IssuedAt = issuedAt.Value,
             Instructions = instructions,
+            SealingPublicKey = sealingPublicKey ?? ReadOnlyMemory<byte>.Empty,
         };
+
+        // The same shape rules the serialiser enforces (a v1 kit's verbatim
+        // FBPKKEYS object, a v2 kit's public key and nothing wrapped) apply
+        // to parsed bytes — one rule set, both directions.
+        Validate(kit);
+        return kit;
     }
 }

@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Abstractions;
 
@@ -23,6 +24,13 @@ public static class RecoveryKitFactory
         + "3. The kit is one factor; without the repository passphrase it opens nothing.";
 
     /// <summary>Builds a kit for the repository at <paramref name="store"/>.</summary>
+    /// <remarks>
+    /// A write-only (format v2) repository's kit carries no key material at
+    /// all (ADR-0042 §8): the sealing public key rides as the verifier, the
+    /// key-object field is empty, and the passphrase is still proven before
+    /// export — by derive-and-compare rather than an unwrap — so a kit is
+    /// never exported that the passphrase cannot use.
+    /// </remarks>
     public static async ValueTask<RecoveryKit> BuildAsync(
         IObjectStore store,
         Passphrase passphrase,
@@ -33,8 +41,30 @@ public static class RecoveryKitFactory
     {
         ThrowHelper.ThrowIfNull(destinations);
 
-        var (descriptor, keyObject) = await RepositoryLifecycle
-            .ExportVerifiedKeyObjectAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+        RepositoryDescriptor descriptor;
+        var keyObject = ReadOnlyMemory<byte>.Empty;
+        var sealingPublicKey = ReadOnlyMemory<byte>.Empty;
+
+        var probed = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+        if (RepositoryLifecycle.IsWriteOnly(probed))
+        {
+            if (!RepositoryLifecycle.TryDeriveReadAuthority(probed, passphrase, out var authority))
+            {
+                throw new KeyUnwrapFailedException(
+                    Resources.Strings.RepositoryLifecycle_PassphraseDoesNotReproduce);
+            }
+
+            authority!.Dispose();
+            descriptor = probed;
+            sealingPublicKey = probed.SealingPublicKey;
+        }
+        else
+        {
+            byte[] exported;
+            (descriptor, exported) = await RepositoryLifecycle
+                .ExportVerifiedKeyObjectAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            keyObject = exported;
+        }
 
         return new RecoveryKit
         {
@@ -51,6 +81,7 @@ public static class RecoveryKitFactory
             IssuingDeviceId = issuingDeviceId,
             IssuedAt = issuedAt,
             Instructions = DefaultInstructions,
+            SealingPublicKey = sealingPublicKey,
         };
     }
 }

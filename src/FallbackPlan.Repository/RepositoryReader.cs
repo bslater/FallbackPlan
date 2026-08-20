@@ -56,12 +56,28 @@ public sealed class RepositoryReader : IDisposable
     private readonly RepositoryKeySet _keys;
     private readonly IObjectStore _store;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly byte[]? _sealingPrivateKey;
+    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
     private readonly List<BlobReader> _blobReaders = [];
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
     public RepositoryReader(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
+        : this(repositoryId, keys, store, readAuthority: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a reader holding a restore grant (ADR-0042 §5): sealed v2
+    /// data blobs' content keys open under
+    /// <paramref name="readAuthority"/>'s derived scalar. Without one, a
+    /// sealed blob's structure still loads and its record reads answer
+    /// <see cref="RecordReadOutcome.ContentSealed"/>. The scalar is copied
+    /// and zeroed on dispose; the authority stays the caller's to dispose.
+    /// </summary>
+    public RepositoryReader(
+        RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store, RepositoryReadAuthority? readAuthority)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(store);
@@ -70,6 +86,14 @@ public sealed class RepositoryReader : IDisposable
         _keys = keys;
         _store = store;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
+
+        if (readAuthority is not null)
+        {
+            var sealingPrivateKey = readAuthority.SealingPrivateKey.ToArray();
+            _sealingPrivateKey = sealingPrivateKey;
+            _sealedContentKeyOpener = envelope =>
+                SealedContentKey.Open(sealingPrivateKey, envelope.SealedContentKey, _repositoryId, envelope.BlobId);
+        }
     }
 
     /// <summary>Every record-table entry across the loaded blobs.</summary>
@@ -118,7 +142,8 @@ public sealed class RepositoryReader : IDisposable
                     _repositoryId,
                     _keys.DeriveClassKey,
                     _objectIdDeriver,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    _sealedContentKeyOpener).ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
             {
@@ -179,7 +204,8 @@ public sealed class RepositoryReader : IDisposable
                     _repositoryId,
                     _keys.DeriveClassKey,
                     _objectIdDeriver,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    _sealedContentKeyOpener).ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
             {
@@ -343,5 +369,10 @@ public sealed class RepositoryReader : IDisposable
         }
 
         _objectIdDeriver.Dispose();
+
+        if (_sealingPrivateKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_sealingPrivateKey);
+        }
     }
 }

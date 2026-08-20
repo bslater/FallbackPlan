@@ -43,6 +43,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly SpoolPinnedConfiguration _pinned;
     private readonly IIntentScope? _intentScope;
     private readonly byte[] _classKey;
+    private readonly byte[]? _sealingPublicKey;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
 
@@ -105,7 +106,21 @@ public sealed class ArchiveSession : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _pinned = pinned;
         _intentScope = intentScope;
-        _classKey = keys.DeriveClassKey(BlobClass.Data, generation);
+        // A write-only repository has no data key: its data blobs seal their
+        // records under per-blob content keys, and the footer — the structure
+        // plane — derives from the METADATA class key (ADR-0042 §2). The
+        // session's class key is therefore the structure key there, and the
+        // sealing public key rides beside it for CreateSealed below.
+        if (keys.WriteOnly)
+        {
+            _classKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
+            _sealingPublicKey = keys.SealingPublicKey.ToArray();
+        }
+        else
+        {
+            _classKey = keys.DeriveClassKey(BlobClass.Data, generation);
+        }
+
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
 
@@ -975,17 +990,29 @@ public sealed class ArchiveSession : IAsyncDisposable
             }
         }
 
-        return BlobWriter.Create(
-            _repositoryId,
-            _writerId,
-            _generation,
-            BlobClass.Data,
-            _classKey,
-            _counters.AllocateNext(),
-            _policy.EncryptionProfile,
-            _policy.BlobWriteProfile,
-            _spoolDirectory,
-            pinned: _pinned);
+        return _sealingPublicKey is null
+            ? BlobWriter.Create(
+                _repositoryId,
+                _writerId,
+                _generation,
+                BlobClass.Data,
+                _classKey,
+                _counters.AllocateNext(),
+                _policy.EncryptionProfile,
+                _policy.BlobWriteProfile,
+                _spoolDirectory,
+                pinned: _pinned)
+            : BlobWriter.CreateSealed(
+                _repositoryId,
+                _writerId,
+                _generation,
+                _classKey,
+                _sealingPublicKey,
+                _counters.AllocateNext(),
+                _policy.EncryptionProfile,
+                _policy.BlobWriteProfile,
+                _spoolDirectory,
+                pinned: _pinned);
     }
 
     /// <summary>
@@ -1004,7 +1031,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             _classKey,
             _policy.EncryptionProfile,
             _policy.BlobWriteProfile,
-            _pinned);
+            _pinned,
+            _sealingPublicKey is null ? FormatLimits.FormatVersion : FormatLimits.SealedFormatVersion);
 
         if (result is not ResumeResult.Resumed resumed)
         {

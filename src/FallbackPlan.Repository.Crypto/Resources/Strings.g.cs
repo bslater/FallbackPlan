@@ -155,4 +155,14 @@ internal static class Strings
     /// </summary>
     internal static string FormatWriteOnlyDerivation_RootExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_RootExactlyBytes, arg0);
+
+    /// <summary>
+    /// This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).
+    /// </summary>
+    internal static string KeyHierarchy_NotWriteOnly => Get(nameof(KeyHierarchy_NotWriteOnly));
+
+    /// <summary>
+    /// A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).
+    /// </summary>
+    internal static string KeyHierarchy_WriteOnlyHoldsNoDataKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoDataKey));
 }

@@ -32,6 +32,25 @@ public sealed class RepositoryKeySet : IDisposable
         return new RepositoryKeySet(hierarchy, hierarchy.DeriveContentIdKey(), hierarchy.DeriveKeyIdKey());
     }
 
+    /// <summary>
+    /// Derives the set from a write-only repository's write credential
+    /// (ADR-0042): everything answers from the bundle, and asking for a data
+    /// class key throws — a v2 repository has none. The credential is cloned.
+    /// </summary>
+    public static RepositoryKeySet FromWriteCredential(RepositoryWriteCredential credential)
+    {
+        var hierarchy = KeyHierarchy.ForWriteOnly(credential);
+
+        return new RepositoryKeySet(hierarchy, hierarchy.DeriveContentIdKey(), hierarchy.DeriveKeyIdKey());
+    }
+
+    /// <summary>Whether this set is a write-only bundle rather than a master-key hierarchy.</summary>
+    public bool WriteOnly => _hierarchy.WriteOnly;
+
+    /// <summary>The write-only repository's sealing public key.</summary>
+    /// <exception cref="InvalidOperationException">The set is not write-only.</exception>
+    public ReadOnlySpan<byte> SealingPublicKey => _hierarchy.SealingPublicKey;
+
     /// <summary>The repository-scoped content-ID key.</summary>
     public ReadOnlySpan<byte> ContentIdKey => _contentIdKey;
 

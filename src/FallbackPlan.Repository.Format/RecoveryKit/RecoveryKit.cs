@@ -53,4 +53,14 @@ public sealed record RecoveryKit
 
     /// <summary>Embedded recovery instructions (key 10).</summary>
     public required string Instructions { get; init; }
+
+    /// <summary>
+    /// A write-only (format v2) repository's sealing public key (key 11;
+    /// ADR-0042 §8) — the derive-and-compare verifier, and the only
+    /// key-shaped thing a v2 kit carries: every actual key re-derives from
+    /// the passphrase. Present exactly when
+    /// <see cref="RepositoryFormatVersion"/> is 2 or later, in which case
+    /// <see cref="KeyObject"/> is empty — a v2 repository has no key object.
+    /// </summary>
+    public ReadOnlyMemory<byte> SealingPublicKey { get; init; }
 }

@@ -499,4 +499,7 @@
   <data name="TombstoneCodec_RequiredKeyMissing" xml:space="preserve">
     <value>A tombstone omits required key {0} (11 §3).</value>
   </data>
+  <data name="RecoveryKitCodec_WriteOnlyKitShape" xml:space="preserve">
+    <value>A write-only (format v2) kit carries the 32-byte sealing public key and no key object; every actual key re-derives from the passphrase (ADR-0042).</value>
+  </data>
 </root>

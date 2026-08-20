@@ -103,4 +103,10 @@
   <data name="WriteOnlyDerivation_RootExactlyBytes" xml:space="preserve">
     <value>The derivation root is exactly {0} bytes.</value>
   </data>
+  <data name="KeyHierarchy_NotWriteOnly" xml:space="preserve">
+    <value>This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).</value>
+  </data>
+  <data name="KeyHierarchy_WriteOnlyHoldsNoDataKey" xml:space="preserve">
+    <value>A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).</value>
+  </data>
 </root>
