@@ -71,6 +71,24 @@ public sealed class RecoveryKitConformanceTests
     }
 
     [TestMethod]
+    public void WriteOnlyKit_TheCommittedVector_ParsesEmptyHandedWithTheSealingKey()
+    {
+        // The eleven-key shape (ADR-0042; recovery-kit section 2.1): format
+        // version 2, key 5 EMPTY — the kit carries no key material at all —
+        // and key 11 the sealing public key the ceremony compares against.
+        var vector = Vectors.RootElement.GetProperty("write_only_kit");
+        var kit = RecoveryKitCodec.Parse(Convert.FromHexString(vector.GetProperty("framed_hex").GetString()!));
+        var fields = vector.GetProperty("fields");
+
+        Assert.AreEqual(
+            fields.GetProperty("repository_format_version").GetUInt16(), kit.RepositoryFormatVersion);
+        Assert.IsTrue(kit.KeyObject.IsEmpty, "a write-only kit carries no key material");
+        Assert.AreEqual(
+            fields.GetProperty("sealing_public_key").GetString(),
+            Convert.ToHexStringLower(kit.SealingPublicKey.ToArray()));
+    }
+
+    [TestMethod]
     public void RecoveryKit_EveryCommittedRefusalCase_IsRefused()
     {
         foreach (var refusal in Vectors.RootElement.GetProperty("refusal_cases").EnumerateArray())

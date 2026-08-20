@@ -57,6 +57,41 @@ public sealed class WriteOnlyCommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task WriteOnlyRepository_VerifyAndCheck_NameTheSealedPlaneAndReportNoDamage()
+    {
+        var init = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        Assert.IsTrue(init.ExitCode == 0, init.All);
+
+        var source = _cli.WriteFile("sealed.txt", "counted sealed, not damaged");
+        var archive = await _cli.RunAsync("archive", source);
+        Assert.IsTrue(archive.ExitCode == 0, archive.All);
+
+        // A records-level sweep in direct mode holds the full authority
+        // (derived from the passphrase), yet still REPORTS the sealed plane
+        // by name — the honesty line, with zero failures (ADR-0042 §7).
+        var verify = await _cli.RunAsync("verify", "--level", "records");
+        Assert.IsTrue(verify.ExitCode == 0, verify.All);
+        Assert.Contains("sealed", verify.Output, StringComparison.Ordinal);
+        Assert.Contains("restore grant", verify.Output, StringComparison.Ordinal);
+        Assert.Contains("Not damage", verify.Output, StringComparison.Ordinal);
+
+        var check = await _cli.RunAsync("check", "--level", "records");
+        Assert.IsTrue(check.ExitCode == 0, check.All);
+        Assert.Contains("Not damage", check.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Init_WriteOnlyOverAnExistingRepository_IsACleanRefusalNotAStackTrace()
+    {
+        var first = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        Assert.IsTrue(first.ExitCode == 0, first.All);
+
+        var refused = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        Assert.AreNotEqual(0, refused.ExitCode);
+        Assert.DoesNotContain("   at ", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task WriteOnlyRepository_TheWrongPassphrase_IsRefusedByDeriveAndCompare()
     {
         var init = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");

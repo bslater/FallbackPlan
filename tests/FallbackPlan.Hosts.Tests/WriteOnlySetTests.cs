@@ -337,6 +337,189 @@ public sealed class WriteOnlySetTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.NotFound, unknownSet.Reason);
     }
 
+    [TestMethod]
+    public async Task ProvisionWriteOnlySet_MalformedOrCrossPurposeEnvelopes_AreRefusedAndReProvisionIsAdoption()
+    {
+        _harness.WriteSourceFile("notes.txt", "the envelope gauntlet");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        // Not hex at all: refused by name before anything is opened.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand("docs", "zz this is not hex zz"), _timeout.Token),
+            out var notHex);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, notHex.Reason);
+        Assert.Contains("not hex", notHex.Message, StringComparison.Ordinal);
+
+        // Provision properly, so a real grant envelope exists to replay.
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        // A RESTORE-GRANT envelope replayed as a provision: sealed to the
+        // right recipient but under the grant purpose, so the AAD separation
+        // refuses it exactly like a foreign envelope — purposes never blur.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", await SealGrantAsync(description.RestoreGrantRecipient!, PassphraseText)),
+                _timeout.Token),
+            out var crossPurpose);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, crossPurpose.Reason);
+        Assert.Contains("different service", crossPurpose.Message, StringComparison.Ordinal);
+
+        // Re-provisioning the provisioned set with the same passphrase is an
+        // idempotent adoption, never a destructive re-creation.
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+            new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs",
+                    SealProvision(
+                        description.RestoreGrantRecipient!, PassphraseText,
+                        descriptor.KdfSalt.ToArray(), descriptor.KdfParameters)),
+                _timeout.Token),
+            out var readopted);
+        Assert.IsTrue(
+            readopted.Lines.Any(line => line.Contains("adopted", StringComparison.Ordinal)),
+            "a re-provision of the same archive is named an adoption");
+    }
+
+    [TestMethod]
+    public async Task OpenRestoreSource_MalformedWrongServiceOrWrongPassphraseGrants_AreRefusedByName()
+    {
+        _harness.WriteSourceFile("notes.txt", "granted or refused, never confused");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var provisionEnvelope = SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand("docs", provisionEnvelope), _timeout.Token));
+        await RunBackupAndWaitAsync(runtime, handler);
+
+        // Not hex.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new OpenRestoreSourceCommand("docs", Envelope: "certainly not hex"), _timeout.Token),
+            out var notHex);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, notHex.Reason);
+        Assert.Contains("not hex", notHex.Message, StringComparison.Ordinal);
+
+        // The PROVISION envelope replayed as a grant: right recipient, wrong
+        // purpose — the AAD separation holds in this direction too.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new OpenRestoreSourceCommand("docs", Envelope: provisionEnvelope), _timeout.Token),
+            out var crossPurpose);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, crossPurpose.Reason);
+        Assert.Contains("different service", crossPurpose.Message, StringComparison.Ordinal);
+
+        // A grant derived from the WRONG passphrase: it opens (it was sealed
+        // to this service), but the scalar does not reproduce the
+        // repository's sealing key — a wrong passphrase at the client,
+        // refused by name, never a damage claim.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new OpenRestoreSourceCommand(
+                    "docs",
+                    Envelope: await SealGrantFromWrongPassphraseAsync(description.RestoreGrantRecipient!)),
+                _timeout.Token),
+            out var wrongPassphrase);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, wrongPassphrase.Reason);
+        Assert.Contains("not this repository's", wrongPassphrase.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task OpenRestoreSource_AGrantOnAV1Source_IsIgnoredAndTheRestoreStillWorks()
+    {
+        // A v1 archive with a service that holds its passphrase — the world
+        // the grant machinery must leave completely alone.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "v1 ignores grants");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithServicePassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunBackupAndWaitAsync(runtime, handler);
+
+        // The contract says a grant on a v1 source is ignored — even one
+        // that is not hex — because there is nothing for it to mean.
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await handler.ExecuteAsync(
+                new OpenRestoreSourceCommand("docs", Envelope: "zz ignored on v1 zz"), _timeout.Token),
+            out var opened);
+        var snapshotId = Assert.ContainsSingle(opened.Snapshots).SnapshotId;
+
+        var restoredOut = Path.Combine(_harness.WorkPath, "v1-ignored");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, restoredOut, Source: opened.SourceId, InPlace: true),
+                _timeout.Token),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.AreEqual("v1 ignores grants", File.ReadAllText(Path.Combine(restoredOut, "notes.txt")));
+    }
+
+    [TestMethod]
+    public async Task OpenRestoreSource_ACorruptStoredWriteCredential_RefusesByNamingAdoption()
+    {
+        _harness.WriteSourceFile("notes.txt", "the credential rots");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using (var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory))
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            Assert.IsInstanceOfType<ServiceDescriptionResult>(
+                await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+            var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(
+                await handler.ExecuteAsync(
+                    new ProvisionWriteOnlySetCommand(
+                        "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                    _timeout.Token));
+            await RunBackupAndWaitAsync(runtime, handler);
+        }
+
+        // Rot the stored credential in place: still a file, no longer a
+        // credential. The next service life must name it as damage — the
+        // remedy is adoption — never a silent "not provisioned".
+        var credentialPath = Path.Combine(
+            _harness.StateDirectory, "write-credentials", $"{_harness.DocsSetId}.bin");
+        var bytes = await File.ReadAllBytesAsync(credentialPath, _timeout.Token);
+        bytes[0] ^= 0x01;
+        await File.WriteAllBytesAsync(credentialPath, bytes, _timeout.Token);
+
+        await using (var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory))
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var refused = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
+                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token));
+            Assert.Contains("adopt", refused.Message, StringComparison.Ordinal);
+            Assert.Contains(_harness.DocsSetId, refused.Message, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>
     /// The client half of the provisioning ceremony: Argon2id where the
     /// person typed, the write bundle sealed to the service's published
@@ -373,6 +556,38 @@ public sealed class WriteOnlySetTests : IDisposable
                 WriteOnlyProvisioning.SealGrant(
                     Convert.FromHexString(recipientHex), authority!.SealingPrivateKey));
         }
+    }
+
+    /// <summary>
+    /// A grant sealed correctly to this service — but derived from a
+    /// passphrase that is not this repository's, against the descriptor's
+    /// own salt and parameters so only the passphrase is wrong.
+    /// </summary>
+    private async Task<string> SealGrantFromWrongPassphraseAsync(string recipientHex)
+    {
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+            new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
+        using var passphrase = Passphrase.Create("emphatically not the passphrase of this drill");
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.ToArray(), KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealGrant(
+                Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
+    }
+
+    private async Task<ServiceRuntime> StartWithServicePassphraseAsync()
+    {
+        using var passphrase = Passphrase.Create(
+            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+
+        return await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+            },
+            passphrase,
+            _timeout.Token);
     }
 
     private async Task RunBackupAndWaitAsync(ServiceRuntime runtime, ServiceCommandHandler handler)

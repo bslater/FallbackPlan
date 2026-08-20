@@ -1559,6 +1559,19 @@ def _kit_body(overrides: dict | None = None) -> bytes:
     return _cbor_map(sorted(fields.items()))
 
 
+def _kit_body_v2() -> bytes:
+    """The synthetic write-only (repository format 2) kit body: eleven keys,
+    key 5 deliberately EMPTY -- the kit carries no key material at all
+    (ADR-0042, recovery-kit section 2.1) -- and key 11 the 32-byte sealing
+    public key the restore ceremony compares against.
+    """
+    return _kit_body({
+        4: _cbor_uint(2),
+        5: _cbor_bytes(b""),
+        11: _cbor_bytes(bytes([0x9C]) * 32),
+    })
+
+
 def _kit_frame(body: bytes, version: int = 1, declared_length: int | None = None,
                corrupt_checksum: bool = False) -> bytes:
     header = b"FBPKRKIT" + u16(version) + u16(0) + u32(
@@ -1593,6 +1606,8 @@ def recovery_kit_vectors() -> dict:
     """Specifications/recovery-kit sections 2-4 -- framing and text form."""
     body = _kit_body()
     framed = _kit_frame(body)
+    body_v2 = _kit_body_v2()
+    framed_v2 = _kit_frame(body_v2)
 
     refusals = [
         {
@@ -1627,6 +1642,29 @@ def recovery_kit_vectors() -> dict:
             "framed_hex": (b"NOTAKIT!" + framed[8:]).hex(),
             "reason": "not a recovery kit",
         },
+        {
+            "name": "write_only_with_key_object",
+            "framed_hex": _kit_frame(_kit_body({
+                4: _cbor_uint(2),
+                11: _cbor_bytes(bytes([0x9C]) * 32),
+            })).hex(),
+            "reason": (
+                "a format-2 kit must carry an EMPTY key 5 -- a write-only "
+                "kit holds no key material (ADR-0042, section 2.1)"
+            ),
+        },
+        {
+            "name": "write_only_without_sealing_key",
+            "framed_hex": _kit_frame(_kit_body({
+                4: _cbor_uint(2),
+                5: _cbor_bytes(b""),
+            })).hex(),
+            "reason": (
+                "a ten-key body claiming repository format 2 has nothing "
+                "for the restore ceremony to verify against -- key 11 is "
+                "required"
+            ),
+        },
     ]
 
     text = _kit_text(framed)
@@ -1647,6 +1685,8 @@ def recovery_kit_vectors() -> dict:
     assert len(framed) == 16 + len(body) + 32
     assert hashlib.sha256(framed[:-32]).digest() == framed[-32:]
     assert _kit_line_check("01", b32(framed)[:48]) in text
+    assert hashlib.sha256(framed_v2[:-32]).digest() == framed_v2[-32:]
+    assert bytes([0x9C]) * 32 in body_v2 and b"FBPKKEYS" not in body_v2
 
     return {
         "description": "Recovery-kit framing and text form (specifications/recovery-kit sections 2-4).",
@@ -1675,6 +1715,16 @@ def recovery_kit_vectors() -> dict:
                         "salt": bytes(range(0x10, 0x20)).hex()},
                 "issued_at": 1_722_600_000_000,
                 "destination_count": 1,
+            },
+        },
+        "write_only_kit": {
+            "body_hex": body_v2.hex(),
+            "framed_hex": framed_v2.hex(),
+            "checksum_hex": framed_v2[-32:].hex(),
+            "fields": {
+                "repository_format_version": 2,
+                "key_object_length": 0,
+                "sealing_public_key": (bytes([0x9C]) * 32).hex(),
             },
         },
         "refusal_cases": refusals,
