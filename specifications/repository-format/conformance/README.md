@@ -98,7 +98,7 @@ Cross-verification is not an audit. It establishes that two people did not make 
 
 ## Fixtures
 
-The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content — live in [`fixtures/`](fixtures/README.md). The first, `fixture-repository-v1`, is a complete deterministic phase-0 repository (descriptor, key object, blobs, standalone snapshot, index delta, journal) whose committed bytes are regenerated and compared on every test run: a diff under `fixtures/` is a format change and must be deliberate.
+The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content — live in [`fixtures/`](fixtures/README.md). The first, `fixture-repository-v1`, is a complete deterministic phase-0 repository (descriptor, key object, blobs, standalone snapshot, index delta, journal) whose committed bytes are regenerated and compared on every test run: a diff under `fixtures/` is a format change and must be deliberate. Beside it, `fixture-repository-v2` is a committed write-only repository (ADR-0042): sealing is randomised by design so it is not byte-regenerated — instead every run re-proves its read contract (structure with the write bundle, `ContentSealed` without a grant, byte-identical restore with the derived authority).
 
 The suite also carries the **recovery kit** ([specifications/recovery-kit](../../recovery-kit/README.md)): framing and text-form vectors in `vectors/recovery-kit.json`, and a committed kit for the fixture repository under `fixtures/fixture-repository-v1-kit/`.
 
@@ -115,7 +115,7 @@ Recorded so they are visible rather than discovered:
 | **XChaCha20-Poly1305 cross-verification** | No second implementation available to check against — unlike Argon2id, which is cross-verified on every CI run |
 | Negative vectors (rejection cases) | Fixture territory — e.g. a non-power-of-two `fixed-v1` segment size ([09 §2.2](../09-segmentation.md#22-parameters)) MUST be rejected, but every committed case happens to use a conforming size, so a non-enforcing implementation passes today |
 | Corruption-injected fixtures | `fixture-repository-v1` is the intact baseline; committed pre-corrupted variants (each damage class as frozen bytes) remain future work — today corruption is injected at test time by the F2 harness |
-| Format upgrade fixtures | No second format version exists yet |
+| Format upgrade fixtures | `fixture-repository-v2` freezes the write-only (ADR-0042) read contract; an upgrade path between formats does not exist by design — a repository is v1 or v2 from creation |
 
 ## Reporting a defect
 

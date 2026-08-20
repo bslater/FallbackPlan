@@ -1,6 +1,6 @@
 # ADR-0042 — Write-only repositories: one passphrase, a sealed data plane, and a restore key that is derived, never stored
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08
 **Requirements:** FR-WOR-001, FR-WOR-002, FR-WOR-003, FR-WOR-004, FR-WOR-005, NFR-SEC-009, NFR-SEC-010
 **Related:** [ADR-0019](0019-third-party-dependency-policy.md), [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [architecture 03](../architecture/03-crypto.md), [format spec 03](../../specifications/repository-format/03-keys.md)
@@ -205,3 +205,4 @@ default until v2 has earned its miles.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the derivation, sealing, adoption and confinement-amendment decisions fixed by the user; build sequenced as crypto core → format v2 → repository layer → service and contract 1.12 → clients → docs |
+| 2026-08 | Accepted | Built end to end: the derivation tree and content sealing in Repository.Crypto (conformance vectors cross-checked against an independent pure-python X25519), the v2 descriptor/envelope/footer re-key with sealed spool resume, derived lifecycle opens, contract 1.12's provisioning and grant ceremonies with the service's recipient keypair and per-set credential store, passphrase-free service start, the CLI's `init --write-only` and derived direct mode, the console's setup ceremony and v2 wizard gate — proven by service-level drills including the machine-migration adoption, a committed v2 conformance fixture, and a live Playwright walk from provisioning to byte-identical restore |

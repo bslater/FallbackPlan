@@ -95,6 +95,14 @@ The recovery kit is what makes clean-machine recovery possible, and it is a rele
 
 Both carry identical content. Both embed their own instructions, on the assumption that when the kit is needed, no other project documentation is reachable — which is precisely the scenario the kit exists for.
 
+### 4.5 The write-only kit (format v2)
+
+A write-only repository's kit ([ADR-0042](../adr/0042-write-only-repositories.md)) carries **no key material at all** — not even wrapped: no key object exists to carry. It holds the repository id, format 2, the sealing public key, the KDF salt and parameters, and the destinations — purely "where the repository is and how to re-derive". The passphrase is the one factor; `RecoverySession` derives the whole authority from it against the kit's recorded parameters and proves it by public-key equality. A stolen v2 kit yields strictly less than a stolen v1 kit (which at least carried a wrapped key to attack offline): it yields an address and a public key.
+
+### 4.6 Restore grants (format v2)
+
+On a write-only set the service cannot read file contents, so a guided restore ([ADR-0041](../adr/0041-guided-restore-and-peer-retrieval.md)) carries a **grant**: the admin client re-derives the sealing scalar from the passphrase where the person typed it, seals it end-to-end to the service's published recipient key (opaque to the browser and to every relay), and sends it on `open_restore_source`. The unsealed scalar lives only inside the source handle — zeroed on explicit close, the 30-minute idle sweep, or shutdown — and structure-plane verbs (browse, list, plan) never needed it at all. A restore attempted without a grant degrades honestly: each sealed read is reported as sealed in the receipt, never as damage.
+
 ### 4.4 Lifecycle
 
 - Generated during first-run setup, with **explicit confirmation** that it has been saved before setup completes.
