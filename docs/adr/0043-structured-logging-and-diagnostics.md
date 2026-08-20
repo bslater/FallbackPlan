@@ -334,15 +334,18 @@ and both now covered by tests:
   power-of-two capacity; otherwise one slot can misalign once per 2^32
   operations. An always-on service reaches 2^32 log writes, and that fault
   would arrive years late and unreproducible.
-- **A snapshot must be filtered and sorted.** Reading a lock-free ring while
-  producers write can observe a slot claimed but not yet published — which
-  arrives as `null`, since the buffer's constraint is `where T : class?` and the
-  compiler's non-null annotation is therefore not a runtime promise. And because
-  `Add` stamps the sequence and enqueues in two steps, FIFO order is not
-  sequence order. Left alone, the first is a `NullReferenceException` in the
-  diagnostics read path under load, and the second silently drops a record from
-  the feed. A concurrency test — four threads logging while a reader pages —
-  found the first on its first run.
+- **A snapshot must be filtered and sorted.** `ToArray` is documented as
+  best-effort: under sustained churn, after its retry budgets are exhausted, a
+  slot that cannot be stabilised contributes `default(T)` — `null` here — in
+  preference to returning a torn or stale-generation reference. That is the
+  buffer behaving as designed and as `where T : class?` advertises; assuming
+  non-null elements was **our** misuse of it, and the fix is to treat an
+  unstabilised slot as a record that is simply not in this page. Separately,
+  because `Add` stamps the sequence and enqueues in two steps, FIFO order is
+  not sequence order. Left alone, the first is a `NullReferenceException` in
+  the diagnostics read path under load, and the second silently drops a record
+  from the feed. A concurrency test — four threads logging while a reader pages
+  — found the first on its first run.
 
 The rotating file sink remains ours: file rotation, retention and owner-only
 permissions are policy about this product's state directory, not a general data

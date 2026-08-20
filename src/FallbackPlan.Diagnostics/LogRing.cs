@@ -170,14 +170,16 @@ public sealed class LogRing
     /// reading a lock-free ring while producers are writing to it.
     /// </para>
     /// <para>
-    /// <b>Nulls.</b> A snapshot can observe a slot a producer has claimed but
-    /// not yet published, and the buffer's <c>where T : class?</c> lets that
-    /// arrive as <see langword="null"/> — so the compiler's non-null
-    /// annotation on the element type is not a promise the runtime keeps. A
-    /// record that is not published yet is simply not in this page; its
-    /// sequence is above the cursor, so the next read returns it. Discarding
-    /// it here is what keeps a diagnostic read from throwing under exactly the
-    /// load that makes somebody want to read diagnostics.
+    /// <b>Nulls.</b> <c>ToArray</c> is documented best-effort: under sustained
+    /// churn, once its retry budgets are exhausted, a slot it cannot stabilise
+    /// contributes <c>default(T)</c> rather than a torn or stale-generation
+    /// reference. For a reference type that is <see langword="null"/>, which is
+    /// what <c>where T : class?</c> is telling the caller to expect. The
+    /// buffer is right to prefer a hole over a lie; handling it is ours to do.
+    /// A record we could not read here is simply not in this page — its
+    /// sequence is above the cursor, so the next read returns it — and
+    /// discarding it is what keeps a diagnostic read from throwing under
+    /// exactly the load that makes somebody want to read diagnostics.
     /// </para>
     /// <para>
     /// <b>Order.</b> <see cref="Add"/> stamps the sequence and enqueues in two
