@@ -474,6 +474,57 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// The diagnostics ring buffer is a collections dependency, and it belongs
+    /// to exactly one project (ADR-0043 §6). It is admitted at ADR-0019's
+    /// <em>operational</em> bar, which it clears because
+    /// <c>FallbackPlan.Diagnostics</c> is reached only by the Agent and the
+    /// CLI — never by <c>Repository.Format</c>, and therefore never by the
+    /// standalone recovery tool, whose closure is judged at the far stricter
+    /// format-critical bar.
+    ///
+    /// That reasoning is only sound while the containment holds, so it is a
+    /// test rather than a paragraph. If the buffer drifts into a lower layer,
+    /// the tier it was admitted under silently stops applying.
+    /// </summary>
+    [TestMethod]
+    public void CollectionsBuffer_EveryAssemblyBesidesDiagnostics_ReferencesItNowhere()
+    {
+        var offenders = new List<string>();
+
+        foreach (var project in Directory.EnumerateFiles(
+            Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileNameWithoutExtension(project);
+            if (string.Equals(name, "FallbackPlan.Diagnostics", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (File.ReadAllText(project).Contains("Bodu.Collections", StringComparison.Ordinal))
+            {
+                offenders.Add(name);
+            }
+        }
+
+        Assert.IsEmpty(
+            offenders,
+            "Only FallbackPlan.Diagnostics may reference the collections packages; "
+            + $"found one in {string.Join(", ", offenders)}.");
+    }
+
+    /// <summary>
+    /// The positive half: a prohibition that passes because nothing references
+    /// the package at all is a test that keeps passing after somebody deletes
+    /// the containment it claims to enforce.
+    /// </summary>
+    [TestMethod]
+    public void CollectionsBuffer_ProjectFileCanary_StaysInDiagnostics()
+    {
+        AssertProjectReferences(
+            "FallbackPlan.Diagnostics", "<PackageReference Include=\"Bodu.Collections.Concurrent\" />");
+    }
+
+    /// <summary>
     /// Application is the use-case layer: it "depends on domain
     /// abstractions, never on provider implementations" (11 §2). Hosts —
     /// the CLI and the Agent — compose engines and providers and pass

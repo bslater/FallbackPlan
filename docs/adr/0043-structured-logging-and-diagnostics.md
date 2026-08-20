@@ -258,7 +258,7 @@ third-party logging stack in a deliberately dependency-light tree governed by a
 committed feed ([ADR-0021](0021-consume-bodu-via-committed-package-feed.md)),
 and it would contradict ADR-0027 §3's "no exporter packages" for the sake of
 convenience in four host processes. The sinks we need are a ring buffer and a
-rotating file; both are small and both are ours to test.
+rotating file — and see the amendment below on where the ring came from.
 
 **Keep the `Action<string, Exception?>` delegates and grow them.** Zero new
 dependencies. Rejected: it has no level, no category, no event id and no
@@ -294,8 +294,63 @@ first rejected it. That decision named logging as one of the things this
 service "either does not need or already has by another means"; what is added
 here is the abstraction and two small providers, not a hosting model.
 
+
+## Amendment (2026-08): the ring buffer is Bodu's, not ours
+
+The decision above reasoned about sinks as things "ours to test" and, on that
+basis, a bounded ring was written by hand in `FallbackPlan.Diagnostics`. That
+was a mistake of research, not of judgement: **`Bodu.Collections.Generic.Concurrent.ConcurrentCircularBuffer<T>`
+already existed**, and it is precisely this data structure — fixed capacity,
+`allowOverwrite` for drop-oldest, a lock-free Vyukov MPMC protocol, a
+snapshot-based enumerator, MIT.
+
+What made it easy to miss is worth recording, because the same trap is still
+there. `external/packages/` vendors four Bodu packages, and `Bodu.Core`
+contains a `Bodu.Collections.*` namespace holding **extension methods only**.
+A search of the vendored feed therefore returns a collections namespace with no
+collections in it, which reads like evidence that no such type exists. It is
+not: the packages are published from `bslater/bodu`'s `local-packages/` feed
+under a lock-step version, and this repository vendors only the subset it has
+needed so far. **The vendored feed is a record of what we have taken, never a
+statement of what exists.**
+
+`Bodu.Collections.Concurrent 0.2.0` is now vendored (with its declared
+dependency `Bodu.Collections 0.2.0`, which nothing here uses directly) and
+`LogRing` keeps only what the buffer does not model: the monotonic sequence and
+the non-destructive cursor read that let a reader learn it fell behind.
+
+**Tier.** This is admitted at §2's **operational** bar, not the format-critical
+one: `FallbackPlan.Diagnostics` is referenced by the Agent and the CLI alone,
+never by `Repository.Format`, so it never enters the standalone recovery tool's
+closure. That reasoning holds only while the containment does, so it is a pair
+of tests rather than a paragraph — a sweep over every `src` project and a
+positive canary, in the shape ADR-0019's other package containments already use.
+
+**Two properties the swap surfaced**, both invisible in the hand-rolled version
+and both now covered by tests:
+
+- **Capacity is rounded up to a power of two.** The ring's slot mapping is a
+  clean permutation across the position counter's 2^32 wrap *only* at a
+  power-of-two capacity; otherwise one slot can misalign once per 2^32
+  operations. An always-on service reaches 2^32 log writes, and that fault
+  would arrive years late and unreproducible.
+- **A snapshot must be filtered and sorted.** Reading a lock-free ring while
+  producers write can observe a slot claimed but not yet published — which
+  arrives as `null`, since the buffer's constraint is `where T : class?` and the
+  compiler's non-null annotation is therefore not a runtime promise. And because
+  `Add` stamps the sequence and enqueues in two steps, FIFO order is not
+  sequence order. Left alone, the first is a `NullReferenceException` in the
+  diagnostics read path under load, and the second silently drops a record from
+  the feed. A concurrency test — four threads logging while a reader pages —
+  found the first on its first run.
+
+The rotating file sink remains ours: file rotation, retention and owner-only
+permissions are policy about this product's state directory, not a general data
+structure.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Abstractions in twenty-four projects; sinks in `FallbackPlan.Diagnostics`; contract 1.13 diagnostics verbs |
+| 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |

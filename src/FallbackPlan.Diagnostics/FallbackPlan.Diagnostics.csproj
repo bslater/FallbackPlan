@@ -24,6 +24,12 @@
     <!-- Prebuilt package from the committed external/packages feed: parameter
          validation (ADR-0019 section 4 / ADR-0021). -->
     <PackageReference Include="Bodu.Core" />
+    <!-- The ring the client log feed reads from (ADR-0043 §6). A lock-free
+         Vyukov MPMC circular buffer with drop-oldest eviction — the structure
+         LogRing needs, already written and already tested. A canary in
+         DependencyRuleTests pins it here: it is an operational-tier dependency
+         and must not drift into the format-critical closure. -->
+    <PackageReference Include="Bodu.Collections.Concurrent" />
   </ItemGroup>
 
 </Project>

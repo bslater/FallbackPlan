@@ -34,8 +34,12 @@ public sealed record LoggingOptions
     /// <summary>How many rolled files to keep, newest first.</summary>
     public int RetainFiles { get; init; } = 5;
 
-    /// <summary>How many records the in-memory ring holds for clients to read.</summary>
-    public int RingCapacity { get; init; } = 2_000;
+    /// <summary>
+    /// How many records the in-memory ring holds for clients to read, rounded
+    /// up to a power of two by <see cref="LogRing"/> — so the default is
+    /// already one, and the configured value matches the effective one.
+    /// </summary>
+    public int RingCapacity { get; init; } = 2_048;
 
     /// <summary>Whether to also write to the console, for a foreground run.</summary>
     public bool Console { get; init; }

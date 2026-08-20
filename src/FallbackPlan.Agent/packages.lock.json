@@ -78,6 +78,7 @@
       "fallbackplan.diagnostics": {
         "type": "Project",
         "dependencies": {
+          "Bodu.Collections.Concurrent": "[0.2.0, )",
           "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging": "[10.0.10, )",
@@ -252,6 +253,24 @@
           "Bodu.Core": "[0.2.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
+      "Bodu.Collections": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "JMfCNBPjen4T9jaM1l1ZiyaRoceOBEL/J+oUvwTwlwfxuHcK4L3Py23IJ/XcjNIbIwUa1vzDSyItThS6FpQ1Ww==",
+        "dependencies": {
+          "Bodu.Core": "0.2.0"
+        }
+      },
+      "Bodu.Collections.Concurrent": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "YTWeHiPWI88qxAjuq0L1J5tTl+WwlU5zrU4AnaV5kAteGR1Xi/tJfpZCK0RwrKxef+v0jl7bsUlU6wAioGhU/w==",
+        "dependencies": {
+          "Bodu.Collections": "0.2.0"
         }
       },
       "Bodu.Globalization.Recurrence": {

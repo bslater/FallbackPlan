@@ -41,6 +41,7 @@
     <Project Path="tests/FallbackPlan.Application.Tests/FallbackPlan.Application.Tests.csproj" />
     <Project Path="tests/FallbackPlan.ArchitectureTests/FallbackPlan.ArchitectureTests.csproj" />
     <Project Path="tests/FallbackPlan.Cli.Tests/FallbackPlan.Cli.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Diagnostics.Tests/FallbackPlan.Diagnostics.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Domain.Tests/FallbackPlan.Domain.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Filesystem.Tests/FallbackPlan.Filesystem.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Hosts.Tests/FallbackPlan.Hosts.Tests.csproj" />

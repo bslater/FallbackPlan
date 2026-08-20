@@ -1,4 +1,5 @@
 using Bodu;
+using Bodu.Collections.Generic.Concurrent;
 
 namespace FallbackPlan.Diagnostics;
 
@@ -8,11 +9,21 @@ namespace FallbackPlan.Diagnostics;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Modelled on the progress hub, and for the same reason: it is bounded, it
-/// drops the oldest record when it is full, and every record carries a
-/// monotonic <see cref="LogRecord.Sequence"/> so a reader can tell that it
-/// missed something rather than quietly seeing a shorter history. A diagnostic
-/// buffer that silently loses records is worse than one that says it did.
+/// Storage and thread-safety are
+/// <see cref="ConcurrentCircularBuffer{T}"/>'s — a lock-free Vyukov MPMC ring
+/// with <c>allowOverwrite</c>, which is exactly this shape: bounded, and
+/// dropping the oldest record rather than the newest when it fills. Writers
+/// here are genuinely many (the archive loop runs at the policy's concurrency,
+/// the scheduler lane and both listeners all log), so the concurrent variant
+/// is the correct one and no external lock is needed.
+/// </para>
+/// <para>
+/// What this type adds is the part the buffer does not model: a
+/// <b>monotonic sequence</b> per record and a <b>non-destructive read from a
+/// cursor</b>. Those are what let a reader discover it fell behind — the same
+/// drop-oldest-and-say-so contract the progress hub keeps, for the same reason.
+/// A diagnostic buffer that silently loses records is worse than one that says
+/// it did.
 /// </para>
 /// <para>
 /// A client never receives a path to the log file. The service exposes no raw
@@ -23,35 +34,30 @@ namespace FallbackPlan.Diagnostics;
 /// </remarks>
 public sealed class LogRing
 {
-    private readonly LogRecord?[] _records;
-    private readonly Lock _gate = new();
+    private readonly ConcurrentCircularBuffer<LogRecord> _records;
     private long _nextSequence;
-    private int _head;
-    private int _count;
 
-    /// <summary>Creates a ring holding at most <paramref name="capacity"/> records.</summary>
-    /// <param name="capacity">How many records to retain.</param>
+    /// <summary>Creates a ring holding at least <paramref name="capacity"/> records.</summary>
+    /// <param name="capacity">How many records to retain; rounded up to a power of two.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is not positive.</exception>
     public LogRing(int capacity)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
-        _records = new LogRecord?[capacity];
+
+        // Rounded up to a power of two, and not merely to be tidy: the ring's
+        // slot mapping is a clean permutation across the position counter's
+        // 2^32 wrap ONLY at a power-of-two capacity — otherwise one slot can
+        // misalign once per 2^32 operations. An always-on service reaches
+        // 2^32 log writes eventually, and the resulting fault would be
+        // unreproducible and years late. Two is the protocol's own minimum.
+        _records = new ConcurrentCircularBuffer<LogRecord>(RoundUpToPowerOfTwo(capacity), allowOverwrite: true);
     }
 
     /// <summary>How many records the ring holds.</summary>
-    public int Capacity => _records.Length;
+    public int Capacity => _records.Capacity;
 
     /// <summary>The sequence the next added record will carry.</summary>
-    public long NextSequence
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _nextSequence;
-            }
-        }
-    }
+    public long NextSequence => Interlocked.Read(ref _nextSequence);
 
     /// <summary>
     /// The oldest sequence still held, or the next sequence when the ring is
@@ -61,10 +67,8 @@ public sealed class LogRing
     {
         get
         {
-            lock (_gate)
-            {
-                return _count == 0 ? _nextSequence : _nextSequence - _count;
-            }
+            var snapshot = SnapshotBySequence();
+            return snapshot.Count == 0 ? NextSequence : snapshot[0].Sequence;
         }
     }
 
@@ -78,18 +82,12 @@ public sealed class LogRing
     {
         ThrowHelper.ThrowIfNull(record);
 
-        lock (_gate)
-        {
-            var stamped = record with { Sequence = _nextSequence++ };
-            _records[_head] = stamped;
-            _head = (_head + 1) % _records.Length;
-            if (_count < _records.Length)
-            {
-                _count++;
-            }
-
-            return stamped;
-        }
+        // Interlocked rather than a lock: the buffer is already safe for
+        // concurrent producers, so the sequence is the only shared state left
+        // to order, and ordering one counter does not need a critical section.
+        var stamped = record with { Sequence = Interlocked.Increment(ref _nextSequence) - 1 };
+        _records.Enqueue(stamped);
+        return stamped;
     }
 
     /// <summary>
@@ -108,31 +106,110 @@ public sealed class LogRing
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximum);
 
-        lock (_gate)
+        // One snapshot, taken without disturbing the buffer — reading
+        // diagnostics must never consume them, since two clients may be
+        // watching and neither owns the history.
+        //
+        // Sorted by sequence, and that is not belt-and-braces. Add stamps the
+        // sequence and enqueues in two steps, so two producers can interleave
+        // between them: thread A takes 5, thread B takes 6, B enqueues first,
+        // and the buffer's FIFO order is 6 then 5. Paging a snapshot in that
+        // order would advance the cursor past 6 and then silently drop 5 —
+        // a record missing from the feed with nothing to say it went. Sorting
+        // costs O(n log n) over at most Capacity records on a read that
+        // happens when a human asks, and it buys back the ordering the
+        // lock-free enqueue cannot promise.
+        var snapshot = SnapshotBySequence();
+
+        if (snapshot.Count == 0)
         {
-            var oldest = _count == 0 ? _nextSequence : _nextSequence - _count;
-            var dropped = sinceSequence < oldest;
-            var cursor = Math.Max(sinceSequence, oldest);
+            return new LogPage([], Math.Max(sinceSequence, NextSequence), Dropped: false);
+        }
 
-            var page = new List<LogRecord>();
-            var sequence = cursor;
+        // The reader fell behind if its cursor names a record the ring has
+        // already evicted. Derived from the snapshot rather than from Count,
+        // which this buffer documents as approximate.
+        var dropped = sinceSequence < snapshot[0].Sequence;
 
-            while (sequence < _nextSequence && page.Count < maximum)
+        var page = new List<LogRecord>();
+        var cursor = Math.Max(sinceSequence, snapshot[0].Sequence);
+
+        foreach (var record in snapshot)
+        {
+            if (record.Sequence < cursor)
             {
-                var slot = (int)(((_head - (_nextSequence - sequence)) % _records.Length + _records.Length)
-                    % _records.Length);
-                var held = _records[slot];
-                if (held is not null && held.Level >= minimumLevel)
-                {
-                    page.Add(held);
-                }
-
-                sequence++;
+                continue;
             }
 
-            return new LogPage(page, sequence, dropped);
+            if (page.Count == maximum)
+            {
+                // Stop at the page boundary and report the first sequence NOT
+                // returned, so the next read resumes exactly here — including
+                // over records this call filtered out by level.
+                return new LogPage(page, record.Sequence, dropped);
+            }
+
+            if (record.Level >= minimumLevel)
+            {
+                page.Add(record);
+            }
+
+            cursor = record.Sequence + 1;
         }
+
+        return new LogPage(page, cursor, dropped);
     }
+
+    /// <summary>
+    /// A snapshot of the held records, oldest sequence first, with unpublished
+    /// slots discarded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two corrections to a raw <c>ToArray</c>, both of them consequences of
+    /// reading a lock-free ring while producers are writing to it.
+    /// </para>
+    /// <para>
+    /// <b>Nulls.</b> A snapshot can observe a slot a producer has claimed but
+    /// not yet published, and the buffer's <c>where T : class?</c> lets that
+    /// arrive as <see langword="null"/> — so the compiler's non-null
+    /// annotation on the element type is not a promise the runtime keeps. A
+    /// record that is not published yet is simply not in this page; its
+    /// sequence is above the cursor, so the next read returns it. Discarding
+    /// it here is what keeps a diagnostic read from throwing under exactly the
+    /// load that makes somebody want to read diagnostics.
+    /// </para>
+    /// <para>
+    /// <b>Order.</b> <see cref="Add"/> stamps the sequence and enqueues in two
+    /// steps, so two producers can interleave between them — thread A takes 5,
+    /// thread B takes 6, B enqueues first, and the ring's FIFO order is 6 then
+    /// 5. Paging in that order would advance the cursor past 6 and silently
+    /// drop 5: a record missing from the feed with nothing to say it went.
+    /// </para>
+    /// </remarks>
+    private List<LogRecord> SnapshotBySequence()
+    {
+        var raw = _records.ToArray();
+        var held = new List<LogRecord>(raw.Length);
+
+        foreach (var record in raw)
+        {
+            if (record is not null)
+            {
+                held.Add(record);
+            }
+        }
+
+        held.Sort(static (left, right) => left.Sequence.CompareTo(right.Sequence));
+        return held;
+    }
+
+    /// <summary>
+    /// The next power of two at or above <paramref name="value"/>, floored at
+    /// the ring protocol's minimum of two.
+    /// </summary>
+    private static int RoundUpToPowerOfTwo(int value) =>
+        value <= 2 ? 2 : (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)value);
 }
 
 /// <summary>One page of diagnostics read from a <see cref="LogRing"/>.</summary>
