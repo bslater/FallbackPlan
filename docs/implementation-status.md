@@ -68,6 +68,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | **Specified only** | [notes](#0043--the-decision-is-made-the-abstraction-is-not-yet-threaded) |
+| [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | **Specified only** | [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
 
 ---
 
@@ -210,6 +211,15 @@ ADR-0043 is accepted and nothing has been built against it. The repository has n
 ## What keeps this true
 
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
+
+
+### 0044 — the ceremony that two requirements have been waiting for
+
+ADR-0044 is proposed and nothing has been built against it. What exists today is the *absence* it describes: a service starts cleanly with no passphrase, `describe_service` has no way to say so, and the only door to a provisioned set is the per-set `Write-only…` dialog in the console's Configuration view, which presumes a destination, a set, and an operator who knows it is there. The refusal an unprovisioned set eventually raises (`ServiceRuntime.ArchiveForAsync`) is accurate and arrives on a scheduler poll long after anybody could act on it.
+
+What is decided is the shape: one installation-wide write credential rather than one per set, because `WriteOnlyDerivation` never took a repository identifier and one `(passphrase, salt, params)` triple can stamp every archive; a `setup_required` state on `describe_service`; contract 1.13's `provision_installation` carrying the same sealed envelope ADR-0042 already uses; a caller scope so a paired remote console is refused; and a length floor with a modest strength estimate enforced at the setup boundary only, which answers [Q14](open-questions.md#q14--minimum-passphrase-length-and-the-globalization-dependency-behind-normalisation). FR-SVC-011 and NFR-SEC-011 name what has to become true, and their traceability rows carry an explicit unmet marker until it is.
+
+**Two older requirements stay unmet and are worth naming here rather than leaving to look satisfied.** FR-KIT-004 requires a recovery kit generated during first-run setup with confirmation it has been saved; FR-SNP-007 requires first run to warn when the only destination shares a failure domain with the source. ADR-0044 deliberately scopes the ceremony to the passphrase alone, so both gaps survive it — but the ceremony they were written against will now exist, which is the part that was missing.
 
 ### 0035 — a destination has to earn being relied on
 

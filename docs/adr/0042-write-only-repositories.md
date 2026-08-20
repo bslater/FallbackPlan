@@ -200,9 +200,40 @@ default until v2 has earned its miles.
   exceed what a tab will allocate, and the console host process is
   already local to the person typing (ADR-0041 settled this shape).
 
+## Amendment (2026-08): setup provisions the installation, not the first set
+
+Decision 10 above gives one provisioning verb serving create and adopt, and
+both are addressed to a **named set**. That was the right shape for the
+ceremony it was written for — an operator turning an existing set write-only,
+or re-attaching a moved archive — and the wrong shape for the one that was
+missing. A service on its first run has no sets, so there is nothing to
+address, and the passphrase had no way in until the operator had already
+built a destination and a set through a console they were never told they
+needed.
+
+[ADR-0044](0044-first-run-setup.md) closes that with an
+**installation-level** credential. It rests on a property of the derivation
+that was always there and never used: `WriteOnlyDerivation` takes no
+repository identifier — `root = Argon2id(passphrase, salt, params)` and five
+HKDF labels — so one `(passphrase, salt, params)` triple can stamp every
+archive an installation ever creates. Setup mints one salt, derives once, and
+the service stores the credential beside its per-set siblings; each set's
+staging archive is then created from it on that set's first backup.
+
+Nothing here is retracted. The per-set verb keeps decision 10's adopt
+ceremony, which is the case where the salt is not ours to mint because the
+archive's descriptor already fixed it. Decision 11 is reinforced rather than
+weakened: one root for an installation makes "there is no passphrase change"
+an installation-wide statement, and ADR-0044 refuses a second setup for
+exactly that reason. The consequence worth naming, because it is now
+structural rather than incidental, is the blast radius: the passphrase opens
+every set on the machine. It always did — there is one passphrase — but a
+reader of the derivation should not have to infer it.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the derivation, sealing, adoption and confinement-amendment decisions fixed by the user; build sequenced as crypto core → format v2 → repository layer → service and contract 1.12 → clients → docs |
 | 2026-08 | Accepted | Built end to end: the derivation tree and content sealing in Repository.Crypto (conformance vectors cross-checked against an independent pure-python X25519), the v2 descriptor/envelope/footer re-key with sealed spool resume, derived lifecycle opens, contract 1.12's provisioning and grant ceremonies with the service's recipient keypair and per-set credential store, passphrase-free service start, the CLI's `init --write-only` and derived direct mode, the console's setup ceremony and v2 wizard gate — proven by service-level drills including the machine-migration adoption, a committed v2 conformance fixture, and a live Playwright walk from provisioning to byte-identical restore |
+| 2026-08 | Amended | Decision 10's per-set provisioning is joined by an installation-level credential for first-run setup ([ADR-0044](0044-first-run-setup.md)); the per-set verb keeps the adopt ceremony, where the descriptor already fixes the salt |
