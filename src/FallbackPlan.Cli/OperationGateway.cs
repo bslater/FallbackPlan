@@ -395,12 +395,18 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
         var result = await SendAsync<VerificationResult>(
             new VerifyCommand(level), "a verification", cancellationToken).ConfigureAwait(false);
 
-        return new OperationReport(
-            result.Failures == 0,
-            [
-                string.Create(CultureInfo.InvariantCulture,
-                    $"verified {result.ObjectsChecked} blob(s) at level {result.Level}; {result.Failures} failure(s)"),
-            ]);
+        List<string> lines =
+        [
+            string.Create(CultureInfo.InvariantCulture,
+                $"verified {result.ObjectsChecked} blob(s) at level {result.Level}; {result.Failures} failure(s)"),
+        ];
+        if (result.SealedRecords > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"sealed   {result.SealedRecords} record(s) — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
+        }
+
+        return new OperationReport(result.Failures == 0, lines);
     }
 
     /// <inheritdoc/>
@@ -636,8 +642,12 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             : catalogue.EnumerateSnapshots()
                 .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
+        // A write-only repository takes the device trust domain (ADR-0042):
+        // verify-on-reuse reads content, which it cannot.
         var orchestrator = new PublicationOrchestrator(
-            CapturePolicy.Default,
+            session.Repository.Keys.WriteOnly
+                ? CapturePolicy.Default with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device }
+                : CapturePolicy.Default,
             session.Repository.RepositoryId,
             session.Writer,
             session.CurrentGeneration,
@@ -711,6 +721,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         using var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
         var blobs = 0;
         var failures = 0;
+        var sealedRecords = 0L;
         List<string> lines = [];
 
         await foreach (var entry in session.Store
@@ -724,6 +735,8 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
                 failures++;
                 lines.Add($"FAILED {entry.Key.Value}: {result.Detail}");
             }
+
+            sealedRecords += result.RecordsSealed;
         }
 
         // Direct mode names the blob that failed. The contract carries only a
@@ -731,6 +744,11 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // in what they can say.
         lines.Add(string.Create(CultureInfo.InvariantCulture,
             $"verified {blobs} blob(s) at level {parsed}; {failures} failure(s)"));
+        if (sealedRecords > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"sealed   {sealedRecords} record(s) — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
+        }
 
         return new OperationReport(failures == 0, lines);
     }
@@ -745,6 +763,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         using (var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store))
         {
             var blobs = 0;
+            var sealedRecords = 0L;
             await foreach (var entry in session.Store
                 .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
             {
@@ -756,9 +775,16 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
                     problems++;
                     lines.Add($"blob FAILED  {entry.Key.Value}: {result.Detail}");
                 }
+
+                sealedRecords += result.RecordsSealed;
             }
 
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"blobs      {blobs} verified at {parsed}"));
+            if (sealedRecords > 0)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"sealed     {sealedRecords} record(s) — content verification needs a restore grant (ADR-0042). Not damage."));
+            }
         }
 
         using (var journalReader = new JournalReader(

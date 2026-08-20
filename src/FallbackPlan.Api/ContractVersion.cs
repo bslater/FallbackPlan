@@ -49,8 +49,10 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// describe_service. 1.12 added write-only repositories (ADR-0042):
     /// provision_write_only_set carrying the sealed write bundle for both the
     /// create and adopt ceremonies, the optional sealed restore-grant
-    /// envelope on open_restore_source, and the grant-recipient public key on
-    /// describe_service.
+    /// envelope on open_restore_source, the grant-recipient public key on
+    /// describe_service, and the sealed-record count on verification results
+    /// so a records-level sweep of a write-only set reads as neither damage
+    /// nor a clean content check.
     /// </remarks>
     public static ContractVersion Current { get; } = new(1, 12);
 

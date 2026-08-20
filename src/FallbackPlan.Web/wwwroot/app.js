@@ -783,8 +783,12 @@ const actions = {
       const result = await run({ command: "verify", level }, { errToast: "Verify refused" });
       if (result?.result === "verification") {
         const clean = Number(result.failures) === 0;
+        // Sealed records on a write-only set are a stated incapacity, not
+        // damage and not a clean content check (ADR-0042).
+        const sealed = Number(result.sealedRecords ?? 0);
         toast(clean ? "ok" : "bad",
-          `Verified ${fmtCount(result.objectsChecked)} blob(s) at ${result.level} — ${fmtCount(result.failures)} failure(s).`);
+          `Verified ${fmtCount(result.objectsChecked)} blob(s) at ${result.level} — ${fmtCount(result.failures)} failure(s).`
+          + (sealed ? ` ${fmtCount(sealed)} sealed record(s) need a restore grant for content checks.` : ""));
       }
     });
   },

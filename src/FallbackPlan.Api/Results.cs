@@ -471,7 +471,15 @@ public sealed record RestoreSourceOpenedResult(
 /// <param name="ObjectsChecked">How many objects were examined.</param>
 /// <param name="Failures">How many failed.</param>
 /// <param name="Level">The level that was run.</param>
-public sealed record VerificationResult(long ObjectsChecked, long Failures, string Level) : ServiceResult;
+/// <param name="SealedRecords">
+/// How many records could not be content-verified because they are sealed
+/// to a write-only repository's public key (ADR-0042). Not failures and not
+/// passes: structure verified, content needs a restore grant — reported
+/// separately so a records-level sweep of a write-only set never reads as
+/// either damage or a clean content check.
+/// </param>
+public sealed record VerificationResult(
+    long ObjectsChecked, long Failures, string Level, long SealedRecords = 0) : ServiceResult;
 
 /// <summary>What a health check found.</summary>
 /// <param name="Findings">The findings, in the order they matter.</param>

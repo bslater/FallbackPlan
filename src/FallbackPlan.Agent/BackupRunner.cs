@@ -89,8 +89,16 @@ public static class BackupRunner
                     ? archive.Repository.CurrentDataGeneration
                     : archive.Repository.CurrentMetadataGeneration;
 
+            // A write-only archive takes the device trust domain (ADR-0042):
+            // the repository domain's verify-on-reuse reads content, which a
+            // write-only holder cannot, and the orchestrator refuses the
+            // combination by name rather than degrading silently.
+            var policy = archive.Repository.Keys.WriteOnly
+                ? CapturePolicy.Default with { DedupTrustDomain = DedupTrustDomain.Device }
+                : CapturePolicy.Default;
+
             var orchestrator = new PublicationOrchestrator(
-                CapturePolicy.Default,
+                policy,
                 archive.Repository.RepositoryId,
                 runtime.Writer,
                 generation,

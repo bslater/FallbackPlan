@@ -387,6 +387,13 @@ public static class CliApplication
                     }
                     : CapturePolicy.Default;
 
+                // A write-only repository takes the device trust domain
+                // (ADR-0042): verify-on-reuse reads content, which it cannot.
+                if (session.Repository.Keys.WriteOnly)
+                {
+                    policy = policy with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device };
+                }
+
                 var orchestrator = new PublicationOrchestrator(
                     policy,
                     session.Repository.RepositoryId,
@@ -682,7 +689,14 @@ public static class CliApplication
                     var fileResult = await engine.VerifyFileAsync(
                         FileVersionManifestCodec.Decode(read.Plaintext!), reader, cancellationToken).ConfigureAwait(false);
 
-                    output.WriteLine(fileResult.Ok ? "file: OK (every segment and the whole-file hash verified)" : $"file: FAILED — {fileResult.Detail}");
+                    // Sealed content is a stated incapacity, not damage
+                    // (ADR-0042): still not a success — the file was NOT
+                    // verified — but never reported as corrupt.
+                    output.WriteLine(fileResult.Ok
+                        ? "file: OK (every segment and the whole-file hash verified)"
+                        : fileResult.NeedsRestoreGrant
+                            ? $"file: NOT CHECKED — {fileResult.Detail}"
+                            : $"file: FAILED — {fileResult.Detail}");
                     return fileResult.Ok ? 0 : 2;
                 }
 

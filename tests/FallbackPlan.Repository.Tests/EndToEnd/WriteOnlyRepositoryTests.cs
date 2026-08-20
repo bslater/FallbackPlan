@@ -44,10 +44,16 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
 
     private static Passphrase Right() => Passphrase.Create(PassphraseText);
 
-    /// <summary>64 KiB segments so a modest file spans several sealed records.</summary>
+    /// <summary>
+    /// 64 KiB segments so a modest file spans several sealed records — and
+    /// the device trust domain, which is the write-only default: the
+    /// repository domain's verify-on-reuse reads content, so the
+    /// orchestrator refuses that combination by name (ADR-0042 §7).
+    /// </summary>
     private static CapturePolicy SmallPolicy => CapturePolicy.Default with
     {
         SegmentSize = SegmentSize.Create(64 * 1024),
+        DedupTrustDomain = DedupTrustDomain.Device,
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
             TargetSizeBytes = 256 * 1024,
@@ -175,6 +181,88 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
                 SequenceAssert.AreEqual(
                     content,
                     await File.ReadAllBytesAsync(Path.Combine(output, path.Replace('/', Path.DirectorySeparatorChar))));
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_VerifyIsHonestAboutSealedContent_AndRefusesRepositoryDedup()
+    {
+        var store = CreateStore();
+        var (opened, authority, catalogue, _) = await CreateAndBackUpAsync(store);
+        using var _1 = opened;
+        using var _2 = authority;
+        using var _3 = catalogue;
+
+        // The repository trust domain is refused at construction, with the
+        // remedy named — never left to degrade silently (ADR-0042 §7).
+        var refused = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
+            SmallPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
+            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(_root, "refused-sequence.txt"))),
+            Path.Combine(_root, "refused-spool")));
+        Assert.Contains("write-only", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("device", refused.Message, StringComparison.Ordinal);
+
+        // Verification with the write bundle alone: levels 1–2 are the
+        // structure plane and pass whole; level 3 counts the sealed records
+        // as a stated incapacity — Ok, never a failure, never silent.
+        using var verifier = new VerifyEngine(opened.RepositoryId, opened.Keys, store);
+        var sawSealedData = false;
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            foreach (var level in new[] { VerifyLevel.LocatorAndFooter, VerifyLevel.FooterAndDigest })
+            {
+                var structural = await verifier.VerifyBlobAsync(entry.Key, entry.Length, level, CancellationToken.None);
+                Assert.IsTrue(structural.Ok, $"{entry.Key.Value} at {level}: {structural.Detail}");
+            }
+
+            var records = await verifier.VerifyBlobAsync(
+                entry.Key, entry.Length, VerifyLevel.EveryRecord, CancellationToken.None);
+            Assert.IsTrue(records.Ok, $"{entry.Key.Value}: sealed content must not read as damage: {records.Detail}");
+
+            if (entry.Key.Value.StartsWith("blobs/data/", StringComparison.Ordinal))
+            {
+                sawSealedData = true;
+                Assert.IsTrue(records.RecordsSealed > 0, "a sealed data blob's records cannot content-verify");
+                Assert.Contains("restore grant", records.Detail!, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.AreEqual(0, records.RecordsSealed, "metadata blobs are the structure plane and verify whole");
+                Assert.IsNull(records.Detail);
+            }
+        }
+
+        Assert.IsTrue(sawSealedData, "the drill must have verified at least one sealed data blob");
+
+        // File verification without a grant is the same statement, distinct
+        // from damage, and with the derived authority it verifies end to end.
+        using (var structural = new RepositoryReader(opened.RepositoryId, opened.Keys, store))
+        {
+            await structural.LoadBlobsAsync(CancellationToken.None);
+            var manifestEntry = structural.AllRecords.First(
+                record => record.ObjectType == Domain.ObjectType.FileVersionManifest);
+            var manifestRead = await structural.ReadSegmentAsync(manifestEntry.ObjectId, CancellationToken.None);
+            Assert.AreEqual(FallbackPlan.Repository.Packing.RecordReadOutcome.Ok, manifestRead.Outcome);
+            var manifest = FallbackPlan.Repository.Format.Manifests.FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
+
+            var unchecked_ = await verifier.VerifyFileAsync(manifest, structural, CancellationToken.None);
+            Assert.IsFalse(unchecked_.Ok);
+            Assert.IsTrue(unchecked_.NeedsRestoreGrant, "a sealed file is not checkable, and not damaged");
+            Assert.Contains("no damage", unchecked_.Detail!, StringComparison.Ordinal);
+
+            using var passphrase = Right();
+            var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+                store, passphrase, CancellationToken.None);
+            using (readOpened)
+            using (readAuthority)
+            using (var granted = new RepositoryReader(readOpened.RepositoryId, readOpened.Keys, store, readAuthority))
+            {
+                await granted.LoadBlobsAsync(CancellationToken.None);
+                var checkedResult = await verifier.VerifyFileAsync(manifest, granted, CancellationToken.None);
+                Assert.IsTrue(checkedResult.Ok, checkedResult.Detail);
             }
         }
     }

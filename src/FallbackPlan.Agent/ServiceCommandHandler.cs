@@ -999,6 +999,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
 
         var examined = 0L;
         var failures = 0L;
+        var sealedRecords = 0L;
 
         foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -1014,10 +1015,14 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 {
                     failures++;
                 }
+
+                // Sealed content on a write-only set is a stated incapacity,
+                // never a failure and never a silent pass (ADR-0042).
+                sealedRecords += result.RecordsSealed;
             }
         }
 
-        return new VerificationResult(examined, failures, canonical);
+        return new VerificationResult(examined, failures, canonical, sealedRecords);
     }
 
     /// <summary>Health across every set's archive: the blob sweep, the journal survey, and the catalogue's damage findings.</summary>
@@ -1039,6 +1044,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         {
             using (var verifier = new VerifyEngine(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store))
             {
+                var sealedRecords = 0L;
                 await foreach (var entry in archive.Store
                     .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
                     .ConfigureAwait(false))
@@ -1049,6 +1055,18 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                     {
                         findings.Add($"{set.Name}: blob {entry.Key.Value}: {result.Detail}");
                     }
+
+                    sealedRecords += result.RecordsSealed;
+                }
+
+                // The stated incapacity, once per set rather than per blob: a
+                // records-level check of a write-only set must say what it
+                // could not check (ADR-0042), never read as a clean content
+                // sweep — and never as damage.
+                if (sealedRecords > 0)
+                {
+                    findings.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"{set.Name}: {sealedRecords} record(s) are sealed to the repository public key — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
                 }
             }
 

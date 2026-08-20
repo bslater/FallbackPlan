@@ -36,6 +36,21 @@ All ten keys are mandatory (`destinations` MAY be an empty array). Unknown keys 
 
 Key 5 is deliberately the **unmodified key object**: the kit inherits the key object's own framing, AAD binding, and unwrap path, so a kit parser reuses the repository-format code and vectors instead of introducing a second wrapping construction. Recovering with a kit is exactly repository-open ([01 §6](../repository-format/01-object-layout.md#6-discovery-order)) with steps 1 and 3 satisfied from the kit instead of the store.
 
+### 2.1 Write-only repositories (repository format v2)
+
+A kit for a write-only repository ([ADR-0042](../../docs/adr/0042-write-only-repositories.md); [repository-format 03 §9](../repository-format/03-keys.md#9-write-only-repositories-format-v2)) carries **no key material at all** — not even wrapped, because no key object exists to carry. Its body is the same map with one added key:
+
+| Key | Type | Value |
+|-----|------|-------|
+| 11 | bytes[32] | `sealing_public_key` — the repository's derived X25519 public key, byte-identical to descriptor key 9 |
+
+The shape rules are mandatory in both directions and a parser MUST enforce them:
+
+- when key 11 is **present** (an 11-key map): key 4 MUST be ≥ 2 and key 5 MUST be a **zero-length** byte string — a v2 kit that claims to carry a key object is a forgery or a defect, refused exactly as a passphrase-bearing kit is (§1);
+- when key 11 is **absent** (the 10-key map of §2): key 5 MUST be a well-formed `FBPKKEYS` object as before.
+
+Such a kit is purely *where the repository is and how to re-derive*: the KDF parameters (key 6) reproduce the Argon2id root from the passphrase, and key 11 is the verifier — derive, compare, no decryption. A stolen v2 kit yields strictly less than a stolen v1 kit: an address and a public key, with no wrapped key object to attack offline. The passphrase remains the one factor, and losing it loses the backup — the kit cannot soften that, by design.
+
 ## 3 Machine form (framing)
 
 ```text
@@ -80,6 +95,8 @@ The QR representation encodes the framed binary (§3) directly in **byte mode**,
 2. Derive the KEK from the passphrase and key 6's parameters ([03 §2](../repository-format/03-keys.md#2-key-encryption-key)).
 3. Unwrap key 5 exactly as repository-open step 3 ([03 §3](../repository-format/03-keys.md#3-the-key-object)). A wrong passphrase and a tampered key object are indistinguishable, by design.
 4. Reach the store named by key 7 (credentials come from the operator, never the kit), then proceed as an ordinary reader — including catalogue rebuild and forensic rebuild if the index plane is gone.
+
+For a **write-only kit** (§2.1), steps 2–3 are replaced by the v2 derivation ([03 §9](../repository-format/03-keys.md#9-write-only-repositories-format-v2)): run Argon2id over the passphrase with key 6's parameters, expand the root into the full authority, and prove it by comparing the derived sealing public key against key 11 — equality is the verifier, and a mismatch is the wrong passphrase, refused before anything is read.
 
 A **stale** kit — issued before a destination change — still performs steps 1–3; it may simply not know where every replica lives. Staleness is a freshness property, never a validity property ([ADR-0013](../../docs/adr/0013-recovery-kit.md)).
 

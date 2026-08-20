@@ -85,6 +85,20 @@ public sealed class WriteOnlySetTests : IDisposable
         // Backup, browse and plan — all on a service that holds no passphrase.
         await RunBackupAndWaitAsync(runtime, handler);
 
+        // A records-level sweep is honest about the sealed plane (ADR-0042
+        // §7): zero failures, the sealed count reported, and the check names
+        // the incapacity as exactly that — never as damage.
+        Assert.IsInstanceOfType<VerificationResult>(
+            await handler.ExecuteAsync(new VerifyCommand("records"), _timeout.Token), out var verified);
+        Assert.AreEqual(0L, verified.Failures, "sealed content must never verify as damage");
+        Assert.IsTrue(verified.SealedRecords > 0, "the sealed records are reported, not silently passed");
+
+        Assert.IsInstanceOfType<CheckResult>(
+            await handler.ExecuteAsync(new CheckCommand("records"), _timeout.Token), out var checkedUp);
+        var incapacity = Assert.ContainsSingle(checkedUp.Findings);
+        Assert.Contains("restore grant", incapacity, StringComparison.Ordinal);
+        Assert.Contains("Not damage", incapacity, StringComparison.Ordinal);
+
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
             await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var structure);
         var snapshotId = Assert.ContainsSingle(structure.Snapshots).SnapshotId;

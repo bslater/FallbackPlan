@@ -165,6 +165,21 @@ public sealed partial class PublicationOrchestrator
                 nameof(policy));
         }
 
+        // ADR-0042 §7's gate, in the same place: the repository domain
+        // verifies other writers' segments by READING their content, and a
+        // write-only holder cannot — every verification would answer
+        // unavailable and quietly turn the hardened domain into re-archiving.
+        // Refused with the remedy named rather than left to degrade; the
+        // hosts choose the device domain for write-only sets.
+        if (keys.WriteOnly && policy.DedupTrustDomain == DedupTrustDomain.Repository)
+        {
+            throw new ArgumentException(
+                "The repository trust domain verifies other writers' segments by reading their content, "
+                + "which a write-only repository cannot do (ADR-0042). Use the device domain — the "
+                + "write-only default — or repository-unverified with its acknowledgement.",
+                nameof(policy));
+        }
+
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
