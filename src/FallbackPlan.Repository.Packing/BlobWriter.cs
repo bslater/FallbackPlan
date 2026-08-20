@@ -4,6 +4,8 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing.Resources;
@@ -338,8 +340,11 @@ public sealed class BlobWriter : IAsyncDisposable
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
         SpoolPinnedConfiguration current,
-        ushort expectedFormatVersion = FormatLimits.FormatVersion)
+        ushort expectedFormatVersion = FormatLimits.FormatVersion,
+        ILogger? logger = null)
     {
+        logger ??= NullLogger.Instance;
+
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
         ThrowHelper.ThrowIfNull(current);
@@ -363,6 +368,12 @@ public sealed class BlobWriter : IAsyncDisposable
 
         ResumeResult.MustRestart Discard(string reason)
         {
+            // Every restart passes through here, so this is the one place the
+            // reason has to be recorded. A restart is invisible from outside —
+            // the job still completes and the snapshot is still correct — and
+            // "why did the nightly get slower" is otherwise unanswerable.
+            Log.SpoolDiscarded(logger, reason);
+
             File.Delete(checkpointPath);
             if (File.Exists(spoolPath))
             {
@@ -593,6 +604,8 @@ public sealed class BlobWriter : IAsyncDisposable
         writer._digest.AppendData(spoolBytes);
         writer._entries.AddRange(entries);
         writer.CurrentLength = spoolBytes.Length;
+
+        Log.SpoolResumed(logger, envelope.BlobId, entries.Count, spoolBytes.Length);
 
         return new ResumeResult.Resumed(writer);
     }

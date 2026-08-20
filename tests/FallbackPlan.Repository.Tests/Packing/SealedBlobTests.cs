@@ -339,9 +339,34 @@ public sealed class SealedBlobTests : IDisposable
         await writer.DisposeAsync();
     }
 
+    [TestMethod]
+    public async Task SealedSpool_ARestart_SaysWhyInTheLogRatherThanOnlyInTheReturn()
+    {
+        // A restart is invisible from outside: the job still completes and the
+        // snapshot is still correct, so the cost — lost spooled work — shows up
+        // only as a slower nightly. The reason has to reach the log, or the
+        // question "why did this get slower" has no answer (ADR-0043).
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        await WriteAbandonedSealedSpoolAsync(authority);
+
+        var sidecar = await File.ReadAllBytesAsync(SidecarPath());
+        sidecar[^1] ^= 0x01;
+        await File.WriteAllBytesAsync(SidecarPath(), sidecar);
+
+        var logger = new RecordingLogger();
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(ResumeSealed(authority, logger), out var restart);
+
+        var recorded = Assert.ContainsSingle(logger.Records);
+        Assert.AreEqual(1601, recorded.EventId, "the discard carries its allocated event id");
+        Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, recorded.Level);
+        Assert.AreEqual(restart.Reason, recorded.Value("Reason"), "the logged reason is the returned reason");
+        Assert.Contains("checkpoint_unreadable", recorded.Message, StringComparison.Ordinal);
+    }
+
     private string SidecarPath() => Directory.GetFiles(SpoolDirectory, "*.checkpoint").Single();
 
-    private ResumeResult ResumeSealed(RepositoryReadAuthority authority)
+    private ResumeResult ResumeSealed(
+        RepositoryReadAuthority authority, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         var structureKey = authority.Credential.DeriveMetadataKey(KeyGeneration.Zero);
         try
@@ -349,7 +374,8 @@ public sealed class SealedBlobTests : IDisposable
             return BlobWriter.TryResume(
                 SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
                 EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, Pinned,
-                expectedFormatVersion: FormatLimits.SealedFormatVersion);
+                expectedFormatVersion: FormatLimits.SealedFormatVersion,
+                logger: logger);
         }
         finally
         {

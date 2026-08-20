@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository.Crypto;
@@ -9,6 +10,8 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -121,6 +124,7 @@ public sealed partial class PublicationOrchestrator
     private readonly IPublicationObserver? _observer;
     private readonly Catalogue.Catalogue? _catalogue;
     private readonly IJobProgressReporter? _progress;
+    private readonly ILogger _logger;
 
     /// <summary>
     /// Creates an orchestrator for one writer. When
@@ -142,7 +146,8 @@ public sealed partial class PublicationOrchestrator
         string spoolDirectory,
         IPublicationObserver? observer = null,
         Catalogue.Catalogue? catalogue = null,
-        IJobProgressReporter? progress = null)
+        IJobProgressReporter? progress = null,
+        ILogger? logger = null)
     {
         _catalogue = catalogue;
         ThrowHelper.ThrowIfNull(policy);
@@ -191,12 +196,19 @@ public sealed partial class PublicationOrchestrator
         _spoolDirectory = spoolDirectory;
         _observer = observer;
         _progress = progress;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>Runs one publication end to end.</summary>
     public async ValueTask<PublishedSnapshot> PublishAsync(BackupJob job, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(job);
+
+        // Wrapped once for the whole publication rather than at each call:
+        // CA1873 objects to work inside a logging argument, and it is right to
+        // — an argument is evaluated whether or not the level is on.
+        var snapshotForLog = LogId.Snapshot(job.SnapshotId);
+        Log.PublicationStarting(_logger, snapshotForLog, _repositoryId, _writerId);
 
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
@@ -368,6 +380,13 @@ public sealed partial class PublicationOrchestrator
 
             // Step 9: the local job is complete.
             _observer?.AfterStep(PublicationStep.Complete);
+
+            Log.PublicationComplete(
+                _logger,
+                snapshotForLog,
+                archive.LogicalLength,
+                archive.RecordsWritten,
+                archive.Blobs.Count);
 
             return new PublishedSnapshot(
                 snapshotObjectId, fileVersionId, rootTreeId, policyId, deltaId, intentSequence, archive, builder.Blobs);
