@@ -60,6 +60,14 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     /// </summary>
     public IAsyncDisposable? Transport { get; init; }
 
+    /// <summary>
+    /// A write-only set's granted read authority (ADR-0042 §5): the sealing
+    /// scalar that arrived sealed on the open, alive exactly as long as this
+    /// handle — zeroed by the explicit close, the idle sweep, or shutdown.
+    /// Null on v1 sources and on grant-less (structure-only) opens.
+    /// </summary>
+    public RepositoryReadAuthority? ReadAuthority { get; set; }
+
     /// <summary>Unix ms of last use, for the idle sweep.</summary>
     public long LastTouchedMs;
 
@@ -75,6 +83,7 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        ReadAuthority?.Dispose();
         OwnedRepository?.Dispose();
         if (Transport is not null)
         {

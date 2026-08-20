@@ -560,6 +560,11 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// uses it to verify a restore passphrase locally, without the passphrase
 /// ever crossing this contract (ADR-0041, NFR-SEC-009).
 /// </param>
+/// <param name="RestoreGrantRecipient">
+/// The public half of this service's envelope recipient keypair (ADR-0042
+/// §4), lowercase hex. What a client seals write-only provisioning and
+/// restore-grant envelopes to — public by construction, never sensitive.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -567,4 +572,5 @@ public sealed record ServiceDescriptionResult(
     string StateDirectory,
     bool RemoteBindingEnabled,
     int ActiveJobs,
-    string? ArchivesRoot = null) : ServiceResult;
+    string? ArchivesRoot = null,
+    string? RestoreGrantRecipient = null) : ServiceResult;

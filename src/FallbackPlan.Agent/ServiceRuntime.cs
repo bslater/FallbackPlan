@@ -54,7 +54,7 @@ public sealed record ServiceOptions
 public sealed class ServiceRuntime : IAsyncDisposable
 {
     private readonly StateDirectoryLock _writerRole;
-    private readonly Passphrase _passphrase;
+    private readonly Passphrase? _passphrase;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
     private bool _disposed;
@@ -64,7 +64,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private ServiceRuntime(
         ServiceOptions options,
         StateDirectoryLock writerRole,
-        Passphrase passphrase,
+        Passphrase? passphrase,
         LocalState state,
         JobStateStore jobs)
     {
@@ -75,6 +75,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
         Jobs = jobs;
         Progress = new ProgressHub();
         Queue = new JobScheduler(options.Log);
+        GrantRecipient = GrantRecipient.Open(options.StateDirectory);
+        WriteCredentials = new WriteCredentialStore(options.StateDirectory);
     }
 
     /// <summary>How this service was started.</summary>
@@ -102,12 +104,20 @@ public sealed class ServiceRuntime : IAsyncDisposable
     internal RestoreSourceRegistry RestoreSources { get; } = new();
 
     /// <summary>
-    /// The passphrase the runtime unlocks archives with — the ADR-0028 §9
+    /// The passphrase the runtime unlocks v1 archives with — the ADR-0028 §9
     /// posture. Handed to the restore-source opens so a replica or peer
     /// repository unlocks with the same secret its staging archive did;
-    /// never exposed on any contract surface (NFR-SEC-009).
+    /// never exposed on any contract surface (NFR-SEC-009). Null when the
+    /// service started passphrase-free — the ADR-0042 posture, where every
+    /// provisioned set opens with its write credential instead.
     /// </summary>
-    internal Passphrase ArchivePassphrase => _passphrase;
+    internal Passphrase? ArchivePassphrase => _passphrase;
+
+    /// <summary>The service's envelope recipient keypair (ADR-0042 §4).</summary>
+    internal GrantRecipient GrantRecipient { get; }
+
+    /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
+    internal WriteCredentialStore WriteCredentials { get; }
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
@@ -162,10 +172,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <param name="cancellationToken">Cancels start-up.</param>
     /// <returns>The running service.</returns>
     public static ValueTask<ServiceRuntime> StartAsync(
-        ServiceOptions options, Passphrase passphrase, CancellationToken cancellationToken)
+        ServiceOptions options, Passphrase? passphrase, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(options);
-        ThrowHelper.ThrowIfNull(passphrase);
         cancellationToken.ThrowIfCancellationRequested();
 
         var writerRole = StateDirectoryLock.Acquire(options.StateDirectory, StateDirectoryLock.ServiceRole);
@@ -189,7 +198,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
 
             return ValueTask.FromResult(
-                new ServiceRuntime(options, writerRole, passphrase.Clone(), state, jobs)
+                new ServiceRuntime(options, writerRole, passphrase?.Clone(), state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
                     Notices = NoticeStore.Open(options.StateDirectory),
@@ -272,7 +281,29 @@ public sealed class ServiceRuntime : IAsyncDisposable
             var store = new LocalFileSystemObjectStore(path);
 
             OpenedRepository repository;
-            if (ArchiveExists(setId))
+            if (WriteCredentials.TryLoad(setId) is { } credential)
+            {
+                // A provisioned write-only set (ADR-0042 §5): the credential
+                // is the open, no passphrase involved — and the archive's
+                // descriptor was written at provisioning, so absence here is
+                // damage to name, never something to quietly re-create.
+                using (credential)
+                {
+                    repository = ArchiveExists(setId)
+                        ? await RepositoryLifecycle.OpenWriteOnlyAsync(store, credential, cancellationToken)
+                            .ConfigureAwait(false)
+                        : throw new RepositoryOpenException(
+                            $"Set '{setId}' is provisioned write-only but its staging archive is missing — "
+                            + "adopt it again with the passphrase (ADR-0042 §10).");
+                }
+            }
+            else if (_passphrase is null)
+            {
+                throw new RepositoryOpenException(
+                    $"Set '{setId}' is not provisioned write-only and this service started without a "
+                    + "passphrase; start with one, or provision the set (ADR-0042).");
+            }
+            else if (ArchiveExists(setId))
             {
                 repository = await RepositoryLifecycle.OpenAsync(store, _passphrase, cancellationToken)
                     .ConfigureAwait(false);
@@ -346,7 +377,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
 
         _archives.Clear();
-        _passphrase.Dispose();
+        _passphrase?.Dispose();
+        GrantRecipient.Dispose();
         _archivesGate.Dispose();
 
         // After the queue has drained: nothing can be waiting on a set gate.

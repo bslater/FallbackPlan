@@ -287,6 +287,64 @@ public static class RepositoryLifecycle
     }
 
     /// <summary>
+    /// Creates a write-only repository from an already-derived write bundle —
+    /// the service's half of the provisioning ceremony (ADR-0042 §4): the
+    /// admin client ran Argon2id where the person typed, and what arrived
+    /// here is the credential plus the KDF salt and parameters the descriptor
+    /// must record so a later restore can re-derive. The service never held
+    /// the passphrase, which is exactly why this overload exists.
+    /// </summary>
+    /// <exception cref="ArgumentException">The salt is not exactly <see cref="KekDerivation.SaltLength"/> bytes.</exception>
+    /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
+    public static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        ReadOnlyMemory<byte> kdfSalt,
+        Argon2Parameters kdfParameters,
+        string createdBy,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(credential);
+        ThrowHelper.ThrowIfNull(kdfParameters);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(createdBy);
+
+        if (kdfSalt.Length != KekDerivation.SaltLength)
+        {
+            throw new ArgumentException(
+                $"The KDF salt must be exactly {KekDerivation.SaltLength} bytes.", nameof(kdfSalt));
+        }
+
+        Span<byte> repositoryIdBytes = stackalloc byte[RepositoryId.Size];
+        RandomNumberGenerator.Fill(repositoryIdBytes);
+        var repositoryId = RepositoryId.FromBytes(repositoryIdBytes);
+
+        var descriptor = new RepositoryDescriptor(
+            repositoryId,
+            FormatLimits.SealedFormatVersion,
+            RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+            OptionalFeatures: [],
+            kdfParameters,
+            kdfSalt.ToArray(),
+            createdAtUnixMilliseconds,
+            createdBy,
+            UnstableFormat: true,
+            credential.SealingPublicKey.ToArray());
+
+        await PutWholeObjectAsync(store, DescriptorKey, RepositoryDescriptorCodec.Serialize(descriptor), cancellationToken)
+            .ConfigureAwait(false);
+
+        return new OpenedRepository(
+            descriptor,
+            RepositoryKeySet.FromWriteCredential(credential),
+            KeyHierarchy.ForWriteOnly(credential),
+            KeyGeneration.Zero,
+            KeyGeneration.Zero,
+            kdfBelowCreationMinimums: !kdfParameters.ValidateCreationMinimums().IsValid);
+    }
+
+    /// <summary>
     /// Opens a write-only repository with its write bundle — the service's
     /// everyday open (ADR-0042 §5): no passphrase, no content capability.
     /// The credential is verified against the descriptor's sealing public

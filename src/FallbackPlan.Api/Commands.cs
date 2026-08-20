@@ -34,6 +34,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
+[JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
@@ -296,7 +297,35 @@ public sealed record RunRestoreCommand(
 /// </summary>
 /// <param name="SetName">The backup set whose repository to open — sources are per-set, one repository each (ADR-0034).</param>
 /// <param name="DestinationName">The destination whose replica to read; null opens the set's staging archive.</param>
-public sealed record OpenRestoreSourceCommand(string SetName, string? DestinationName = null) : ServiceCommand;
+/// <param name="Envelope">
+/// A restore grant for a write-only set (ADR-0042 §5): the derived sealing
+/// scalar, sealed end-to-end to this service's published recipient key and
+/// rendered as hex. The one shape of key material NFR-SEC-009 permits on the
+/// contract — opaque to every relay, opened only inside the service, held
+/// only for the source handle's life. Null opens structure-plane only on a
+/// write-only set; v1 sets ignore it.
+/// </param>
+public sealed record OpenRestoreSourceCommand(
+    string SetName, string? DestinationName = null, string? Envelope = null) : ServiceCommand;
+
+/// <summary>
+/// Provisions a backup set as a write-only repository (ADR-0042 §4, §10) —
+/// both ceremonies in one verb. The admin client derives the write bundle
+/// from the passphrase, seals it to this service's published recipient key,
+/// and sends the envelope; the service opens it and either <b>creates</b> the
+/// v2 repository (no descriptor at the staging path yet) or <b>adopts</b> an
+/// existing one (descriptor present — a moved archive or a lost state
+/// directory — after proving the derived sealing public key matches the
+/// descriptor's; a mismatch is a wrong passphrase and is refused). The
+/// passphrase itself never crosses this contract.
+/// </summary>
+/// <param name="SetName">The backup set to provision.</param>
+/// <param name="Envelope">
+/// The provisioning envelope — write bundle plus KDF salt and parameters —
+/// sealed to the service's recipient key and rendered as hex (NFR-SEC-009's
+/// permitted shape).
+/// </param>
+public sealed record ProvisionWriteOnlySetCommand(string SetName, string Envelope) : ServiceCommand;
 
 /// <summary>
 /// Closes a restore source. Idempotent — closing an unknown or already-closed

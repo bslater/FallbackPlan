@@ -273,17 +273,14 @@ public static class AgentHost
             // The keystore is what makes unattended scheduled backup possible
             // at all (ADR-0028 section 9). An environment variable held for the
             // life of the process, and inherited by every child, is the thing
-            // it replaces.
+            // it replaces. Holding neither is a valid way to run since
+            // ADR-0042: a provisioned write-only set opens with its stored
+            // credential and no passphrase at all — a v1 set on such a start
+            // is refused per set, with the remedy named, when something
+            // actually tries to open it.
             try
             {
-                if (!PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue)
-                    || passphraseValue is null)
-                {
-                    error.WriteLine(
-                        "error: no passphrase. Either run `unlock --passphrase-env <VAR>` once to store it in this "
-                        + "account's keystore, or pass --passphrase-env on every run.");
-                    return 1;
-                }
+                PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue);
             }
             catch (KeystoreException exception)
             {
@@ -303,7 +300,7 @@ public static class AgentHost
         {
             try
             {
-                using var verbPassphrase = Passphrase.Create(passphraseValue);
+                using var verbPassphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
                 await using var verbRuntime = await ServiceRuntime.StartAsync(
                     new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
                     verbPassphrase, cancellationToken).ConfigureAwait(false);
@@ -456,7 +453,7 @@ public static class AgentHost
 
         try
         {
-            using var passphrase = Passphrase.Create(passphraseValue);
+            using var passphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
             await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
                 .ConfigureAwait(false);
 

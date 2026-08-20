@@ -107,6 +107,33 @@ public sealed class RepositoryReadAuthority : IDisposable
         _sealingPrivateKey = sealingPrivateKey;
     }
 
+    /// <summary>
+    /// Rebuilds an authority from its two parts — the service's stored write
+    /// credential and a granted scalar that arrived sealed (ADR-0042 §5).
+    /// Both are cloned; the caller keeps responsibility for its own copies.
+    /// </summary>
+    public static RepositoryReadAuthority FromParts(
+        RepositoryWriteCredential credential, ReadOnlySpan<byte> sealingPrivateKey)
+    {
+        if (sealingPrivateKey.Length != WriteOnlyDerivation.SealingKeyLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_RootExactlyBytes(WriteOnlyDerivation.SealingKeyLength),
+                nameof(sealingPrivateKey));
+        }
+
+        var serialized = credential.ToBytes();
+        try
+        {
+            return new RepositoryReadAuthority(
+                RepositoryWriteCredential.FromBytes(serialized), sealingPrivateKey.ToArray());
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(serialized);
+        }
+    }
+
     /// <summary>The write bundle.</summary>
     public RepositoryWriteCredential Credential { get; }
 

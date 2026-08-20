@@ -336,6 +336,8 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
         CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
+        ProvisionWriteOnlySetCommand provision =>
+            await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -791,7 +793,8 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
                 slices = [(plan, command.OutputDirectory, string.Empty)];
             }
 
-            using var reader = new RepositoryReader(context.RepositoryId, context.Keys, context.Store);
+            using var reader = new RepositoryReader(
+                context.RepositoryId, context.Keys, context.Store, context.Source?.ReadAuthority);
             if (context.Source is null)
             {
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
@@ -1974,7 +1977,8 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             runtime.Options.StateDirectory,
             remoteBinding.Enabled,
             runtime.Queue.ActiveCount,
-            runtime.Options.ArchivesRoot);
+            runtime.Options.ArchivesRoot,
+            runtime.GrantRecipient.PublicKeyHex);
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

@@ -46,9 +46,13 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// replica and peer sources; source, several paths, target, existing
     /// and in-place options on the restore verbs; plan conflicts and the
     /// persisted-receipt summary on their results; and the archives root on
+    /// describe_service. 1.12 added write-only repositories (ADR-0042):
+    /// provision_write_only_set carrying the sealed write bundle for both the
+    /// create and adopt ceremonies, the optional sealed restore-grant
+    /// envelope on open_restore_source, and the grant-recipient public key on
     /// describe_service.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 11);
+    public static ContractVersion Current { get; } = new(1, 12);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

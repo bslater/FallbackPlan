@@ -5,7 +5,9 @@ namespace FallbackPlan.Api.Tests;
 
 /// <summary>
 /// NFR-SEC-009: key material never crosses the command surface, in either
-/// direction, under any setting.
+/// direction, under any setting. As amended by ADR-0042, exactly one shape
+/// is carved out: hex-rendered sealed envelopes on the two named write-only
+/// ceremonies — asserted here as precisely as the bans.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -93,6 +95,42 @@ public sealed class KeyMaterialConfinementTests
             exporting.Count == 0,
             "Key export re-derives the KEK from a passphrase supplied per invocation and therefore runs locally, "
             + $"never as a command: {string.Join(", ", exporting)}");
+    }
+
+    [TestMethod]
+    public void ContractSurface_SealedEnvelopes_AreStringsOnExactlyTheNamedVerbs()
+    {
+        // NFR-SEC-009 [amended] (ADR-0042 §4): the ONE permitted shape of key
+        // material in transit is a sealed envelope — hex-rendered, end-to-end
+        // encrypted to the service's recipient key, opaque to every relay —
+        // and only on the two ceremonies that need one. This test is the
+        // carve-out's fence: the fields must stay string-typed (never raw
+        // bytes), and must not quietly spread to other verbs.
+        var envelopeMembers = ContractTypes()
+            .SelectMany(type => type
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(property => property.Name == "Envelope")
+                .Select(property => (Type: type, Property: property)))
+            .ToList();
+
+        CollectionAssert.AreEquivalent(
+            new[] { nameof(ProvisionWriteOnlySetCommand), nameof(OpenRestoreSourceCommand) },
+            envelopeMembers.Select(member => member.Type.Name).ToList(),
+            "Sealed envelopes are permitted on exactly provision_write_only_set and open_restore_source "
+            + "(NFR-SEC-009 as amended by ADR-0042) — nowhere else.");
+
+        foreach (var (type, property) in envelopeMembers)
+        {
+            Assert.AreEqual(
+                typeof(string), property.PropertyType,
+                $"{type.Name}.{property.Name} must stay a hex string — a sealed envelope, never raw bytes.");
+        }
+
+        // The recipient key clients seal to is public by construction and
+        // crosses as hex on describe_service.
+        var recipient = typeof(ServiceDescriptionResult).GetProperty("RestoreGrantRecipient");
+        Assert.IsNotNull(recipient);
+        Assert.AreEqual(typeof(string), recipient.PropertyType);
     }
 
     [TestMethod]

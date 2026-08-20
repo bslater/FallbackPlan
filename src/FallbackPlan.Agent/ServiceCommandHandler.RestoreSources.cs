@@ -146,6 +146,16 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
+        if (command.Envelope is not null)
+        {
+            var grantRefusal = AttachReadAuthority(handle, command.Envelope);
+            if (grantRefusal is not null)
+            {
+                await handle.DisposeAsync().ConfigureAwait(false);
+                return grantRefusal;
+            }
+        }
+
         var snapshots = new List<SnapshotDescriptor>();
         using (var catalogue = handle.OpenReadCatalogue())
         {
@@ -215,8 +225,7 @@ public sealed partial class ServiceCommandHandler
             OpenedRepository repository;
             try
             {
-                repository = await RepositoryLifecycle.OpenAsync(store, runtime.ArchivePassphrase, cancellationToken)
-                    .ConfigureAwait(false);
+                repository = await OpenSourceRepositoryAsync(set, store, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)
             {
@@ -290,8 +299,7 @@ public sealed partial class ServiceCommandHandler
                 OpenedRepository repository;
                 try
                 {
-                    repository = await RepositoryLifecycle.OpenAsync(store, runtime.ArchivePassphrase, cancellationToken)
-                        .ConfigureAwait(false);
+                    repository = await OpenSourceRepositoryAsync(set, store, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)
                 {
@@ -330,6 +338,100 @@ public sealed partial class ServiceCommandHandler
                 ServiceErrorReason.Unavailable,
                 $"Peer '{destination.Name}' is not reachable: {unreachable.Message}"));
         }
+    }
+
+    /// <summary>
+    /// Opens a restore-grant envelope and attaches the read authority to the
+    /// source handle (ADR-0042 §5). The envelope carries the derived sealing
+    /// scalar, sealed to this service's recipient key; the scalar is proved
+    /// against the repository's descriptor copy of the sealing public key —
+    /// a mismatch is a wrong passphrase at the client and is refused by
+    /// name. A grant on a v1 source is ignored, as the contract says.
+    /// </summary>
+    private ServiceError? AttachReadAuthority(OpenRestoreSourceHandle handle, string envelopeHex)
+    {
+        if (!handle.Keys.WriteOnly)
+        {
+            return null;
+        }
+
+        byte[] envelope;
+        try
+        {
+            envelope = Convert.FromHexString(envelopeHex);
+        }
+        catch (FormatException)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, "The restore-grant envelope is not hex.");
+        }
+
+        byte[] scalar;
+        try
+        {
+            scalar = runtime.GrantRecipient.OpenGrant(envelope);
+        }
+        catch (SealedContentException)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "The restore-grant envelope does not open — it was sealed to a different service's recipient key.");
+        }
+
+        try
+        {
+            if (!ContentSealing.PublicKeyOf(scalar).AsSpan().SequenceEqual(handle.Keys.SealingPublicKey))
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    "The granted key does not reproduce this repository's sealing public key — the passphrase it "
+                    + "was derived from is not this repository's.");
+            }
+
+            using var credential = runtime.WriteCredentials.TryLoad(handle.SetId);
+            if (credential is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed,
+                    $"Set '{handle.SetName}' holds no write credential on this service — provision it first (ADR-0042 §10).");
+            }
+
+            handle.ReadAuthority = RepositoryReadAuthority.FromParts(credential, scalar);
+            return null;
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(scalar);
+        }
+    }
+
+    /// <summary>
+    /// Opens a candidate source repository the way its set opens: a
+    /// provisioned write-only set with its credential — a v2 replica carries
+    /// the same descriptor, so the same bundle proves and opens it
+    /// (ADR-0042 §5) — and a v1 set with the runtime's passphrase. A v1
+    /// candidate on a passphrase-free service is a stated refusal the
+    /// probing loops surface as a warning like any other failed open.
+    /// </summary>
+    private async ValueTask<OpenedRepository> OpenSourceRepositoryAsync(
+        Application.BackupSetConfiguration set,
+        Storage.Abstractions.IObjectStore store,
+        CancellationToken cancellationToken)
+    {
+        if (runtime.WriteCredentials.TryLoad(set.Id) is { } credential)
+        {
+            using (credential)
+            {
+                return await RepositoryLifecycle.OpenWriteOnlyAsync(store, credential, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        var passphrase = runtime.ArchivePassphrase
+            ?? throw new RepositoryOpenException(
+                "This service started without a passphrase and the set is not provisioned write-only (ADR-0042).");
+
+        return await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
