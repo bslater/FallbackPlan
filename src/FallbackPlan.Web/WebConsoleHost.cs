@@ -149,6 +149,7 @@ public static class WebConsoleHost
         app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth));
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
         app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
+        app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
@@ -214,7 +215,12 @@ public static class WebConsoleHost
     /// <summary>The gate's answer to the page.</summary>
     /// <param name="Outcome"><c>verified</c>, <c>wrong</c>, or <c>unavailable</c>.</param>
     /// <param name="Detail">What an unavailable outcome met.</param>
-    private sealed record GateResponse(string Outcome, string? Detail);
+    /// <param name="Envelope">
+    /// A sealed restore grant for a write-only archive (ADR-0042 §5), hex —
+    /// opaque to the page, opened only by the service; the wizard passes it
+    /// into <c>open_restore_source</c>. Null on v1 archives.
+    /// </param>
+    private sealed record GateResponse(string Outcome, string? Detail, string? Envelope = null);
 
     /// <summary>
     /// The restore wizard's passphrase gate (ADR-0041): the one endpoint that
@@ -254,6 +260,7 @@ public static class WebConsoleHost
         }
 
         string? archivesRoot = null;
+        string? grantRecipient = null;
         try
         {
             await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
@@ -261,6 +268,7 @@ public static class WebConsoleHost
                 is ServiceDescriptionResult description)
             {
                 archivesRoot = description.ArchivesRoot;
+                grantRecipient = description.RestoreGrantRecipient;
             }
         }
         catch (ServiceConnectionException)
@@ -269,17 +277,141 @@ public static class WebConsoleHost
             // unavailable answer lets the page say so in one place.
         }
 
-        var answer = await ConsoleRestoreGate.VerifyAsync(archivesRoot, passphrase, context.RequestAborted)
-            .ConfigureAwait(false);
+        var answer = await ConsoleRestoreGate.VerifyAsync(
+            archivesRoot, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
 
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json; charset=utf-8";
         context.Response.Headers.CacheControl = "no-store";
         await JsonSerializer.SerializeAsync(
             context.Response.Body,
-            new GateResponse(answer.Outcome.ToString().ToLowerInvariant(), answer.Detail),
+            new GateResponse(answer.Outcome.ToString().ToLowerInvariant(), answer.Detail, answer.GrantEnvelope),
             SerializerOptions,
             context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>What the provisioning endpoint reads from the page.</summary>
+    /// <param name="SetName">The backup set to provision.</param>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0042 §4).</param>
+    /// <param name="Acknowledged">
+    /// The typed loss acknowledgement: the operator accepts that the
+    /// passphrase can never change and that losing it loses the backup.
+    /// </param>
+    private sealed record ProvisionRequest(string? SetName, string? Passphrase, bool Acknowledged);
+
+    /// <summary>The provisioning endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>provisioned</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not provisioned.</param>
+    /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
+    private sealed record ProvisionResponse(string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
+
+    /// <summary>
+    /// The write-only setup ceremony (ADR-0042 §4, §10): the second endpoint
+    /// permitted a secret, and it holds the same line as the restore gate —
+    /// Argon2id runs in this process, and what goes to the service is the
+    /// write bundle sealed to its published recipient key. Serves creation
+    /// and adoption alike; the loss acknowledgement is collected here, before
+    /// anything derives.
+    /// </summary>
+    private static async Task ProvisionWriteOnlyAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        ProvisionRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<ProvisionRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { SetName.Length: > 0, Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a set name and a passphrase are required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(ProvisionResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        if (!request.Acknowledged)
+        {
+            // The acknowledgement is the ceremony (ADR-0042 §11): there is no
+            // recovery path to offer later, so consent comes before the
+            // derivation, enforced where the derivation runs.
+            await AnswerAsync(new ProvisionResponse(
+                "refused",
+                "Provisioning needs the loss acknowledgement: the passphrase can never change, and if it is "
+                + "lost the backup is unrecoverable.")).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult { RestoreGrantRecipient.Length: > 0 } description)
+            {
+                await AnswerAsync(new ProvisionResponse(
+                    "unavailable", "The service does not publish a grant-recipient key.")).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted).ConfigureAwait(false)
+                    is not BackupSetsResult sets
+                || sets.Sets.FirstOrDefault(set =>
+                    string.Equals(set.Name, request.SetName, StringComparison.Ordinal)) is not { } target)
+            {
+                await AnswerAsync(new ProvisionResponse(
+                    "unavailable", $"No backup set named '{request.SetName}' is configured.")).ConfigureAwait(false);
+                return;
+            }
+
+            var minted = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
+                description.ArchivesRoot, target.Id, request.Passphrase, description.RestoreGrantRecipient,
+                context.RequestAborted).ConfigureAwait(false);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new ProvisionResponse(
+                    minted.Outcome == ConsoleRestoreGate.GateOutcome.Wrong ? "wrong" : "unavailable",
+                    minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(request.SetName, minted.Envelope!), context.RequestAborted)
+                .ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                ConfigurationChangeResult change => new ProvisionResponse("provisioned", Lines: change.Lines),
+                ServiceError refusal => new ProvisionResponse("refused", refusal.Message),
+                _ => new ProvisionResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

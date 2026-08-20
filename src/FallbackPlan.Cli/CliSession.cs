@@ -46,12 +46,14 @@ public sealed class CliSession : IDisposable
         LocalFileSystemObjectStore store,
         OpenedRepository repository,
         string stateDirectory,
-        StateDirectoryLock? writerRole)
+        StateDirectoryLock? writerRole,
+        RepositoryReadAuthority? readAuthority)
     {
         Store = store;
         Repository = repository;
         StateDirectory = stateDirectory;
         _writerRole = writerRole;
+        ReadAuthority = readAuthority;
     }
 
     /// <summary>Whether this command took the writer role — i.e. is in direct mode.</summary>
@@ -60,6 +62,14 @@ public sealed class CliSession : IDisposable
     public LocalFileSystemObjectStore Store { get; }
 
     public OpenedRepository Repository { get; }
+
+    /// <summary>
+    /// The full read authority of a write-only repository (ADR-0042 §5).
+    /// Direct mode holds the passphrase, so it holds the whole capability —
+    /// derived at open, alive for the command, zeroed with the session. Null
+    /// on v1 repositories.
+    /// </summary>
+    public RepositoryReadAuthority? ReadAuthority { get; }
 
     public string StateDirectory { get; }
 
@@ -130,9 +140,23 @@ public sealed class CliSession : IDisposable
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
         OpenedRepository repository;
+        RepositoryReadAuthority? readAuthority = null;
         try
         {
-            repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            // A write-only repository has no key object to unwrap: direct
+            // mode derives the full authority from the passphrase and proves
+            // it against the descriptor (ADR-0042 §1) — same variable, same
+            // commands, different open underneath.
+            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+            if (RepositoryLifecycle.IsWriteOnly(descriptor))
+            {
+                (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+                    store, passphrase, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (RepositoryOpenException exception)
         {
@@ -172,11 +196,12 @@ public sealed class CliSession : IDisposable
             catch (ClientStateException exception)
             {
                 repository.Dispose();
+                readAuthority?.Dispose();
                 throw new CliFailureException(exception.Message, exception);
             }
         }
 
-        return new CliSession(store, repository, state, role);
+        return new CliSession(store, repository, state, role, readAuthority);
     }
 
     /// <summary>
@@ -230,6 +255,7 @@ public sealed class CliSession : IDisposable
     public void Dispose()
     {
         _writerRole?.Dispose();
+        ReadAuthority?.Dispose();
         Repository.Dispose();
     }
 }

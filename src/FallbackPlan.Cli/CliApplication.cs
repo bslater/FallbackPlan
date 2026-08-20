@@ -298,10 +298,22 @@ public static class CliApplication
                 Description = "Informational creator string recorded in the descriptor.",
                 DefaultValueFactory = _ => "fallbackplan-cli/0.1",
             };
+            var writeOnlyOption = new Option<bool>("--write-only")
+            {
+                Description = "Create a write-only (format 2) repository (ADR-0042): every key derives from the "
+                    + "passphrase, nothing is stored, content seals to a public key. Requires --acknowledge-loss.",
+            };
+            var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
+            {
+                Description = "Acknowledge that a write-only repository's passphrase can never change and that "
+                    + "losing it loses the backup irrecoverably.",
+            };
             var command = new Command("init", "Create a new repository at --repo (keys first, descriptor last).");
             command.Options.Add(repoOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(createdByOption);
+            command.Options.Add(writeOnlyOption);
+            command.Options.Add(acknowledgeLossOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -309,6 +321,35 @@ public static class CliApplication
                 var store = new LocalFileSystemObjectStore(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
+
+                if (parse.GetValue(writeOnlyOption))
+                {
+                    // The loss acknowledgement is the ceremony, not a speed
+                    // bump (ADR-0042 §11, architecture 03 §1 rule 6): there
+                    // is no recovery path to offer later, so consent is
+                    // collected before the descriptor exists.
+                    if (!parse.GetValue(acknowledgeLossOption))
+                    {
+                        throw new CliFailureException(
+                            "A write-only repository's passphrase can never change, and if it is lost the backup "
+                            + "is unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
+                            + "to accept this (ADR-0042).");
+                    }
+
+                    var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                        store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        cancellationToken).ConfigureAwait(false);
+                    using (created)
+                    using (authority)
+                    {
+                        output.WriteLine($"created write-only repository {Base32.Encode(created.RepositoryId.ToArray())}");
+                        output.WriteLine(
+                            "the passphrase is the only key: it can never change, and losing it loses the backup.");
+                    }
+
+                    output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
+                    return 0;
+                }
 
                 using var repository = await RepositoryLifecycle.CreateAsync(
                     store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
@@ -442,7 +483,7 @@ public static class CliApplication
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 var objectId = ParseObjectId(parse.GetValue(idArgument)!);
 
-                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                 if (!reader.TryLocateRecord(objectId, out _, out var entry))
@@ -572,7 +613,7 @@ public static class CliApplication
                     // blob is live and serves locations into blobs collection
                     // removed — the index naming an object no blob holds.
                     using var inventory = new RepositoryReader(
-                        session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                        session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                     var report = await new CatalogueRebuilder(loader).RebuildAsync(
@@ -628,7 +669,7 @@ public static class CliApplication
                     using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                     error.WriteLine("mode: direct — verifying one file version has no service equivalent.");
 
-                    using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                    using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                     var read = await reader.ReadSegmentAsync(ParseObjectId(manifestIdHex), cancellationToken).ConfigureAwait(false);
@@ -667,7 +708,7 @@ public static class CliApplication
             {
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
 
-                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                 ObjectId manifestId;

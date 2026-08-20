@@ -1029,6 +1029,7 @@ function renderConfigBody() {
       <div>${set.destinations.map(name => `<span class="chip">→ ${esc(name)}</span>`).join(" ")}</div>
       <div class="actions-row">
         <button type="button" class="btn small" data-action="cfg-edit-set" data-name="${esc(set.name)}">Edit</button>
+        <button type="button" class="btn small" data-action="cfg-write-only" data-name="${esc(set.name)}">Write-only…</button>
         <button type="button" class="btn small" data-action="cfg-delete-set" data-name="${esc(set.name)}">Delete…</button>
       </div>
     </div>`).join("");
@@ -1847,6 +1848,59 @@ Object.assign(actions, {
     });
   },
 
+  // The write-only setup ceremony (ADR-0042). The passphrase goes to the
+  // CONSOLE PROCESS on this machine, which derives the keys and seals the
+  // write bundle to the service; it never crosses the command contract. One
+  // dialog serves creation and adoption — the console tells them apart by
+  // whether a v2 archive already exists.
+  "cfg-write-only"(el) {
+    const name = el.dataset.name;
+    openDialog(`
+      <h3>Make '${esc(name)}' write-only</h3>
+      <p class="dlg-sub">One long passphrase becomes the set's only key: the service keeps a sealing
+      public key and a metadata key, and can add to the backup but <b>never read file contents back</b>.
+      Restoring — or moving the archive to another machine — means entering the passphrase again.</p>
+      <label class="field" for="wo-passphrase">Passphrase</label>
+      <input type="password" id="wo-passphrase" autocomplete="new-password">
+      <ul class="warnings"><li>The passphrase can never change, and there is no reset, no export and no
+      recovery kit that restores without it. <b>If it is lost, this backup is unrecoverable.</b></li></ul>
+      <label class="check-row"><input type="checkbox" id="wo-ack">
+        I understand that losing this passphrase loses the backup, permanently.</label>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" data-action="cfg-write-only-go" data-name="${esc(name)}">Provision write-only</button>
+      </div>`);
+    document.getElementById("wo-passphrase").focus();
+  },
+
+  async "cfg-write-only-go"(el) {
+    const passphrase = document.getElementById("wo-passphrase")?.value ?? "";
+    const acknowledged = document.getElementById("wo-ack")?.checked ?? false;
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
+    if (!acknowledged) { toast("warn", "Provisioning needs the loss acknowledgement."); return; }
+    await withBusy(el, async () => {
+      let response;
+      try {
+        response = await fetch("/api/provision-write-only", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ setName: el.dataset.name, passphrase, acknowledged }),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const body = await safeJson(response);
+      if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return; }
+      if (body?.outcome === "provisioned") {
+        reportDialog("Write-only provisioned", body.lines ?? []);
+        refreshConfigData(); refreshStatus();
+      } else {
+        toast("bad", body?.detail ?? "The ceremony refused.");
+      }
+    });
+  },
+
   "dest-add-local"() { openDestEditor("local-path", null); },
   "dest-add-peer"() { openDestEditor("peer", null); },
 
@@ -2196,6 +2250,7 @@ function openRestoreWizard(prefill) {
     gate: null,               // null | "verified" | "wrong" | "unavailable"
     gateDetail: null,
     gateAck: false,
+    grantEnvelope: null,      // sealed restore grant for a write-only set (ADR-0042); opaque hex
     sets: [], dests: [],
     setName: null, destinationName: null,
     source: null,             // RestoreSourceOpenedResult
@@ -2522,6 +2577,10 @@ async function rstGateCheck() {
   if (!response.ok) { toast("bad", body?.message ?? "The gate refused."); return false; }
   W.gate = body?.outcome ?? "unavailable";
   W.gateDetail = body?.detail ?? null;
+  // A write-only archive's gate answers with a sealed restore grant
+  // (ADR-0042): opaque here, opened only by the service; it rides the
+  // source open at step 2. v1 archives answer none.
+  W.grantEnvelope = body?.envelope ?? null;
   if (W.gate === "verified") return true;
   if (W.gate === "unavailable") {
     W.gateAck = document.getElementById("rst-gate-ack")?.checked ?? false;
@@ -2545,6 +2604,7 @@ async function rstOpenSource() {
     command: "open_restore_source",
     setName: W.setName,
     destinationName: W.destinationName,
+    envelope: W.grantEnvelope ?? undefined,
   }, { errToast: "The source would not open" });
   if (result?.result !== "restore_source") {
     W.sourceError = "The source did not open — see the message above.";

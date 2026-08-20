@@ -820,7 +820,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
-        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
         await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(

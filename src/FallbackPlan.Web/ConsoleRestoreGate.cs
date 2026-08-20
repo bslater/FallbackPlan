@@ -39,21 +39,33 @@ public static class ConsoleRestoreGate
     /// <summary>An attempt's answer.</summary>
     /// <param name="Outcome">How it resolved.</param>
     /// <param name="Detail">What an unavailable outcome met, for the page to show.</param>
-    public sealed record GateAnswer(GateOutcome Outcome, string? Detail = null);
+    /// <param name="GrantEnvelope">
+    /// A restore grant for a write-only archive (ADR-0042 §5): the derived
+    /// scalar sealed to the service's recipient key, hex-rendered — minted
+    /// only when the passphrase verified against a v2 archive and a recipient
+    /// key was given. Opaque to the page and to the relay; only the service
+    /// can open it. Null on v1 archives.
+    /// </param>
+    public sealed record GateAnswer(GateOutcome Outcome, string? Detail = null, string? GrantEnvelope = null);
 
     /// <summary>
     /// Verifies a typed passphrase against the first staging archive under
     /// <paramref name="archivesRoot"/> that will answer. Every archive a
     /// service manages opens under the one service passphrase, so any archive
     /// is as good a witness as another; a damaged one is skipped for the
-    /// next.
+    /// next. A write-only archive is verified by derive-and-compare against
+    /// its descriptor's sealing public key (ADR-0042 §1 — no key object
+    /// exists to unwrap), and when <paramref name="grantRecipientHex"/> names
+    /// the service's recipient key the verified scalar is sealed into a
+    /// restore grant on the way out.
     /// </summary>
     /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
     /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
+    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>; null mints no grant.</param>
     /// <param name="cancellationToken">Cancels the derivation.</param>
     /// <returns>The answer.</returns>
     public static async Task<GateAnswer> VerifyAsync(
-        string? archivesRoot, string passphraseText, CancellationToken cancellationToken)
+        string? archivesRoot, string passphraseText, string? grantRecipientHex, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(passphraseText);
 
@@ -76,19 +88,47 @@ public static class ConsoleRestoreGate
             sawAnArchive = true;
             try
             {
-                // The genuine check: derive the key-encryption key with the
+                var store = new LocalFileSystemObjectStore(archive);
+                var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (RepositoryLifecycle.IsWriteOnly(descriptor))
+                {
+                    // The v2 verifier is equality, not decryption: derive and
+                    // compare the sealing public key (ADR-0042 §1). The same
+                    // derivation's scalar is the restore grant, so a verified
+                    // answer carries it sealed rather than making the wizard
+                    // pay the Argon2 cost twice.
+                    if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var authority))
+                    {
+                        return new GateAnswer(GateOutcome.Wrong);
+                    }
+
+                    using (authority)
+                    {
+                        return new GateAnswer(
+                            GateOutcome.Verified,
+                            GrantEnvelope: grantRecipientHex is { Length: > 0 }
+                                ? Convert.ToHexStringLower(
+                                    WriteOnlyProvisioning.SealGrant(
+                                        Convert.FromHexString(grantRecipientHex), authority!.SealingPrivateKey))
+                                : null);
+                    }
+                }
+
+                // The genuine v1 check: derive the key-encryption key with the
                 // archive's own KDF parameters and unwrap a key object. There
                 // is no cheaper honest answer, and the cost is the point —
                 // this is the same wall a stolen archive presents.
                 _ = await RepositoryLifecycle.ExportVerifiedKeyObjectAsync(
-                    new LocalFileSystemObjectStore(archive), passphrase, cancellationToken).ConfigureAwait(false);
+                    store, passphrase, cancellationToken).ConfigureAwait(false);
                 return new GateAnswer(GateOutcome.Verified);
             }
             catch (KeyUnwrapFailedException)
             {
                 return new GateAnswer(GateOutcome.Wrong);
             }
-            catch (Exception damaged) when (damaged is RepositoryOpenException or IOException)
+            catch (Exception damaged) when (damaged is RepositoryOpenException or IOException or FormatException)
             {
                 // A damaged archive proves nothing either way; try the next.
             }
@@ -99,5 +139,85 @@ public static class ConsoleRestoreGate
             sawAnArchive
                 ? "No local archive could answer the check."
                 : "No staging archive exists yet to verify against.");
+    }
+
+    /// <summary>A provisioning ceremony's client half, resolved.</summary>
+    /// <param name="Outcome"><see cref="GateOutcome.Verified"/> when the envelope was minted.</param>
+    /// <param name="Detail">Why not, when it was not.</param>
+    /// <param name="Envelope">The sealed provisioning envelope, hex — the write bundle plus KDF salt and parameters.</param>
+    public sealed record ProvisionAnswer(GateOutcome Outcome, string? Detail = null, string? Envelope = null);
+
+    /// <summary>
+    /// The client half of the write-only provisioning ceremony (ADR-0042 §4,
+    /// §10): Argon2id runs here, where the person typed, and what leaves this
+    /// process is the write bundle sealed to the service's recipient key. An
+    /// existing v2 archive at <paramref name="archivesRoot"/>/<paramref name="setId"/>
+    /// makes this an adoption — the derivation uses the descriptor's recorded
+    /// salt and parameters and is proved against its public key before
+    /// anything is sealed; no archive (or no local read access) makes it a
+    /// creation with a fresh salt and the default parameters.
+    /// </summary>
+    /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
+    /// <param name="setId">The set's 32-hex identity, naming its staging archive directory.</param>
+    /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
+    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
+    /// <param name="cancellationToken">Cancels the derivation.</param>
+    /// <returns>The answer.</returns>
+    public static async Task<ProvisionAnswer> BuildProvisionEnvelopeAsync(
+        string? archivesRoot,
+        string setId,
+        string passphraseText,
+        string grantRecipientHex,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+        ThrowHelper.ThrowIfNull(passphraseText);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
+
+        using var passphrase = Passphrase.Create(passphraseText);
+        var recipient = Convert.FromHexString(grantRecipientHex);
+
+        var archivePath = string.IsNullOrWhiteSpace(archivesRoot) ? null : Path.Combine(archivesRoot, setId);
+        if (archivePath is not null
+            && File.Exists(Path.Combine(archivePath, RepositoryLifecycle.DescriptorKey.Value)))
+        {
+            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+                new LocalFileSystemObjectStore(archivePath), cancellationToken).ConfigureAwait(false);
+            if (!RepositoryLifecycle.IsWriteOnly(descriptor))
+            {
+                return new ProvisionAnswer(
+                    GateOutcome.Unavailable,
+                    "This set's staging archive is a format 1 repository — an existing repository cannot "
+                    + "become write-only (ADR-0042).");
+            }
+
+            if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var derived))
+            {
+                return new ProvisionAnswer(
+                    GateOutcome.Wrong,
+                    "That passphrase does not reproduce this archive's keys.");
+            }
+
+            using (derived)
+            {
+                return new ProvisionAnswer(
+                    GateOutcome.Verified,
+                    Envelope: Convert.ToHexStringLower(
+                        WriteOnlyProvisioning.SealProvision(
+                            recipient, derived!, descriptor.KdfSalt.Span, descriptor.KdfParameters)));
+            }
+        }
+
+        // Creation: nothing exists yet (or the archives are not locally
+        // readable and the service will refuse an accidental adoption
+        // mismatch by name). Fresh salt, current default parameters.
+        var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var parameters = Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters;
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
+        return new ProvisionAnswer(
+            GateOutcome.Verified,
+            Envelope: Convert.ToHexStringLower(
+                WriteOnlyProvisioning.SealProvision(recipient, authority, salt, parameters)));
     }
 }
