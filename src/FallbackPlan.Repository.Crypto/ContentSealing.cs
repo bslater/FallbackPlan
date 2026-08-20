@@ -66,6 +66,13 @@ public static class ContentSealing
             throw new ArgumentException(Strings.FormatContentSealing_ContentKeyExactlyBytes(32), nameof(contentKey));
         }
 
+        // Sealing TO a low-order point yields an attacker-known secret — the
+        // mirror of the guard Open applies to the ephemeral share.
+        if (X25519.IsLowOrderPoint(recipientPublicKey))
+        {
+            throw new ArgumentException(Strings.ContentSealing_LowOrderRecipient, nameof(recipientPublicKey));
+        }
+
         using var exchange = X25519.Create();
         exchange.GenerateKey();
         var ephemeralPublic = exchange.ExportPublicKey();
@@ -162,6 +169,11 @@ public static class ContentSealing
         if (recipientPublicKey.Length != KeyLength)
         {
             throw new ArgumentException(Strings.FormatContentSealing_KeyExactlyBytes(KeyLength), nameof(recipientPublicKey));
+        }
+
+        if (X25519.IsLowOrderPoint(recipientPublicKey))
+        {
+            throw new ArgumentException(Strings.ContentSealing_LowOrderRecipient, nameof(recipientPublicKey));
         }
 
         using var exchange = X25519.Create();

@@ -120,6 +120,15 @@ public sealed class SpoolCheckpoint
         SpoolPinnedConfiguration pinned,
         ReadOnlyMemory<byte>? contentKey = null)
     {
+        // Empty is "none" — the shape a v1 writer's null byte[] arrives in
+        // through the implicit ReadOnlyMemory conversion — so only a PRESENT
+        // key of the wrong length is a caller defect.
+        if (contentKey is { Length: not (0 or 32) })
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatSpoolCheckpoint_ContentKeyExactlyBytes(32), nameof(contentKey));
+        }
+
         FormatVersion = formatVersion;
         BlobClass = blobClass;
         KeyGeneration = keyGeneration;

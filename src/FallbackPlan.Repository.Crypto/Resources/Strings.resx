@@ -91,6 +91,9 @@
   <data name="ContentSealing_KeyExactlyBytes" xml:space="preserve">
     <value>An X25519 key is exactly {0} bytes.</value>
   </data>
+  <data name="ContentSealing_LowOrderRecipient" xml:space="preserve">
+    <value>The recipient public key is a low-order point — sealing to it would derive an attacker-known secret, so it is refused.</value>
+  </data>
   <data name="ContentSealing_LowOrderShare" xml:space="preserve">
     <value>The sealed share offers a low-order point and is refused.</value>
   </data>

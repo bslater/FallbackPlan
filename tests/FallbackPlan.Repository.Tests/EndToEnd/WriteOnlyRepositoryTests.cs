@@ -186,6 +186,51 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     }
 
     [TestMethod]
+    public async Task WriteOnlyRepository_ATamperedSealedShare_SkipsOneBlobAndLoadsTheRest()
+    {
+        var store = CreateStore();
+        var (opened, authority, catalogue, _) = await CreateAndBackUpAsync(store);
+        using var _1 = opened;
+        using var _2 = authority;
+        using var _3 = catalogue;
+
+        var dataDirectory = Path.Combine(_root, "repo", "blobs", "data");
+        var blobFiles = Directory.EnumerateFiles(dataDirectory, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        Assert.IsNotEmpty(blobFiles);
+
+        // One byte flipped inside a data blob's sealed content-key share.
+        var bytes = await File.ReadAllBytesAsync(blobFiles[0]);
+        bytes[88 + 32 + 5] ^= 0x01;
+        await File.WriteAllBytesAsync(blobFiles[0], bytes);
+
+        // A granted load must contain the damage to that one blob — a single
+        // hostile replica object cannot take reading everything else down
+        // with it (ADR-0042 §7).
+        using var passphrase = Right();
+        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            store, passphrase, CancellationToken.None);
+        using (readOpened)
+        using (readAuthority)
+        using (var reader = new RepositoryReader(readOpened.RepositoryId, readOpened.Keys, store, readAuthority))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+
+            var skipped = Assert.ContainsSingle(reader.SkippedBlobs);
+            Assert.Contains("does not open", skipped.Reason, StringComparison.Ordinal);
+
+            // The metadata blob loaded past the skip and its records still
+            // read — the load finished, degraded by exactly one blob.
+            Assert.IsNotEmpty(reader.AllRecords);
+            var survivor = reader.AllRecords.First(
+                record => record.ObjectType == Domain.ObjectType.FileVersionManifest);
+            var read = await reader.ReadSegmentAsync(survivor.ObjectId, CancellationToken.None);
+            Assert.AreEqual(FallbackPlan.Repository.Packing.RecordReadOutcome.Ok, read.Outcome);
+        }
+    }
+
+    [TestMethod]
     public async Task WriteOnlyRepository_VerifyIsHonestAboutSealedContent_AndRefusesRepositoryDedup()
     {
         var store = CreateStore();
@@ -204,11 +249,26 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         Assert.Contains("write-only", refused.Message, StringComparison.Ordinal);
         Assert.Contains("device", refused.Message, StringComparison.Ordinal);
 
+        // The exact sealed population, from the structure plane: every
+        // segment record lives in a sealed data blob, so the verify sweep's
+        // sealed count must EQUAL it — not merely exceed zero, or an
+        // off-by-N in the accounting would pass unseen.
+        long expectedSealed;
+        using (var census = new RepositoryReader(opened.RepositoryId, opened.Keys, store))
+        {
+            await census.LoadBlobsAsync(CancellationToken.None);
+            expectedSealed = census.AllRecords.Count(
+                record => record.ObjectType == Domain.ObjectType.SegmentRecord);
+        }
+
+        Assert.IsTrue(expectedSealed > 0);
+
         // Verification with the write bundle alone: levels 1–2 are the
         // structure plane and pass whole; level 3 counts the sealed records
         // as a stated incapacity — Ok, never a failure, never silent.
         using var verifier = new VerifyEngine(opened.RepositoryId, opened.Keys, store);
         var sawSealedData = false;
+        var totalSealed = 0L;
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
         {
@@ -221,10 +281,12 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             var records = await verifier.VerifyBlobAsync(
                 entry.Key, entry.Length, VerifyLevel.EveryRecord, CancellationToken.None);
             Assert.IsTrue(records.Ok, $"{entry.Key.Value}: sealed content must not read as damage: {records.Detail}");
+            totalSealed += records.RecordsSealed;
 
             if (entry.Key.Value.StartsWith("blobs/data/", StringComparison.Ordinal))
             {
                 sawSealedData = true;
+                Assert.AreEqual(0, records.RecordsVerified, "no sealed record may claim content verification");
                 Assert.IsTrue(records.RecordsSealed > 0, "a sealed data blob's records cannot content-verify");
                 Assert.Contains("restore grant", records.Detail!, StringComparison.Ordinal);
             }
@@ -236,6 +298,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         }
 
         Assert.IsTrue(sawSealedData, "the drill must have verified at least one sealed data blob");
+        Assert.AreEqual(expectedSealed, totalSealed, "the sealed count is exact, blob by blob");
 
         // File verification without a grant is the same statement, distinct
         // from damage, and with the derived authority it verifies end to end.

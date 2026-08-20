@@ -76,6 +76,22 @@ public static class ConsoleRestoreGate
                 "The service's archives are not readable from this console.");
         }
 
+        // The recipient key is parsed ONCE, before any archive is touched: a
+        // service publishing an unusable key is its own finding, never to be
+        // mistaken for a damaged archive — and a wizard verified without a
+        // mintable grant would only defer the failure to the restore.
+        byte[]? recipient = null;
+        if (grantRecipientHex is { Length: > 0 })
+        {
+            if (!TryParseRecipient(grantRecipientHex, out recipient))
+            {
+                return new GateAnswer(
+                    GateOutcome.Unavailable,
+                    "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                    + "and try again (ADR-0042).");
+            }
+        }
+
         using var passphrase = Passphrase.Create(passphraseText);
         var sawAnArchive = false;
         foreach (var archive in Directory.GetDirectories(archivesRoot))
@@ -108,10 +124,9 @@ public static class ConsoleRestoreGate
                     {
                         return new GateAnswer(
                             GateOutcome.Verified,
-                            GrantEnvelope: grantRecipientHex is { Length: > 0 }
+                            GrantEnvelope: recipient is not null
                                 ? Convert.ToHexStringLower(
-                                    WriteOnlyProvisioning.SealGrant(
-                                        Convert.FromHexString(grantRecipientHex), authority!.SealingPrivateKey))
+                                    WriteOnlyProvisioning.SealGrant(recipient, authority!.SealingPrivateKey))
                                 : null);
                     }
                 }
@@ -174,43 +189,92 @@ public static class ConsoleRestoreGate
         ThrowHelper.ThrowIfNull(passphraseText);
         ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
 
+        if (!TryParseRecipient(grantRecipientHex, out var recipient))
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Unavailable,
+                "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                + "and try again (ADR-0042).");
+        }
+
         using var passphrase = Passphrase.Create(passphraseText);
-        var recipient = Convert.FromHexString(grantRecipientHex);
 
         var archivePath = string.IsNullOrWhiteSpace(archivesRoot) ? null : Path.Combine(archivesRoot, setId);
         if (archivePath is not null
             && File.Exists(Path.Combine(archivePath, RepositoryLifecycle.DescriptorKey.Value)))
         {
-            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
-                new LocalFileSystemObjectStore(archivePath), cancellationToken).ConfigureAwait(false);
-            if (!RepositoryLifecycle.IsWriteOnly(descriptor))
+            try
             {
+                var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+                    new LocalFileSystemObjectStore(archivePath), cancellationToken).ConfigureAwait(false);
+                if (!RepositoryLifecycle.IsWriteOnly(descriptor))
+                {
+                    return new ProvisionAnswer(
+                        GateOutcome.Unavailable,
+                        "This set's staging archive is a format 1 repository — an existing repository cannot "
+                        + "become write-only (ADR-0042).");
+                }
+
+                if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var derived))
+                {
+                    return new ProvisionAnswer(
+                        GateOutcome.Wrong,
+                        "That passphrase does not reproduce this archive's keys.");
+                }
+
+                using (derived)
+                {
+                    return new ProvisionAnswer(
+                        GateOutcome.Verified,
+                        Envelope: Convert.ToHexStringLower(
+                            WriteOnlyProvisioning.SealProvision(
+                                recipient!, derived!, descriptor.KdfSalt.Span, descriptor.KdfParameters)));
+                }
+            }
+            catch (RepositoryOpenException damaged)
+            {
+                // A descriptor that does not read is the archive's problem,
+                // named — a ceremony must never crash the endpoint over it.
                 return new ProvisionAnswer(
                     GateOutcome.Unavailable,
-                    "This set's staging archive is a format 1 repository — an existing repository cannot "
-                    + "become write-only (ADR-0042).");
-            }
-
-            if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var derived))
-            {
-                return new ProvisionAnswer(
-                    GateOutcome.Wrong,
-                    "That passphrase does not reproduce this archive's keys.");
-            }
-
-            using (derived)
-            {
-                return new ProvisionAnswer(
-                    GateOutcome.Verified,
-                    Envelope: Convert.ToHexStringLower(
-                        WriteOnlyProvisioning.SealProvision(
-                            recipient, derived!, descriptor.KdfSalt.Span, descriptor.KdfParameters)));
+                    $"This set's staging archive descriptor does not read: {damaged.Message}");
             }
         }
 
         // Creation: nothing exists yet (or the archives are not locally
         // readable and the service will refuse an accidental adoption
         // mismatch by name). Fresh salt, current default parameters.
+        return BuildCreationEnvelope(passphrase, recipient!);
+    }
+
+    /// <summary>
+    /// A recipient key is usable when it is hex and exactly 32 bytes —
+    /// decided once, up front, so a service publishing garbage is its own
+    /// named finding rather than a mystery blamed on an archive.
+    /// </summary>
+    private static bool TryParseRecipient(string grantRecipientHex, out byte[]? recipient)
+    {
+        try
+        {
+            recipient = Convert.FromHexString(grantRecipientHex);
+        }
+        catch (FormatException)
+        {
+            recipient = null;
+            return false;
+        }
+
+        if (recipient.Length != 32)
+        {
+            recipient = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)
+    {
         var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
         var parameters = Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters;
         using var authority = WriteOnlyDerivation.Derive(

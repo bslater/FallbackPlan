@@ -119,6 +119,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ContentSealing_KeyExactlyBytes, arg0);
 
     /// <summary>
+    /// The recipient public key is a low-order point — sealing to it would derive an attacker-known secret, so it is refused.
+    /// </summary>
+    internal static string ContentSealing_LowOrderRecipient => Get(nameof(ContentSealing_LowOrderRecipient));
+
+    /// <summary>
     /// The sealed share offers a low-order point and is refused.
     /// </summary>
     internal static string ContentSealing_LowOrderShare => Get(nameof(ContentSealing_LowOrderShare));

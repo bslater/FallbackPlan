@@ -189,6 +189,17 @@ public sealed class BlobReader : IDisposable
             {
                 recordKey = sealedContentKeyOpener(envelope);
             }
+            catch (Exception refusal) when (refusal is SealedContentException or ArgumentException)
+            {
+                // Every call site proves the authority against the descriptor
+                // before constructing an opener, so a share that still does
+                // not open is THIS blob's damage — tampered, transplanted, or
+                // a low-order ephemeral. Contained to the blob exactly as a
+                // failed footer is (ADR-0042 §7): one hostile object must not
+                // abort loading every other blob.
+                CryptographicOperations.ZeroMemory(blobKey);
+                throw new BlobFormatException(Strings.BlobReader_SealedShareDoesNotOpen);
+            }
             catch
             {
                 CryptographicOperations.ZeroMemory(blobKey);

@@ -82,11 +82,12 @@ public sealed class ParserFuzzTests
         // Stamp each framing magic over the head so the fuzz input gets past
         // the cheap gate and into the field validation it exists to test.
         data ??= [];
-        ReadOnlySpan<byte> magic = ((uint)magicIndex % 4) switch
+        ReadOnlySpan<byte> magic = ((uint)magicIndex % 5) switch
         {
             0 => "FBPKSREC"u8,
             1 => "FBPKBLOB"u8,
             2 => "FBPKKEYS"u8,
+            3 => "FBPKRKIT"u8,
             _ => "FBPKSPCK"u8,
         };
 
@@ -131,15 +132,16 @@ public sealed class ParserFuzzTests
         PropertyCheck.Holds(this, maxTest: 200);
 
     public static void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrowsProperty(
-        byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations)
+        byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations, bool useV2Seed)
     {
         // 01 §3.1: "not a repository", "damaged", and "unsupported" are
         // RESULTS, not exceptions — for every input, including a mutated
-        // once-valid descriptor.
+        // once-valid descriptor of EITHER format: key 9 and the required
+        // feature set widen the surface, never the contract (ADR-0042).
         byte[] candidate;
         if (stampMagic)
         {
-            candidate = (byte[])FuzzCorpus.DescriptorSeed.Clone();
+            candidate = (byte[])(useV2Seed ? FuzzCorpus.DescriptorV2Seed : FuzzCorpus.DescriptorSeed).Clone();
             foreach (var (offset, mask) in mutations ?? [])
             {
                 candidate[(int)((uint)offset % candidate.Length)] ^= (byte)(mask | 1);
@@ -170,6 +172,35 @@ public sealed class ParserFuzzTests
         // The try-contract: false for garbage, never an exception — a torn
         // sidecar means "restart the blob", not "crash the resume".
         if (!SpoolCheckpoint.TryParse(candidate, out var checkpoint))
+        {
+            Assert.IsNull(checkpoint);
+        }
+    }
+
+    [TestMethod]
+    public void SpoolCheckpointTryParse_GivenAMutatedSealedSidecar_NeverThrows() =>
+        PropertyCheck.Holds(this, maxTest: 200);
+
+    public static void SpoolCheckpointTryParse_GivenAMutatedSealedSidecar_NeverThrowsProperty(
+        (int Offset, byte Mask)[]? mutations, int resize)
+    {
+        // The v2 sidecar carries a content key (ADR-0042 §3); truncations
+        // and flips land inside real structure — the version/class fields
+        // that decide the expected shape included — and the try-contract
+        // still never throws.
+        var seed = FuzzCorpus.SealedSpoolCheckpointSeed;
+        var length = Math.Max(0, seed.Length + (int)((uint)resize % 64) - 32);
+        var mutated = new byte[length];
+        Array.Copy(seed, mutated, Math.Min(seed.Length, length));
+        foreach (var (offset, mask) in mutations ?? [])
+        {
+            if (mutated.Length > 0)
+            {
+                mutated[(int)((uint)offset % mutated.Length)] ^= (byte)(mask | 1);
+            }
+        }
+
+        if (!SpoolCheckpoint.TryParse(mutated, out var checkpoint))
         {
             Assert.IsNull(checkpoint);
         }

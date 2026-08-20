@@ -304,6 +304,22 @@ internal static class Strings
     internal static string BlobEnvelope_SealedShareDisagrees => Get(nameof(BlobEnvelope_SealedShareDisagrees));
 
     /// <summary>
+    /// The blob's sealed content key does not open under the granted authority — a tampered or transplanted share, contained to this blob (ADR-0042).
+    /// </summary>
+    internal static string BlobReader_SealedShareDoesNotOpen => Get(nameof(BlobReader_SealedShareDoesNotOpen));
+
+    /// <summary>
+    /// A checkpointed content key is exactly {0} bytes.
+    /// </summary>
+    private static string SpoolCheckpoint_ContentKeyExactlyBytes => Get(nameof(SpoolCheckpoint_ContentKeyExactlyBytes));
+
+    /// <summary>
+    /// A checkpointed content key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatSpoolCheckpoint_ContentKeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SpoolCheckpoint_ContentKeyExactlyBytes, arg0);
+
+    /// <summary>
     /// This record's content key is sealed to the repository's public key — reading it requires a restore grant (ADR-0042).
     /// </summary>
     internal static string BlobReader_ContentKeySealed => Get(nameof(BlobReader_ContentKeySealed));

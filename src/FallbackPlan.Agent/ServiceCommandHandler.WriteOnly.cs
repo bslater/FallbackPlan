@@ -1,6 +1,7 @@
 using FallbackPlan.Api;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
@@ -64,8 +65,21 @@ public sealed partial class ServiceCommandHandler
                 // moved archive, a restored replica, or a state directory that
                 // was lost. Prove the passphrase reproduces THIS repository's
                 // keys before storing anything.
-                var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
-                    .ConfigureAwait(false);
+                RepositoryDescriptor descriptor;
+                try
+                {
+                    descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (RepositoryOpenException damaged)
+                {
+                    // A descriptor that no longer verifies is the archive's
+                    // problem, named as such — never an unhandled crash of
+                    // the provisioning verb.
+                    return new ServiceError(
+                        ServiceErrorReason.Failed,
+                        $"Set '{set.Name}' has a staging archive whose descriptor does not read: {damaged.Message}");
+                }
                 if (!RepositoryLifecycle.IsWriteOnly(descriptor))
                 {
                     return new ServiceError(

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Agent;
@@ -40,7 +41,29 @@ public sealed class GrantRecipient : IDisposable
         byte[] scalar;
         if (File.Exists(path))
         {
-            scalar = Convert.FromHexString(File.ReadAllText(path).Trim());
+            // A recipient key that does not read back is named, not thrown
+            // raw out of service start: the operator's remedy is to restore
+            // the state directory, or delete the file so a fresh keypair is
+            // minted (outstanding envelopes sealed to the old key then no
+            // longer open, which re-provisioning repairs).
+            try
+            {
+                scalar = Convert.FromHexString(File.ReadAllText(path).Trim());
+            }
+            catch (FormatException)
+            {
+                throw new ClientStateException(
+                    $"The envelope recipient key at '{path}' is not readable hex — restore the state "
+                    + "directory, or delete the file to mint a fresh keypair and re-provision (ADR-0042).");
+            }
+
+            if (scalar.Length != 32)
+            {
+                CryptographicOperations.ZeroMemory(scalar);
+                throw new ClientStateException(
+                    $"The envelope recipient key at '{path}' is {scalar.Length} bytes, not 32 — restore the "
+                    + "state directory, or delete the file to mint a fresh keypair and re-provision (ADR-0042).");
+            }
         }
         else
         {
@@ -111,6 +134,16 @@ public sealed class WriteCredentialStore(string stateDirectory)
         try
         {
             return RepositoryWriteCredential.FromBytes(bytes);
+        }
+        catch (ArgumentException)
+        {
+            // A credential file that no longer parses is damage to NAME, not
+            // a silent "not provisioned" — pretending would flip the set onto
+            // the passphrase path and mask the loss. The remedy is the same
+            // as any state loss: adopt again with the passphrase (ADR-0042 §10).
+            throw new RepositoryOpenException(
+                $"The stored write credential for set '{setId}' at '{path}' is damaged — adopt the set "
+                + "again with the passphrase (ADR-0042).");
         }
         finally
         {

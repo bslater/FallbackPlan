@@ -148,6 +148,12 @@
   <data name="BlobEnvelope_SealedShareDisagrees" xml:space="preserve">
     <value>A v2 data blob's envelope carries exactly one 80-byte sealed content key; every other envelope carries none (ADR-0042).</value>
   </data>
+  <data name="BlobReader_SealedShareDoesNotOpen" xml:space="preserve">
+    <value>The blob's sealed content key does not open under the granted authority — a tampered or transplanted share, contained to this blob (ADR-0042).</value>
+  </data>
+  <data name="SpoolCheckpoint_ContentKeyExactlyBytes" xml:space="preserve">
+    <value>A checkpointed content key is exactly {0} bytes.</value>
+  </data>
   <data name="BlobReader_ContentKeySealed" xml:space="preserve">
     <value>This record's content key is sealed to the repository's public key — reading it requires a restore grant (ADR-0042).</value>
   </data>

@@ -167,4 +167,73 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
             harness.Clients.Client.Received.All(command => command is DescribeServiceCommand),
             "the gate may ask the service only where the archives live and what to seal to");
     }
+
+    [TestMethod]
+    public async Task Gate_AnUnusableRecipientKey_IsNamedNotBlamedOnTheArchive()
+    {
+        var archive = Path.Combine(_archives, _setId);
+        Directory.CreateDirectory(archive);
+        var store = new LocalFileSystemObjectStore(archive);
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        {
+            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
+            repository.Dispose();
+            authority.Dispose();
+        }
+
+        // A service publishing a non-hex or wrong-length recipient key is
+        // ITS OWN finding — pre-fix, the non-hex case was swallowed as "no
+        // archive could answer" and the short case escaped untyped.
+        foreach (var unusable in new[] { "this is not hex", "abcd" })
+        {
+            var answer = await ConsoleRestoreGate.VerifyAsync(
+                _archives, PassphraseText, unusable, CancellationToken.None);
+            Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, answer.Outcome, unusable);
+            Assert.Contains("grant-recipient", answer.Detail!, StringComparison.Ordinal);
+        }
+
+        // No recipient at all still verifies — it just mints no grant.
+        var verified = await ConsoleRestoreGate.VerifyAsync(
+            _archives, PassphraseText, grantRecipientHex: null, CancellationToken.None);
+        Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Verified, verified.Outcome);
+        Assert.IsNull(verified.GrantEnvelope);
+    }
+
+    [TestMethod]
+    public async Task BuildProvisionEnvelope_BadRecipientOrDamagedDescriptor_AnswersUnavailableByName()
+    {
+        var recipientHex = Convert.ToHexStringLower(
+            ContentSealing.PublicKeyOf(Enumerable.Repeat((byte)0x71, 32).ToArray()));
+
+        // A bad recipient never starts an Argon2 derivation — pre-fix this
+        // was an unguarded FormatException out of the ceremony endpoint.
+        var badRecipient = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
+            _archives, _setId, PassphraseText, "definitely-not-hex", CancellationToken.None);
+        Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, badRecipient.Outcome);
+        Assert.Contains("grant-recipient", badRecipient.Detail!, StringComparison.Ordinal);
+
+        // A staging archive whose descriptor no longer reads is named, not
+        // crashed over — adoption cannot proceed against damage.
+        var archive = Path.Combine(_archives, _setId);
+        Directory.CreateDirectory(archive);
+        var store = new LocalFileSystemObjectStore(archive);
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        {
+            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
+            repository.Dispose();
+            authority.Dispose();
+        }
+
+        var descriptorPath = Path.Combine(archive, "repository-format");
+        var bytes = await File.ReadAllBytesAsync(descriptorPath);
+        bytes[^1] ^= 0x01;
+        await File.WriteAllBytesAsync(descriptorPath, bytes);
+
+        var damaged = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
+            _archives, _setId, PassphraseText, recipientHex, CancellationToken.None);
+        Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, damaged.Outcome);
+        Assert.Contains("does not read", damaged.Detail!, StringComparison.Ordinal);
+    }
 }

@@ -164,13 +164,54 @@ public sealed class SealedBlobTests : IDisposable
         var store = CreateStore();
         var (key, length, _) = await WriteAndUploadAsync(store, authority, recordCount: 1);
 
+        // Wrong authority and tampered share land in the SAME typed refusal —
+        // BlobFormatException, the shape every skip path contains — because
+        // callers prove the authority against the descriptor before an
+        // opener ever exists, so at this level the two are one damage class.
         using var deriver = new ObjectIdDeriver(ContentIdKey);
-        await Assert.ThrowsExactlyAsync<SealedContentException>(async () =>
+        var refusal = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
         {
             using var reader = await BlobReader.OpenAsync(
                 store, key, length, Repo, StructureKeys(authority.Credential), deriver,
                 CancellationToken.None, Grant(wrong));
         });
+        Assert.Contains("does not open", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task SealedBlob_ATamperedSealedShare_IsOneBlobsDamageNotALoadFailure()
+    {
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        var store = CreateStore();
+        var (key, length, _) = await WriteAndUploadAsync(store, authority, recordCount: 2);
+
+        // Flip one byte inside the stored envelope's 80-byte sealed share —
+        // the wrapped-content-key half, offset 88 (v1 fields) + 32
+        // (ephemeral share) + 5 into the blob.
+        var path = Path.Combine(_root, "store", key.Value.Replace('/', Path.DirectorySeparatorChar));
+        var bytes = await File.ReadAllBytesAsync(path);
+        bytes[88 + 32 + 5] ^= 0x01;
+        await File.WriteAllBytesAsync(path, bytes);
+
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+
+        // Under a VALID grant the refusal is this blob's own damage — the
+        // typed BlobFormatException that LoadBlobsAsync demotes to ONE
+        // SkippedBlob — never a SealedContentException that would abort the
+        // whole load (ADR-0042 §7).
+        var refusal = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
+        {
+            using var reader = await BlobReader.OpenAsync(
+                store, key, length, Repo, StructureKeys(authority.Credential), deriver,
+                CancellationToken.None, Grant(authority));
+        });
+        Assert.Contains("does not open", refusal.Message, StringComparison.Ordinal);
+
+        // The structure plane never touches the share: a write-only holder
+        // still reads the tampered blob's whole record table.
+        using var structural = await BlobReader.OpenAsync(
+            store, key, length, Repo, StructureKeys(authority.Credential), deriver, CancellationToken.None);
+        Assert.AreEqual(2, structural.RecordTable.Count);
     }
 
     [TestMethod]
@@ -249,6 +290,151 @@ public sealed class SealedBlobTests : IDisposable
             Assert.AreEqual(RecordReadOutcome.Ok, result.Outcome);
             SequenceAssert.AreEqual(expected, result.Plaintext);
         }
+    }
+
+    [TestMethod]
+    public async Task SealedBlob_AShareSealedForAnotherBlob_IsRefusedThroughThePackingLayer()
+    {
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        var store = CreateStore();
+        var (key, length, _) = await WriteAndUploadAsync(store, authority, recordCount: 1);
+
+        // A perfectly valid share — right public key, wrong blob identity —
+        // spliced over the stored one. The AAD (repository_id ‖ blob_id,
+        // 05 §2.1) is what refuses the transplant, proven through the
+        // packing layer rather than only at the ContentSealing unit.
+        var foreignShare = SealedContentKey.Seal(
+            authority.Credential.SealingPublicKey,
+            Enumerable.Repeat((byte)0x66, 32).ToArray(),
+            Repo,
+            BlobId.FromWriterCounter(Writer, 999));
+
+        var path = Path.Combine(_root, "store", key.Value.Replace('/', Path.DirectorySeparatorChar));
+        var bytes = await File.ReadAllBytesAsync(path);
+        foreignShare.CopyTo(bytes.AsSpan(88, 80));
+        await File.WriteAllBytesAsync(path, bytes);
+
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        var refusal = await Assert.ThrowsExactlyAsync<BlobFormatException>(async () =>
+        {
+            using var reader = await BlobReader.OpenAsync(
+                store, key, length, Repo, StructureKeys(authority.Credential), deriver,
+                CancellationToken.None, Grant(authority));
+        });
+        Assert.Contains("does not open", refusal.Message, StringComparison.Ordinal);
+    }
+
+    private static readonly SpoolPinnedConfiguration Pinned = new(
+        1, 65_536, 0, 0, CompressionProfile.None.Value, "none", EncryptionProfile.Aes256GcmV1.Value);
+
+    private async Task WriteAbandonedSealedSpoolAsync(RepositoryReadAuthority authority, ulong counter = 9)
+    {
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        var payload = Enumerable.Repeat((byte)0x41, 900).ToArray();
+        var writer = CreateSealedWriter(authority, counter, Pinned);
+        await writer.AppendRecordAsync(
+            ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
+            (ulong)payload.Length, payload, CancellationToken.None);
+        await writer.AbandonAsync();
+        await writer.DisposeAsync();
+    }
+
+    private string SidecarPath() => Directory.GetFiles(SpoolDirectory, "*.checkpoint").Single();
+
+    private ResumeResult ResumeSealed(RepositoryReadAuthority authority)
+    {
+        var structureKey = authority.Credential.DeriveMetadataKey(KeyGeneration.Zero);
+        try
+        {
+            return BlobWriter.TryResume(
+                SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
+                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, Pinned,
+                expectedFormatVersion: FormatLimits.SealedFormatVersion);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(structureKey);
+        }
+    }
+
+    private static void RewriteTrailingHash(byte[] sidecar) =>
+        System.Security.Cryptography.SHA256.HashData(sidecar.AsSpan(0, sidecar.Length - 32))
+            .CopyTo(sidecar.AsSpan(sidecar.Length - 32));
+
+    [TestMethod]
+    public async Task SealedSpool_ATornCheckpoint_Restarts()
+    {
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        await WriteAbandonedSealedSpoolAsync(authority);
+
+        var sidecar = await File.ReadAllBytesAsync(SidecarPath());
+        sidecar[^1] ^= 0x01;
+        await File.WriteAllBytesAsync(SidecarPath(), sidecar);
+
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(ResumeSealed(authority), out var restart);
+        Assert.AreEqual("checkpoint_unreadable", restart.Reason);
+    }
+
+    [TestMethod]
+    public async Task SealedSpool_ATamperedContentKeyInTheCheckpoint_FailsTheTailWalkAndRestarts()
+    {
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        await WriteAbandonedSealedSpoolAsync(authority);
+
+        // Flip a byte INSIDE the checkpointed content key — the 32 bytes
+        // just before the trailing hash — and re-stamp the hash, so the
+        // sidecar parses cleanly and the deception is only caught where it
+        // must be: the tail walk's record tags under the wrong key (05
+        // §6.2's authenticate-the-tail proof).
+        var sidecar = await File.ReadAllBytesAsync(SidecarPath());
+        sidecar[^40] ^= 0x01;
+        RewriteTrailingHash(sidecar);
+        await File.WriteAllBytesAsync(SidecarPath(), sidecar);
+
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(ResumeSealed(authority), out var restart);
+        Assert.AreEqual("spool_tail_unauthenticated", restart.Reason);
+    }
+
+    [TestMethod]
+    public async Task SealedSpool_ASidecarStrippedOfItsContentKey_IsUnreadable()
+    {
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        await WriteAbandonedSealedSpoolAsync(authority);
+
+        // A v2-data sidecar without its 32 content-key bytes is a shape the
+        // parser computes as impossible — even with a freshly correct hash.
+        var sidecar = await File.ReadAllBytesAsync(SidecarPath());
+        var stripped = sidecar.AsSpan(0, sidecar.Length - 64).ToArray()
+            .Concat(sidecar.AsSpan(sidecar.Length - 32).ToArray())
+            .ToArray();
+        RewriteTrailingHash(stripped);
+        await File.WriteAllBytesAsync(SidecarPath(), stripped);
+
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(ResumeSealed(authority), out var restart);
+        Assert.AreEqual("checkpoint_unreadable", restart.Reason);
+    }
+
+    [TestMethod]
+    public async Task V1Spool_MetByAV2Expectation_Restarts()
+    {
+        // The reverse of the sealed test's version pin: a v1 data spool
+        // offered to a session that writes sealed blobs restarts rather
+        // than resuming under keys it does not have.
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        var dataKey = Enumerable.Repeat((byte)0x77, 32).ToArray();
+        var payload = Enumerable.Repeat((byte)0x42, 700).ToArray();
+        var writer = BlobWriter.Create(
+            Repo, Writer, KeyGeneration.Zero, BlobClass.Data, dataKey, blobCounter: 11,
+            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory, pinned: Pinned);
+        await writer.AppendRecordAsync(
+            ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
+            (ulong)payload.Length, payload, CancellationToken.None);
+        await writer.AbandonAsync();
+        await writer.DisposeAsync();
+
+        using var authority = DeriveAuthority("the write-only passphrase!!");
+        Assert.IsInstanceOfType<ResumeResult.MustRestart>(ResumeSealed(authority), out var restart);
+        Assert.AreEqual("format_version_changed", restart.Reason);
     }
 
     /// <inheritdoc />

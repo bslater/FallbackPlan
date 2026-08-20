@@ -185,4 +185,43 @@ public sealed class WriteOnlyDerivationTests
         Assert.ThrowsExactly<ArgumentException>(
             () => ContentSealing.Open(authority.SealingPrivateKey, lowOrder, context));
     }
+
+    [TestMethod]
+    public void ContentSealing_ALowOrderRecipient_IsRefusedAtSealTime()
+    {
+        // Sealing TO a low-order point derives an attacker-known secret —
+        // the descriptor is the only place a sealing key arrives from, and a
+        // hostile store could serve one. The refusal mirrors the guard the
+        // open side applies to the ephemeral share.
+        var lowOrder = new byte[ContentSealing.KeyLength];
+        var contentKey = RandomNumberGenerator.GetBytes(32);
+
+        var sealRefusal = Assert.ThrowsExactly<ArgumentException>(
+            () => ContentSealing.Seal(lowOrder, contentKey, "repo+blob context"u8.ToArray()));
+        Assert.Contains("low-order", sealRefusal.Message, StringComparison.Ordinal);
+
+        var payloadRefusal = Assert.ThrowsExactly<ArgumentException>(
+            () => ContentSealing.SealPayload(lowOrder, contentKey, "fbp/provision/v2"u8.ToArray()));
+        Assert.Contains("low-order", payloadRefusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void OpenProvision_AWellSealedEnvelopeHidingGarbage_IsRefusedIndistinguishably()
+    {
+        // The outer envelope opens and its magic and length are right, but
+        // the embedded credential is not one. The refusal must be the SAME
+        // SealedContentException as any tampered envelope — never a leaked
+        // parse detail, and never an untyped escape past a handler that
+        // catches only the sealed-refusal type.
+        var recipientPrivate = Enumerable.Repeat((byte)0x60, 32).ToArray();
+        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
+
+        var payload = new byte[8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 9];
+        "FBPPROV1"u8.CopyTo(payload);
+        payload.AsSpan(8).Fill(0xEE);
+        var sealedBytes = ContentSealing.SealPayload(recipientPublic, payload, "fbp/provision/v2"u8.ToArray());
+
+        Assert.ThrowsExactly<SealedContentException>(
+            () => WriteOnlyProvisioning.OpenProvision(recipientPrivate, sealedBytes));
+    }
 }

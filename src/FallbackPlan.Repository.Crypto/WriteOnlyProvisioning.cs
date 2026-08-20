@@ -77,8 +77,19 @@ public static class WriteOnlyProvisioning
                 throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
             }
 
-            var credential = RepositoryWriteCredential.FromBytes(
-                payload.AsSpan(8, RepositoryWriteCredential.SerializedLength));
+            RepositoryWriteCredential credential;
+            try
+            {
+                credential = RepositoryWriteCredential.FromBytes(
+                    payload.AsSpan(8, RepositoryWriteCredential.SerializedLength));
+            }
+            catch (ArgumentException)
+            {
+                // A well-sealed envelope whose embedded credential is not one
+                // is refused exactly as a tampered envelope is — the caller
+                // gets one refusal shape, never a leaked parse detail.
+                throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
+            }
             var offset = 8 + RepositoryWriteCredential.SerializedLength;
             var salt = payload.AsSpan(offset, KekDerivation.SaltLength).ToArray();
             offset += KekDerivation.SaltLength;
