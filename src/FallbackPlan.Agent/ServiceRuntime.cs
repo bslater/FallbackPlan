@@ -9,6 +9,7 @@ using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using FallbackPlan.Diagnostics;
 
 namespace FallbackPlan.Agent;
 
@@ -36,7 +37,7 @@ public sealed record ServiceOptions
     /// so it could not be filtered, could not be read by a client, and could
     /// not be turned down when it was noisy.
     /// </remarks>
-    public ILoggerFactory? LoggerFactory { get; init; }
+    public LoggingComposition? Logging { get; init; }
 }
 
 /// <summary>
@@ -94,11 +95,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>A logger for <paramref name="category"/>, or a silent one.</summary>
     private static ILogger Logger(ServiceOptions options, Type category) =>
-        options.LoggerFactory?.CreateLogger(category.FullName!) ?? NullLogger.Instance;
+        options.Logging?.Factory.CreateLogger(category.FullName!) ?? NullLogger.Instance;
 
     /// <summary>A logger for <typeparamref name="T"/>, or a silent one.</summary>
     internal ILogger LoggerFor<T>() =>
-        Options.LoggerFactory?.CreateLogger(typeof(T).FullName!) ?? NullLogger.Instance;
+        Options.Logging?.Factory.CreateLogger(typeof(T).FullName!) ?? NullLogger.Instance;
 
     /// <summary>Durable local state — device and writer identity.</summary>
     public LocalState State { get; }

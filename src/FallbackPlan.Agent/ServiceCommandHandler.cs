@@ -334,6 +334,9 @@ public sealed partial class ServiceCommandHandler(
         UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
         DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
         ListPairingsCommand => ListPairings(),
+        GetDiagnosticsCommand => GetDiagnostics(),
+        SetLogLevelCommand setLevel => SetLogLevel(setLevel),
+        ReadLogCommand readLog => ReadLog(readLog),
         BrowseFoldersCommand browse => BrowseFolders(browse),
         ValidateSetDraftCommand draft => ValidateSetDraft(draft),
         CreatePairingInviteCommand invite => CreatePairingInvite(invite),
@@ -2013,7 +2016,10 @@ public sealed partial class ServiceCommandHandler(
             runtime.Options.ArchivesRoot,
             runtime.GrantRecipient.PublicKeyHex,
             runtime.SetupState,
-            Convert.ToHexStringLower(runtime.State.DeviceId));
+            Convert.ToHexStringLower(runtime.State.DeviceId),
+            runtime.Options.Logging is { } logging
+                ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
+                : null);
 }
 
 /// <summary>

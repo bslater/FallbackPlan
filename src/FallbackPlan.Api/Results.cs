@@ -65,6 +65,8 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
+[JsonDerivedType(typeof(DiagnosticsResult), "diagnostics")]
+[JsonDerivedType(typeof(LogRecordsResult), "log_records")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -597,6 +599,12 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// issuer (FR-KIT-001). Public by construction; the device's private key
 /// never leaves the service (ADR-0010).
 /// </param>
+/// <param name="LogLevel">
+/// The default level in force, by name (ADR-0043 §6). Carried here so a
+/// console can show what the service is logging without a second round trip,
+/// the same way the Maintenance card already reads this result. Null from a
+/// service older than contract 1.15.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -607,4 +615,88 @@ public sealed record ServiceDescriptionResult(
     string? ArchivesRoot = null,
     string? RestoreGrantRecipient = null,
     string? SetupState = null,
-    string? DeviceId = null) : ServiceResult;
+    string? DeviceId = null,
+    string? LogLevel = null) : ServiceResult;
+
+/// <summary>
+/// What this service is logging and where it is putting it (ADR-0043 §6,
+/// FR-SVC-010) — the answer to <see cref="GetDiagnosticsCommand"/>.
+/// </summary>
+/// <remarks>
+/// There is no path anywhere in this result, and that is the point. A service
+/// that exposes no raw filesystem access to clients (threat T-16) does not
+/// start by handing one out to say where it writes; whoever may read the file
+/// already knows the state directory, and a remote console could not open it
+/// anyway.
+/// </remarks>
+/// <param name="DefaultLevel">The level in force where no category rule matches, by name.</param>
+/// <param name="CategoryLevels">
+/// The category prefixes with their own level, longest-prefix wins. Empty when
+/// one level covers everything.
+/// </param>
+/// <param name="DurableSink">
+/// Whether records are being written to a file that survives a restart. False
+/// means the ring is all there is, which is what a client needs to know before
+/// telling somebody to "send us the log".
+/// </param>
+/// <param name="RetainFiles">How many rolled files are kept, newest first.</param>
+/// <param name="MaximumFileBytes">How large one file may grow before it rolls.</param>
+/// <param name="RingCapacity">How many records the readable ring holds.</param>
+/// <param name="OldestSequence">
+/// The oldest sequence still in the ring — a cursor older than this has missed
+/// records.
+/// </param>
+/// <param name="NextSequence">The sequence the next record will take.</param>
+public sealed record DiagnosticsResult(
+    string DefaultLevel,
+    IReadOnlyDictionary<string, string> CategoryLevels,
+    bool DurableSink,
+    int RetainFiles,
+    long MaximumFileBytes,
+    int RingCapacity,
+    long OldestSequence,
+    long NextSequence) : ServiceResult;
+
+/// <summary>
+/// One log record as it crosses the command surface (ADR-0043 §4).
+/// </summary>
+/// <remarks>
+/// Rendered, not structured. The service holds each record as its name/value
+/// state so it can be rendered twice — in full for the local file, redacted for
+/// anything crossing the boundary — and handing the raw values to a client
+/// would hand across exactly what redaction exists to withhold. What a client
+/// receives is the rendering it is entitled to (NFR-SEC-006, NFR-PRIV-003).
+/// </remarks>
+/// <param name="Sequence">The record's monotonic sequence — the cursor, and what correlates it with the on-disk line.</param>
+/// <param name="TimestampUnixMilliseconds">When it was captured, UTC.</param>
+/// <param name="Level">The level, by name.</param>
+/// <param name="EventId">The stable event id (ADR-0043 §3) — what a bug report quotes.</param>
+/// <param name="Category">The logger category, which is the declaring type's full name.</param>
+/// <param name="Message">The rendered message, redacted or not according to who asked.</param>
+/// <param name="ExceptionType">The exception's type name, when one was logged.</param>
+/// <param name="ExceptionMessage">The exception's message, when one was logged.</param>
+public sealed record LogRecordDescriptor(
+    long Sequence,
+    long TimestampUnixMilliseconds,
+    string Level,
+    int EventId,
+    string Category,
+    string Message,
+    string? ExceptionType = null,
+    string? ExceptionMessage = null);
+
+/// <summary>
+/// A page of the log ring — the answer to <see cref="ReadLogCommand"/>.
+/// </summary>
+/// <param name="Records">The page, oldest first.</param>
+/// <param name="NextSequence">The cursor to pass next. Unchanged when nothing new arrived.</param>
+/// <param name="Dropped">
+/// Whether the reader's cursor was older than anything still held, so records
+/// were missed. A different fact from an empty page, and worth showing: a
+/// client that silently treats the two alike will one day report a quiet
+/// service that was in fact logging faster than anyone was reading.
+/// </param>
+public sealed record LogRecordsResult(
+    IReadOnlyList<LogRecordDescriptor> Records,
+    long NextSequence,
+    bool Dropped) : ServiceResult;

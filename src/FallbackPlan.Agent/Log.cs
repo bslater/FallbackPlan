@@ -86,6 +86,11 @@ internal static partial class Log
     internal static partial void Replicated(ILogger logger, long committed, string fingerprint);
 
     [LoggerMessage(
+        EventId = 3724, Level = LogLevel.Information,
+        Message = "Log level for {Category} changed to {Level} for the life of this service")]
+    internal static partial void LogLevelChanged(ILogger logger, string category, string level);
+
+    [LoggerMessage(
         EventId = 3730, Level = LogLevel.Information,
         Message = "Service listening on the local binding")]
     internal static partial void LocalBindingUp(ILogger logger);

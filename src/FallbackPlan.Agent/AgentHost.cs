@@ -370,7 +370,7 @@ public static class AgentHost
                     {
                         ArchivesRoot = archivesRoot!,
                         StateDirectory = stateDirectory,
-                        LoggerFactory = logging.Factory,
+                        Logging = logging,
                     },
                     verbPassphrase, cancellationToken).ConfigureAwait(false);
 
@@ -436,7 +436,7 @@ public static class AgentHost
                     {
                         ArchivesRoot = archivesRoot!,
                         StateDirectory = stateDirectory,
-                        LoggerFactory = logging.Factory,
+                        Logging = logging,
                     },
                     passphrase: null, cancellationToken).ConfigureAwait(false);
 
@@ -708,7 +708,7 @@ public static class AgentHost
             ArchivesRoot = archivesRoot!,
             StateDirectory = stateDirectory,
             PollSeconds = pollSeconds,
-            LoggerFactory = logging.Factory,
+            Logging = logging,
         };
 
         try

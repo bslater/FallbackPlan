@@ -65,8 +65,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// and ready plus this device's public identity for the kit to record,
     /// and validate_set_draft answers a draft's roots and destinations with
     /// a failure-domain warning (FR-SNP-007).
+    /// 1.15 opened the diagnostics the engine had been writing to nobody
+    /// (ADR-0043 §6, FR-SVC-010): get_diagnostics reports the levels in
+    /// force and whether a durable sink exists — never where it is (T-16);
+    /// read_log serves the in-memory ring by cursor, paginated because
+    /// FrameCodec caps a frame at 8 MiB and "send me everything" is not a
+    /// thing a log reader may ask; and set_log_level changes a level
+    /// without a restart, which matters because the level a machine needs
+    /// is only known once it has already misbehaved. Records cross
+    /// rendered rather than as their name/value state, because rendering
+    /// is where redaction happens: a local caller is served in full, a
+    /// paired remote console redacted, and set_log_level is refused to a
+    /// remote caller outright. describe_service carries the effective
+    /// level so a console can show it without a second round trip.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 14);
+    public static ContractVersion Current { get; } = new(1, 15);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

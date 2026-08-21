@@ -37,6 +37,9 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
 [JsonDerivedType(typeof(ConfirmRecoveryKitCommand), "confirm_recovery_kit")]
+[JsonDerivedType(typeof(GetDiagnosticsCommand), "get_diagnostics")]
+[JsonDerivedType(typeof(SetLogLevelCommand), "set_log_level")]
+[JsonDerivedType(typeof(ReadLogCommand), "read_log")]
 [JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
@@ -393,6 +396,83 @@ public sealed record ProvisionInstallationCommand(string Envelope) : ServiceComm
 /// The kit's SHA-256, lowercase hex — the last 32 bytes of its framed form.
 /// </param>
 public sealed record ConfirmRecoveryKitCommand(string KitChecksum) : ServiceCommand;
+
+/// <summary>
+/// Asks what this service is logging and where it is putting it (ADR-0043 §6,
+/// FR-SVC-010).
+/// </summary>
+/// <remarks>
+/// The answer says whether a durable sink exists and <b>never where it is</b>.
+/// A client that learned the log's path would have learned a filesystem path
+/// from a service that exposes no filesystem access to clients (threat T-16),
+/// and a remote console would have learned one on a machine it cannot see.
+/// Whoever may read the file already knows the state directory.
+/// </remarks>
+public sealed record GetDiagnosticsCommand : ServiceCommand;
+
+/// <summary>
+/// Changes a level while the service runs (ADR-0043 §6).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The reason this is a verb rather than a configuration edit and a restart:
+/// the level a machine needs is only ever known once it has already
+/// misbehaved, and asking somebody to restart the service to find out why it
+/// failed is asking them to destroy the evidence first.
+/// </para>
+/// <para>
+/// The change is <b>in force, not persisted</b>. It lasts until the service
+/// stops, at which point <c>config.json</c>'s level applies again — so an
+/// afternoon of tracing cannot become a machine that has been logging at trace
+/// for eight months because nobody remembered to put it back.
+/// </para>
+/// <para>
+/// <b>Local callers only.</b> Turning the logging up is how an operator makes
+/// this machine write more about itself to its own disk; a paired remote
+/// console may read the log but not decide what goes into it (ADR-0028 §6).
+/// </para>
+/// </remarks>
+/// <param name="Category">
+/// The category prefix to set, matched by longest declared prefix — so
+/// <c>FallbackPlan.Repository</c> covers its children. Null sets the default
+/// level that applies where no prefix matches.
+/// </param>
+/// <param name="Level">
+/// The level by name: trace, debug, information, warning, error, critical or
+/// none. A name nobody recognises is refused naming the ones that exist.
+/// </param>
+public sealed record SetLogLevelCommand(string? Category, string Level) : ServiceCommand;
+
+/// <summary>
+/// Reads a page of the service's in-memory log ring (ADR-0043 §6).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Paginated, and not as a courtesy: <c>FrameCodec</c> caps a frame at 8 MiB,
+/// so "send me everything" is not a request this contract can answer. A client
+/// walks the ring with the cursor the previous page returned.
+/// </para>
+/// <para>
+/// The ring is bounded and drops its oldest records, so a reader that falls far
+/// enough behind will find its cursor older than anything still held. That is
+/// reported rather than papered over — <c>LogRecordsResult.Dropped</c> says
+/// records were missed, which is a different fact from "nothing happened".
+/// </para>
+/// </remarks>
+/// <param name="SinceSequence">
+/// The cursor: records after this sequence. Zero starts at the oldest record
+/// still held.
+/// </param>
+/// <param name="MaxRecords">
+/// The most records to return in this page. Clamped to a ceiling the frame can
+/// carry rather than refused, because a client asking for too many is asking
+/// for a page, not committing an error.
+/// </param>
+/// <param name="MinimumLevel">
+/// Records below this level are skipped. Null means everything the ring holds.
+/// </param>
+public sealed record ReadLogCommand(long SinceSequence, int MaxRecords, string? MinimumLevel = null)
+    : ServiceCommand;
 
 /// <summary>
 /// Closes a restore source. Idempotent — closing an unknown or already-closed
