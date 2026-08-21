@@ -38,7 +38,7 @@ public sealed class RecoveryKitConformanceTests
         Assert.AreEqual(fields.GetProperty("minimum_tool_version").GetString(), kit.MinimumToolVersion);
         SequenceAssert.AreEqual(
             fields.GetProperty("repository_id").GetString(),
-            Convert.ToHexString(kit.RepositoryId.ToArray()).ToLowerInvariant());
+            Convert.ToHexString(kit.RepositoryId!.Value.ToArray()).ToLowerInvariant());
         Assert.AreEqual(fields.GetProperty("issued_at").GetUInt64(), kit.IssuedAt);
         Assert.AreEqual(fields.GetProperty("destination_count").GetInt32(), kit.Destinations.Count);
         Assert.AreEqual(fields.GetProperty("kdf").GetProperty("memory_kib").GetUInt32(), kit.KdfMemoryKiB);
@@ -189,7 +189,7 @@ public sealed class RecoveryKitConformanceTests
             using var keys = RepositoryKeySet.FromMasterKey(bundle.MasterKey);
             var store = new LocalFileSystemObjectStore(FixtureStorePath(FixtureKitDirectory()));
 
-            using var reader = new RepositoryReader(kit.RepositoryId, keys, store);
+            using var reader = new RepositoryReader(kit.RepositoryId!.Value, keys, store);
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var manifestEntry = reader.AllRecords.Single(

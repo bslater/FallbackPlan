@@ -68,6 +68,15 @@ public sealed class RecoverySession : IDisposable
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNull(store);
 
+        if (kit.IsInstallationKit)
+        {
+            // An installation kit names no repository, and the repository id
+            // is AAD for every record and every sealed blob — so it has to
+            // come from the archive's own descriptor, which this synchronous
+            // overload cannot read. OpenAsync is that path.
+            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_InstallationKitNeedsTheArchive);
+        }
+
         var parameters = new Argon2Parameters
         {
             MemoryKiB = kit.KdfMemoryKiB,
@@ -94,7 +103,7 @@ public sealed class RecoverySession : IDisposable
             try
             {
                 return new RecoverySession(
-                    store, kit.RepositoryId, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+                    store, kit.RepositoryId!.Value, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
             }
             catch
             {
@@ -114,7 +123,7 @@ public sealed class RecoverySession : IDisposable
         try
         {
             using var bundle = KeyBundleCodec.Decode(bundleCbor);
-            return new RecoverySession(store, kit.RepositoryId, new KeyHierarchy(bundle.MasterKey));
+            return new RecoverySession(store, kit.RepositoryId!.Value, new KeyHierarchy(bundle.MasterKey));
         }
         finally
         {

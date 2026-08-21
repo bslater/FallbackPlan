@@ -55,7 +55,7 @@ Such a kit is purely *where the repository is and how to re-derive*: the KDF par
 
 A **v2 kit describes an installation, not a repository** ([ADR-0044](../../docs/adr/0044-first-run-setup.md)). It exists because a write-only installation's keys do not come from any repository: `root = Argon2id(passphrase, salt, params)` and every key is an HKDF domain of that root ([03 §9](../repository-format/03-keys.md#9-write-only-repositories-format-v2)), with no repository identifier anywhere in the derivation. Everything a person needs to reconstruct their keys is therefore known the moment the passphrase is chosen — before any archive, set or destination exists — and that is when the kit is generated (FR-KIT-004).
 
-Its body is a **six-key** deterministic-CBOR map:
+Its body is an **eight-key** deterministic-CBOR map:
 
 | Key | Type | Value |
 |-----|------|-------|

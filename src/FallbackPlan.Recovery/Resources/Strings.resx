@@ -70,4 +70,7 @@
   <data name="RecoverySession_PassphraseDoesNotReproduce" xml:space="preserve">
     <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.</value>
   </data>
+  <data name="RecoverySession_InstallationKitNeedsTheArchive" xml:space="preserve">
+    <value>An installation kit does not name a repository; the archive supplies its own identity, so open it with the asynchronous overload that reads the descriptor.</value>
+  </data>
 </root>

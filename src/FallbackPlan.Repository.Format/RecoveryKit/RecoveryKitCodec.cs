@@ -84,7 +84,7 @@ public static class RecoveryKitCodec
         }
 
         var framedVersion = BinaryPrimitives.ReadUInt16BigEndian(span[8..]);
-        if (framedVersion != 1)
+        if (framedVersion is not (1 or RecoveryKit.InstallationKitVersion))
         {
             throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_KitFormatVersionNotSupported(framedVersion));
         }
@@ -126,10 +126,36 @@ public static class RecoveryKitCodec
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KdfSaltIssuingDeviceId);
         }
 
-        // A v2 kit carries the sealing public key and NO key object — every
-        // real key re-derives from the passphrase (ADR-0042 §8); a v1 kit
-        // carries the verbatim key object and no public key. Anything else
-        // is a contradiction refused before it is stored or trusted.
+        // An installation kit (§2.2) names no repository, carries no key
+        // object and lists no destination. Each absence is checked rather
+        // than assumed: a v2 kit that claims a repository id is either a
+        // forgery or a v1 kit with its version stamped over, and both should
+        // fail here rather than open one archive and silently fail the rest.
+        if (kit.IsInstallationKit)
+        {
+            if (kit.RepositoryId is not null || !kit.KeyObject.IsEmpty || kit.Destinations.Count > 0)
+            {
+                throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_InstallationKitShape);
+            }
+
+            if (kit.SealingPublicKey.Length != 32 || kit.RepositoryFormatVersion < 2)
+            {
+                throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_InstallationKitShape);
+            }
+
+            return;
+        }
+
+        if (kit.RepositoryId is null)
+        {
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_RepositoryKitOmitsRepositoryId);
+        }
+
+        // A write-only v1 kit carries the sealing public key and NO key
+        // object — every real key re-derives from the passphrase
+        // (ADR-0042 §8); an ordinary v1 kit carries the verbatim key object
+        // and no public key. Anything else is a contradiction refused before
+        // it is stored or trusted.
         if (kit.RepositoryFormatVersion >= 2)
         {
             if (!kit.KeyObject.IsEmpty || kit.SealingPublicKey.Length != 32)
@@ -146,17 +172,30 @@ public static class RecoveryKitCodec
     private static byte[] EncodeBody(RecoveryKit kit)
     {
         var writer = new CanonicalCborWriter();
-        writer.WriteStartMap(kit.SealingPublicKey.IsEmpty ? 10 : 11);
+
+        // The key numbering keeps its holes on an installation kit — 3, 5
+        // and 7 are skipped rather than the rest renumbered — so a reader
+        // that confuses the two versions fails on a missing mandatory key
+        // instead of reading one field as another (§2.2).
+        writer.WriteStartMap(kit.IsInstallationKit ? 8 : kit.SealingPublicKey.IsEmpty ? 10 : 11);
         writer.WriteKey(1);
         writer.WriteUnsignedInteger(kit.KitFormatVersion);
         writer.WriteKey(2);
         writer.WriteTextString(kit.MinimumToolVersion);
-        writer.WriteKey(3);
-        writer.WriteByteString(kit.RepositoryId.ToArray());
+        if (!kit.IsInstallationKit)
+        {
+            writer.WriteKey(3);
+            writer.WriteByteString(kit.RepositoryId!.Value.ToArray());
+        }
+
         writer.WriteKey(4);
         writer.WriteUnsignedInteger(kit.RepositoryFormatVersion);
-        writer.WriteKey(5);
-        writer.WriteByteString(kit.KeyObject.Span);
+        if (!kit.IsInstallationKit)
+        {
+            writer.WriteKey(5);
+            writer.WriteByteString(kit.KeyObject.Span);
+        }
+
         writer.WriteKey(6);
         writer.WriteStartMap(4);
         writer.WriteKey(1);
@@ -168,23 +207,11 @@ public static class RecoveryKitCodec
         writer.WriteKey(4);
         writer.WriteByteString(kit.KdfSalt.Span);
         writer.WriteEndMap();
-        writer.WriteKey(7);
-        writer.WriteStartArray(kit.Destinations.Count);
-        foreach (var destination in kit.Destinations)
+        if (!kit.IsInstallationKit)
         {
-            writer.WriteStartMap(4);
-            writer.WriteKey(1);
-            writer.WriteTextString(destination.Kind);
-            writer.WriteKey(2);
-            writer.WriteTextString(destination.Endpoint);
-            writer.WriteKey(3);
-            writer.WriteTextString(destination.Container);
-            writer.WriteKey(4);
-            writer.WriteTextString(destination.Prefix);
-            writer.WriteEndMap();
+            WriteDestinations(writer, kit.Destinations);
         }
 
-        writer.WriteEndArray();
         writer.WriteKey(8);
         writer.WriteByteString(kit.IssuingDeviceId.Span);
         writer.WriteKey(9);
@@ -201,11 +228,36 @@ public static class RecoveryKitCodec
         return writer.Encode();
     }
 
+    private static void WriteDestinations(CanonicalCborWriter writer, IReadOnlyList<KitDestination> destinations)
+    {
+        writer.WriteKey(7);
+        writer.WriteStartArray(destinations.Count);
+        foreach (var destination in destinations)
+        {
+            writer.WriteStartMap(4);
+            writer.WriteKey(1);
+            writer.WriteTextString(destination.Kind);
+            writer.WriteKey(2);
+            writer.WriteTextString(destination.Endpoint);
+            writer.WriteKey(3);
+            writer.WriteTextString(destination.Container);
+            writer.WriteKey(4);
+            writer.WriteTextString(destination.Prefix);
+            writer.WriteEndMap();
+        }
+
+        writer.WriteEndArray();
+    }
+
     private static RecoveryKit DecodeBody(ReadOnlyMemory<byte> body)
     {
         var reader = new CanonicalCborReader(body);
         var count = reader.ReadStartMap();
-        if (count is not (10 or 11))
+
+        // Eight keys is an installation kit, ten or eleven a repository kit
+        // (§2.2). The count decides which mandatory set applies, and the
+        // version stamped in key 1 is cross-checked against it below.
+        if (count is not (8 or 10 or 11))
         {
             throw new RecoveryKitFormatException(Strings.FormatRecoveryKitCodec_VKitBodyCarriesExactly(count));
         }
@@ -326,14 +378,34 @@ public static class RecoveryKitCodec
         reader.ReadEndMap();
         reader.AssertEndOfDocument();
 
-        if (version is null || minimumTool is null || repositoryId is null || formatVersion is null
-            || keyObject is null || memory is null || iterations is null || parallelism is null || salt is null
-            || deviceId is null || issuedAt is null || instructions is null)
+        var installation = count == 8;
+
+        if (version is null || minimumTool is null || formatVersion is null || memory is null
+            || iterations is null || parallelism is null || salt is null || deviceId is null
+            || issuedAt is null || instructions is null)
         {
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitBodyOmitsMandatoryKey);
         }
 
-        if (repositoryId.Length != 16 || salt.Length != 16 || deviceId.Length != 16)
+        if (installation)
+        {
+            // Checked here as well as in Validate, because a parser must
+            // refuse a hostile body before anything downstream trusts its
+            // shape — and the absences are the whole of what makes an
+            // installation kit one (§2.2).
+            if (version.Value != RecoveryKit.InstallationKitVersion
+                || repositoryId is not null || keyObject is not null
+                || destinations.Count > 0 || sealingPublicKey is null)
+            {
+                throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_InstallationKitShape);
+            }
+        }
+        else if (repositoryId is null || keyObject is null)
+        {
+            throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KitBodyOmitsMandatoryKey);
+        }
+
+        if (salt.Length != 16 || deviceId.Length != 16 || (repositoryId is not null && repositoryId.Length != 16))
         {
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_RepositoryIdKdfSaltIssuing);
         }
@@ -342,9 +414,9 @@ public static class RecoveryKitCodec
         {
             KitFormatVersion = version.Value,
             MinimumToolVersion = minimumTool,
-            RepositoryId = RepositoryId.FromBytes(repositoryId),
+            RepositoryId = repositoryId is null ? null : RepositoryId.FromBytes(repositoryId),
             RepositoryFormatVersion = formatVersion.Value,
-            KeyObject = keyObject,
+            KeyObject = keyObject ?? ReadOnlyMemory<byte>.Empty,
             KdfMemoryKiB = memory.Value,
             KdfIterations = iterations.Value,
             KdfParallelism = parallelism.Value,

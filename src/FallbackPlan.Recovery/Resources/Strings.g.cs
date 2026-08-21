@@ -70,4 +70,9 @@ internal static class Strings
     /// The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.
     /// </summary>
     internal static string RecoverySession_PassphraseDoesNotReproduce => Get(nameof(RecoverySession_PassphraseDoesNotReproduce));
+
+    /// <summary>
+    /// An installation kit does not name a repository; the archive supplies its own identity, so open it with the asynchronous overload that reads the descriptor.
+    /// </summary>
+    internal static string RecoverySession_InstallationKitNeedsTheArchive => Get(nameof(RecoverySession_InstallationKitNeedsTheArchive));
 }
