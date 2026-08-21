@@ -152,6 +152,7 @@ public static class WebConsoleHost
         app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
         app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
         app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
+        app.MapPost("/api/recovery-kit", (HttpContext context) => RecoveryKitAsync(context, clients, auth));
         app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -499,9 +500,26 @@ public static class WebConsoleHost
     /// <param name="Detail">Why, when not provisioned.</param>
     /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
     /// <param name="Findings">What was wrong with the passphrase, on a weak outcome.</param>
+    /// <param name="Kit">The recovery kit, when provisioned — see <see cref="SetupKit"/>.</param>
     private sealed record SetupResponse(
         string Outcome, string? Detail = null,
-        IReadOnlyList<string>? Lines = null, IReadOnlyList<string>? Findings = null);
+        IReadOnlyList<string>? Lines = null, IReadOnlyList<string>? Findings = null,
+        SetupKit? Kit = null);
+
+    /// <summary>
+    /// The recovery kit, handed to the page rather than kept here.
+    /// </summary>
+    /// <remarks>
+    /// Returned inline so this host holds no kit between two requests. The
+    /// page turns these into downloads; nothing about the kit is secret
+    /// (FR-KIT-002), and a console that stored one would be a console
+    /// keeping a copy of the thing the operator is being asked to take
+    /// somewhere else.
+    /// </remarks>
+    /// <param name="Machine">The framed binary form, base64.</param>
+    /// <param name="Text">The printable transcribable form.</param>
+    /// <param name="Checksum">The kit's SHA-256, lowercase hex.</param>
+    private sealed record SetupKit(string Machine, string Text, string Checksum);
 
     /// <summary>
     /// First-run setup (ADR-0044): the third endpoint permitted a secret, and
@@ -596,8 +614,11 @@ public static class WebConsoleHost
                 return;
             }
 
-            var minted = ConsoleRestoreGate.BuildInstallationEnvelope(
-                request.Passphrase, description.RestoreGrantRecipient);
+            // One Argon2id pass produces both the sealed envelope and the
+            // recovery kit — they come from the same derivation, so deriving
+            // twice would be paying that cost to learn nothing.
+            var minted = ConsoleRestoreGate.BuildInstallationSetup(
+                request.Passphrase, description.RestoreGrantRecipient, description.DeviceId ?? string.Empty);
             if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
             {
                 await AnswerAsync(new SetupResponse("unavailable", minted.Detail)).ConfigureAwait(false);
@@ -609,9 +630,119 @@ public static class WebConsoleHost
 
             await AnswerAsync(result switch
             {
-                ConfigurationChangeResult change => new SetupResponse("provisioned", Lines: change.Lines),
+                ConfigurationChangeResult change => new SetupResponse(
+                    "provisioned",
+                    Lines: change.Lines,
+                    Kit: new SetupKit(
+                        Convert.ToBase64String(minted.Kit!.Framed), minted.Kit.Text, minted.Kit.Checksum)),
                 ServiceError refusal => new SetupResponse("refused", refusal.Message),
                 _ => new SetupResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What the recovery-kit endpoint reads from the page.</summary>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere.</param>
+    private sealed record KitRequest(string? Passphrase);
+
+    /// <summary>The recovery-kit endpoint's answer.</summary>
+    /// <param name="Outcome"><c>built</c>, <c>wrong</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why not, when it was not built.</param>
+    /// <param name="Kit">The kit in both forms.</param>
+    private sealed record KitResponse(string Outcome, string? Detail = null, SetupKit? Kit = null);
+
+    /// <summary>
+    /// Rebuilds this installation's recovery kit for a ceremony that was
+    /// interrupted before the kit was confirmed saved (FR-KIT-004).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the one place the ceremony asks for the passphrase a second
+    /// time, and only because the first attempt did not finish. Nothing is
+    /// stored between the two visits: the service keeps no kit, and this
+    /// host keeps no passphrase — so the only way back to a kit is the way
+    /// it was made.
+    /// </para>
+    /// <para>
+    /// The salt comes from the archive the installation already wrote, via
+    /// the same derive-and-compare the restore gate uses, so a wrong
+    /// passphrase produces no kit rather than a kit that opens nothing. An
+    /// installation with no archive yet has no salt to recover from — its
+    /// operator has to finish the original ceremony, and the endpoint says
+    /// so rather than minting a second root.
+    /// </para>
+    /// </remarks>
+    private static async Task RecoveryKitAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        KitRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<KitRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a passphrase is required")).ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(KitResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult description)
+            {
+                await AnswerAsync(new KitResponse("unavailable", "The service did not describe itself."))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var sets = await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted)
+                .ConfigureAwait(false) as BackupSetsResult;
+
+            var rebuilt = await ConsoleRestoreGate.RebuildInstallationKitAsync(
+                description.ArchivesRoot, sets?.Sets.Select(set => set.Id) ?? [],
+                request.Passphrase, description.DeviceId ?? string.Empty, context.RequestAborted)
+                .ConfigureAwait(false);
+
+            await AnswerAsync(rebuilt.Outcome switch
+            {
+                ConsoleRestoreGate.GateOutcome.Verified => new KitResponse(
+                    "built",
+                    Kit: new SetupKit(
+                        Convert.ToBase64String(rebuilt.Kit!.Framed), rebuilt.Kit.Text, rebuilt.Kit.Checksum)),
+                ConsoleRestoreGate.GateOutcome.Wrong => new KitResponse("wrong", rebuilt.Detail),
+                _ => new KitResponse("unavailable", rebuilt.Detail),
             }).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)

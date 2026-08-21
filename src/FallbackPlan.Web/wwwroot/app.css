@@ -633,3 +633,4 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 .meter.meter-too_short > i, .meter.meter-weak > i { background: var(--bad); }
 .meter.meter-fair > i { background: var(--warn); }
 .meter.meter-strong > i { background: var(--ok); }
+.setup-kit-actions { justify-content: flex-start; gap: 8px; margin: 14px 0 4px; }
