@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Application;
@@ -413,5 +414,76 @@ public sealed class InstallationCredentialStore(string stateDirectory)
         {
             CryptographicOperations.ZeroMemory(bytes);
         }
+    }
+}
+
+/// <summary>
+/// Whether the operator has said they saved this installation's recovery
+/// kit — the last thing first-run setup waits for (FR-KIT-004, ADR-0044).
+/// </summary>
+/// <remarks>
+/// <para>
+/// It records the kit's <b>checksum</b>, never the kit. A kit stored on the
+/// machine being backed up is not a recovery kit; a service that could hand
+/// one out would have made itself a second factor, and this file exists
+/// precisely so it does not have to.
+/// </para>
+/// <para>
+/// It is durable because the alternative is a modal nobody can be made to
+/// read. A closed tab between provisioning and confirming leaves the
+/// installation in <c>kit_required</c>, and the ceremony resumes there.
+/// </para>
+/// </remarks>
+public sealed class RecoveryKitConfirmation(string stateDirectory)
+{
+    private string Path_ => Path.Combine(stateDirectory, "recovery-kit.confirmed");
+
+    /// <summary>Whether a kit has been confirmed saved.</summary>
+    public bool Holds => File.Exists(Path_);
+
+    /// <summary>The confirmed kit's checksum, or null when none has been confirmed.</summary>
+    public string? Checksum
+    {
+        get
+        {
+            var path = Path_;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            // First line is the checksum; the rest is for whoever opens the
+            // file wondering what it is.
+            var text = File.ReadAllText(path).AsSpan();
+            var newline = text.IndexOfAny('\r', '\n');
+            return (newline < 0 ? text : text[..newline]).Trim().ToString();
+        }
+    }
+
+    /// <summary>Records a confirmation, replacing any earlier one.</summary>
+    /// <param name="kitChecksum">The kit's SHA-256, lowercase hex.</param>
+    /// <param name="confirmedAtUnixMilliseconds">When the operator confirmed.</param>
+    public void Save(string kitChecksum, ulong confirmedAtUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(kitChecksum);
+
+        Directory.CreateDirectory(stateDirectory);
+        var path = Path_;
+        var temporary = path + ".tmp";
+
+        File.WriteAllText(
+            temporary,
+            kitChecksum + Environment.NewLine
+                + "# The SHA-256 of the recovery kit this installation's operator confirmed saving."
+                + Environment.NewLine
+                + "# Confirmed at " + confirmedAtUnixMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + " (Unix ms). The kit itself is deliberately NOT here." + Environment.NewLine);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        File.Move(temporary, path, overwrite: true);
     }
 }

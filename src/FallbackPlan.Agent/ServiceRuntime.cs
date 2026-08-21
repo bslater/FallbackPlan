@@ -78,6 +78,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
+        KitConfirmation = new RecoveryKitConfirmation(options.StateDirectory);
     }
 
     /// <summary>How this service was started.</summary>
@@ -127,6 +128,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
     internal InstallationCredentialStore InstallationCredential { get; }
 
     /// <summary>
+    /// Whether the operator confirmed saving this installation's recovery
+    /// kit (FR-KIT-004).
+    /// </summary>
+    internal RecoveryKitConfirmation KitConfirmation { get; }
+
+    /// <summary>
     /// Whether this installation has a passphrase behind it — the state
     /// <c>describe_service</c> reports so a client knows to run setup
     /// (FR-SVC-011).
@@ -169,6 +176,31 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>
+    /// How far first-run setup has got: <c>setup_required</c>,
+    /// <c>kit_required</c>, or <c>ready</c> (FR-SVC-011, FR-KIT-004).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three states rather than two, because "has a passphrase" and "is
+    /// finished" stopped being the same thing once the ceremony had to end
+    /// with a saved kit. The middle state is what makes the confirmation
+    /// real: a closed tab between provisioning and confirming resumes at the
+    /// kit step instead of leaving an installation that looks finished and
+    /// has no kit.
+    /// </para>
+    /// <para>
+    /// An installation provisioned the older per-set way is <c>ready</c>
+    /// whatever the kit says. It predates this ceremony, it works, and
+    /// demanding a kit for an installation credential it does not have would
+    /// be offering a step that cannot complete.
+    /// </para>
+    /// </remarks>
+    public string SetupState =>
+        !InstallationCredential.Holds
+            ? IsSetUp ? "ready" : "setup_required"
+            : KitConfirmation.Holds ? "ready" : "kit_required";
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");

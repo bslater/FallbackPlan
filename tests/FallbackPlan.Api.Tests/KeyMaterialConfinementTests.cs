@@ -83,12 +83,23 @@ public sealed class KeyMaterialConfinementTests
     [TestMethod]
     public void ContractSurface_CommandVocabulary_OffersNoKeyExport()
     {
+        // Named exceptions, not a softer pattern. ConfirmRecoveryKitCommand
+        // carries a SHA-256 of a kit the CLIENT built and the operator
+        // saved; it produces nothing, opens nothing, and the service never
+        // holds the kit it names (ADR-0044's amendment, FR-KIT-004). The
+        // rule this test protects is that a kit is never *produced* by a
+        // command — which remains true, and stays checkable, only because
+        // the exception is written down here rather than dissolved into the
+        // match.
+        var recording = new[] { nameof(ConfirmRecoveryKitCommand) };
+
         var exporting = ContractTypes()
             .Where(type => typeof(ServiceCommand).IsAssignableFrom(type))
             .Where(type => type.Name.Contains("Kit", StringComparison.Ordinal)
                 || type.Name.Contains("Key", StringComparison.Ordinal)
                 || type.Name.Contains("Unlock", StringComparison.Ordinal))
             .Select(type => type.Name)
+            .Except(recording, StringComparer.Ordinal)
             .ToList();
 
         Assert.IsTrue(

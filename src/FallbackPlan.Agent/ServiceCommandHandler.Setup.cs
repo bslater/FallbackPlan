@@ -108,4 +108,46 @@ public sealed partial class ServiceCommandHandler
             "It can never be changed, and if it is lost the backup is unrecoverable. Keep it somewhere safe.",
         ]);
     }
+
+    private ServiceResult ConfirmRecoveryKit(ConfirmRecoveryKitCommand command)
+    {
+        if (Scope == CallerScope.Remote)
+        {
+            // The person confirming has to be the person holding the kit,
+            // and a remote operator cannot be (ADR-0044 §5).
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "Confirming the recovery kit runs on the service's own machine, where the kit was written.");
+        }
+
+        if (!runtime.InstallationCredential.Holds)
+        {
+            // Out of order rather than wrong: there is no installation to
+            // have a kit for yet.
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "This installation has no passphrase yet, so it has no recovery kit to confirm — run setup "
+                + "first (ADR-0044).");
+        }
+
+        var checksum = command.KitChecksum?.Trim() ?? string.Empty;
+        if (checksum.Length != 64 || !checksum.All(Uri.IsHexDigit))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "A kit checksum is the 64 hex characters of its SHA-256.");
+        }
+
+        runtime.KitConfirmation.Save(
+            checksum.ToLowerInvariant(), (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        return new ConfigurationChangeResult(
+        [
+            "Recovery kit saved. This installation is now fully set up.",
+            "The kit and your passphrase are two separate things and both are needed. Keep them apart: a kit "
+                + "beside the passphrase it protects is one thing to lose, not two.",
+            "The kit holds no passphrase and no keys — it is safe to print, and useless to anyone without "
+                + "your passphrase.",
+        ]);
+    }
 }

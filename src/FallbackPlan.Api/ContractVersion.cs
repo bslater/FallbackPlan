@@ -59,8 +59,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// state on describe_service, so a client learns it must capture the
     /// passphrase before anything else. Local callers only; a paired remote
     /// console is refused.
+    /// 1.14 finished that ceremony (ADR-0044's amendment, ADR-0013's):
+    /// confirm_recovery_kit records that the installation's kit was saved,
+    /// describe_service gains a kit_required state between setup_required
+    /// and ready plus this device's public identity for the kit to record,
+    /// and validate_set_draft answers a draft's roots and destinations with
+    /// a failure-domain warning (FR-SNP-007).
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 13);
+    public static ContractVersion Current { get; } = new(1, 14);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

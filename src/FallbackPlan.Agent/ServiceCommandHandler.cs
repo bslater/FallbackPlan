@@ -352,6 +352,7 @@ public sealed partial class ServiceCommandHandler(
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
+        ConfirmRecoveryKitCommand confirm => ConfirmRecoveryKit(confirm),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -2011,7 +2012,8 @@ public sealed partial class ServiceCommandHandler(
             runtime.Queue.ActiveCount,
             runtime.Options.ArchivesRoot,
             runtime.GrantRecipient.PublicKeyHex,
-            runtime.IsSetUp ? "ready" : "setup_required");
+            runtime.SetupState,
+            Convert.ToHexStringLower(runtime.State.DeviceId));
 }
 
 /// <summary>

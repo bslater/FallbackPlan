@@ -574,12 +574,18 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// restore-grant envelopes to — public by construction, never sensitive.
 /// </param>
 /// <param name="SetupState">
-/// Whether this installation has been set up — <c>"ready"</c> or
-/// <c>"setup_required"</c> (ADR-0044 §7, FR-SVC-011). A client meeting
-/// <c>setup_required</c> shows the passphrase ceremony in place of its normal
-/// views, because nothing behind that gate can work yet. Null from a service
-/// older than contract 1.13, which a client reads as "cannot tell" and so as
-/// no reason to interrupt anybody.
+/// How far first-run setup has got — <c>"setup_required"</c>,
+/// <c>"kit_required"</c> or <c>"ready"</c> (ADR-0044 §7 as amended,
+/// FR-SVC-011, FR-KIT-004). A client meeting either unfinished state shows
+/// the ceremony in place of its normal views and resumes at the step named,
+/// so a closed tab between provisioning and confirming does not strand the
+/// installation. Null from a service older than contract 1.13, which a
+/// client reads as "cannot tell" and so as no reason to interrupt anybody.
+/// </param>
+/// <param name="DeviceId">
+/// This device's public identity, lowercase hex — what a kit records as its
+/// issuer (FR-KIT-001). Public by construction; the device's private key
+/// never leaves the service (ADR-0010).
 /// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
@@ -590,4 +596,5 @@ public sealed record ServiceDescriptionResult(
     int ActiveJobs,
     string? ArchivesRoot = null,
     string? RestoreGrantRecipient = null,
-    string? SetupState = null) : ServiceResult;
+    string? SetupState = null,
+    string? DeviceId = null) : ServiceResult;

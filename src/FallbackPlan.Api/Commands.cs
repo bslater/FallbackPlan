@@ -36,6 +36,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
+[JsonDerivedType(typeof(ConfirmRecoveryKitCommand), "confirm_recovery_kit")]
 [JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
@@ -360,6 +361,29 @@ public sealed record ProvisionWriteOnlySetCommand(string SetName, string Envelop
 /// permitted shape, NFR-SEC-011).
 /// </param>
 public sealed record ProvisionInstallationCommand(string Envelope) : ServiceCommand;
+
+/// <summary>
+/// Records that the operator has saved the installation's recovery kit,
+/// which is the last thing first-run setup waits for (FR-KIT-004,
+/// ADR-0044's 2026-08 amendment).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The <b>checksum, not the kit</b>. The service never holds a copy: a kit
+/// stored on the machine being backed up is not a recovery kit, and a
+/// service able to hand one out would have made itself a second factor.
+/// What it keeps is enough to say <em>which</em> kit was saved, so a later
+/// one can be told apart from the one in the drawer.
+/// </para>
+/// <para>
+/// Local callers only, for the same reason setup is: the person confirming
+/// has to be the person holding the kit.
+/// </para>
+/// </remarks>
+/// <param name="KitChecksum">
+/// The kit's SHA-256, lowercase hex — the last 32 bytes of its framed form.
+/// </param>
+public sealed record ConfirmRecoveryKitCommand(string KitChecksum) : ServiceCommand;
 
 /// <summary>
 /// Closes a restore source. Idempotent — closing an unknown or already-closed
