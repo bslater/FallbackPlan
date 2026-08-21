@@ -77,6 +77,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         Queue = new JobScheduler(options.Log);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
+        InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
     }
 
     /// <summary>How this service was started.</summary>
@@ -118,6 +119,27 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
     internal WriteCredentialStore WriteCredentials { get; }
+
+    /// <summary>
+    /// What first-run setup provisioned, from which every set's staging
+    /// archive is created (ADR-0044 §2).
+    /// </summary>
+    internal InstallationCredentialStore InstallationCredential { get; }
+
+    /// <summary>
+    /// Whether this installation has a passphrase behind it — the state
+    /// <c>describe_service</c> reports so a client knows to run setup
+    /// (FR-SVC-011).
+    /// </summary>
+    /// <remarks>
+    /// A set provisioned the older per-set way counts. An installation that
+    /// predates ADR-0044 is already working, and telling it to set itself up
+    /// would offer a ceremony whose only possible outcome is a second,
+    /// unrelated derivation root.
+    /// </remarks>
+    public bool IsSetUp =>
+        InstallationCredential.Holds
+        || Configuration.BackupSets.Any(set => WriteCredentials.Holds(set.Id));
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
@@ -265,6 +287,75 @@ public sealed class ServiceRuntime : IAsyncDisposable
         return result;
     }
 
+    /// <summary>
+    /// Opens — or creates — a set's staging archive from the installation
+    /// credential first-run setup provisioned (ADR-0044 §2), or returns null
+    /// when this installation has none or this set is not its business.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Returning null rather than throwing is what keeps the ladder in
+    /// <see cref="ArchiveForAsync(string, bool, CancellationToken)"/> a ladder: two of the three ways out of
+    /// here are "not mine", and the arm below still has a passphrase to try.
+    /// </para>
+    /// <para>
+    /// A format 1 archive is one of those ways out. An installation set up
+    /// after such a set already existed keeps opening it with the passphrase;
+    /// nothing is migrated, because write-only is chosen at creation
+    /// (ADR-0042).
+    /// </para>
+    /// </remarks>
+    private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
+        string setId, LocalFileSystemObjectStore store, bool createIfMissing, CancellationToken cancellationToken)
+    {
+        using var provisioning = InstallationCredential.TryLoad();
+        if (provisioning is null)
+        {
+            return null;
+        }
+
+        if (!ArchiveExists(setId))
+        {
+            if (!createIfMissing)
+            {
+                return null;
+            }
+
+            // The first backup of a set on a set-up installation. This is
+            // what replaces the silent format-1 CreateAsync below: a set
+            // created after setup is write-only because the installation is,
+            // not because anybody remembered a dialog.
+            return await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+                    store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
+                    createdBy: Environment.MachineName,
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!RepositoryLifecycle.IsWriteOnly(descriptor))
+        {
+            return null;
+        }
+
+        if (!provisioning.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
+        {
+            // A write-only archive under a DIFFERENT root — a replica moved
+            // in from another installation, or a state directory restored
+            // over the top of one. Opening it with the wrong credential
+            // would write records this archive's passphrase can never read
+            // back, so it is refused by name and adoption is the remedy.
+            throw new RepositoryOpenException(
+                $"Set '{setId}' has a write-only staging archive derived from a different passphrase than "
+                + "this installation's — adopt the set with that passphrase (ADR-0042 §10).");
+        }
+
+        return await RepositoryLifecycle.OpenWriteOnlyAsync(store, provisioning.Credential, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private async ValueTask<ArchiveHandle> ArchiveForAsync(
         string setId, bool createIfMissing, CancellationToken cancellationToken)
     {
@@ -297,11 +388,17 @@ public sealed class ServiceRuntime : IAsyncDisposable
                             + "adopt it again with the passphrase (ADR-0042 §10).");
                 }
             }
+            else if (await OpenFromInstallationAsync(setId, store, createIfMissing, cancellationToken)
+                .ConfigureAwait(false) is { } fromInstallation)
+            {
+                repository = fromInstallation;
+            }
             else if (_passphrase is null)
             {
                 throw new RepositoryOpenException(
                     $"Set '{setId}' is not provisioned write-only and this service started without a "
-                    + "passphrase; start with one, or provision the set (ADR-0042).");
+                    + "passphrase; run first-run setup to give this installation one, start the service "
+                    + "with a passphrase, or provision the set (ADR-0044, ADR-0042).");
             }
             else if (ArchiveExists(setId))
             {

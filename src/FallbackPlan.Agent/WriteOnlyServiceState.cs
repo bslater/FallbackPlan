@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Application;
@@ -185,6 +186,208 @@ public sealed class WriteCredentialStore(string stateDirectory)
         if (File.Exists(path))
         {
             File.Delete(path);
+        }
+    }
+}
+
+/// <summary>
+/// What first-run setup left behind: the write credential the whole
+/// installation derives from, with the salt and KDF parameters that produced
+/// it (ADR-0044 §2). Owns the credential and disposes it.
+/// </summary>
+/// <remarks>
+/// The salt and parameters travel with the credential because every archive
+/// this installation creates stamps them into its own descriptor — they are
+/// what lets a restore, years later and possibly on another machine,
+/// reproduce this exact bundle from the passphrase alone.
+/// </remarks>
+public sealed class InstallationProvisioning : IDisposable
+{
+    /// <summary>The serialised length: magic, credential, salt, and three KDF fields.</summary>
+    public const int SerializedLength =
+        8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
+
+    private static readonly byte[] Magic = "FBPINST1"u8.ToArray();
+
+    private readonly byte[] _kdfSalt;
+
+    /// <summary>Takes ownership of <paramref name="credential"/>.</summary>
+    /// <param name="credential">The installation's write credential.</param>
+    /// <param name="kdfSalt">The 16-byte salt it was derived with.</param>
+    /// <param name="kdfParameters">The Argon2id parameters it was derived with.</param>
+    /// <exception cref="ArgumentException"><paramref name="kdfSalt"/> is not 16 bytes.</exception>
+    public InstallationProvisioning(
+        RepositoryWriteCredential credential,
+        ReadOnlySpan<byte> kdfSalt,
+        Domain.Configuration.Argon2Parameters kdfParameters)
+    {
+        ThrowHelper.ThrowIfNull(credential);
+        ThrowHelper.ThrowIfNull(kdfParameters);
+
+        if (kdfSalt.Length != KekDerivation.SaltLength)
+        {
+            throw new ArgumentException(
+                $"An installation KDF salt is exactly {KekDerivation.SaltLength} bytes; got {kdfSalt.Length}.",
+                nameof(kdfSalt));
+        }
+
+        Credential = credential;
+        _kdfSalt = kdfSalt.ToArray();
+        KdfParameters = kdfParameters;
+    }
+
+    /// <summary>The installation's write credential.</summary>
+    public RepositoryWriteCredential Credential { get; }
+
+    /// <summary>The salt every archive of this installation records.</summary>
+    public ReadOnlySpan<byte> KdfSalt => _kdfSalt;
+
+    /// <summary>The Argon2id parameters every archive of this installation records.</summary>
+    public Domain.Configuration.Argon2Parameters KdfParameters { get; }
+
+    /// <summary>The serialised form the store persists.</summary>
+    public byte[] ToBytes()
+    {
+        var bytes = new byte[SerializedLength];
+        var credential = Credential.ToBytes();
+        try
+        {
+            Magic.CopyTo(bytes, 0);
+            credential.CopyTo(bytes, 8);
+            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            _kdfSalt.CopyTo(bytes, offset);
+            offset += KekDerivation.SaltLength;
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), KdfParameters.MemoryKiB);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4), KdfParameters.Iterations);
+            bytes[offset + 8] = KdfParameters.Parallelism;
+            return bytes;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(credential);
+        }
+    }
+
+    /// <summary>Parses the serialised form.</summary>
+    /// <param name="bytes">The stored bytes.</param>
+    /// <exception cref="ArgumentException">The bytes are not an installation provisioning.</exception>
+    public static InstallationProvisioning FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != SerializedLength || !bytes[..8].SequenceEqual(Magic))
+        {
+            throw new ArgumentException(
+                $"A serialised installation provisioning is exactly {SerializedLength} bytes.", nameof(bytes));
+        }
+
+        var offset = 8 + RepositoryWriteCredential.SerializedLength;
+        var credential = RepositoryWriteCredential.FromBytes(bytes[8..offset]);
+        var salt = bytes.Slice(offset, KekDerivation.SaltLength);
+        var kdf = offset + KekDerivation.SaltLength;
+
+        return new InstallationProvisioning(
+            credential,
+            salt,
+            new Domain.Configuration.Argon2Parameters
+            {
+                MemoryKiB = BinaryPrimitives.ReadUInt32LittleEndian(bytes[kdf..]),
+                Iterations = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(kdf + 4)..]),
+                Parallelism = bytes[kdf + 8],
+            });
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Credential.Dispose();
+        CryptographicOperations.ZeroMemory(_kdfSalt);
+    }
+}
+
+/// <summary>
+/// The one credential first-run setup provisions, from which every set's
+/// staging archive is created (ADR-0044 §2).
+/// </summary>
+/// <remarks>
+/// <para>
+/// A sibling of <see cref="WriteCredentialStore"/> rather than an entry in
+/// it, and the distinction is not filing: a per-set credential is bound to
+/// one archive's descriptor and its salt came from that descriptor, while
+/// this one minted its own salt and can stamp archives that do not exist
+/// yet. They answer different questions, and a lookup that could return
+/// either without saying which would make the ladder in
+/// <c>ServiceRuntime.ArchiveForAsync</c> impossible to read.
+/// </para>
+/// <para>
+/// It shares the per-set directory because it is the same kind of secret
+/// with the same handling, and the file name cannot collide: a set id is
+/// validated as thirty-two hex characters, and <c>installation</c> is not
+/// hex.
+/// </para>
+/// </remarks>
+public sealed class InstallationCredentialStore(string stateDirectory)
+{
+    private string Path_ =>
+        Path.Combine(stateDirectory, "write-credentials", "installation.bin");
+
+    /// <summary>Whether this installation has been set up.</summary>
+    public bool Holds => File.Exists(Path_);
+
+    /// <summary>Loads the installation provisioning, or null when there is none. The caller disposes.</summary>
+    /// <exception cref="RepositoryOpenException">The file exists and does not parse.</exception>
+    public InstallationProvisioning? TryLoad()
+    {
+        var path = Path_;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        try
+        {
+            return InstallationProvisioning.FromBytes(bytes);
+        }
+        catch (ArgumentException)
+        {
+            // Damage to NAME, exactly as a per-set credential's is. Reporting
+            // "not set up" would send the operator back through a setup
+            // ceremony that would mint a NEW salt — and every archive already
+            // written under the old one would become unopenable by the
+            // passphrase that made it.
+            throw new RepositoryOpenException(
+                $"The installation write credential at '{path}' is damaged — restore the state directory, "
+                + "or adopt each set again with the passphrase (ADR-0044, ADR-0042 §10).");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    /// <summary>Persists the installation provisioning.</summary>
+    /// <param name="provisioning">What setup derived.</param>
+    public void Save(InstallationProvisioning provisioning)
+    {
+        ThrowHelper.ThrowIfNull(provisioning);
+
+        var path = Path_;
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+
+        var bytes = provisioning.ToBytes();
+        try
+        {
+            var temporary = path + ".tmp";
+            File.WriteAllBytes(temporary, bytes);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
         }
     }
 }
