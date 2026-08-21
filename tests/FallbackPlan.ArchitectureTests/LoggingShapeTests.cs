@@ -203,8 +203,6 @@ public sealed class LoggingShapeTests
         "FallbackPlan.Replication.ObjectCopied",
         "FallbackPlan.Replication.CopyFailed",
         "FallbackPlan.Replication.ReplicationComplete",
-        "FallbackPlan.Repository.PublicationStep",
-        "FallbackPlan.Repository.SnapshotPublished",
         "FallbackPlan.Repository.PublicationFailed",
         "FallbackPlan.Repository.RepositoryCreated",
         "FallbackPlan.Repository.RepositoryOpened",

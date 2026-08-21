@@ -149,6 +149,7 @@ public sealed partial class PublicationOrchestrator
     public async ValueTask<PublishedTreeSnapshot> PublishAsync(SnapshotJob job, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(job);
+        var snapshotForLog = LogId.Snapshot(job.SnapshotId);
 
         using var activity = EngineDiagnostics.Activities.StartActivity("publish");
         var publicationStarted = Stopwatch.GetTimestamp();
@@ -276,10 +277,12 @@ public sealed partial class PublicationOrchestrator
             var rootTreeId = walker.RootTreeId
                 ?? throw new InvalidOperationException(Strings.PublicationOrchestrator_ScanProducedNoRootDirectory);
             _observer?.AfterStep(PublicationStep.ScanSource);
+            Log.PublicationStep(_logger, nameof(PublicationStep.ScanSource), snapshotForLog);
 
             reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
             await session.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.SegmentAndSeal);
+            Log.PublicationStep(_logger, nameof(PublicationStep.SegmentAndSeal), snapshotForLog);
             reporter.Observe(JobState.Publishing, walker.Files, walker.Failures.Count);
 
             // The error manifest exists exactly when something failed —
@@ -351,9 +354,11 @@ public sealed partial class PublicationOrchestrator
 
             await builder.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.UploadBlobs);
+            Log.PublicationStep(_logger, nameof(PublicationStep.UploadBlobs), snapshotForLog);
 
             // Step 5: every put's acknowledgement was awaited as it happened.
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
+            Log.PublicationStep(_logger, nameof(PublicationStep.VerifyAcknowledgements), snapshotForLog);
 
             // Step 6: index deltas referencing the now-durable blobs.
             var entries = new List<IndexEntry>();
@@ -385,6 +390,7 @@ public sealed partial class PublicationOrchestrator
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
+            Log.PublicationStep(_logger, nameof(PublicationStep.PublishIndexDeltas), snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded
             // by the advisory source-identity hints, so a hint the next
@@ -399,6 +405,7 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
+            Log.PublicationStep(_logger, nameof(PublicationStep.PublishSnapshot), snapshotForLog);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).
             await journal.PublishAsync(
@@ -408,6 +415,7 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
+            Log.PublicationStep(_logger, nameof(PublicationStep.RetireIntent), snapshotForLog);
 
             // Step 9: the local job is complete — and the live catalogue
             // learns what was published without re-reading the store
@@ -420,6 +428,21 @@ public sealed partial class PublicationOrchestrator
             EngineDiagnostics.PublicationDuration.Record(
                 Stopwatch.GetElapsedTime(publicationStarted).TotalSeconds);
             _observer?.AfterStep(PublicationStep.Complete);
+            Log.PublicationStep(_logger, nameof(PublicationStep.Complete), snapshotForLog);
+
+            // Two records mark this moment and they answer different
+            // questions. PublicationComplete, from the single-stream path
+            // below, is the storage view — bytes, records, blobs. This is the
+            // operator's: how many files, and how many did not make it. The
+            // failure count appears nowhere else in the log, and it is the
+            // number somebody actually wants at two in the morning.
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                var files = walker.Files.Count;
+                var failures = walker.Failures.Count;
+                var logicalBytes = walker.Files.Sum(file => file.Archive?.LogicalLength ?? 0);
+                Log.SnapshotPublished(_logger, snapshotForLog, files, failures, logicalBytes);
+            }
 
             return new PublishedTreeSnapshot(
                 snapshotObjectId,
@@ -554,7 +577,7 @@ public sealed partial class PublicationOrchestrator
 
         public ObjectId? RootTreeId { get; private set; }
 
-        public IReadOnlyList<PublishedFileVersion> Files => _files;
+        public List<PublishedFileVersion> Files => _files;
 
         public List<CaptureFailure> Failures => _failures;
 
