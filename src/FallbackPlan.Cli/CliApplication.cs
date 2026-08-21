@@ -135,6 +135,7 @@ public static class CliApplication
             new LoggingOptions { Default = logLevel, Directory = null, Console = true },
             error);
         var sessionLogger = logging.Factory.CreateLogger<CliSession>();
+        var catalogueLogger = logging.Factory.CreateLogger<Catalogue>();
 
         var root = new RootCommand(
             "FallbackPlan — encrypted backup: repository tooling, backup and restore, and the console for a running service");
@@ -641,7 +642,7 @@ public static class CliApplication
             {
                 using var session = await OpenWritingSessionAsync(parse, "rebuild-index", cancellationToken).ConfigureAwait(false);
                 var cataloguePath = parse.GetValue(catalogueOption) ?? session.CataloguePath;
-                using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 IReadOnlyList<DamageFinding> findings;
                 if (parse.GetValue(forensicOption))
@@ -665,7 +666,9 @@ public static class CliApplication
                         throw new CliFailureException(Strings.CliApplication_TargetSnapshotRequiresForensicCheckpoint);
                     }
 
-                    var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+                    var loader = new IndexLoader(
+                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy,
+                        logging.Factory.CreateLogger<IndexLoader>());
 
                     // Precedence rule 3 (specification 07 §3) needs to know
                     // which blobs the store still holds, and this is the only
@@ -676,7 +679,8 @@ public static class CliApplication
                         session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
-                    var report = await new CatalogueRebuilder(loader).RebuildAsync(
+                    var report = await new CatalogueRebuilder(
+                        loader, logging.Factory.CreateLogger<CatalogueRebuilder>()).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
                         gapPatienceGenerations: 2,
@@ -963,7 +967,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 var snapshots = catalogue.EnumerateSnapshots();
                 if (snapshots.Count == 0)
@@ -1029,7 +1033,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 var snapshotId = Convert.FromHexString(parse.GetValue(snapshotArgument)!);
                 var path = parse.GetValue(pathArgument) ?? string.Empty;
@@ -1527,7 +1531,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
                 var configuration = ClientConfiguration.Load(session.ConfigurationPath);
                 var jobs = JobStateStore.Open(session.StateDirectory);
                 var repoPath = Repo(parse);

@@ -178,7 +178,7 @@ public sealed partial class PublicationOrchestrator
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
-        BlobWriter.SweepUnresumable(_spoolDirectory);
+        BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
@@ -206,7 +206,8 @@ public sealed partial class PublicationOrchestrator
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
+            _logger);
 
         // One targeted reader serves both things this publication reads back:
         // a renamed file's prior manifest (architecture 06 §4.2) and the
@@ -231,7 +232,7 @@ public sealed partial class PublicationOrchestrator
 
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, dedup);
+            _policy.BlobWriteProfile, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))

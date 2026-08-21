@@ -528,11 +528,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 // sequence spaces under one writer identity (ADR-0034).
                 var repositoryIdHex = repository.RepositoryId.ToString();
                 var cataloguePath = Path.Combine(Options.StateDirectory, $"catalogue-{repositoryIdHex}.db");
+                var catalogueLogger = LoggerFor<CatalogueDb>();
                 archive = new ArchiveHandle
                 {
                     Store = store,
                     Repository = repository,
-                    Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId),
+                    Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId, catalogueLogger),
+                    CatalogueLogger = catalogueLogger,
                     Sequence = new WriterSequence(
                         new FileSequenceStateStore(Path.Combine(Options.StateDirectory, $"sequence-{repositoryIdHex}.txt"))),
                     SpoolDirectory = Path.Combine(Options.StateDirectory, "spool", repositoryIdHex),

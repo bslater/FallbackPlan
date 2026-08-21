@@ -13,6 +13,7 @@ using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Segmentation;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
 using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
@@ -46,6 +47,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly byte[]? _sealingPublicKey;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
+    private readonly ILogger? _logger;
 
     // Codecs are pooled rather than shared or made per-segment. One wraps a
     // native compressor context and documents itself as not thread-safe, so the
@@ -94,8 +96,10 @@ public sealed class ArchiveSession : IAsyncDisposable
         string spoolDirectory,
         SpoolPinnedConfiguration pinned,
         IIntentScope? intentScope,
-        ReusePredicate? mayReuseSegment)
+        ReusePredicate? mayReuseSegment,
+        ILogger? logger = null)
     {
+        _logger = logger;
         _mayReuseSegment = mayReuseSegment;
         _policy = policy;
         _repositoryId = repositoryId;
@@ -1001,7 +1005,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 _policy.EncryptionProfile,
                 _policy.BlobWriteProfile,
                 _spoolDirectory,
-                pinned: _pinned)
+                pinned: _pinned,
+                logger: _logger)
             : BlobWriter.CreateSealed(
                 _repositoryId,
                 _writerId,
@@ -1012,7 +1017,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 _policy.EncryptionProfile,
                 _policy.BlobWriteProfile,
                 _spoolDirectory,
-                pinned: _pinned);
+                pinned: _pinned,
+                logger: _logger);
     }
 
     /// <summary>
@@ -1032,7 +1038,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             _policy.EncryptionProfile,
             _policy.BlobWriteProfile,
             _pinned,
-            _sealingPublicKey is null ? FormatLimits.FormatVersion : FormatLimits.SealedFormatVersion);
+            _sealingPublicKey is null ? FormatLimits.FormatVersion : FormatLimits.SealedFormatVersion,
+            _logger);
 
         if (result is not ResumeResult.Resumed resumed)
         {

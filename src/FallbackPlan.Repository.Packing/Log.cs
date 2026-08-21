@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using Microsoft.Extensions.Logging;
 
@@ -27,21 +28,31 @@ internal static partial class Log
             + "Spooled work is lost; correctness is not — the restarted blob draws a fresh salt")]
     internal static partial void SpoolDiscarded(ILogger logger, string reason);
 
+    // Written once, at create — see WriteCheckpoint. The declaration used to
+    // carry a record count, which read as though the sidecar were refreshed
+    // as records landed; it never is, and every field in it is fixed for the
+    // blob's life (05 §6.2). A hole that is always zero is a message that
+    // lies about the mechanism, so it is gone.
     [LoggerMessage(
         EventId = 1602, Level = LogLevel.Trace,
-        Message = "Checkpointed spool for blob {BlobId} at record {Records}")]
-    internal static partial void SpoolCheckpointed(ILogger logger, BlobId blobId, int records);
+        Message = "Wrote the resume checkpoint for blob {BlobId} — a kill from here on can resume the spool")]
+    internal static partial void SpoolCheckpointed(ILogger logger, BlobId blobId);
 
     [LoggerMessage(
         EventId = 1603, Level = LogLevel.Debug,
         Message = "Swept an unresumable spool with no checkpoint beside it: {Count} file(s)")]
     internal static partial void UnresumableSwept(ILogger logger, int count);
 
+    // The class is carried because data and metadata blobs are sealed by
+    // different callers on different code paths, and a log that cannot tell
+    // them apart cannot answer "did the file content actually get written",
+    // which is the question a stalled backup raises.
     [LoggerMessage(
         EventId = 1610, Level = LogLevel.Debug,
-        Message = "Sealed blob {BlobId}: {Records} records, {Bytes} bytes, format version {FormatVersion}")]
+        Message = "Sealed {Class} blob {BlobId}: {Records} records, {Bytes} bytes, "
+            + "format version {FormatVersion}")]
     internal static partial void BlobSealed(
-        ILogger logger, BlobId blobId, int records, long bytes, int formatVersion);
+        ILogger logger, BlobClass @class, BlobId blobId, int records, long bytes, int formatVersion);
 
     [LoggerMessage(
         EventId = 1611, Level = LogLevel.Trace,

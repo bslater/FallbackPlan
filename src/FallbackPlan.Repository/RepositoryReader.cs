@@ -152,7 +152,8 @@ public sealed class RepositoryReader : IDisposable
                     _keys.DeriveClassKey,
                     _objectIdDeriver,
                     cancellationToken,
-                    _sealedContentKeyOpener).ConfigureAwait(false);
+                    _sealedContentKeyOpener,
+                    _logger).ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
             {
@@ -217,7 +218,8 @@ public sealed class RepositoryReader : IDisposable
                     _keys.DeriveClassKey,
                     _objectIdDeriver,
                     cancellationToken,
-                    _sealedContentKeyOpener).ConfigureAwait(false);
+                    _sealedContentKeyOpener,
+                    _logger).ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
             {

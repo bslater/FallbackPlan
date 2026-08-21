@@ -213,7 +213,7 @@ public sealed partial class PublicationOrchestrator
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
-        BlobWriter.SweepUnresumable(_spoolDirectory);
+        BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
         using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
@@ -248,7 +248,8 @@ public sealed partial class PublicationOrchestrator
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
         // upload — each blob's covering extension durable before its put.
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
+            _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
 
@@ -256,7 +257,7 @@ public sealed partial class PublicationOrchestrator
         // step-4 window; the snapshot's discoverable copy waits for step 7.
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope);
+            _policy.BlobWriteProfile, scope, logger: _logger);
 
         ObjectId fileVersionId, rootTreeId, policyId, snapshotObjectId;
         SnapshotManifest snapshot;

@@ -60,6 +60,7 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly IncrementalHash _digest;
     private readonly List<RecordTableEntry> _entries = [];
     private readonly SpoolPinnedConfiguration? _pinned;
+    private readonly ILogger _log;
     private bool _sealed;
     private bool _abandoned;
     private bool _spoolClosed;
@@ -73,8 +74,10 @@ public sealed class BlobWriter : IAsyncDisposable
         string spoolPath,
         FileStream spool,
         SpoolPinnedConfiguration? pinned,
-        byte[]? contentKey = null)
+        byte[]? contentKey = null,
+        ILogger? logger = null)
     {
+        _log = logger ?? NullLogger.Instance;
         _envelope = envelope;
         _profile = profile;
         _encryptionProfile = encryptionProfile;
@@ -130,7 +133,8 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         string spoolDirectory,
         ReadOnlySpan<byte> blobSalt = default,
-        SpoolPinnedConfiguration? pinned = null)
+        SpoolPinnedConfiguration? pinned = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -172,7 +176,8 @@ public sealed class BlobWriter : IAsyncDisposable
         var spoolPath = Path.Combine(spoolDirectory, $"blob-{envelope.BlobId}.spool");
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
-        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned);
+        var writer = new BlobWriter(
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, logger: logger);
         WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
         return writer;
     }
@@ -198,7 +203,8 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         string spoolDirectory,
         ReadOnlySpan<byte> blobSalt = default,
-        SpoolPinnedConfiguration? pinned = null)
+        SpoolPinnedConfiguration? pinned = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -246,7 +252,7 @@ public sealed class BlobWriter : IAsyncDisposable
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
         var writer = new BlobWriter(
-            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, contentKey);
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, contentKey, logger);
         WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
         return writer;
     }
@@ -277,7 +283,9 @@ public sealed class BlobWriter : IAsyncDisposable
     /// directory, ADR-0028 §2), which is what makes an unpaired file garbage
     /// rather than another session's work in flight.
     /// </summary>
-    public static void SweepUnresumable(string spoolDirectory)
+    /// <param name="spoolDirectory">The writer's spool directory.</param>
+    /// <param name="logger">Where the count swept is recorded.</param>
+    public static void SweepUnresumable(string spoolDirectory, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
@@ -286,11 +294,14 @@ public sealed class BlobWriter : IAsyncDisposable
             return;
         }
 
+        var swept = 0;
+
         foreach (var spool in Directory.EnumerateFiles(spoolDirectory, "blob-*.spool"))
         {
             if (!File.Exists(SpoolCheckpoint.PathFor(spool)))
             {
                 File.Delete(spool);
+                swept++;
             }
         }
 
@@ -299,7 +310,16 @@ public sealed class BlobWriter : IAsyncDisposable
             if (!File.Exists(checkpoint[..^".checkpoint".Length]))
             {
                 File.Delete(checkpoint);
+                swept++;
             }
+        }
+
+        // Only when something was actually swept. A clean start does this on
+        // every publication and finds nothing; recording that would be a line
+        // per backup saying no work was needed.
+        if (swept > 0)
+        {
+            Log.UnresumableSwept(logger ?? NullLogger.Instance, swept);
         }
     }
 
@@ -600,7 +620,7 @@ public sealed class BlobWriter : IAsyncDisposable
         spool.Seek(0, SeekOrigin.End);
 
         var writer = new BlobWriter(
-            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey);
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger);
         writer._digest.AppendData(spoolBytes);
         writer._entries.AddRange(entries);
         writer.CurrentLength = spoolBytes.Length;
@@ -758,6 +778,8 @@ public sealed class BlobWriter : IAsyncDisposable
         var temporary = checkpointPath + ".tmp";
         File.WriteAllBytes(temporary, checkpoint.Serialize());
         File.Move(temporary, checkpointPath, overwrite: true);
+
+        Log.SpoolCheckpointed(_log, _envelope.BlobId);
     }
 
     /// <summary>
@@ -818,6 +840,10 @@ public sealed class BlobWriter : IAsyncDisposable
         {
             File.Delete(SpoolCheckpoint.PathFor(_spoolPath));
         }
+
+        Log.BlobSealed(
+            _log, _envelope.BlobClass, _envelope.BlobId, _entries.Count, CurrentLength,
+            _envelope.FormatVersion);
 
         return new SealedBlob(
             _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest, _entries);

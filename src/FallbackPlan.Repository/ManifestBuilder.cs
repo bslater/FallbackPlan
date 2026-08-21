@@ -8,6 +8,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
 using FallbackPlan.Repository.Resources;
 
 namespace FallbackPlan.Repository;
@@ -34,6 +35,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly List<ArchivedBlob> _blobs = [];
     private readonly IIntentScope? _intentScope;
     private readonly ReusePredicate? _mayReuse;
+    private readonly ILogger? _logger;
     private BlobWriter? _writer;
 
     /// <summary>Creates a builder writing metadata blobs under <paramref name="blobProfile"/>.</summary>
@@ -47,7 +49,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
         string spoolDirectory,
         BlobWriteProfile blobProfile,
         IIntentScope? intentScope = null,
-        ReusePredicate? mayReuse = null)
+        ReusePredicate? mayReuse = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(store);
@@ -55,6 +58,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ThrowHelper.ThrowIfNull(blobProfile);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
+        _logger = logger;
         _repositoryId = repositoryId;
         _writerId = writerId;
         _generation = generation;
@@ -162,7 +166,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
             _counters.AllocateNext(),
             EncryptionProfile.Aes256GcmV1,
             _blobProfile,
-            _spoolDirectory);
+            _spoolDirectory,
+            logger: _logger);
 
         await _writer.AppendRecordAsync(
             objectType,

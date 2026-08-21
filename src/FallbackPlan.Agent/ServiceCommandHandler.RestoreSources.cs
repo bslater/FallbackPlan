@@ -103,6 +103,7 @@ public sealed partial class ServiceCommandHandler
                 RepositoryId = archive.Repository.RepositoryId,
                 Keys = archive.Repository.Keys,
                 CataloguePath = archive.CataloguePath,
+                CatalogueLogger = runtime.LoggerFor<CatalogueDb>(),
                 CacheDirectory = null,
             };
         }
@@ -462,13 +463,17 @@ public sealed partial class ServiceCommandHandler
                 repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
             RebuildReport report;
-            using (var catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId))
+            using (var catalogue = CatalogueDb.Open(
+                cataloguePath, repository.RepositoryId, runtime.LoggerFor<CatalogueDb>()))
             {
                 // The index plane rebuilds the locations; no blob inventory
                 // is taken, because an entry naming a trimmed blob is
                 // re-answered honestly by the plan probe, which asks the
                 // store per blob (FR-RST-003).
-                report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy, runtime.LoggerFor<IndexLoader>()))
+                report = await new CatalogueRebuilder(
+                    new IndexLoader(
+                        store, repository.RepositoryId, repository.Hierarchy, runtime.LoggerFor<IndexLoader>()),
+                    runtime.LoggerFor<CatalogueRebuilder>())
                     .RebuildAsync(
                         catalogue, generation, gapPatienceGenerations: 2,
                         isSequenceAccountedAsync: null, cancellationToken)
@@ -509,6 +514,7 @@ public sealed partial class ServiceCommandHandler
                 RepositoryId = repository.RepositoryId,
                 Keys = repository.Keys,
                 CataloguePath = cataloguePath,
+                CatalogueLogger = runtime.LoggerFor<CatalogueDb>(),
                 CacheDirectory = cacheDirectory,
                 Transport = transport,
             };

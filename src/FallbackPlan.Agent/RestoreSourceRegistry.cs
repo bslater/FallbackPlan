@@ -4,6 +4,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -47,6 +48,9 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     /// <summary>The catalogue file read connections open against.</summary>
     public required string CataloguePath { get; init; }
 
+    /// <summary>The catalogue's logger, carried so a read connection is diagnosable too.</summary>
+    public ILogger? CatalogueLogger { get; init; }
+
     /// <summary>
     /// This source's throwaway cache directory under
     /// <c>&lt;state&gt;/restore-cache/</c> — deleted on dispose. Null for a
@@ -78,7 +82,7 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     public SemaphoreSlim Gate { get; } = new(1, 1);
 
     /// <summary>A read-side catalogue connection.</summary>
-    public CatalogueDb OpenReadCatalogue() => CatalogueDb.Open(CataloguePath, RepositoryId);
+    public CatalogueDb OpenReadCatalogue() => CatalogueDb.Open(CataloguePath, RepositoryId, CatalogueLogger);
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()

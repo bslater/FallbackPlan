@@ -215,7 +215,7 @@ public static class OperationGateway
             }
 
             session.TakeWriterRole();
-            return new DirectGateway(session);
+            return new DirectGateway(session, logger);
         }
         catch
         {
@@ -277,7 +277,7 @@ public static class OperationGateway
                 }
             }
 
-            return new DirectGateway(session);
+            return new DirectGateway(session, logger);
         }
         catch
         {
@@ -597,7 +597,7 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
 }
 
 /// <summary>The gateway that does the work in this process, holding the writer role.</summary>
-internal sealed class DirectGateway(CliSession session) : IOperationGateway
+internal sealed class DirectGateway(CliSession session, ILogger? logger = null) : IOperationGateway
 {
     /// <summary>The session this gateway works through — the verbs a service cannot serve still need it.</summary>
     public CliSession Session => session;
@@ -638,7 +638,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(root.Path));
         }
 
-        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
 
         // Incremental against the newest snapshot of the same set the catalogue
         // knows — unless --full asks for a re-read.
@@ -810,7 +810,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
 
         if (File.Exists(session.CataloguePath))
         {
-            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
             var findings = catalogue.Findings();
             problems += findings.Count;
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"catalogue  {findings.Count} damage finding(s)"));
@@ -844,7 +844,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         var snapshotId = Convert.FromHexString(request.SnapshotId);
         var target = RestoreTargetProfile.ForLocalPlatform();
 
-        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
         var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
         if (plan.Items.Count == 0)
         {

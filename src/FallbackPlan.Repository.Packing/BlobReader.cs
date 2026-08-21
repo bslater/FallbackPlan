@@ -7,6 +7,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using FallbackPlan.Repository.Packing.Resources;
 
 namespace FallbackPlan.Repository.Packing;
@@ -98,6 +100,7 @@ public sealed class BlobReader : IDisposable
     /// table opens, record reads answer
     /// <see cref="RecordReadOutcome.ContentSealed"/>.
     /// </param>
+    /// <param name="logger">Where the open and any contained sealed-share refusal are recorded.</param>
     /// <exception cref="BlobFormatException">The blob is damaged — every refusal names its finding.</exception>
     public static async ValueTask<BlobReader> OpenAsync(
         IObjectStore store,
@@ -107,8 +110,11 @@ public sealed class BlobReader : IDisposable
         Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
         ObjectIdDeriver objectIdDeriver,
         CancellationToken cancellationToken,
-        Func<BlobEnvelope, byte[]>? sealedContentKeyOpener = null)
+        Func<BlobEnvelope, byte[]>? sealedContentKeyOpener = null,
+        ILogger? logger = null)
     {
+        var log = logger ?? NullLogger.Instance;
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(classKeyProvider);
         ThrowHelper.ThrowIfNull(objectIdDeriver);
@@ -198,6 +204,7 @@ public sealed class BlobReader : IDisposable
                 // failed footer is (ADR-0042 §7): one hostile object must not
                 // abort loading every other blob.
                 CryptographicOperations.ZeroMemory(blobKey);
+                Log.SealedShareRefused(log, envelope.BlobId);
                 throw new BlobFormatException(Strings.BlobReader_SealedShareDoesNotOpen);
             }
             catch
@@ -210,6 +217,8 @@ public sealed class BlobReader : IDisposable
         {
             recordKey = null;
         }
+
+        Log.BlobOpened(log, envelope.BlobId, entries.Count);
 
         return new BlobReader(store, key, blobLength, repositoryId, objectIdDeriver, envelope, blobKey, recordKey, entries);
     }
