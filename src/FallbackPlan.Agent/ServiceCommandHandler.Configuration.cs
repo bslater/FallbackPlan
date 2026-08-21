@@ -412,7 +412,7 @@ public sealed partial class ServiceCommandHandler
             new(bucket.Count, bucket.Sample);
     }
 
-    private static SetDraftValidationResult ValidateSetDraft(ValidateSetDraftCommand command)
+    private SetDraftValidationResult ValidateSetDraft(ValidateSetDraftCommand command)
     {
         List<string> defects = [];
 
@@ -445,7 +445,116 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
-        return new SetDraftValidationResult(defects, nextRuns);
+        return new SetDraftValidationResult(defects, nextRuns, DurabilityWarnings(command));
+    }
+
+    /// <summary>
+    /// What is sound but unwise about where this draft would be durable
+    /// (FR-SNP-007, ADR-0018).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A warning, never a defect: the operator may have exactly one disk and
+    /// know it, and a product that refused to protect anything until they
+    /// bought a second one would protect nothing at all. What it must not do
+    /// is let them believe they are covered — which is why the wording says
+    /// what the status page will go on to say, in the same words.
+    /// </para>
+    /// <para>
+    /// The comparison is <see cref="DestinationStatus.Describe"/>'s, not a
+    /// second one written for drafts. It already handles the declaration
+    /// winning over inference, the every-root rule for multi-root sets
+    /// (ADR-0040), and the conservative answer when the platform will not say
+    /// which volume a path is on.
+    /// </para>
+    /// <para>
+    /// This is where FR-SNP-007's "first run warns" lives, and it warns on
+    /// every edit rather than only the first — the requirement's failure is a
+    /// person believing a backup survives something it does not, and that
+    /// belief is available to form at any point, not only once.
+    /// </para>
+    /// </remarks>
+    private List<string>? DurabilityWarnings(ValidateSetDraftCommand command)
+    {
+        if (command.Roots is not { Count: > 0 } roots || command.Destinations is not { Count: > 0 } names)
+        {
+            // The draft did not ask. An editor that has not reached the
+            // destination step yet should not be told its set is undurable.
+            return null;
+        }
+
+        var configuration = ConfigurationOrNull();
+        if (configuration is null)
+        {
+            return null;
+        }
+
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var best = FailureDomain.SameVolume;
+        var unknown = new List<string>();
+
+        foreach (var name in names)
+        {
+            var destination = configuration.FindDestination(name);
+            if (destination is null)
+            {
+                unknown.Add(name);
+                continue;
+            }
+
+            var input = DestinationStatus.Describe(
+                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, DeviceIdOf);
+
+            if (input.Domain > best)
+            {
+                best = input.Domain;
+            }
+        }
+
+        var warnings = new List<string>();
+
+        foreach (var name in unknown)
+        {
+            warnings.Add(
+                $"'{name}' is not a declared destination, so this set would reference something that does "
+                + "not exist.");
+        }
+
+        if (unknown.Count == names.Count)
+        {
+            return warnings;
+        }
+
+        if (best <= FailureDomain.SameMachine)
+        {
+            warnings.Add(
+                best == FailureDomain.SameVolume
+                    ? "Every destination for this set is on the same volume as its source. Losing that disk "
+                        + "loses the backup with it, so snapshots will report `captured`, never `protected`."
+                    : "Every destination for this set is on this machine. Another disk survives losing a "
+                        + "disk and nothing more, so snapshots will report `captured`, never `protected`. "
+                        + "A paired peer or a removable drive kept elsewhere is what changes that.");
+        }
+
+        return warnings.Count == 0 ? null : warnings;
+    }
+
+    /// <summary>The configuration, or null when it will not load.</summary>
+    /// <remarks>
+    /// A draft check is advice. It must not be the thing that turns a typo in
+    /// <c>config.json</c> into a failed request, when the editor asking is
+    /// very likely the way that typo gets fixed.
+    /// </remarks>
+    private ClientConfiguration? ConfigurationOrNull()
+    {
+        try
+        {
+            return runtime.Configuration;
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

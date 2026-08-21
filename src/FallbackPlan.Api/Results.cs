@@ -227,8 +227,18 @@ public sealed record FolderListingResult(
 /// <summary>What a set draft means, before anything is saved.</summary>
 /// <param name="Defects">Everything wrong, rules and schedule alike, named verbatim; empty when the draft is sound.</param>
 /// <param name="NextRuns">The schedule's next occurrences (ISO-8601, the service's clock frame); empty for manual-only or a defective schedule.</param>
+/// <param name="Warnings">
+/// What is sound but unwise — kept apart from <paramref name="Defects"/>
+/// because a defect refuses the save and a warning does not (FR-SNP-007).
+/// The first of these is a set whose every destination sits inside its
+/// source's own failure domain, which is the difference between
+/// <c>captured</c> and <c>protected</c> and is worth knowing before the
+/// first backup rather than after it.
+/// </param>
 public sealed record SetDraftValidationResult(
-    IReadOnlyList<string> Defects, IReadOnlyList<string> NextRuns) : ServiceResult;
+    IReadOnlyList<string> Defects,
+    IReadOnlyList<string> NextRuns,
+    IReadOnlyList<string>? Warnings = null) : ServiceResult;
 
 /// <summary>One bucket of a set-change preview: the exact count, and at most the sample cap of paths.</summary>
 /// <param name="Count">Every file the bucket matched — exact, never truncated.</param>

@@ -634,3 +634,7 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 .meter.meter-fair > i { background: var(--warn); }
 .meter.meter-strong > i { background: var(--ok); }
 .setup-kit-actions { justify-content: flex-start; gap: 8px; margin: 14px 0 4px; }
+
+/* A warning is not a defect: it does not refuse the save, and the colour
+   says so before the wording does (FR-SNP-007). */
+.warnings li.advisory { color: var(--warn); }

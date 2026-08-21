@@ -1957,13 +1957,27 @@ function validateDraftSoon() {
       schedule,
       includeRules: [...E.handIncludes],
       excludeRules: [...compiled.excludeRules, ...E.handExcludes],
+
+      // Roots and destinations together let the service answer where this
+      // set would actually be durable (FR-SNP-007). Sent only once both
+      // exist: an editor mid-way through choosing folders should not be
+      // told its set survives nothing.
+      roots: compiled.roots.map(root => root.path),
+      destinations: [...E.destinations],
     });
     if (result?.result !== "set_draft_validation" || !E) return;
 
     const defects = document.getElementById("draft-defects");
     if (defects) {
-      defects.innerHTML = result.defects.length
-        ? `<ul class="warnings">${result.defects.map(defect => `<li>${esc(defect)}</li>`).join("")}</ul>` : "";
+      // Defects and warnings are shown together but never merged: a defect
+      // refuses the save, a warning is a thing worth knowing before the
+      // first backup rather than after it.
+      defects.innerHTML = (result.defects.length || result.warnings?.length)
+        ? `<ul class="warnings">`
+            + result.defects.map(defect => `<li>${esc(defect)}</li>`).join("")
+            + (result.warnings ?? []).map(warning => `<li class="advisory">${esc(warning)}</li>`).join("")
+            + `</ul>`
+        : "";
     }
     const preview = document.getElementById("sched-preview");
     if (preview) {

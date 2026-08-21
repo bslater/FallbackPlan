@@ -110,10 +110,19 @@ public sealed record BrowseFoldersCommand(string? Path, bool IncludeFiles = fals
 /// <param name="Schedule">The schedule expression, or null/empty for manual-only.</param>
 /// <param name="IncludeRules">rules-v1 include rules.</param>
 /// <param name="ExcludeRules">rules-v1 exclude rules.</param>
+/// <param name="Roots">
+/// The draft's source folders. Supplied together with
+/// <paramref name="Destinations"/> so the answer can say where this set
+/// would actually be durable (FR-SNP-007); omitted, the durability question
+/// is simply not asked.
+/// </param>
+/// <param name="Destinations">The destination names the draft references, by name.</param>
 public sealed record ValidateSetDraftCommand(
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
-    IReadOnlyList<string> ExcludeRules) : ServiceCommand;
+    IReadOnlyList<string> ExcludeRules,
+    IReadOnlyList<string>? Roots = null,
+    IReadOnlyList<string>? Destinations = null) : ServiceCommand;
 
 /// <summary>
 /// Walks a set's source now — under its saved root and rules, or a draft's —
