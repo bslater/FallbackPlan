@@ -21,8 +21,13 @@ public sealed class LoggerProviderTests : IDisposable
     private readonly string _directory =
         Path.Combine(Path.GetTempPath(), "fbp-log-provider-tests", Guid.NewGuid().ToString("n"));
 
+    /// <summary>The composition under test, cleared once a test has drained it.</summary>
+    private LoggingComposition? _logging;
+
     public void Dispose()
     {
+        _logging?.Dispose();
+
         if (Directory.Exists(_directory))
         {
             Directory.Delete(_directory, recursive: true);
@@ -37,36 +42,41 @@ public sealed class LoggerProviderTests : IDisposable
             RingCapacity = 64,
         });
 
-    private async Task<string> FileTextAsync()
+    /// <summary>
+    /// Drains the sink, then reads what it wrote.
+    /// </summary>
+    /// <param name="logging">The composition to shut down first.</param>
+    /// <remarks>
+    /// Disposing is the synchronisation, not a poll with a generous timeout.
+    /// The file sink writes off the caller's thread and
+    /// <c>RollingFileSink.DisposeAsync</c> is documented to put whatever is
+    /// queued on disk before returning, so shutting it down makes the read
+    /// deterministic. A timeout-based wait passes on an idle machine and fails
+    /// under load, which is a test that reports the machine's mood rather than
+    /// the code's behaviour.
+    /// </remarks>
+    private string FileTextAfterDraining(LoggingComposition logging)
     {
+        logging.Dispose();
+        _logging = null;
+
         var path = Path.Combine(_directory, "fallbackplan-current.log");
-
-        // The file sink writes off the caller's thread, so the line is not
-        // there the instant the call returns.
-        for (var attempt = 0; attempt < 200; attempt++)
+        if (!File.Exists(path))
         {
-            if (File.Exists(path))
-            {
-                using var stream = new FileStream(
-                    path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var reader = new StreamReader(stream);
-                var text = await reader.ReadToEndAsync().ConfigureAwait(false);
-                if (text.Length > 0)
-                {
-                    return text;
-                }
-            }
-
-            await Task.Delay(10).ConfigureAwait(false);
+            return string.Empty;
         }
 
-        return string.Empty;
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     [TestMethod]
-    public async Task FileLine_ForEveryRecord_LeadsWithTheSameSequenceTheRingAssigned()
+    public void FileLine_ForEveryRecord_LeadsWithTheSameSequenceTheRingAssigned()
     {
-        using var logging = Compose();
+        var logging = Compose();
+        _logging = logging;
         var logger = logging.Factory.CreateLogger("FallbackPlan.Test");
 
 #pragma warning disable CA1848 // A test is not a hot path, and the point here is the sink, not the call.
@@ -74,11 +84,10 @@ public sealed class LoggerProviderTests : IDisposable
         logger.LogWarning("second");
 #pragma warning restore CA1848
 
-        var text = await FileTextAsync().ConfigureAwait(false);
+        var page = logging.Ring.Read(sinceSequence: 0, maximum: 10, minimumLevel: LogLevel.Trace);
+        var text = FileTextAfterDraining(logging);
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.HasCount(2, lines);
-
-        var page = logging.Ring.Read(sinceSequence: 0, maximum: 10, minimumLevel: LogLevel.Trace);
         Assert.HasCount(2, page.Records);
 
         foreach (var record in page.Records)
@@ -93,16 +102,17 @@ public sealed class LoggerProviderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task FileLine_ForOneRecord_CarriesLevelEventIdAndCategory()
+    public void FileLine_ForOneRecord_CarriesLevelEventIdAndCategory()
     {
-        using var logging = Compose();
+        var logging = Compose();
+        _logging = logging;
         var logger = logging.Factory.CreateLogger("FallbackPlan.Test.Category");
 
 #pragma warning disable CA1848
         logger.Log(LogLevel.Error, new EventId(4242), "the sky fell");
 #pragma warning restore CA1848
 
-        var line = (await FileTextAsync().ConfigureAwait(false)).Trim();
+        var line = FileTextAfterDraining(logging).Trim();
         StringAssert.Contains(line, "error");
         StringAssert.Contains(line, "4242");
         StringAssert.Contains(line, "FallbackPlan.Test.Category");
@@ -110,9 +120,10 @@ public sealed class LoggerProviderTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Records_BeneathTheLevelInForce_ReachNeitherSink()
+    public void Records_BeneathTheLevelInForce_ReachNeitherSink()
     {
-        using var logging = Compose(LogLevel.Warning);
+        var logging = Compose(LogLevel.Warning);
+        _logging = logging;
         var logger = logging.Factory.CreateLogger("FallbackPlan.Test");
 
 #pragma warning disable CA1848
@@ -120,12 +131,12 @@ public sealed class LoggerProviderTests : IDisposable
         logger.LogWarning("above it");
 #pragma warning restore CA1848
 
-        var text = await FileTextAsync().ConfigureAwait(false);
-        Assert.DoesNotContain("beneath the floor", text);
-        StringAssert.Contains(text, "above it");
-
         var page = logging.Ring.Read(sinceSequence: 0, maximum: 10, minimumLevel: LogLevel.Trace);
         Assert.ContainsSingle(page.Records);
+
+        var text = FileTextAfterDraining(logging);
+        Assert.DoesNotContain("beneath the floor", text);
+        StringAssert.Contains(text, "above it");
     }
 
     [TestMethod]

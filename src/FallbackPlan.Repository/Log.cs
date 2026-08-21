@@ -62,9 +62,9 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 2010, Level = LogLevel.Debug,
-        Message = "Captured {Path}: {Bytes} bytes in {Segments} segments, {Reused} reused")]
+        Message = "Captured {Path}: {Bytes} bytes, {Segments} segments, {Written} records written")]
     internal static partial void FileCaptured(
-        ILogger logger, LogPath path, long bytes, int segments, int reused);
+        ILogger logger, LogPath path, long bytes, int segments, int written);
 
     [LoggerMessage(
         EventId = 2011, Level = LogLevel.Debug,

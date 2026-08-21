@@ -114,14 +114,28 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
         var rootEntry = BuildEntry(full, relativePath: "", "/"u8.ToArray(), rootStat, options, root);
 
+        Log.ScanningRoot(_logger, new LogPath(full));
+        var files = 0;
+        var directories = 0;
+        var failures = 0;
+
         yield return new ScanEvent.EnterDirectory(rootEntry);
         await foreach (var scanEvent in WalkAsync(full, root, "", rootStat.Device, options, cancellationToken)
             .ConfigureAwait(false))
         {
+            switch (scanEvent)
+            {
+                case ScanEvent.Leaf: files++; break;
+                case ScanEvent.EnterDirectory: directories++; break;
+                case ScanEvent.Failure: failures++; break;
+                default: break;
+            }
+
             yield return scanEvent;
         }
 
         yield return new ScanEvent.LeaveDirectory(rootEntry);
+        Log.ScanComplete(_logger, new LogPath(full), files, directories, failures);
     }
 
     private async IAsyncEnumerable<ScanEvent> WalkAsync(
@@ -260,9 +274,11 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
                 if (options.Rules?.MayDescend(rulesSubject) == false)
                 {
+                    Log.Excluded(_logger, new LogPath(relativePath));
                     continue;
                 }
 
+                Log.EnteringDirectory(_logger, new LogPath(relativePath));
                 yield return new ScanEvent.EnterDirectory(directoryEntry);
                 await foreach (var scanEvent in WalkAsync(
                     fullPath, childScope, relativePath, rootDevice, options, cancellationToken).ConfigureAwait(false))

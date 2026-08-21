@@ -268,6 +268,9 @@ public sealed class RestoreExecutor(
         var items = new List<ReceiptItem>();
         var displaced = new List<string>();
 
+        var existingPolicy = options.ExistingDestination.ToString();
+        Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), existingPolicy);
+
         foreach (var item in plan.Items)
         {
             // Cooperative stop, not an exception: break so the receipt is still
@@ -624,6 +627,29 @@ public sealed class RestoreExecutor(
             WrittenTo = root,
             Outcome = Aggregate(items, plan.Items.Count),
         };
+
+        // Per item, from the receipt rather than from twenty scattered call
+        // sites: the receipt already records every item's outcome, and these
+        // records exist to explain the reasoning behind it. Logging the two
+        // from one place is what keeps them from ever disagreeing.
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            foreach (var item in items)
+            {
+                switch (item.Outcome)
+                {
+                    case "restored":
+                        Log.ItemRestored(_logger, new LogPath(item.Path), item.Bytes);
+                        break;
+                    case "failed":
+                        Log.ItemFailed(_logger, new LogPath(item.Path), item.Detail ?? "no reason recorded");
+                        break;
+                    default:
+                        Log.ItemSkipped(_logger, new LogPath(item.Path), item.Detail ?? item.Outcome);
+                        break;
+                }
+            }
+        }
 
         // Guarded, not hoisted: counting three ways over every restored item is
         // real work, and CA1873 is right that an argument is evaluated whether

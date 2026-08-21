@@ -362,10 +362,18 @@ structure.
 | 2026-08 | Accepted | The shape decided: abstractions in the libraries, sinks in the hosts, redaction by declared type, event-id ranges |
 | 2026-08 | Accepted | Built: abstractions in twenty-four projects, per-project `Log.cs`, and the ring, rolling file and renderer in `FallbackPlan.Diagnostics` |
 | 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
+| 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is 46 of 107 declarations, with the remainder frozen as a shrinking register |
 
-The diagnostics verbs remain unbuilt and move from the contract 1.13 this
-document originally named to **1.15**: 1.13 was taken by first-run setup
+The diagnostics verbs moved from the contract 1.13 this document originally
+named to **1.15**: 1.13 was taken by first-run setup
 ([ADR-0044](0044-first-run-setup.md)) and 1.14 by the installation recovery kit
-([ADR-0013](0013-recovery-kit.md)). Until they land the ring is filled and
-nothing reads it, and a level change still needs a restart.
+([ADR-0013](0013-recovery-kit.md)).
+
+**One thing this ADR did not anticipate**, recorded because it nearly cost the
+privacy guarantee its proof: declaring a `[LoggerMessage]` and calling it are
+separate acts, and phase 2 did far more of the first than the second. Sixty-one
+declarations still have no call site, and the eleven path-carrying ones on the
+publish-and-restore path had none — so the headline privacy test would have run
+over an empty capture and passed. `LoggingShapeTests` now refuses a declaration
+without a call site, against a frozen register that may shrink and never grow.
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |

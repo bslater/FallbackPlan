@@ -845,7 +845,7 @@ public sealed partial class ServiceCommandHandler(
             // The output directory is a path on the machine running the
             // service: a restore commanded from elsewhere writes here and the
             // caller is told what happened, never sent the files (ADR-0028 §6).
-            var executor = new RestoreExecutor(reader, target);
+            var executor = new RestoreExecutor(reader, target, runtime.LoggerFor<RestoreExecutor>());
             var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
             foreach (var (slice, outputDirectory, labelPrefix) in slices)
             {

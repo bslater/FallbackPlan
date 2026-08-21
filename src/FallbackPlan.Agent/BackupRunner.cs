@@ -109,7 +109,8 @@ public static class BackupRunner
                 archive.SpoolDirectory,
                 observer: null,
                 archive.Catalogue,
-                progress);
+                progress,
+                runtime.LoggerFor<PublicationOrchestrator>());
 
             var snapshotId = RandomNumberGenerator.GetBytes(16);
             jobs.Transition(jobId, JobState.Publishing, nowMs);
@@ -117,7 +118,7 @@ public static class BackupRunner
             var published = await orchestrator.PublishAsync(
                 new SnapshotJob
                 {
-                    Source = new LocalFileSystemSource(),
+                    Source = new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>()),
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,

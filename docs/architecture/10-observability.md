@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
-**Built:** Partly — the status model, job states and instrumentation are implemented; §6's logging is landing now and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
+**Built:** Partly — the status model, job states and instrumentation are implemented; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -158,7 +158,9 @@ Levels carry their ordinary meanings, tiered by layer. `Trace` is per-record and
 
 Two sinks, both ours. A **rolling file** in the state directory is the durable record, size-capped with a retained-file count. A bounded **ring buffer** with a monotonic sequence — the same drop-oldest-and-say-so shape as the progress hub, for the same reason — is what a client reads. A client never receives a path to a log file: the service exposes no raw filesystem access (threat T-16), and a log reader is not where to make an exception.
 
-The effective level comes from a flag, the environment, `config.json`, then `Information` — and it is changeable while the service runs. The level a machine needs is only known once it has already misbehaved, and requiring a restart to raise it is requiring someone to destroy the evidence first.
+The effective level comes from a flag, the environment, `config.json`, then `Information` — and it is changeable while the service runs. The level a machine needs is only known once it has already misbehaved, and requiring a restart to raise it is requiring someone to destroy the evidence first. A level changed over the contract lasts until the service stops rather than being written back, so an afternoon of tracing cannot become a machine that has been at trace for eight months.
+
+What crosses to a client is **rendered**, never the record's raw name/value state: rendering is where redaction happens, so handing over the values would hand over exactly what redaction withholds. A local caller is served in full and a paired console redacted, and a paired console may read the log but not decide what goes into it.
 
 ---
 

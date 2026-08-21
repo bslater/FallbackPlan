@@ -14,6 +14,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Repository;
 
@@ -250,7 +251,7 @@ public sealed partial class PublicationOrchestrator
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
-                reader);
+                reader, _logger);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -538,7 +539,8 @@ public sealed partial class PublicationOrchestrator
         CatalogueGate? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
         HintSource? hints,
-        TargetedRecordReader? manifests)
+        TargetedRecordReader? manifests,
+        ILogger logger)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -685,6 +687,7 @@ public sealed partial class PublicationOrchestrator
                 string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
+                Log.FileUnchanged(logger, new LogPath(entry.RelativePath));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
@@ -741,6 +744,9 @@ public sealed partial class PublicationOrchestrator
 
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
                 EngineDiagnostics.ScanBytes.Add(entry.Length);
+                Log.FileCaptured(
+                    logger, new LogPath(entry.RelativePath), entry.Length,
+                    LastArchive?.SegmentReferences.Count ?? 0, LastArchive?.RecordsWritten ?? 0);
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
@@ -753,6 +759,7 @@ public sealed partial class PublicationOrchestrator
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
+                Log.FileFailed(logger, new LogPath(entry.RelativePath), exception.Message);
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
         }

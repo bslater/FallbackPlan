@@ -22,7 +22,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 2801, Level = LogLevel.Debug,
         Message = "Restored {Path}: {Bytes} bytes")]
-    internal static partial void ItemRestored(ILogger logger, LogPath path, long bytes);
+    internal static partial void ItemRestored(ILogger logger, LogPath path, ulong bytes);
 
     [LoggerMessage(
         EventId = 2802, Level = LogLevel.Warning,

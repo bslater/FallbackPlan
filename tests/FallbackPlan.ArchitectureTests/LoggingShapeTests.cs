@@ -134,6 +134,153 @@ public sealed class LoggingShapeTests
         Assert.IsEmpty(offenders, string.Join("; ", offenders));
     }
 
+    /// <summary>
+    /// Every declared message is called somewhere in its own project.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A <c>[LoggerMessage]</c> nobody calls is not harmless. It reads exactly
+    /// like a message the engine emits — in the file, in review, and to anyone
+    /// reasoning about what a log will contain — while emitting nothing, and a
+    /// privacy test written over a flow whose call sites were never wired
+    /// passes perfectly without proving anything. That is how this rule came to
+    /// exist: the publish-and-restore path had eleven path-carrying
+    /// declarations and not one call site, so `LogPrivacyTests` would have been
+    /// theatre.
+    /// </para>
+    /// <para>
+    /// The unwired ones are frozen below rather than left to accumulate. The
+    /// list may shrink and must never grow: a new declaration has to come with
+    /// its call site, and wiring an old one means deleting a line here. It is a
+    /// debt register, not an exemption.
+    /// </para>
+    /// </remarks>
+    [TestMethod]
+    public void LogMessages_EveryDeclaration_IsCalledSomewhereOrIsAKnownDebt()
+    {
+        var undeclaredDebt = new List<string>();
+        var settled = new List<string>();
+
+        foreach (var (project, member, called) in DeclaredCallSites())
+        {
+            var key = $"{project}.{member}";
+            if (called && KnownUnwired.Contains(key))
+            {
+                settled.Add(key);
+            }
+            else if (!called && !KnownUnwired.Contains(key))
+            {
+                undeclaredDebt.Add(key);
+            }
+        }
+
+        Assert.IsEmpty(
+            undeclaredDebt,
+            "These messages are declared but never called, so they describe logging that does not happen. "
+            + $"Wire the call site, or delete the declaration: {string.Join(", ", undeclaredDebt)}");
+
+        Assert.IsEmpty(
+            settled,
+            "These are now wired — delete them from KnownUnwired so the register keeps shrinking: "
+            + $"{string.Join(", ", settled)}");
+    }
+
+    /// <summary>
+    /// Declarations with no call site yet (ADR-0043 phase 2's remainder). This
+    /// list may shrink and must never grow.
+    /// </summary>
+    private static readonly HashSet<string> KnownUnwired = new(StringComparer.Ordinal)
+    {
+        "FallbackPlan.Api.CommandHandled",
+        "FallbackPlan.Api.WatchOpened",
+        "FallbackPlan.Api.Listening",
+        "FallbackPlan.Application.ConfigurationLoaded",
+        "FallbackPlan.Application.ConfigurationRefused",
+        "FallbackPlan.Application.ConfigurationMigrated",
+        "FallbackPlan.Application.SetDue",
+        "FallbackPlan.Application.SetNotDue",
+        "FallbackPlan.Application.MissedRunsCoalesced",
+        "FallbackPlan.Application.NoticeRaised",
+        "FallbackPlan.Application.NoticeAcknowledged",
+        "FallbackPlan.Protocol.PairingAccepted",
+        "FallbackPlan.Protocol.PairingRefused",
+        "FallbackPlan.Protocol.IdentityChanged",
+        "FallbackPlan.Protocol.SessionEstablished",
+        "FallbackPlan.Protocol.SessionFailed",
+        "FallbackPlan.Replication.ReplicationStarting",
+        "FallbackPlan.Replication.ObjectCopied",
+        "FallbackPlan.Replication.CopyFailed",
+        "FallbackPlan.Replication.ReplicationComplete",
+        "FallbackPlan.Repository.PublicationStep",
+        "FallbackPlan.Repository.SnapshotPublished",
+        "FallbackPlan.Repository.PublicationFailed",
+        "FallbackPlan.Repository.BlobSealed",
+        "FallbackPlan.Repository.RepositoryCreated",
+        "FallbackPlan.Repository.RepositoryOpened",
+        "FallbackPlan.Repository.RepositoryOpenRefused",
+        "FallbackPlan.Repository.RecordRead",
+        "FallbackPlan.Repository.RecordSealed",
+        "FallbackPlan.Repository.Catalogue.CatalogueOpened",
+        "FallbackPlan.Repository.Catalogue.RebuildStarting",
+        "FallbackPlan.Repository.Catalogue.RebuildComplete",
+        "FallbackPlan.Repository.Catalogue.DamageFound",
+        "FallbackPlan.Repository.Crypto.DerivingRoot",
+        "FallbackPlan.Repository.Crypto.RootDerived",
+        "FallbackPlan.Repository.Crypto.UnwrapFailed",
+        "FallbackPlan.Repository.Crypto.SealedEnvelopeRefused",
+        "FallbackPlan.Repository.Crypto.WriteOnlyAuthorityDerived",
+        "FallbackPlan.Repository.Format.Parsed",
+        "FallbackPlan.Repository.Format.Refused",
+        "FallbackPlan.Repository.Format.UnsupportedFeatures",
+        "FallbackPlan.Repository.Index.DeltaPublished",
+        "FallbackPlan.Repository.Index.IndexLoaded",
+        "FallbackPlan.Repository.Index.UnparseableJournalRecord",
+        "FallbackPlan.Repository.Index.SequenceAnomaly",
+        "FallbackPlan.Repository.Index.VoidDeltaPublished",
+        "FallbackPlan.Repository.Packing.SpoolCheckpointed",
+        "FallbackPlan.Repository.Packing.UnresumableSwept",
+        "FallbackPlan.Repository.Packing.BlobSealed",
+        "FallbackPlan.Repository.Packing.BlobOpened",
+        "FallbackPlan.Repository.Packing.SealedShareRefused",
+        "FallbackPlan.Repository.Segmentation.Segmented",
+        "FallbackPlan.Restore.Quarantined",
+        "FallbackPlan.Retention.PlanningRetention",
+        "FallbackPlan.Retention.RetentionPlanned",
+        "FallbackPlan.Retention.RetentionHeld",
+        "FallbackPlan.Retention.CollectionComplete",
+        "FallbackPlan.Storage.Local.ObjectPut",
+        "FallbackPlan.Storage.Local.ObjectRead",
+        "FallbackPlan.Storage.Local.OperationFailed",
+        "FallbackPlan.Storage.Local.ObjectDeleted",
+    };
+
+    /// <summary>Every declaration, with whether its own project calls it.</summary>
+    private static IEnumerable<(string Project, string Member, bool Called)> DeclaredCallSites()
+    {
+        foreach (var file in LogFiles())
+        {
+            var project = Path.GetFileName(Path.GetDirectoryName(file))!;
+            var sources = Directory
+                .GetFiles(Path.GetDirectoryName(file)!, "*.cs", SearchOption.AllDirectories)
+                .Where(candidate =>
+                    !candidate.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                    !candidate.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                    !string.Equals(candidate, file, StringComparison.Ordinal))
+                .Select(File.ReadAllText)
+                .ToArray();
+
+            foreach (Match declaration in Regex.Matches(
+                File.ReadAllText(file), @"internal static partial void ([A-Za-z]+)"))
+            {
+                var member = declaration.Groups[1].Value;
+                yield return (
+                    project,
+                    member,
+                    sources.Any(text => text.Contains($"Log.{member}(", StringComparison.Ordinal)));
+            }
+        }
+    }
+
     /// <summary>Every <c>[LoggerMessage]</c> declaration, as (event id, project, member).</summary>
     private static IEnumerable<(int Id, string Project, string Member)> DeclaredEvents()
     {
