@@ -745,6 +745,20 @@ public static class AgentHost
 
                 await using var localListener = LocalServiceListener.Start(
                     localHandler, stateDirectory, logging.Factory.CreateLogger<LocalServiceListener>());
+
+                // Logged as well as printed, and the duplication is deliberate.
+                // Installed as a service there is no console to print to, and
+                // "what came up, and when" is the first thing anybody reading a
+                // support log needs. The printed lines stay because a
+                // foreground run is somebody waiting to see it start.
+                var hostLog = logging.Factory.CreateLogger(typeof(AgentHost).FullName!);
+                Log.LocalBindingUp(hostLog);
+                if (remoteListener is not null)
+                {
+                    var boundTo = remoteListener.Endpoint.ToString();
+                    Log.RemoteBindingUp(hostLog, boundTo, peerKeypair!.Identity.Fingerprint);
+                }
+
                 if (!once)
                 {
                     output.WriteLine($"{DateTimeOffset.Now:u}  listening on {localListener.Address}");
