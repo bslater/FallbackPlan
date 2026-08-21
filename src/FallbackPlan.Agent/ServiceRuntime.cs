@@ -132,14 +132,43 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// (FR-SVC-011).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A set provisioned the older per-set way counts. An installation that
     /// predates ADR-0044 is already working, and telling it to set itself up
     /// would offer a ceremony whose only possible outcome is a second,
     /// unrelated derivation root.
+    /// </para>
+    /// <para>
+    /// <b>A configuration that will not load is not an answer of "no".</b>
+    /// This is read by <c>describe_service</c>, which is the first thing a
+    /// console asks and the verb that decides whether it can talk to this
+    /// service at all — so a typo in <c>config.json</c> must not take it
+    /// down, and must certainly not present a set-up installation with a
+    /// ceremony that would mint it a second root. The installation credential
+    /// is a file on disk and answers without the configuration; the per-set
+    /// fallback is what needs the set list, and it simply does not get
+    /// consulted when the list cannot be read.
+    /// </para>
     /// </remarks>
-    public bool IsSetUp =>
-        InstallationCredential.Holds
-        || Configuration.BackupSets.Any(set => WriteCredentials.Holds(set.Id));
+    public bool IsSetUp
+    {
+        get
+        {
+            if (InstallationCredential.Holds)
+            {
+                return true;
+            }
+
+            try
+            {
+                return Configuration.BackupSets.Any(set => WriteCredentials.Holds(set.Id));
+            }
+            catch (ClientStateException)
+            {
+                return false;
+            }
+        }
+    }
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");

@@ -278,6 +278,34 @@ public sealed class InstallationCredentialTests : IDisposable
             "the loser must not leave key material in a .tmp beside the real one");
     }
 
+    [TestMethod]
+    public async Task Runtime_AConfigurationThatWillNotLoad_StillAnswersDescribeService()
+    {
+        // describe_service is the first thing a console asks and the verb
+        // that decides whether it can talk to this service at all. Reading
+        // config.json to answer the setup state put a typo in that file on
+        // the path of that answer — found by a live drill, not by a test,
+        // which is why this one exists.
+        await File.WriteAllTextAsync(
+            Path.Combine(_harness.StateDirectory, "config.json"),
+            """{"schemaVersion": 3, "backupSets": []}""",
+            _timeout.Token);
+
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+        Assert.AreEqual("setup_required", description.SetupState);
+
+        // And a set-up installation still reports ready, because the
+        // installation credential answers without the configuration at all.
+        Save(Store());
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var afterwards);
+        Assert.AreEqual("ready", afterwards.SetupState);
+    }
+
     /// <summary>Provisions the installation as setup would, returning the salt it used.</summary>
     private static byte[] Save(InstallationCredentialStore store)
     {
