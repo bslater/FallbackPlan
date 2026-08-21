@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "recover from kit": {
+      "commandName": "Project",
+      "commandLineArgs": "--kit C:\\fbp\\kit.txt --repo C:\\fbp\\repo --output C:\\fbp\\recovered --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    }
+  }
+}

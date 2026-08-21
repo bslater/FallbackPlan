@@ -1,0 +1,23 @@
+{
+  "profiles": {
+    "run (foreground)": {
+      "commandName": "Project",
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    },
+    "run --once": {
+      "commandName": "Project",
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --once",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    },
+    "unlock": {
+      "commandName": "Project",
+      "commandLineArgs": "unlock --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    },
+    "notices": {
+      "commandName": "Project",
+      "commandLineArgs": "notices --archives C:\\fbp\\archives --state C:\\fbp\\state"
+    }
+  }
+}

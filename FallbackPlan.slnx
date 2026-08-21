@@ -4,7 +4,9 @@
     <Project Path="src/FallbackPlan.Api/FallbackPlan.Api.csproj" />
     <Project Path="src/FallbackPlan.Application/FallbackPlan.Application.csproj" />
     <Project Path="src/FallbackPlan.Cli/FallbackPlan.Cli.csproj" />
-    <Project Path="src/FallbackPlan.Diagnostics/FallbackPlan.Diagnostics.csproj" />
+    <Project Path="src/FallbackPlan.Diagnostics/FallbackPlan.Diagnostics.csproj">
+      <Build Solution="Debug|*" Project="false" />
+    </Project>
     <Project Path="src/FallbackPlan.Domain/FallbackPlan.Domain.csproj" />
     <Project Path="src/FallbackPlan.Filesystem.Local/FallbackPlan.Filesystem.Local.csproj" />
     <Project Path="src/FallbackPlan.Filesystem/FallbackPlan.Filesystem.csproj" />
@@ -41,7 +43,9 @@
     <Project Path="tests/FallbackPlan.Application.Tests/FallbackPlan.Application.Tests.csproj" />
     <Project Path="tests/FallbackPlan.ArchitectureTests/FallbackPlan.ArchitectureTests.csproj" />
     <Project Path="tests/FallbackPlan.Cli.Tests/FallbackPlan.Cli.Tests.csproj" />
-    <Project Path="tests/FallbackPlan.Diagnostics.Tests/FallbackPlan.Diagnostics.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Diagnostics.Tests/FallbackPlan.Diagnostics.Tests.csproj">
+      <Build Solution="Debug|*" Project="false" />
+    </Project>
     <Project Path="tests/FallbackPlan.Domain.Tests/FallbackPlan.Domain.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Filesystem.Tests/FallbackPlan.Filesystem.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Hosts.Tests/FallbackPlan.Hosts.Tests.csproj" />

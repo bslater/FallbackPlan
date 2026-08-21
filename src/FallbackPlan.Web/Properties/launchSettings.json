@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "console": {
+      "commandName": "Project",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
+      "launchBrowser": false
+    }
+  }
+}
