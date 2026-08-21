@@ -299,6 +299,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
                     offeredFeatures: _offeredFeatures,
                     preread: first,
+                    logger: _log,
                     cancellationToken: _stopping.Token).ConfigureAwait(false);
             }
             catch (PeerProtocolException refusal)

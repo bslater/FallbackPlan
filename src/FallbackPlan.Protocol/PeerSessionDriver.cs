@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Bodu;
 
 namespace FallbackPlan.Protocol;
@@ -95,6 +96,7 @@ public static class PeerSessionDriver
     /// </param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused; a refusal was sent before closing.</exception>
+    /// <param name="logger">Where the pairing and session outcome is recorded (ADR-0043).</param>
     public static ValueTask<PeerSession> AcceptAsync(
         PeerTlsConnection connection,
         PeerKeypair keypair,
@@ -104,10 +106,11 @@ public static class PeerSessionDriver
         Func<PeerGrant, PeerTerms?>? termsForPeer = null,
         IReadOnlyList<string>? offeredFeatures = null,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null,
+        ILogger? logger = null,
         CancellationToken cancellationToken = default) =>
         RunAsync(
             connection, keypair, grants, expected: null, agentVersion, terms, termsForPeer, offeredFeatures,
-            requiredFeatures: null, preread, cancellationToken);
+            requiredFeatures: null, preread, logger, cancellationToken);
 
     /// <summary>Dials a known peer: authenticate the one expected, then open.</summary>
     /// <param name="connection">The TLS connection, its bindings already known.</param>
@@ -127,6 +130,7 @@ public static class PeerSessionDriver
     /// <param name="cancellationToken">Cancels the handshake.</param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused, or refused this side.</exception>
+    /// <param name="logger">Where the pairing and session outcome is recorded (ADR-0043).</param>
     public static ValueTask<PeerSession> DialAsync(
         PeerTlsConnection connection,
         PeerKeypair keypair,
@@ -135,12 +139,13 @@ public static class PeerSessionDriver
         string agentVersion,
         PeerTerms? terms = null,
         IReadOnlyList<string>? requiredFeatures = null,
+        ILogger? logger = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(expected);
         return RunAsync(
             connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, offeredFeatures: null,
-            requiredFeatures, preread: null, cancellationToken);
+            requiredFeatures, preread: null, logger, cancellationToken);
     }
 
     private static async ValueTask<PeerSession> RunAsync(
@@ -154,6 +159,7 @@ public static class PeerSessionDriver
         IReadOnlyList<string>? offeredFeatures,
         IReadOnlyList<string>? requiredFeatures,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread,
+        ILogger? logger,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(connection);
