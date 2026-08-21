@@ -93,7 +93,13 @@ public static class RecoveryHost
             var kit = RecoveryKitCodec.Parse(framed);
 
             using var passphrase = Passphrase.Create(passphraseValue);
-            using var session = RecoverySession.Open(kit, passphrase, new LocalFileSystemObjectStore(repoPath));
+            // OpenAsync serves both kit formats: a repository kit is
+            // delegated to the synchronous path unchanged, and an
+            // installation kit reads the archive's own identity from its
+            // descriptor first (recovery-kit §6).
+            using var session = await RecoverySession.OpenAsync(
+                kit, passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
+                .ConfigureAwait(false);
 
             switch (command)
             {
@@ -101,7 +107,10 @@ public static class RecoveryHost
                 {
                     output.WriteLine($"repository     {Convert.ToHexString(session.RepositoryId.ToArray()).ToLowerInvariant()}");
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"kit version    {kit.KitFormatVersion} (issued {DateTimeOffset.FromUnixTimeMilliseconds((long)kit.IssuedAt):yyyy-MM-dd})"));
-                    output.WriteLine("key object     unwrapped — the kit and passphrase open this repository");
+                    output.WriteLine(kit.IsInstallationKit
+                        ? "derivation     reproduced — this kit and passphrase open this archive, and every "
+                            + "other archive this installation wrote"
+                        : "key object     unwrapped — the kit and passphrase open this repository");
                     var (blobs, notes) = await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"blobs          {blobs} readable"));
                     foreach (var note in notes)

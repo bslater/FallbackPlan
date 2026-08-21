@@ -5,6 +5,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
@@ -56,6 +57,134 @@ public sealed class RecoverySession : IDisposable
 
     /// <summary>The repository identity the kit names.</summary>
     public RepositoryId RepositoryId { get; }
+
+    /// <summary>
+    /// The descriptor object every repository publishes at its root
+    /// (repository-format 01 §6).
+    /// </summary>
+    /// <remarks>
+    /// Named here rather than taken from <c>RepositoryLifecycle</c>: the
+    /// recovery tool's dependency closure is deliberately
+    /// format/crypto/packing/storage only, so it reads the descriptor with
+    /// the format codec and does not reach the engine to learn a filename.
+    /// </remarks>
+    private static readonly ObjectKey DescriptorKey = ObjectKey.Parse("repository-format");
+
+    /// <summary>
+    /// Opens a session, reading the repository's own identity from the
+    /// archive when the kit does not carry one (specifications/recovery-kit
+    /// §2.2, §6; FR-KIT-006).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An <b>installation kit</b> names no repository, because one opens
+    /// every archive its passphrase wrote. The repository id is nonetheless
+    /// load-bearing — it is associated data for every record and every
+    /// sealed blob — so it comes from the descriptor of whichever archive
+    /// the operator pointed at. The kit supplies the keys; the archive
+    /// supplies its name.
+    /// </para>
+    /// <para>
+    /// The derivation is proved <b>twice</b>, and the two failures are
+    /// different questions with different answers. Against the kit's copy:
+    /// this is not the passphrase that made this kit. Against the
+    /// descriptor's: this kit belongs to a different installation than this
+    /// archive. Collapsing them into one message would leave somebody
+    /// retyping a passphrase that was right all along.
+    /// </para>
+    /// <para>
+    /// A <b>repository kit</b> is delegated to <see cref="Open"/> unchanged,
+    /// so one call site serves both and neither has to ask which it holds.
+    /// </para>
+    /// </remarks>
+    /// <param name="kit">The kit, of either format.</param>
+    /// <param name="passphrase">The repository passphrase.</param>
+    /// <param name="store">The archive to open.</param>
+    /// <param name="cancellationToken">Abandons the descriptor read.</param>
+    /// <returns>The opened session.</returns>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce the kit's keys.</exception>
+    /// <exception cref="RecoveryKitFormatException">The archive has no readable descriptor, or belongs to another installation.</exception>
+    public static async ValueTask<RecoverySession> OpenAsync(
+        RecoveryKit kit, Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(kit);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(store);
+
+        if (!kit.IsInstallationKit)
+        {
+            return Open(kit, passphrase, store);
+        }
+
+        var descriptor = await ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+
+        var authority = WriteOnlyDerivation.Derive(
+            passphrase,
+            new Argon2Parameters
+            {
+                MemoryKiB = kit.KdfMemoryKiB,
+                Iterations = kit.KdfIterations,
+                Parallelism = kit.KdfParallelism,
+            },
+            kit.KdfSalt.Span,
+            KdfValidationMode.OpenRepository);
+
+        try
+        {
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
+            {
+                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+            }
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
+            {
+                throw new RecoveryKitFormatException(
+                    Resources.Strings.RecoverySession_KitBelongsToAnotherInstallation);
+            }
+
+            return new RecoverySession(
+                store, descriptor.RepositoryId, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+        }
+        catch
+        {
+            authority.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Reads and parses the archive's descriptor.</summary>
+    private static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(
+        IObjectStore store, CancellationToken cancellationToken)
+    {
+        using var read = await store.OpenReadAsync(DescriptorKey, range: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (read.Outcome != OpenReadOutcome.Found)
+        {
+            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor);
+        }
+
+        using var memory = new MemoryStream();
+        await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+
+        // Every non-Ok outcome is the same answer here — this is not an
+        // archive this kit can open — but the tool still says which, because
+        // "not a repository" and "digest does not verify" send an operator
+        // to completely different places.
+        return RepositoryDescriptorCodec.Parse(memory.ToArray()) switch
+        {
+            DescriptorParseResult.Ok ok => ok.Descriptor,
+            DescriptorParseResult.NotARepository =>
+                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor),
+            DescriptorParseResult.IntegrityFailure =>
+                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead),
+            DescriptorParseResult.FormatViolation violation =>
+                throw new RecoveryKitFormatException(violation.Message),
+            var other =>
+                throw new RecoveryKitFormatException(
+                    Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead + " (" + other.GetType().Name + ")"),
+        };
+    }
 
     /// <summary>
     /// Opens a session: KEK from the kit's KDF parameters and the
