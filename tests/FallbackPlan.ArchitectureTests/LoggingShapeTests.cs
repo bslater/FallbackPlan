@@ -228,10 +228,6 @@ public sealed class LoggingShapeTests
         "FallbackPlan.Retention.RetentionPlanned",
         "FallbackPlan.Retention.RetentionHeld",
         "FallbackPlan.Retention.CollectionComplete",
-        "FallbackPlan.Storage.Local.ObjectPut",
-        "FallbackPlan.Storage.Local.ObjectRead",
-        "FallbackPlan.Storage.Local.OperationFailed",
-        "FallbackPlan.Storage.Local.ObjectDeleted",
     };
 
     /// <summary>Every declaration, with whether its own project calls it.</summary>

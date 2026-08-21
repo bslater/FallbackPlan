@@ -471,7 +471,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
             var path = ArchivePath(setId);
             Directory.CreateDirectory(path);
-            var store = new LocalFileSystemObjectStore(path);
+            var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
 
             OpenedRepository repository;
             if (WriteCredentials.TryLoad(setId) is { } credential)

@@ -152,7 +152,7 @@ public sealed class CliSession : IDisposable
     {
         var log = logger ?? NullLogger.Instance;
 
-        var store = new LocalFileSystemObjectStore(repoPath);
+        var store = new LocalFileSystemObjectStore(repoPath, log);
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
         OpenedRepository repository;
