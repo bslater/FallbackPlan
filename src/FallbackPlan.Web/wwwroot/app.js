@@ -28,6 +28,11 @@ const gateEl = document.getElementById("gate");
 
 const S = {
   connected: null,          // null until first answer; then true/false
+  diagnostics: null,        // DiagnosticsResult, or null before the first read
+  logRecords: [],           // LogRecordDescriptor[] newest last, capped for the DOM's sake
+  logCursor: 0,             // the sequence to ask from next
+  logDropped: false,        // whether this reader has fallen behind the ring
+  logLevelFilter: "",       // the minimum level asked for, "" for everything
   lastContact: null,        // ms epoch of last successful exchange
   desc: null,               // ServiceDescriptionResult
   status: null,             // StatusResult
@@ -271,6 +276,7 @@ async function refreshDesc() {
     S.setupState = result.setupState ?? null;
     if (changed) { S.setupRequired = wants; renderSetupGate(); }
     if (S.view === "maintenance") renderMaintenance();
+    if (S.view === "diagnostics") renderDiagnostics();
   }
 }
 
@@ -303,7 +309,7 @@ function scheduleJobsRender() {
 
 /* ---------------------------------------------------------------- views */
 
-const VIEWS = ["overview", "snapshots", "jobs", "notices", "config", "maintenance"];
+const VIEWS = ["overview", "snapshots", "jobs", "notices", "config", "maintenance", "diagnostics"];
 
 function route() {
   const view = location.hash.replace("#", "") || "overview";
@@ -315,9 +321,11 @@ function route() {
     link.classList.toggle("active", link.dataset.view === S.view);
   }
   ({ overview: renderOverview, snapshots: renderSnapshots, jobs: renderJobs,
-     notices: renderNotices, config: renderConfig, maintenance: renderMaintenance })[S.view]();
+     notices: renderNotices, config: renderConfig, maintenance: renderMaintenance,
+     diagnostics: renderDiagnostics })[S.view]();
   if (S.view === "config") refreshConfigData();
   if (S.view === "notices") refreshNotices();
+  if (S.view === "diagnostics") refreshDiagnostics();
 }
 
 /* ----- overview ----- */
@@ -512,6 +520,121 @@ function renderNotices() {
 }
 
 /* ----- maintenance ----- */
+
+/* ----- diagnostics ----- */
+
+// The seventh view (ADR-0043 §6, FR-SVC-010). It reads the service's in-memory
+// ring through the contract like every other view, on the existing poll rather
+// than a second SSE stream: a log a person is watching is being read at human
+// speed, and a stream would be a second push channel to keep honest for no gain.
+//
+// The level control is here rather than withheld. The console runs on loopback,
+// so it is a local caller and set_log_level is permitted to it (ADR-0028 §6);
+// the change does not persist, so a level somebody raised and forgot goes back
+// on the next restart rather than becoming a machine that has been at trace for
+// eight months.
+
+const LOG_LEVELS = ["trace", "debug", "information", "warning", "error", "critical", "none"];
+
+// What the DOM will hold. The ring is the service's memory; this is the
+// browser's, and an unbounded one would turn a busy service into a tab that
+// eventually stops responding.
+const LOG_RECORDS_KEPT = 500;
+
+async function refreshDiagnostics() {
+  const diagnostics = await run({ command: "get_diagnostics" });
+  if (diagnostics?.result === "diagnostics") S.diagnostics = diagnostics;
+
+  const page = await run({
+    command: "read_log",
+    sinceSequence: S.logCursor,
+    maxRecords: 200,
+    minimumLevel: S.logLevelFilter || null,
+  });
+
+  if (page?.result === "log_records") {
+    if (page.dropped) S.logDropped = true;
+    S.logRecords = [...S.logRecords, ...page.records].slice(-LOG_RECORDS_KEPT);
+    S.logCursor = page.nextSequence;
+  }
+
+  if (S.view === "diagnostics") renderDiagnostics();
+}
+
+function renderDiagnostics() {
+  const el = document.getElementById("view-diagnostics");
+  const d = S.diagnostics;
+  const categories = Object.entries(d?.categoryLevels ?? {});
+
+  el.innerHTML = `
+    <h2>Diagnostics</h2>
+    <p class="view-sub">The engineer's view, not the operator's — anything you must act on is a notice, and a log line is never the fix for a missing one.</p>
+    <div class="grid cols-2">
+
+      <div class="card">
+        <h3>🎚 Level</h3>
+        <p class="sub">Takes effect immediately and lasts until the service stops; <code>config.json</code>'s level applies again after a restart.</p>
+        <label class="field" for="diag-level">Default level</label>
+        <select id="diag-level">
+          ${LOG_LEVELS.map(name => `<option${name === (d?.defaultLevel ?? "") ? " selected" : ""}>${esc(name)}</option>`).join("")}
+        </select>
+        <label class="field" for="diag-category">Category override <span class="sub">(optional, longest prefix wins)</span></label>
+        <input id="diag-category" type="text" placeholder="FallbackPlan.Repository">
+        <div class="actions-row"><button type="button" class="btn" data-action="set-log-level">Apply</button></div>
+        ${categories.length === 0 ? "" : `
+          <p class="sub">In force now: ${categories.map(([k, v]) => `<code>${esc(k)}</code> → ${esc(v)}`).join(", ")}</p>`}
+      </div>
+
+      <div class="card">
+        <h3>📦 Where the records go</h3>
+        ${d ? `
+          <div class="table-wrap"><table class="data"><tbody>
+            <tr><td>Durable file</td><td>${d.durableSink ? `yes — ${esc(String(d.retainFiles))} kept, ${fmtBytes(d.maximumFileBytes)} each` : "no — the ring is all there is"}</td></tr>
+            <tr><td>Ring</td><td>${esc(String(d.ringCapacity))} records, sequences ${esc(String(d.oldestSequence))}–${esc(String(d.nextSequence))}</td></tr>
+          </tbody></table></div>
+          <p class="sub">The service does not say where the file is: it exposes no filesystem access to clients, and a log reader is not where to make an exception.</p>`
+        : `<p class="sub">Waiting for the service.</p>`}
+      </div>
+
+      <div class="card records">
+        <h3>📜 Records</h3>
+        <div class="actions-row">
+          <label class="field" for="diag-filter">Show</label>
+          <select id="diag-filter">
+            <option value=""${S.logLevelFilter === "" ? " selected" : ""}>everything the ring holds</option>
+            ${LOG_LEVELS.slice(0, -1).map(name =>
+              `<option value="${esc(name)}"${S.logLevelFilter === name ? " selected" : ""}>${esc(name)} and above</option>`).join("")}
+          </select>
+          <button type="button" class="btn" data-action="clear-log">Clear this view</button>
+        </div>
+        ${S.logDropped ? `<p class="sub dropped">Records were dropped before what you can see — the service logged faster than this page was reading. Raise <code>ring_capacity</code>, or leave this view open.</p>` : ""}
+        ${S.logRecords.length === 0
+          ? `<p class="sub">Nothing at this level yet.</p>`
+          : `<div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>When</th><th>Level</th><th>Event</th><th>Category</th><th>Message</th></tr></thead><tbody>
+              ${S.logRecords.slice().reverse().map(r => `
+                <tr class="lvl-${esc(r.level)}">
+                  <td>${esc(String(r.sequence))}</td>
+                  <td>${esc(new Date(r.timestampUnixMilliseconds).toLocaleTimeString())}</td>
+                  <td>${esc(r.level)}</td>
+                  <td>${esc(String(r.eventId))}</td>
+                  <td><code>${esc(r.category)}</code></td>
+                  <td>${esc(r.message)}${r.exceptionType ? `<br><span class="sub">${esc(r.exceptionType)}: ${esc(r.exceptionMessage ?? "")}</span>` : ""}</td>
+                </tr>`).join("")}
+             </tbody></table></div>`}
+      </div>
+
+    </div>`;
+
+  document.getElementById("diag-filter").addEventListener("change", event => {
+    // A different filter is a different question, so the answer starts over
+    // rather than mixing two level sets in one table.
+    S.logLevelFilter = event.target.value;
+    S.logRecords = [];
+    S.logCursor = 0;
+    S.logDropped = false;
+    refreshDiagnostics();
+  });
+}
 
 function renderMaintenance() {
   const el = document.getElementById("view-maintenance");
@@ -1083,6 +1206,27 @@ const setupActions = {
 };
 
 const actions = {
+  async "set-log-level"(el) {
+    await withBusy(el, async () => {
+      const category = document.getElementById("diag-category").value.trim();
+      const result = await run(
+        { command: "set_log_level", category: category || null, level: document.getElementById("diag-level").value },
+        { errToast: "The level was not changed" });
+      if (result?.result === "configuration_change") {
+        toast("ok", result.lines[0]);
+        refreshDiagnostics();
+      }
+    });
+  },
+
+  async "clear-log"() {
+    // Clears this page, never the service's ring: two consoles may be watching
+    // and neither owns the history.
+    S.logRecords = [];
+    S.logDropped = false;
+    renderDiagnostics();
+  },
+
   async "backup"(el) {
     await withBusy(el, async () => {
       const result = await run(

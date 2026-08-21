@@ -638,3 +638,19 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 /* A warning is not a defect: it does not refuse the save, and the colour
    says so before the wording does (FR-SNP-007). */
 .warnings li.advisory { color: var(--warn); }
+
+/* ---------- diagnostics (ADR-0043 §6) ---------- */
+
+/* The records card spans the grid: a log line is a sentence, and wrapping one
+   into a 380px column to sit beside a level control helps nobody. */
+.card.records { grid-column: 1 / -1; }
+
+/* A gap in what the reader can see is a finding, not a footnote — it is the
+   difference between a quiet service and one nobody was reading fast enough. */
+.dropped { color: var(--warn); }
+
+/* Level, at a glance. The severities that mean something get colour; trace and
+   debug deliberately do not, because most of a busy log is them. */
+table.data tr.lvl-warning td:nth-child(3) { color: var(--warn); font-weight: 650; }
+table.data tr.lvl-error td:nth-child(3),
+table.data tr.lvl-critical td:nth-child(3) { color: var(--bad); font-weight: 650; }

@@ -3,6 +3,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Cli;
 using FallbackPlan.Domain;
@@ -1372,6 +1373,122 @@ public static class CliApplication
             }));
         }
 
+        // ---------------------------------------------------------------- logs
+
+        {
+            var levelFilterOption = new Option<string?>("--level")
+            {
+                Description = "Show records at this level and above: trace, debug, information, warning, error, critical.",
+            };
+            var sinceOption = new Option<long>("--since")
+            {
+                Description = "Start after this sequence number. 0 starts at the oldest record still held.",
+            };
+            var tailOption = new Option<int>("--tail")
+            {
+                Description = "Show at most this many of the most recent records.",
+                DefaultValueFactory = _ => 50,
+            };
+            var followOption = new Option<bool>("--follow")
+            {
+                Description = "Keep reading as records arrive, until interrupted.",
+            };
+
+            var command = WithRemoteCapableSession(new Command(
+                "logs",
+                "Read the service's diagnostic log (ADR-0043 §6). Needs a running service: the records live "
+                + "in its memory, so there is no --direct equivalent."));
+            command.Options.Add(levelFilterOption);
+            command.Options.Add(sinceOption);
+            command.Options.Add(tailOption);
+            command.Options.Add(followOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                // The one read verb with no local path. Every other one can fall
+                // back to reading the repository itself; this cannot, because the
+                // ring is in the running service's memory and a service that is
+                // not running has no log to show. So it takes the service's
+                // address directly — --state for the local binding, --connect for
+                // a paired one — and never opens a repository it does not need.
+                var remote = ResolveRemote(parse, direct: false);
+                var state = parse.GetValue(stateOption);
+                if (remote is null && state is not { Length: > 0 })
+                {
+                    throw new CliFailureException(
+                        "logs reads a running service, so it needs to know which one: pass --state <dir> for the "
+                        + "service on this machine, or --connect <host:port> --fingerprint <fp> for a paired one. "
+                        + "There is no --direct mode — the records are in the service's memory, not in the repository.");
+                }
+
+                var level = parse.GetValue(levelFilterOption);
+                var tail = Math.Max(parse.GetValue(tailOption), 1);
+                var follow = parse.GetValue(followOption);
+                var cursor = parse.GetValue(sinceOption);
+
+                async ValueTask<LogRecordsResult> ReadAsync(long since, int maximum)
+                {
+                    var request = new ReadLogCommand(since, maximum, level);
+                    if (remote is { } target)
+                    {
+                        return await QueryRemoteAsync<LogRecordsResult>(target, request, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    LocalServiceClient client;
+                    try
+                    {
+                        client = await LocalServiceClient.ConnectAsync(
+                            state!, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (ServiceConnectionException unreachable)
+                    {
+                        // Nothing listening is an ordinary condition here, not a
+                        // crash. Everywhere else in the CLI it means "do the work
+                        // in this process instead"; this verb has no such
+                        // fallback, so it has to say what it found.
+                        throw new CliFailureException(
+                            $"{unreachable.Message} Logs are held by the running service, so there is nothing "
+                            + "to read until one is up.",
+                            unreachable);
+                    }
+
+                    await using (client.ConfigureAwait(false))
+                    {
+                        return await client.ExecuteAsync(request, cancellationToken).ConfigureAwait(false) switch
+                        {
+                            LogRecordsResult page => page,
+                            ServiceError failure => throw new CliFailureException(failure.Message),
+                            var other => throw new CliFailureException(
+                                $"the service answered with {other.GetType().Name}."),
+                        };
+                    }
+                }
+
+                if (remote is not null)
+                {
+                    // Said once, because it changes what the records mean: a
+                    // paired console reads redacted, so a path is a hash here
+                    // and the whole path on the machine that holds the files.
+                    error.WriteLine("mode: service (remote) — records are redacted for a paired caller (ADR-0043 §4).");
+                }
+
+                var first = await ReadAsync(cursor, tail).ConfigureAwait(false);
+                WriteLogPage(first, output, error);
+                cursor = first.NextSequence;
+
+                while (follow && !cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                    var page = await ReadAsync(cursor, 200).ConfigureAwait(false);
+                    WriteLogPage(page, output, error);
+                    cursor = page.NextSequence;
+                }
+
+                return 0;
+            }));
+        }
+
         // -------------------------------------------------------------- status
 
         {
@@ -1491,6 +1608,42 @@ public static class CliApplication
 
         return await root.Parse(args).InvokeAsync(configuration).ConfigureAwait(false);
 
+    }
+
+    /// <summary>
+    /// Writes one page of log records, and says when records were missed.
+    /// </summary>
+    /// <param name="page">The page the service answered with.</param>
+    /// <param name="output">Where the records go.</param>
+    /// <param name="error">Where the gap notice goes, so a redirect keeps the records clean.</param>
+    /// <remarks>
+    /// The dropped notice is not decoration. A reader that has fallen behind the
+    /// ring has missed records, which is a different fact from a quiet service,
+    /// and a client that renders the two alike will one day have somebody
+    /// reporting that nothing happened during the hour everything did.
+    /// </remarks>
+    private static void WriteLogPage(LogRecordsResult page, TextWriter output, TextWriter error)
+    {
+        if (page.Dropped)
+        {
+            error.WriteLine(
+                "warning: records were dropped before this page — the service logged faster than this reader "
+                + "was reading. Raise ring_capacity in config.json, or read more often.");
+        }
+
+        foreach (var record in page.Records)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{record.Sequence,-8}  " +
+                $"{DateTimeOffset.FromUnixTimeMilliseconds(record.TimestampUnixMilliseconds):u}  " +
+                $"{record.Level,-11}  {record.EventId,-5}  {record.Category}  {record.Message}"));
+
+            if (record.ExceptionType is { Length: > 0 })
+            {
+                output.WriteLine($"{string.Empty,-8}  {record.ExceptionType}: {record.ExceptionMessage}");
+            }
+        }
     }
 
     /// <summary>

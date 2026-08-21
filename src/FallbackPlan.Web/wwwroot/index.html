@@ -23,6 +23,7 @@
       <a href="#notices" data-view="notices">Notices&nbsp;<span class="count warn" id="notices-count" hidden></span></a>
       <a href="#config" data-view="config">Configuration</a>
       <a href="#maintenance" data-view="maintenance">Maintenance</a>
+      <a href="#diagnostics" data-view="diagnostics">Diagnostics</a>
     </nav>
     <div class="top-actions">
       <span class="conn" id="conn" role="status"><span class="dot"></span><span id="conn-text">connecting…</span></span>
@@ -39,6 +40,10 @@
     <section class="view" id="view-notices" aria-label="Notices" hidden></section>
     <section class="view" id="view-config" aria-label="Configuration" hidden></section>
     <section class="view" id="view-maintenance" aria-label="Maintenance" hidden></section>
+    <!-- The engineer's view (ADR-0043 §6): what the service is logging, and
+         what it has logged. Deliberately last in the nav — it answers a
+         question nobody asks until something has already gone wrong. -->
+    <section class="view" id="view-diagnostics" aria-label="Diagnostics" hidden></section>
   </main>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
