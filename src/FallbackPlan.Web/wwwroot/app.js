@@ -42,6 +42,7 @@ const S = {
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
+  setupRequired: false,     // describe_service said this installation has no passphrase (ADR-0044)
 };
 
 const SETTLED = new Set([
@@ -262,6 +263,10 @@ async function refreshDesc() {
   const result = await api({ command: "describe_service" }).catch(() => null);
   if (result?.result === "service_description") {
     S.desc = result;
+    // A service older than contract 1.13 answers null here, which reads as
+    // "cannot tell" and so as no reason to interrupt anybody.
+    const wants = result.setupState === "setup_required";
+    if (wants !== S.setupRequired) { S.setupRequired = wants; renderSetupGate(); }
     if (S.view === "maintenance") renderMaintenance();
   }
 }
@@ -734,6 +739,197 @@ async function withBusy(button, work) {
   try { await work(); }
   finally { if (button) { button.disabled = false; button.classList.remove("busy"); } }
 }
+
+/* -------------------------------------------------- first-run setup (ADR-0044) */
+
+// The one ceremony that runs before anything else works. Three steps —
+// what you are about to commit to, the passphrase, and confirming it —
+// shown INSTEAD of the console rather than in a dialog over it, because
+// there is nothing behind it that functions until an installation has a
+// passphrase.
+let U = null;
+
+const SETUP_STEPS = ["What this is", "Passphrase", "Confirm"];
+
+function renderSetupGate() {
+  const host = document.getElementById("setup");
+  if (!S.setupRequired) {
+    host.hidden = true;
+    appEl.hidden = false;
+    U = null;
+    return;
+  }
+
+  if (!U) U = { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false };
+  appEl.hidden = true;
+  host.hidden = false;
+  setupRender();
+}
+
+function setupRender() {
+  const host = document.getElementById("setup");
+  const body = [setupStep1, setupStep2, setupStep3][U.step - 1]();
+  host.innerHTML = `<div class="gate-card setup-card">
+    <div class="rst-steps">${SETUP_STEPS.map((label, index) =>
+      `<span class="${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
+    ${body}
+  </div>`;
+  if (U.step === 2) {
+    const field = document.getElementById("setup-pass");
+    field?.focus();
+  }
+}
+
+function setupStep1() {
+  // The wording IS the feature. Everything here is stated before a
+  // passphrase field exists, so nobody types one having skipped it.
+  return `
+    <h1>Set up this installation</h1>
+    <p>FallbackPlan is not protecting anything yet. It needs one passphrase, and
+    everything else follows from it.</p>
+    <ul class="setup-facts">
+      <li><b>The passphrase is the master key for this installation.</b> Every
+      key protecting your backups is derived from it.</li>
+      <li><b>It is never stored</b> — not on this machine, not in the backup, not
+      anywhere. This service will be able to add to your backup history and see
+      its structure, but it will never be able to read your files back.</li>
+      <li><b>It can never be changed.</b> There is no reset and no export.</li>
+      <li class="setup-danger"><b>If you lose it, every backup this installation
+      ever makes is permanently unrecoverable.</b> Nobody can recover it for you
+      — not us, not support, not with the machine in front of them.</li>
+    </ul>
+    <p class="gate-hint">Write it down and put it somewhere safe before you
+    continue. A password manager, or paper somewhere only you can reach.</p>
+    <label class="check-row"><input type="checkbox" id="setup-ack" ${U.acknowledged ? "checked" : ""}
+      data-action-change="setup-ack">
+      I understand that losing this passphrase loses the backup, permanently.</label>
+    <div class="dlg-actions">
+      <button type="button" class="btn danger" data-action="setup-begin"
+        ${U.acknowledged ? "" : "disabled"}>Choose the passphrase</button>
+    </div>`;
+}
+
+function setupStep2() {
+  const meter = U.strength;
+  return `
+    <h1>Choose the passphrase</h1>
+    <p>Longer is better than complicated. Several unrelated words you will
+    remember beat a short string of symbols you will not.</p>
+    <input type="password" id="setup-pass" class="setup-field" autocomplete="new-password"
+      spellcheck="false" placeholder="the passphrase for this installation"
+      value="${esc(U.passphrase)}" data-action-input="setup-pass">
+    ${meter ? `
+      <div class="meter meter-${esc(meter.band)}"><i style="width:${Math.max(4, meter.score)}%"></i></div>
+      <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="setup-back">‹ Back</button>
+      <button type="button" class="btn primary" data-action="setup-to-confirm"
+        ${meter?.acceptable ? "" : "disabled"}>Continue</button>
+    </div>`;
+}
+
+function setupStep3() {
+  const mismatch = U.confirmation.length > 0 && U.confirmation !== U.passphrase;
+  return `
+    <h1>Type it again</h1>
+    <p>The one thing that cannot be fixed later is a typo in a passphrase you
+    only ever entered once.</p>
+    <input type="password" id="setup-confirm" class="setup-field" autocomplete="new-password"
+      spellcheck="false" placeholder="the same passphrase" value="${esc(U.confirmation)}"
+      data-action-input="setup-confirm">
+    ${mismatch ? `<p class="setup-danger">These do not match.</p>` : ""}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="setup-back">‹ Back</button>
+      <button type="button" class="btn danger" data-action="setup-finish"
+        ${U.busy || mismatch || U.confirmation.length === 0 ? "disabled" : ""}>
+        ${U.busy ? "Setting up…" : "Set up this installation"}</button>
+    </div>`;
+}
+
+// Debounced so a fast typist does not queue a request per keystroke. The
+// scoring is the server's so there is exactly one implementation of the
+// policy — see WebConsoleHost.AssessPassphraseAsync for why that is worth a
+// round trip.
+let setupStrengthTimer = null;
+function setupScheduleStrength() {
+  clearTimeout(setupStrengthTimer);
+  setupStrengthTimer = setTimeout(async () => {
+    const candidate = U?.passphrase ?? "";
+    if (!candidate) { if (U) { U.strength = null; setupRender(); } return; }
+    try {
+      const response = await fetch("/api/passphrase-strength", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify({ candidate }),
+      });
+      if (!response.ok || !U) return;
+      U.strength = await response.json();
+      setupRender();
+    } catch {
+      // The meter is a courtesy; the submit is where the policy is enforced.
+    }
+  }, 250);
+}
+
+const setupActions = {
+  "setup-ack"(el) { U.acknowledged = el.checked; setupRender(); },
+
+  "setup-begin"() { if (U.acknowledged) { U.step = 2; setupRender(); } },
+
+  "setup-back"() { U.step = Math.max(1, U.step - 1); setupRender(); },
+
+  "setup-pass"(el) {
+    U.passphrase = el.value;
+    // No re-render here: it would replace the field the person is typing in.
+    setupScheduleStrength();
+    const go = document.querySelector('[data-action="setup-to-confirm"]');
+    if (go) go.disabled = !U.strength?.acceptable;
+  },
+
+  "setup-to-confirm"() { if (U.strength?.acceptable) { U.step = 3; setupRender(); } },
+
+  "setup-confirm"(el) {
+    U.confirmation = el.value;
+    const go = document.querySelector('[data-action="setup-finish"]');
+    if (go) go.disabled = U.busy || U.confirmation.length === 0 || U.confirmation !== U.passphrase;
+  },
+
+  async "setup-finish"() {
+    U.busy = true;
+    setupRender();
+    let body;
+    try {
+      const response = await fetch("/api/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify({
+          passphrase: U.passphrase, confirmation: U.confirmation, acknowledged: U.acknowledged,
+        }),
+      });
+      body = await response.json();
+    } catch {
+      U.busy = false;
+      toast("bad", "The console process stopped answering.");
+      setupRender();
+      return;
+    }
+
+    U.busy = false;
+    if (body?.outcome !== "provisioned") {
+      toast("warn", body?.detail ?? "Setup did not complete.");
+      if (body?.outcome === "weak") { U.step = 2; U.strength = null; setupScheduleStrength(); }
+      setupRender();
+      return;
+    }
+
+    // Held only as long as the ceremony took.
+    U = null;
+    S.setupRequired = false;
+    renderSetupGate();
+    reportDialog("This installation is set up", body.lines ?? []);
+    refreshAll();
+  },
+};
 
 const actions = {
   async "backup"(el) {
@@ -2792,10 +2988,20 @@ function boot() {
       return;
     }
     const el = event.target.closest("[data-action]");
-    if (el) actions[el.dataset.action]?.(el);
+    if (!el) return;
+    if (U && el.dataset.action.startsWith("setup-")) { setupActions[el.dataset.action]?.(el); return; }
+    actions[el.dataset.action]?.(el);
   });
 
   document.addEventListener("input", event => {
+    // First-run setup owns the page when it is showing, so its fields are
+    // matched before anything else looks at the event.
+    const setupField = event.target.closest("[data-action-input^='setup-']");
+    if (setupField && U) {
+      setupActions[setupField.dataset.actionInput]?.(setupField);
+      return;
+    }
+
     const el = event.target.closest("[data-action-input='confirm-word']");
     if (!el) return;
     const go = document.getElementById(el.dataset.enables);
@@ -2803,6 +3009,11 @@ function boot() {
   });
 
   document.addEventListener("change", event => {
+    if (U && event.target.matches("[data-action-change^='setup-']")) {
+      setupActions[event.target.dataset.actionChange]?.(event.target);
+      return;
+    }
+
     if (event.target.matches("[data-action-change='filter-snapshots']")) {
       S.snapshotFilter = event.target.value;
       renderSnapshots();

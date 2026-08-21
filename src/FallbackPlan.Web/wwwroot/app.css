@@ -606,3 +606,30 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ----- first-run setup (ADR-0044) ----------------------------------------
+   Shown instead of the console, not over it: until the installation has a
+   passphrase there is nothing behind this to look at. Wider and
+   left-aligned than the token gate, because it is read rather than
+   glanced at. */
+.setup-card { max-width: 560px; text-align: left; }
+.setup-card .rst-steps { justify-content: center; }
+.setup-field {
+  width: 100%;
+  padding: 9px 11px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--fg);
+  font-size: 14px;
+}
+.setup-facts { margin: 12px 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
+.setup-facts li { margin: 7px 0; }
+.setup-facts b { color: var(--fg); }
+.setup-danger, .setup-facts .setup-danger b { color: var(--bad); }
+.setup-findings { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.setup-findings li { margin: 3px 0; }
+.meter.meter-too_short > i, .meter.meter-weak > i { background: var(--bad); }
+.meter.meter-fair > i { background: var(--warn); }
+.meter.meter-strong > i { background: var(--ok); }

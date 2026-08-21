@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Bodu;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Web.Resources;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -150,6 +151,8 @@ public static class WebConsoleHost
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
         app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
         app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
+        app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
+        app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
@@ -413,6 +416,241 @@ public static class WebConsoleHost
                 exception.Message).ConfigureAwait(false);
         }
     }
+
+    /// <summary>What the passphrase-strength endpoint reads from the page.</summary>
+    /// <param name="Candidate">The passphrase as typed so far.</param>
+    private sealed record StrengthRequest(string? Candidate);
+
+    /// <summary>The strength endpoint's answer, for the live meter.</summary>
+    /// <param name="Band"><c>too_short</c>, <c>weak</c>, <c>fair</c> or <c>strong</c>.</param>
+    /// <param name="Score">0–100, for the meter's width.</param>
+    /// <param name="Acceptable">Whether setup would accept this candidate.</param>
+    /// <param name="Findings">Plain sentences to show beneath the field.</param>
+    private sealed record StrengthResponse(
+        string Band, int Score, bool Acceptable, IReadOnlyList<string> Findings);
+
+    /// <summary>
+    /// Scores a half-typed passphrase for the setup meter (ADR-0044 §6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this is a round trip rather than a script in the page.</b> A
+    /// meter computed in JavaScript would be a second copy of the policy, in
+    /// a second language, free to disagree with the one that actually
+    /// decides — and the way that disagreement shows up is the page saying
+    /// "strong" and the submit being refused, at the one moment a person is
+    /// least able to work out why. One implementation, one verdict.
+    /// </para>
+    /// <para>
+    /// The exposure it costs is small and worth naming: the candidate reaches
+    /// the same local process that is about to derive from the finished
+    /// passphrase seconds later, over loopback, behind the same token. It is
+    /// never sent to the service and never leaves this machine.
+    /// </para>
+    /// </remarks>
+    private static async Task AssessPassphraseAsync(HttpContext context, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        StrengthRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<StrengthRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        var assessment = PassphraseStrength.Assess(request?.Candidate ?? string.Empty);
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new StrengthResponse(
+                BandName(assessment.Band), assessment.Score, assessment.IsAcceptable,
+                [.. assessment.Findings.Select(Describe)]),
+            SerializerOptions,
+            context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>What the setup endpoint reads from the page.</summary>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0044 §4).</param>
+    /// <param name="Confirmation">The second entry, which must match.</param>
+    /// <param name="Acknowledged">
+    /// The typed loss acknowledgement: the operator accepts that this is the
+    /// master key, that it can never change, and that losing it makes every
+    /// backup unrecoverable.
+    /// </param>
+    private sealed record SetupRequest(string? Passphrase, string? Confirmation, bool Acknowledged);
+
+    /// <summary>The setup endpoint's answer.</summary>
+    /// <param name="Outcome"><c>provisioned</c>, <c>refused</c>, <c>weak</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not provisioned.</param>
+    /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
+    /// <param name="Findings">What was wrong with the passphrase, on a weak outcome.</param>
+    private sealed record SetupResponse(
+        string Outcome, string? Detail = null,
+        IReadOnlyList<string>? Lines = null, IReadOnlyList<string>? Findings = null);
+
+    /// <summary>
+    /// First-run setup (ADR-0044): the third endpoint permitted a secret, and
+    /// it holds the same line as the restore gate and the write-only
+    /// ceremony — Argon2id runs in this process, and what reaches the service
+    /// is the write bundle sealed to its published recipient key.
+    /// </summary>
+    /// <remarks>
+    /// The order below is fixed and tested: acknowledgement, then the two
+    /// entries matching, then strength, and only then a derivation. Consent
+    /// comes before the work for the same reason it does in the write-only
+    /// ceremony — there is no recovery path to offer afterwards.
+    /// </remarks>
+    private static async Task SetupAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        SetupRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<SetupRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a passphrase is required")).ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(SetupResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        if (!request.Acknowledged)
+        {
+            await AnswerAsync(new SetupResponse(
+                "refused",
+                "Setup needs the acknowledgement: this passphrase is the master key for the installation, it "
+                + "can never be changed, and if it is lost every backup is permanently unrecoverable."))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!string.Equals(request.Passphrase, request.Confirmation, StringComparison.Ordinal))
+        {
+            // Compared ordinally and before normalisation, because the two
+            // entries exist to catch a typing mistake, and two strings that
+            // differ only after NFC folding were still typed differently.
+            await AnswerAsync(new SetupResponse(
+                "refused", "The two passphrases do not match.")).ConfigureAwait(false);
+            return;
+        }
+
+        var assessment = PassphraseStrength.Assess(request.Passphrase);
+        if (!assessment.IsAcceptable)
+        {
+            await AnswerAsync(new SetupResponse(
+                "weak",
+                $"This passphrase is too weak to be an installation's master key (it needs at least "
+                + $"{PassphraseStrength.MinimumLength} characters, and more than one repeated unit).",
+                Findings: [.. assessment.Findings.Select(Describe)])).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult { RestoreGrantRecipient.Length: > 0 } description)
+            {
+                await AnswerAsync(new SetupResponse(
+                    "unavailable", "The service does not publish a grant-recipient key.")).ConfigureAwait(false);
+                return;
+            }
+
+            var minted = ConsoleRestoreGate.BuildInstallationEnvelope(
+                request.Passphrase, description.RestoreGrantRecipient);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new SetupResponse("unavailable", minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new ProvisionInstallationCommand(minted.Envelope!), context.RequestAborted).ConfigureAwait(false);
+
+            await AnswerAsync(result switch
+            {
+                ConfigurationChangeResult change => new SetupResponse("provisioned", Lines: change.Lines),
+                ServiceError refusal => new SetupResponse("refused", refusal.Message),
+                _ => new SetupResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The wire name for a strength band.</summary>
+    private static string BandName(PassphraseStrengthBand band) => band switch
+    {
+        PassphraseStrengthBand.TooShort => "too_short",
+        PassphraseStrengthBand.Weak => "weak",
+        PassphraseStrengthBand.Fair => "fair",
+        _ => "strong",
+    };
+
+    /// <summary>
+    /// A finding as a sentence. The assessment returns values rather than
+    /// prose so the policy stays testable; the wording lives here, where it
+    /// is shown.
+    /// </summary>
+    private static string Describe(PassphraseFinding finding) => finding switch
+    {
+        PassphraseFinding.TooShort =>
+            $"Too short — use at least {PassphraseStrength.MinimumLength} characters.",
+        PassphraseFinding.SingleRepeatedCharacter =>
+            "This is one character repeated, which is one character's worth of secret however long it is.",
+        PassphraseFinding.ShortRepeatedCycle =>
+            "This repeats a short run over and over, so its length is not doing the work it looks like it is.",
+        PassphraseFinding.OneCharacterClassOnly =>
+            "Only one kind of character. Either make it longer, or mix in capitals, digits or punctuation.",
+        PassphraseFinding.FewDistinctCharacters =>
+            "Long, but built from very few different characters.",
+        PassphraseFinding.LengthCarriesIt =>
+            "Long enough that ordinary words are fine — no digits or symbols needed.",
+        _ => "Several kinds of character, which is what you want.",
+    };
 
     /// <summary>
     /// Bridges the contract's progress stream onto server-sent events. One

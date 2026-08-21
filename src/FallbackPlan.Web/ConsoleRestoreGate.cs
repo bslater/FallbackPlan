@@ -273,6 +273,39 @@ public static class ConsoleRestoreGate
         return true;
     }
 
+    /// <summary>
+    /// The client half of first-run setup (ADR-0044 §5): mints this
+    /// installation's salt, derives from the passphrase here — where the
+    /// person typed it — and seals the write bundle to the service's
+    /// recipient key.
+    /// </summary>
+    /// <remarks>
+    /// No archives root, no set id and no descriptor, which is the whole
+    /// difference from <see cref="BuildProvisionEnvelopeAsync"/>: there is
+    /// nothing yet to adopt or to prove against, so this is always a creation
+    /// with a fresh salt. Every archive the installation goes on to create
+    /// records that salt, which is what lets one passphrase open all of them.
+    /// </remarks>
+    /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
+    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
+    /// <returns>The sealed envelope, or why one could not be minted.</returns>
+    public static ProvisionAnswer BuildInstallationEnvelope(string passphraseText, string grantRecipientHex)
+    {
+        ThrowHelper.ThrowIfNull(passphraseText);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
+
+        if (!TryParseRecipient(grantRecipientHex, out var recipient))
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Unavailable,
+                "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                + "and try again (ADR-0044).");
+        }
+
+        using var passphrase = Passphrase.Create(passphraseText);
+        return BuildCreationEnvelope(passphrase, recipient!);
+    }
+
     private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)
     {
         var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
