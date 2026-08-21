@@ -51,6 +51,8 @@ public static class AgentHost
                   fallbackplan-agent run    --archives <root> --state <dir> [--passphrase-env <VAR>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
+                  fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
+                                            --acknowledge-loss
                   fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
@@ -73,6 +75,17 @@ public static class AgentHost
                 --archives as <root>/<set id>, created on the set's first backup
                 (ADR-0034). Missed runs coalesce to one catch-up run per set
                 (ADR-0027 §1).
+
+                `setup` gives a fresh installation the passphrase everything derives
+                from (ADR-0044). It is for headless installs with no browser; the
+                console runs the same ceremony with the warnings spelled out.
+                Derivation happens here and only the sealed bundle reaches the
+                service, so the passphrase is named by environment variable and
+                never appears on the command line. It runs exactly once: a v2
+                passphrase can never be changed, so a second attempt is refused
+                rather than obeyed. --acknowledge-loss is required, because losing
+                the passphrase makes every backup unrecoverable and there is no
+                reset, no export and no support path.
 
                 `unlock` stores the passphrase in this account's platform keystore so
                 scheduled backups run with nobody present; `run` then needs no
@@ -130,10 +143,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -345,6 +358,120 @@ public static class AgentHost
                 error.WriteLine("error: the passphrase does not open this repository.");
                 return 1;
             }
+        }
+
+        // Setup speaks the same one-shot shape as the other verbs here: its
+        // own runtime for the duration, then the ceremony. It therefore
+        // inherits the state-directory refusal — a running service holds the
+        // writer role and is named rather than fought.
+        //
+        // Two commands rather than one, so it cannot use ServiceVerbAsync:
+        // the recipient key has to be read before there is anything to seal
+        // to. That is exactly what the console does over HTTP, and doing it
+        // the same way here keeps one ceremony rather than two.
+        async Task<int> SetupVerbAsync()
+        {
+            try
+            {
+                await using var setupRuntime = await ServiceRuntime.StartAsync(
+                    new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                    passphrase: null, cancellationToken).ConfigureAwait(false);
+
+                var handler = new ServiceCommandHandler(setupRuntime, RemoteBindingState.Off, CallerScope.Local);
+
+                if (await handler.ExecuteAsync(new Api.DescribeServiceCommand(), cancellationToken)
+                        .ConfigureAwait(false) is not Api.ServiceDescriptionResult
+                        { RestoreGrantRecipient.Length: > 0 } description)
+                {
+                    error.WriteLine("error: this service does not publish a grant-recipient key.");
+                    return 2;
+                }
+
+                string envelope;
+                using (var passphrase = Passphrase.Create(passphraseValue!))
+                {
+                    var parameters = Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters;
+                    var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(
+                        Repository.Crypto.KekDerivation.SaltLength);
+
+                    // Argon2id runs here, in the process the operator started.
+                    // What crosses is the sealed bundle (NFR-SEC-011).
+                    using var authority = Repository.Crypto.WriteOnlyDerivation.Derive(
+                        passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
+                    envelope = Convert.ToHexStringLower(
+                        Repository.Crypto.WriteOnlyProvisioning.SealProvision(
+                            Convert.FromHexString(description.RestoreGrantRecipient), authority, salt, parameters));
+                }
+
+                var result = await handler.ExecuteAsync(
+                    new Api.ProvisionInstallationCommand(envelope), cancellationToken).ConfigureAwait(false);
+
+                switch (result)
+                {
+                    case Api.ConfigurationChangeResult change:
+                        foreach (var line in change.Lines)
+                        {
+                            output.WriteLine(line);
+                        }
+
+                        return 0;
+
+                    case Api.ServiceError refusal:
+                        error.WriteLine($"error: {refusal.Message}");
+                        return 2;
+
+                    default:
+                        error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
+                        return 2;
+                }
+            }
+            catch (ClientStateException exception)
+            {
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
+        }
+
+        // `setup` gives a fresh installation its passphrase (ADR-0044) for
+        // headless hosts with no browser. Same ceremony as the console's:
+        // derive here, seal to this service's own recipient key, send hex.
+        // The passphrase is read from the named environment variable — it
+        // never goes on the command line, where a process list would hold
+        // the one secret that can never be changed.
+        if (args[0] == "setup")
+        {
+            if (passphraseValue is null)
+            {
+                error.WriteLine(
+                    "error: `setup` needs --passphrase-env <VAR> naming a set environment variable — the "
+                    + "passphrase is passed by name, never on the command line.");
+                return 1;
+            }
+
+            if (!args.Contains("--acknowledge-loss"))
+            {
+                // The acknowledgement is the ceremony, not a speed bump
+                // (ADR-0042 §11, ADR-0044 §3): there is no recovery path to
+                // offer later, so consent is collected before the derivation.
+                error.WriteLine(
+                    "error: this passphrase becomes the master key for the whole installation. It is never "
+                    + "stored, it can never be changed, and if it is lost every backup is unrecoverable — "
+                    + "there is no reset and no export. Re-run with --acknowledge-loss to accept this "
+                    + "(ADR-0044).");
+                return 1;
+            }
+
+            var assessment = Domain.Configuration.PassphraseStrength.Assess(passphraseValue);
+            if (!assessment.IsAcceptable)
+            {
+                error.WriteLine(
+                    $"error: that passphrase is too weak to be an installation's master key — it needs at "
+                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters, and more "
+                    + "than one repeated unit (ADR-0044 §6).");
+                return 1;
+            }
+
+            return await SetupVerbAsync().ConfigureAwait(false);
         }
 
         // `retention [--apply]` runs one pass per configured set

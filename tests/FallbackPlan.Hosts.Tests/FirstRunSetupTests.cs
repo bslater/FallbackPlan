@@ -190,6 +190,81 @@ public sealed class FirstRunSetupTests : IDisposable
             descriptor.SealingPublicKey.ToArray(), authority.Credential.SealingPublicKey.ToArray());
     }
 
+    [TestMethod]
+    public async Task SetupVerb_WithoutTheAcknowledgement_RefusesAndSaysWhatIsAtStake()
+    {
+        // The acknowledgement is the ceremony, not a speed bump: there is no
+        // recovery path to offer afterwards.
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("unrecoverable", result.All, StringComparison.Ordinal);
+        Assert.Contains("--acknowledge-loss", result.All, StringComparison.Ordinal);
+        Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_WithoutANamedVariable_RefusesRatherThanTakingItFromTheCommandLine()
+    {
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--acknowledge-loss");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("never on the command line", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_AWeakPassphrase_IsRefusedBeforeAnythingIsStored()
+    {
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, "abcabcabcabc");
+        try
+        {
+            var result = await HostHarness.RunAsync(
+                AgentHost.RunAsync,
+                "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("too weak", result.All, StringComparison.Ordinal);
+            Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        }
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_Acknowledged_SetsUpTheInstallationAndRefusesASecondRun()
+    {
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+
+        var first = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+
+        Assert.AreEqual(0, first.ExitCode, first.All);
+        Assert.Contains("never be changed", first.All, StringComparison.Ordinal);
+        Assert.IsTrue(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+
+        // The headless path enforces once-ness the same way the console does,
+        // because it is the same handler behind both.
+        var second = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+
+        Assert.AreEqual(2, second.ExitCode);
+        Assert.Contains("already set up", second.All, StringComparison.Ordinal);
+    }
+
     private async Task<ServiceDescriptionResult> DescribeAsync(ServiceCommandHandler handler)
     {
         Assert.IsInstanceOfType<ServiceDescriptionResult>(

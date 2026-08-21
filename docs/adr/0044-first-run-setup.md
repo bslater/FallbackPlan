@@ -1,6 +1,6 @@
 # ADR-0044 — First-run setup: an installation is initialised the moment it has a passphrase
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08
 **Requirements:** FR-SVC-011, NFR-SEC-011
 **Related:** [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0036](0036-local-web-console.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [architecture 03](../architecture/03-crypto.md), [format spec 03](../../specifications/repository-format/03-keys.md)
@@ -269,3 +269,4 @@ and unmigrated.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the model, scope, client set and strength policy fixed by the user: write-only format 2, passphrase-only ceremony, local console plus an agent verb, and a length floor with a strength estimate. Build sequenced as strength assessment → installation credential and the archive ladder → contract 1.13 with caller scope → console ceremony → agent verb and sweep |
+| 2026-08 | Accepted | Built end to end: the strength policy in Domain with the floor enforced only where a passphrase is chosen, the installation credential and the new rung in ServiceRuntime's archive ladder, contract 1.13's provision_installation with a caller scope so a remote console is refused, the console's three-step ceremony shown in place of its views, and the headless `fallbackplan-agent setup` verb — proven by service-level drills including a passphrase-free backup that seals to the chosen passphrase and a restore-side derivation check against each archive's descriptor |
