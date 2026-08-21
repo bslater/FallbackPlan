@@ -157,7 +157,14 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
                     continue;
                 }
 
-                if (value is IRedactedValue or bool or int or long or ulong or double or Enum)
+                // Numbers of every width, and the two non-numeric primitives
+                // that cannot carry a path or a secret. Listed exhaustively
+                // rather than by "is it a value type": a struct wrapping a
+                // path is a value type too, and the point of this test is that
+                // anything it cannot classify has to be looked at.
+                if (value is IRedactedValue or bool or Enum
+                    or byte or sbyte or short or ushort or int or uint or long or ulong
+                    or float or double or decimal)
                 {
                     continue;
                 }

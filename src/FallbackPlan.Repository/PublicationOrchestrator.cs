@@ -215,8 +215,8 @@ public sealed partial class PublicationOrchestrator
         // (05 §6.3), and this writer owns the directory exclusively.
         BlobWriter.SweepUnresumable(_spoolDirectory);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
 
         // Leftovers first: numbers a previous run allocated and never
         // accounted for get their void deltas (07 §4) before new work — a

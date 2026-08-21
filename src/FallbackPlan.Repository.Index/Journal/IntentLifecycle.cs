@@ -1,5 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Index.Journal;
 
@@ -63,14 +65,30 @@ public sealed record IntentSurvey(
 public static class IntentSurveyor
 {
     /// <summary>Builds the survey.</summary>
+    /// <param name="records">The journal records read.</param>
+    /// <param name="unparseableCount">How many records could not be read at all.</param>
+    /// <param name="currentGeneration">The repository's current generation.</param>
+    /// <param name="nowMs">Now, for expiry.</param>
+    /// <param name="skewMarginMs">The clock-skew allowance.</param>
+    /// <param name="logger">Where an unreadable record is recorded.</param>
     public static IntentSurvey Survey(
         IReadOnlyList<JournalRecord> records,
         int unparseableCount,
         ulong currentGeneration,
         ulong nowMs,
-        ulong skewMarginMs)
+        ulong skewMarginMs,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(records);
+
+        // Conservative by design: a record that will not parse keeps every
+        // blob reachable, so the collector reclaims nothing it cannot read
+        // (08 §8). That is safe and invisible — space stops coming back and
+        // nothing says why — which is exactly what this record is for.
+        for (var i = 0; i < unparseableCount; i++)
+        {
+            Log.UnparseableJournalRecord(logger ?? NullLogger.Instance);
+        }
 
         var live = new List<LiveIntent>();
 

@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Repository.Index.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -25,6 +27,7 @@ public sealed class IndexPublisher : IDisposable
     private readonly KeyHierarchy _hierarchy;
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly ILogger _log;
 
     /// <summary>Creates a publisher for one writer.</summary>
     public IndexPublisher(
@@ -32,12 +35,14 @@ public sealed class IndexPublisher : IDisposable
         RepositoryId repositoryId,
         WriterId writerId,
         KeyHierarchy hierarchy,
-        WriterSequence sequence)
+        WriterSequence sequence,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(hierarchy);
         ThrowHelper.ThrowIfNull(sequence);
 
+        _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -98,6 +103,7 @@ public sealed class IndexPublisher : IDisposable
 
         var deltaId = await PublishDeltaObjectAsync(delta, cancellationToken).ConfigureAwait(false);
         _sequence.MarkAccounted(sequence, deltaId);
+        Log.DeltaPublished(_log, deltaId, checked((uint)generation), entries.Count);
         return (deltaId, delta);
     }
 
@@ -121,6 +127,7 @@ public sealed class IndexPublisher : IDisposable
 
         var deltaId = await PublishDeltaObjectAsync(delta, cancellationToken).ConfigureAwait(false);
         _sequence.MarkAccounted(sequence, deltaId);
+        Log.VoidDeltaPublished(_log, sequence);
         return deltaId;
     }
 

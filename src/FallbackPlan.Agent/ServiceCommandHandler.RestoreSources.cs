@@ -468,7 +468,7 @@ public sealed partial class ServiceCommandHandler
                 // is taken, because an entry naming a trimmed blob is
                 // re-answered honestly by the plan probe, which asks the
                 // store per blob (FR-RST-003).
-                report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy))
+                report = await new CatalogueRebuilder(new IndexLoader(store, repository.RepositoryId, repository.Hierarchy, runtime.LoggerFor<IndexLoader>()))
                     .RebuildAsync(
                         catalogue, generation, gapPatienceGenerations: 2,
                         isSequenceAccountedAsync: null, cancellationToken)
