@@ -4,6 +4,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Recovery.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Recovery;
 
@@ -51,6 +52,11 @@ public static class RecoveryHost
 
                 The kit file may be the binary form (FBPKRKIT) or the transcribable
                 text form. The kit is one factor; the passphrase is the other.
+
+                Every verb accepts --log-level <trace|debug|information|warning|
+                error|critical|none>, which also reads FALLBACKPLAN_LOG_LEVEL. Logs
+                go to standard error and nowhere else — this tool writes no file it
+                was not asked to write (ADR-0043 §6).
                 """);
             return 0;
         }
@@ -70,6 +76,14 @@ public static class RecoveryHost
 
         string Require(string name) => Get(name)
             ?? throw new RecoveryFailureException(Strings.FormatRecoveryHost_MissingRequiredOption(name));
+
+        if (!ConsoleLogging.TryResolveLevel(Get("--log-level"), out var logLevel, out var levelRefusal))
+        {
+            error.WriteLine($"error: {levelRefusal}");
+            return 1;
+        }
+
+        var log = ConsoleLogging.For(error, logLevel, typeof(RecoveryHost).FullName!);
 
         try
         {
@@ -91,6 +105,7 @@ public static class RecoveryHost
                 ? kitBytes
                 : RecoveryKitText.ParseToFramed(System.Text.Encoding.UTF8.GetString(kitBytes));
             var kit = RecoveryKitCodec.Parse(framed);
+            Log.KitRead(log, kit.RepositoryFormatVersion, kit.Destinations.Count);
 
             using var passphrase = Passphrase.Create(passphraseValue);
             // OpenAsync serves both kit formats: a repository kit is
@@ -100,6 +115,7 @@ public static class RecoveryHost
             using var session = await RecoverySession.OpenAsync(
                 kit, passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
                 .ConfigureAwait(false);
+            Log.KeysDerived(log);
 
             switch (command)
             {
@@ -161,6 +177,7 @@ public static class RecoveryHost
                         error.WriteLine(note);
                     }
 
+                    Log.RecoveryComplete(log, report.Restored, report.Failed, report.Skipped);
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                         $"restored {report.Restored} file(s), {report.Failed} failed, {report.Skipped} skipped, to {destination}"));
                     return report.Failed == 0 ? 0 : 2;
@@ -177,6 +194,7 @@ public static class RecoveryHost
         }
         catch (KeyUnwrapFailedException)
         {
+            Log.PassphraseRefused(log);
             error.WriteLine("error: the passphrase does not open this kit's key object — wrong passphrase or wrong kit.");
             return 1;
         }

@@ -20,6 +20,8 @@ using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
 using RestoreResult = FallbackPlan.Repository.RestoreResult;
+using FallbackPlan.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Cli;
 
@@ -85,9 +87,57 @@ public static class CliApplication
         {
             Description = "Fingerprint of the pinned service to expect when using --connect (the key it was paired to must answer).",
         };
+        var logLevelOption = new Option<string?>("--log-level")
+        {
+            Description =
+                "How much to log to standard error: trace, debug, information, warning, error, critical or none. "
+                + "Reads FALLBACKPLAN_LOG_LEVEL when absent; warnings and above otherwise.",
+            Recursive = true,
+        };
+
+        // The level is read straight from the arguments rather than from the
+        // parse result: every handler below closes over the composition, so it
+        // has to exist before the commands that use it are built. The option is
+        // still declared — recursively, on the root — so the parser accepts it
+        // wherever it is written and `--help` describes it.
+        string? LogLevelArgument()
+        {
+            for (var i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--log-level")
+                {
+                    return args[i + 1];
+                }
+            }
+
+            return null;
+        }
+
+        if (!LoggingOptions.TryResolveLevel(
+                LogLevelArgument(),
+                Environment.GetEnvironmentVariable(LoggingOptions.LevelVariable),
+                configured: null,
+                out var logLevel,
+                out var levelRefusal,
+                fallback: LogLevel.Warning))
+        {
+            error.WriteLine($"error: {levelRefusal}");
+            return 1;
+        }
+
+        // The console's own output is its result, not its log, so nothing
+        // below Warning reaches standard error unless somebody asked for it —
+        // and no file sink at all, because `<state>/logs` belongs to the
+        // service that owns the state directory, not to a command passing
+        // through it (ADR-0043 §6).
+        using var logging = LoggingComposition.Create(
+            new LoggingOptions { Default = logLevel, Directory = null, Console = true },
+            error);
+        var sessionLogger = logging.Factory.CreateLogger<CliSession>();
 
         var root = new RootCommand(
             "FallbackPlan — encrypted backup: repository tooling, backup and restore, and the console for a running service");
+        root.Options.Add(logLevelOption);
 
         Command WithSession(Command command)
         {
@@ -176,7 +226,7 @@ public static class CliApplication
         }
 
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
-            Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken);
+            Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken, sessionLogger);
 
         // An engineering verb — one the service contract carries no command for
         // — takes the device's writer role for its duration and says so. Direct
@@ -192,7 +242,8 @@ public static class CliApplication
                 PassphraseEnv(parse),
                 parse.GetValue(stateOption),
                 writerRole: true,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                sessionLogger).ConfigureAwait(false);
 
             error.WriteLine(
                 $"mode: direct — '{verb}' has no service equivalent, so this command holds the writer role for "
@@ -218,7 +269,8 @@ public static class CliApplication
                     PassphraseEnv(parse),
                     parse.GetValue(stateOption),
                     parse.GetValue(directOption),
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    sessionLogger).ConfigureAwait(false);
 
             await using (gateway.ConfigureAwait(false))
             {
@@ -844,7 +896,8 @@ public static class CliApplication
                         PassphraseEnv(parse),
                         parse.GetValue(stateOption),
                         parse.GetValue(directOption),
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        sessionLogger).ConfigureAwait(false);
 
                 await using (gateway.ConfigureAwait(false))
                 {

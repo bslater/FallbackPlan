@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Cli;
 
@@ -111,9 +113,19 @@ public sealed class CliSession : IDisposable
     }
 
     /// <summary>Opens an existing repository (01 §6 steps 1–3) and binds the state directory.</summary>
+    /// <param name="repoPath">The repository.</param>
+    /// <param name="passphraseEnvironmentVariable">The variable naming the passphrase.</param>
+    /// <param name="stateDirectory">The state directory, or null for the default.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
+    /// <returns>The session; dispose to release what it holds.</returns>
     public static ValueTask<CliSession> OpenAsync(
-        string repoPath, string passphraseEnvironmentVariable, string? stateDirectory, CancellationToken cancellationToken) =>
-        OpenAsync(repoPath, passphraseEnvironmentVariable, stateDirectory, writerRole: false, cancellationToken);
+        string repoPath,
+        string passphraseEnvironmentVariable,
+        string? stateDirectory,
+        CancellationToken cancellationToken,
+        ILogger? logger = null) =>
+        OpenAsync(repoPath, passphraseEnvironmentVariable, stateDirectory, writerRole: false, cancellationToken, logger);
 
     /// <summary>
     /// Opens a session, optionally taking the device's writer role for the
@@ -128,14 +140,18 @@ public sealed class CliSession : IDisposable
     /// alongside a service.
     /// </param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The session; dispose to release the role.</returns>
     public static async ValueTask<CliSession> OpenAsync(
         string repoPath,
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool writerRole,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
+        var log = logger ?? NullLogger.Instance;
+
         var store = new LocalFileSystemObjectStore(repoPath);
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
@@ -167,16 +183,17 @@ public sealed class CliSession : IDisposable
             throw new CliFailureException(exception.Message, exception);
         }
 
+        // Facts about the repository, not results of the command — so they go
+        // to the log, which is where somebody diagnosing "why did this stop
+        // reading" will look, rather than into the middle of a report.
         if (repository.UnstableFormatWarning)
         {
-            Console.Error.WriteLine(
-                "warning: this repository was written under an UNSTABLE format version — it may become unreadable by future releases (specification 01 §3.2).");
+            Log.UnstableFormat(log, repository.RepositoryId);
         }
 
         if (repository.KdfBelowCreationMinimums)
         {
-            Console.Error.WriteLine(
-                "warning: the repository's stored KDF parameters fall below current creation minimums (specification 03 §2).");
+            Log.KdfBelowMinimums(log, repository.RepositoryId);
         }
 
         var state = stateDirectory ?? DefaultStateDirectory(repository.RepositoryId);

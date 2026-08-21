@@ -4,6 +4,7 @@ using System.Net;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Keystore;
 using FallbackPlan.Protocol;
@@ -12,6 +13,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -69,6 +71,11 @@ public static class AgentHost
                                             [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
+
+                Every verb accepts --log-level <trace|debug|information|warning|
+                error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
+                when the flag is absent (ADR-0043 §6). Logs go to <state>/logs;
+                `run` echoes them to the console as well.
 
                 Backup sets, their destinations and their schedules come from
                 <state>/config.json. Each set's staging archive lives under
@@ -152,6 +159,34 @@ public static class AgentHost
                 "error: usage is `run`, `setup`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
+
+        // The level in force, resolved before any verb runs: the flag, then
+        // the environment, then Information (ADR-0043 §6). A name nobody
+        // recognises is refused here rather than quietly ignored.
+        if (!LoggingOptions.TryResolveLevel(
+                Get("--log-level"),
+                Environment.GetEnvironmentVariable(LoggingOptions.LevelVariable),
+                configured: null,
+                out var logLevel,
+                out var levelRefusal))
+        {
+            error.WriteLine($"error: {levelRefusal}");
+            return 1;
+        }
+
+        // One composition for the process. The sinks own a file handle and a
+        // rotation policy, so a verb that built a second would be rolling the
+        // same file from two places. `run` also echoes to the console, which
+        // is where the service's own lines have always gone; the one-shot
+        // verbs print their result and leave the file to hold the detail.
+        using var logging = LoggingComposition.Create(
+            new LoggingOptions
+            {
+                Default = logLevel,
+                Directory = stateDirectory is null ? null : Path.Combine(stateDirectory, "logs"),
+                Console = args[0] == "run",
+            },
+            output);
 
         // `notices` lists what awaits a human, or acknowledges one entry —
         // the durable third channel (architecture 10 §3.1): a peering that
@@ -318,7 +353,12 @@ public static class AgentHost
             {
                 using var verbPassphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
                 await using var verbRuntime = await ServiceRuntime.StartAsync(
-                    new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                    new ServiceOptions
+                    {
+                        ArchivesRoot = archivesRoot!,
+                        StateDirectory = stateDirectory,
+                        LoggerFactory = logging.Factory,
+                    },
                     verbPassphrase, cancellationToken).ConfigureAwait(false);
 
                 var handler = new ServiceCommandHandler(verbRuntime, RemoteBindingState.Off);
@@ -379,7 +419,12 @@ public static class AgentHost
             try
             {
                 await using var setupRuntime = await ServiceRuntime.StartAsync(
-                    new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                    new ServiceOptions
+                    {
+                        ArchivesRoot = archivesRoot!,
+                        StateDirectory = stateDirectory,
+                        LoggerFactory = logging.Factory,
+                    },
                     passphrase: null, cancellationToken).ConfigureAwait(false);
 
                 var handler = new ServiceCommandHandler(setupRuntime, RemoteBindingState.Off, CallerScope.Local);
@@ -650,8 +695,7 @@ public static class AgentHost
             ArchivesRoot = archivesRoot!,
             StateDirectory = stateDirectory,
             PollSeconds = pollSeconds,
-            Log = (message, exception) => output.WriteLine(
-                $"{DateTimeOffset.Now:u}  {message}{(exception is null ? string.Empty : $": {exception.Message}")}"),
+            LoggerFactory = logging.Factory,
         };
 
         try
@@ -678,7 +722,7 @@ public static class AgentHost
                     var endpoint = new IPEndPoint(IPAddress.Parse(remoteBinding.Interface!), remoteBinding.Port);
                     remoteListener = RemoteServiceListener.Start(
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
-                        log: line => output.WriteLine($"{DateTimeOffset.Now:u}  {line}"),
+                        log: logging.Factory.CreateLogger<RemoteServiceListener>(),
                         replicationStateDirectory: stateDirectory);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
@@ -699,7 +743,8 @@ public static class AgentHost
                 // that the handler exists.
                 remoteListener?.Bind(new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote));
 
-                await using var localListener = LocalServiceListener.Start(localHandler, stateDirectory);
+                await using var localListener = LocalServiceListener.Start(
+                    localHandler, stateDirectory, logging.Factory.CreateLogger<LocalServiceListener>());
                 if (!once)
                 {
                     output.WriteLine($"{DateTimeOffset.Now:u}  listening on {localListener.Address}");

@@ -4,6 +4,11 @@
       "commandName": "Project",
       "commandLineArgs": "--state C:\\fbp\\state --port 5099",
       "launchBrowser": false
+    },
+    "console (debug logging)": {
+      "commandName": "Project",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099 --log-level debug",
+      "launchBrowser": false
     }
   }
 }

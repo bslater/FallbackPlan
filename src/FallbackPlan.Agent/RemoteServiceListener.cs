@@ -5,6 +5,8 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Protocol;
 using ProtocolIdentity = FallbackPlan.Protocol.PeerIdentity;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -30,7 +32,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly Socket _socket;
     private readonly string _agentVersion;
     private readonly IReadOnlyList<string>? _offeredFeatures;
-    private readonly Action<string>? _log;
+    private readonly ILogger _log;
     private readonly string? _replicasRoot;
     private readonly string? _spoolRoot;
     private readonly string? _stateDirectory;
@@ -47,7 +49,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         PeerGrantStore grants,
         Socket socket,
         string agentVersion,
-        Action<string>? log,
+        ILogger log,
         string? replicationStateDirectory,
         IReadOnlyList<string>? offeredFeatures)
     {
@@ -106,7 +108,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         PeerGrantStore grants,
         IPEndPoint endpoint,
         string agentVersion,
-        Action<string>? log = null,
+        ILogger? log = null,
         string? replicationStateDirectory = null,
         IReadOnlyList<string>? offeredFeatures = null)
     {
@@ -120,7 +122,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Bind(endpoint);
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
-                keypair, grants, socket, agentVersion, log, replicationStateDirectory, offeredFeatures);
+                keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
+                replicationStateDirectory, offeredFeatures);
         }
         catch
         {
@@ -209,7 +212,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     {
         if (_stateDirectory is null)
         {
-            _log?.Invoke("pairing offered but this listener holds no state directory; closing");
+            Log.PairingWithoutState(_log);
             return;
         }
 
@@ -226,7 +229,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
             if (result.Grant is { } grant)
             {
-                _log?.Invoke($"peer paired via invite: '{grant.Label}' ({grant.Identity.Fingerprint})");
+                Log.PeerPaired(_log, grant.Label, grant.Identity.Fingerprint);
 
                 // Durable, not just a log line: the issuing operator learns who
                 // redeemed their invite even if they were away (FR-DEST-008's
@@ -239,13 +242,13 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             }
             else
             {
-                _log?.Invoke(
-                    $"invite pairing did not complete: {result.Refusal?.Reason} — {result.Refusal?.Text}");
+                Log.PairingRefused(
+                    _log, result.Refusal?.Reason.ToString() ?? "unknown", result.Refusal?.Text ?? string.Empty);
             }
         }
         catch (PeerProtocolException refusal)
         {
-            _log?.Invoke($"invite pairing refused: {refusal.Reason} — {refusal.Message}");
+            Log.PairingRefused(_log, refusal.Reason.ToString(), refusal.Message);
         }
     }
 
@@ -300,12 +303,12 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             }
             catch (PeerProtocolException refusal)
             {
-                _log?.Invoke($"remote connection refused: {refusal.Reason} — {refusal.Message}");
+                Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
                 return;
             }
 
             var peer = DescribePeer(session.Peer.Identity);
-            _log?.Invoke($"remote peer authenticated: {peer}");
+            Log.PeerAuthenticated(_log, peer);
 
             // The grant's role decides which payload the open stream carries
             // (peer-protocol 03 §1). A peer entitled to store objects here speaks
@@ -315,7 +318,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             {
                 if (_replicasRoot is null)
                 {
-                    _log?.Invoke($"replication offered by {peer} but this service holds no replicas; closing");
+                    Log.ReplicationWithoutReplicas(_log, peer);
                     return;
                 }
 
@@ -336,7 +339,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         _replicasRoot, session.Stream, session.Peer, _owners!,
                         RetrieveOpen.Read(payload.Value.Body), _stopping.Token)
                         .ConfigureAwait(false);
-                    _log?.Invoke($"retrieval session served for {peer}");
+                    Log.RetrievalServed(_log, peer);
                     return;
                 }
 
@@ -363,11 +366,11 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         + $"{(termination.GraceDays > 0 ? $"; it suggests a {termination.GraceDays}-day grace" : string.Empty)}.",
                         now);
                     _grants.Revoke(session.Peer.Identity);
-                    _log?.Invoke($"peering terminated by {peer}");
+                    Log.PeeringTerminated(_log, peer);
                     return;
                 }
 
-                _log?.Invoke($"replicated {outcome.Committed} object(s) for repository {outcome.RepositoryId} from {peer}");
+                Log.Replicated(_log, outcome.Committed, peer);
                 return;
             }
 
@@ -380,13 +383,13 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         {
             // A replication exchange that violated the protocol was refused on
             // the wire by the responder; it ends this connection and no other.
-            _log?.Invoke($"remote connection refused: {refusal.Reason} — {refusal.Message}");
+            Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {
             // A remote client that drops, or a handshake that fails at the TLS
             // layer, ends its own connection and nothing else.
-            _log?.Invoke($"remote connection ended: {exception.Message}");
+            Log.RemoteEnded(_log, exception.Message);
         }
     }
 

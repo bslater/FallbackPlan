@@ -64,7 +64,7 @@ public static class WebConsoleHost
                 FallbackPlan web console — a browser front end for a running service
 
                 usage:
-                  fallbackplan-web --state <dir> [--port <n>]
+                  fallbackplan-web --state <dir> [--port <n>] [--log-level <level>]
 
                 The console talks to the service holding the writer role for <dir>
                 over its local binding, exactly as the CLI does. It binds
@@ -73,6 +73,10 @@ public static class WebConsoleHost
                 every start. It holds no repository, no keys and no writer role: if
                 no service is listening it says so, keeps trying, and the page shows
                 the service as unreachable until one answers (ADR-0036).
+
+                --log-level takes trace, debug, information, warning, error, critical
+                or none, and reads FALLBACKPLAN_LOG_LEVEL when absent. Logs go to
+                standard error; the service keeps its own (ADR-0043 §6).
                 """).ConfigureAwait(false);
             return args.Length == 0 ? 1 : 0;
         }
@@ -83,18 +87,42 @@ public static class WebConsoleHost
             return 1;
         }
 
+        if (!ConsoleLogging.TryResolveLevel(LogLevelArgument(args), out var logLevel, out var levelRefusal))
+        {
+            await error.WriteLineAsync($"error: {levelRefusal}").ConfigureAwait(false);
+            return 1;
+        }
+
+        var log = ConsoleLogging.For(error, logLevel, typeof(WebConsoleHost).FullName!);
         var auth = ConsoleAuth.CreateWithRandomToken();
         IServiceClientFactory clients = new LocalServiceClientFactory(options!.StateDirectory);
 
-        await using var console = await StartAsync(options, clients, auth, cancellationToken).ConfigureAwait(false);
+        await using var console = await StartAsync(options, clients, auth, log, cancellationToken)
+            .ConfigureAwait(false);
 
+        Log.ConsoleBound(log, options.Port, options.StateDirectory);
         await output.WriteLineAsync($"state    {options.StateDirectory}").ConfigureAwait(false);
         await output.WriteLineAsync($"console  {console.TokenisedUrl}").ConfigureAwait(false);
-        await output.WriteLineAsync(await ProbeServiceAsync(clients, cancellationToken).ConfigureAwait(false))
+        await output.WriteLineAsync(await ProbeServiceAsync(clients, log, cancellationToken).ConfigureAwait(false))
             .ConfigureAwait(false);
 
         await console.WaitForShutdownAsync(cancellationToken).ConfigureAwait(false);
         return 0;
+    }
+
+    /// <summary>What <c>--log-level</c> carried, if the command line named it.</summary>
+    /// <param name="args">The command line, as the process received it.</param>
+    private static string? LogLevelArgument(string[] args)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--log-level")
+            {
+                return args[i + 1];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -104,17 +132,21 @@ public static class WebConsoleHost
     /// <param name="options">What to serve.</param>
     /// <param name="clients">Where connected service clients come from.</param>
     /// <param name="auth">The run's authenticator.</param>
+    /// <param name="logger">Where the host check's refusals are recorded.</param>
     /// <param name="cancellationToken">Cancels the start.</param>
     /// <returns>The running console; dispose to stop listening.</returns>
     public static async Task<RunningConsole> StartAsync(
         WebConsoleOptions options,
         IServiceClientFactory clients,
         ConsoleAuth auth,
+        ILogger? logger = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(options);
         ThrowHelper.ThrowIfNull(clients);
         ThrowHelper.ThrowIfNull(auth);
+
+        var log = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
@@ -128,6 +160,7 @@ public static class WebConsoleHost
             // rebound hostname gets nothing at all (ADR-0036 §3).
             if (!ConsoleAuth.IsLoopbackHost(context.Request.Host))
             {
+                Log.HostNotLoopback(log, context.Request.Host.Value ?? string.Empty);
                 await RefuseAsync(context, StatusCodes.Status403Forbidden, "host_not_loopback",
                     Strings.WebConsoleHost_HostNotLoopback).ConfigureAwait(false);
                 return;
@@ -874,7 +907,7 @@ public static class WebConsoleHost
 
     /// <summary>The start-up reachability line: an answer either way, never a hang.</summary>
     private static async Task<string> ProbeServiceAsync(
-        IServiceClientFactory clients, CancellationToken cancellationToken)
+        IServiceClientFactory clients, ILogger log, CancellationToken cancellationToken)
     {
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bounded.CancelAfter(ProbeTimeout);
@@ -889,6 +922,7 @@ public static class WebConsoleHost
         }
         catch (Exception exception) when (exception is ServiceConnectionException or OperationCanceledException)
         {
+            Log.ServiceUnreachable(log);
             return Strings.FormatWebConsoleHost_NoServiceListening(clients.Address);
         }
     }

@@ -7,6 +7,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -23,12 +25,18 @@ public sealed record ServiceOptions
     public int PollSeconds { get; init; } = 60;
 
     /// <summary>
-    /// Where a job that faults past its own handler is reported. The lane
-    /// worker's catch is the last line of defence, and its old default —
-    /// nowhere — discarded such faults whole; a fan-out that dies of an
-    /// unexpected exception must at least leave a line a human can find.
+    /// Where this service's diagnostics go (ADR-0043). Null runs silent,
+    /// which is what a test wants and what a host must not leave as its
+    /// default.
     /// </summary>
-    public Action<string, Exception?>? Log { get; init; }
+    /// <remarks>
+    /// This replaced an <c>Action&lt;string, Exception?&gt;</c> whose only
+    /// consumer was the job lane's last-resort catch. That delegate wrote a
+    /// bare timestamp to a <c>TextWriter</c> with no level and no category,
+    /// so it could not be filtered, could not be read by a client, and could
+    /// not be turned down when it was noisy.
+    /// </remarks>
+    public ILoggerFactory? LoggerFactory { get; init; }
 }
 
 /// <summary>
@@ -74,7 +82,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
-        Queue = new JobScheduler(options.Log);
+        Queue = new JobScheduler(Logger(options, typeof(JobScheduler)));
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
@@ -83,6 +91,14 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>How this service was started.</summary>
     public ServiceOptions Options { get; }
+
+    /// <summary>A logger for <paramref name="category"/>, or a silent one.</summary>
+    private static ILogger Logger(ServiceOptions options, Type category) =>
+        options.LoggerFactory?.CreateLogger(category.FullName!) ?? NullLogger.Instance;
+
+    /// <summary>A logger for <typeparamref name="T"/>, or a silent one.</summary>
+    internal ILogger LoggerFor<T>() =>
+        Options.LoggerFactory?.CreateLogger(typeof(T).FullName!) ?? NullLogger.Instance;
 
     /// <summary>Durable local state — device and writer identity.</summary>
     public LocalState State { get; }

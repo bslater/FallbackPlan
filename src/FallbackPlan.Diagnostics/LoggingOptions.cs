@@ -87,6 +87,64 @@ public sealed record LoggingOptions
         }
     }
 
+    /// <summary>
+    /// The environment variable that names the level, for a service started by
+    /// something with nowhere to put a flag.
+    /// </summary>
+    public const string LevelVariable = "FALLBACKPLAN_LOG_LEVEL";
+
+    /// <summary>
+    /// Resolves the level in force from the places it can be named, in
+    /// precedence order: the flag, then the environment, then the
+    /// configuration, then <see cref="LogLevel.Information"/>.
+    /// </summary>
+    /// <param name="flag">What <c>--log-level</c> carried, if anything.</param>
+    /// <param name="environment">What <see cref="LevelVariable"/> held, if anything.</param>
+    /// <param name="configured">What the configuration named, if anything.</param>
+    /// <param name="level">The level in force.</param>
+    /// <param name="refusal">Why a named level was not accepted, when one was not.</param>
+    /// <param name="fallback">
+    /// What applies when nothing named a level. <see cref="LogLevel.Information"/>
+    /// for a service, whose log is the record of what it did unattended; a
+    /// console passes <see cref="LogLevel.Warning"/>, because its output is the
+    /// answer to the command and lifecycle chatter in the middle of a report
+    /// is noise rather than diagnosis.
+    /// </param>
+    /// <returns>Whether every source that named a level named one that exists.</returns>
+    /// <remarks>
+    /// A source that names a level nobody recognises is refused rather than
+    /// ignored: silently falling back to <see cref="LogLevel.Information"/>
+    /// after a typo is how somebody spends an afternoon wondering why
+    /// <c>--log-level dbeug</c> changed nothing.
+    /// </remarks>
+    public static bool TryResolveLevel(
+        string? flag,
+        string? environment,
+        LogLevel? configured,
+        out LogLevel level,
+        out string? refusal,
+        LogLevel fallback = LogLevel.Information)
+    {
+        if (flag is { Length: > 0 })
+        {
+            refusal = TryParseLevel(flag, out level) ? null : Unrecognised("--log-level", flag);
+            return refusal is null;
+        }
+
+        if (environment is { Length: > 0 })
+        {
+            refusal = TryParseLevel(environment, out level) ? null : Unrecognised(LevelVariable, environment);
+            return refusal is null;
+        }
+
+        level = configured ?? fallback;
+        refusal = null;
+        return true;
+    }
+
+    private static string Unrecognised(string source, string text) =>
+        $"{source} '{text}' is not a log level — the levels are {string.Join(", ", LevelNames)}.";
+
     /// <summary>The names <see cref="TryParseLevel"/> accepts, for help text and refusals.</summary>
     public static IReadOnlyList<string> LevelNames { get; } =
         ["trace", "debug", "information", "warning", "error", "critical", "none"];

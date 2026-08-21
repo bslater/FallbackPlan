@@ -2,6 +2,8 @@ using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -19,14 +21,14 @@ public sealed class LocalServiceListener : IAsyncDisposable
 {
     private readonly IFallbackPlanService _service;
     private readonly string _address;
-    private readonly Action<string>? _log;
+    private readonly ILogger _log;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
     private Socket? _socket;
     private Task? _acceptLoop;
 
-    private LocalServiceListener(IFallbackPlanService service, string address, Action<string>? log)
+    private LocalServiceListener(IFallbackPlanService service, string address, ILogger log)
     {
         _service = service;
         _address = address;
@@ -43,14 +45,15 @@ public sealed class LocalServiceListener : IAsyncDisposable
     /// <param name="stateDirectory">The state directory whose service this is.</param>
     /// <param name="log">Optional sink for connection-level notes.</param>
     /// <returns>The running listener; dispose to stop.</returns>
-    public static LocalServiceListener Start(IFallbackPlanService service, string stateDirectory, Action<string>? log = null)
+    public static LocalServiceListener Start(
+        IFallbackPlanService service, string stateDirectory, ILogger? log = null)
     {
         ThrowHelper.ThrowIfNull(service);
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         LocalEndpoint.PrepareDirectory(stateDirectory);
         var address = LocalEndpoint.AddressFor(stateDirectory);
-        var listener = new LocalServiceListener(service, address, log);
+        var listener = new LocalServiceListener(service, address, log ?? NullLogger.Instance);
 
         if (OperatingSystem.IsWindows())
         {

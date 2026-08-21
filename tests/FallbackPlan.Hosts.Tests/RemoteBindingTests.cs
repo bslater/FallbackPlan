@@ -5,6 +5,7 @@ using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
 using PeerIdentity = FallbackPlan.Protocol.PeerIdentity;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -35,11 +36,10 @@ public sealed class RemoteBindingTests : IDisposable
         using var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
         var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
 
-        var log = new List<string>();
+        var log = new RecordingLogger();
         await using var remote = RemoteServiceListener.Start(
             serviceKeypair, serviceGrants,
-            new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            line => { lock (log) { log.Add(line); } });
+            new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test", log);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.On(remote.Endpoint.ToString()));
         remote.Bind(handler);
 
@@ -66,13 +66,9 @@ public sealed class RemoteBindingTests : IDisposable
 
         // The service side is deterministic: it refused this dialler as not
         // paired, which is the guarantee the exit criterion names.
-        await WaitForAsync(() =>
-        {
-            lock (log)
-            {
-                return log.Any(line => line.Contains("NotPaired", StringComparison.Ordinal));
-            }
-        });
+        await WaitForAsync(() => log.Records.Any(record =>
+            record.Values.Any(pair =>
+                string.Equals(pair.Value as string, "NotPaired", StringComparison.Ordinal))));
 
         // The local binding still answers: refusing a stranger at the remote
         // binding changed nothing about the service a local caller talks to.

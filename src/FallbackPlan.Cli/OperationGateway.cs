@@ -17,6 +17,7 @@ using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 using FallbackPlan.Cli.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Cli;
 
@@ -171,19 +172,21 @@ public static class OperationGateway
     /// holder, because the alternative is two processes writing as one writer.
     /// </param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The gateway; dispose to release whatever it holds.</returns>
     public static async ValueTask<IOperationGateway> OpenForWriteAsync(
         string repoPath,
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool forceDirect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
         // The session opens without the role first, because the default state
         // directory is derived from the repository id — so the address a client
         // would connect to is not knowable until the repository is open.
         var session = await CliSession.OpenAsync(
-            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken).ConfigureAwait(false);
+            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken, logger).ConfigureAwait(false);
 
         try
         {
@@ -231,6 +234,7 @@ public static class OperationGateway
     /// <param name="stateDirectory">The state directory, or null for the default.</param>
     /// <param name="forceDirect">Whether <c>--direct</c> was given.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The gateway; dispose to release whatever it holds.</returns>
     /// <remarks>
     /// A read path never takes the writer role, so unlike the write gateway
@@ -244,10 +248,11 @@ public static class OperationGateway
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool forceDirect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
         var session = await CliSession.OpenAsync(
-            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken).ConfigureAwait(false);
+            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken, logger).ConfigureAwait(false);
 
         try
         {
