@@ -709,7 +709,45 @@ function renderMaintenance() {
         <div class="actions-row"><button type="button" class="btn small" data-action="show-config">View configuration</button></div>
       </div>
 
+      <div class="card">
+        <h3>🗝 Recovery kit</h3>
+        <p class="sub">One of the two things a recovery needs. The kit is useless to a thief without the passphrase — and useless to you without it either.</p>
+        ${renderKitStatus()}
+      </div>
+
     </div>`;
+}
+
+// FR-KIT-005 asks for kit status "surfaced continuously", and continuously
+// means here — on a card an operator passes every time they open Maintenance —
+// rather than only inside the setup ceremony they saw once and closed.
+//
+// Two states, not three. An installation kit carries no destinations, so the
+// requirement's staleness trigger cannot fire, and its salt, Argon2id
+// parameters and sealing public key are fixed for the life of the installation,
+// so nothing else can make it stale either (ADR-0013 as amended).
+function renderKitStatus() {
+  const status = S.desc?.kitStatus ?? null;
+
+  if (status === null) {
+    // A service older than contract 1.15 says nothing here, which reads as
+    // "cannot tell" — not as a missing kit, which would be a false alarm.
+    return `<p class="sub">This service does not report kit status.</p>`;
+  }
+
+  if (status !== "saved") {
+    return `
+      <p class="dropped"><b>Never saved.</b> Nothing on this machine can rebuild your keys without it.
+      Losing the passphrase or the kit makes every backup unrecoverable — there is no reset and no support path.</p>`;
+  }
+
+  const when = S.desc.kitConfirmedAt
+    ? new Date(Number(S.desc.kitConfirmedAt)).toLocaleString()
+    : null;
+
+  return `
+    <p>${badge({ cls: "ok", icon: "✓" }, "saved")}${when ? ` <span class="sub">confirmed ${esc(when)}</span>` : ""}</p>
+    <p class="sub">Keep it somewhere separate from the passphrase. It holds neither the passphrase nor any key.</p>`;
 }
 
 /* ---------------------------------------------------------------- dialogs */

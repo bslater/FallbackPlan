@@ -52,6 +52,84 @@ public sealed class FirstRunSetupTests : IDisposable
     }
 
     [TestMethod]
+    public async Task KitStatus_AcrossTheCeremony_ReadsNeverSavedThenSaved()
+    {
+        // FR-KIT-005 asks for status surfaced *continuously*, so it rides
+        // describe_service — the result every client already polls — rather
+        // than living only inside the ceremony an operator saw once.
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var before = await DescribeAsync(handler);
+        Assert.AreEqual("never_saved", before.KitStatus);
+        Assert.IsNull(before.KitConfirmedAt);
+
+        await SetUpAsync(handler);
+
+        // Still never_saved: a passphrase is not a kit, and the whole reason
+        // the ceremony has a fourth step is that one does not imply the other.
+        Assert.AreEqual("never_saved", (await DescribeAsync(handler)).KitStatus);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('a', 64)), _timeout.Token),
+            out _);
+
+        var after = await DescribeAsync(handler);
+        Assert.AreEqual("saved", after.KitStatus);
+        Assert.IsNotNull(after.KitConfirmedAt);
+        Assert.IsGreaterThan(0ul, after.KitConfirmedAt!.Value);
+    }
+
+    [TestMethod]
+    public async Task KitStatus_AfterARestart_IsStillSavedWithItsOriginalTime()
+    {
+        // The status is a durable fact about the installation, not a fact about
+        // this process — an operator who restarts the service must not be told
+        // their kit was never saved.
+        _harness.WriteConfiguration("every 1h");
+        ulong confirmedAt;
+
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await SetUpAsync(handler);
+            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('b', 64)), _timeout.Token);
+            confirmedAt = (await DescribeAsync(handler)).KitConfirmedAt!.Value;
+        }
+
+        await using (var restarted = await StartWithoutPassphraseAsync())
+        {
+            var describe = await DescribeAsync(new ServiceCommandHandler(restarted, RemoteBindingState.Off));
+            Assert.AreEqual("saved", describe.KitStatus);
+            Assert.AreEqual(confirmedAt, describe.KitConfirmedAt);
+        }
+    }
+
+    [TestMethod]
+    public async Task KitStatus_HasExactlyTwoValues_BecauseAnInstallationKitCannotGoStale()
+    {
+        // Recorded as a test rather than only as prose in ADR-0013, because the
+        // requirement's wording says three. An installation kit carries no
+        // destinations, so FR-KIT-005's stated staleness trigger cannot fire;
+        // its salt, Argon2id parameters and sealing public key are fixed for the
+        // installation's life; and regenerating one differs only in issued_at.
+        // Nothing can move it out of `saved`.
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        await SetUpAsync(handler);
+        await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('c', 64)), _timeout.Token);
+
+        // A second kit, confirmed later, is still simply `saved` — there is no
+        // third value for it to become.
+        await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('d', 64)), _timeout.Token);
+
+        Assert.AreEqual("saved", (await DescribeAsync(handler)).KitStatus);
+    }
+
+    [TestMethod]
     public async Task Setup_AFreshService_SaysWhatTheOperatorHasJustCommittedTo()
     {
         _harness.WriteConfiguration("every 1h");

@@ -2019,7 +2019,9 @@ public sealed partial class ServiceCommandHandler(
             Convert.ToHexStringLower(runtime.State.DeviceId),
             runtime.Options.Logging is { } logging
                 ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
-                : null);
+                : null,
+            runtime.KitConfirmation.Status,
+            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds);
 }
 
 /// <summary>

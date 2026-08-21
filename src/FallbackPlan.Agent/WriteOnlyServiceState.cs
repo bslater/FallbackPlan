@@ -460,6 +460,69 @@ public sealed class RecoveryKitConfirmation(string stateDirectory)
         }
     }
 
+    /// <summary>
+    /// The kit's status, in the two values an installation kit can have
+    /// (FR-KIT-005): <c>"never_saved"</c> or <c>"saved"</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two, not the three the requirement's wording implies, and the reason is
+    /// in what an installation kit contains. FR-KIT-005 names the third state
+    /// <em>stale</em> and says changing destinations causes it — but an
+    /// installation kit carries no destinations at all (ADR-0013 as amended),
+    /// so its stated trigger cannot fire.
+    /// </para>
+    /// <para>
+    /// Nor can anything else cause it. The kit holds the KDF salt, the Argon2id
+    /// parameters and the sealing public key, and all three are fixed for the
+    /// life of the installation — that is exactly what makes one passphrase
+    /// open every archive it ever writes. What is left is the issuing device
+    /// and the issue time, both informational. Regenerating a kit therefore
+    /// yields different bytes only because <c>issued_at</c> moved, which means
+    /// comparing checksums across regenerations proves nothing and a
+    /// freshness test would be theatre.
+    /// </para>
+    /// </remarks>
+    public string Status => Holds ? "saved" : "never_saved";
+
+    /// <summary>
+    /// When the operator confirmed, Unix milliseconds, or null when none has
+    /// been confirmed or the record predates the timestamp being written.
+    /// </summary>
+    /// <remarks>
+    /// Read from the file's own annotation rather than from its modification
+    /// time: a state directory restored from a backup carries somebody else's
+    /// mtimes, and "when was this confirmed" is a question about the ceremony,
+    /// not about the filesystem.
+    /// </remarks>
+    public ulong? ConfirmedAtUnixMilliseconds
+    {
+        get
+        {
+            var path = Path_;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            foreach (var line in File.ReadLines(path))
+            {
+                const string marker = "# Confirmed at ";
+                if (!line.StartsWith(marker, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var rest = line.AsSpan(marker.Length);
+                var end = rest.IndexOf(' ');
+                var digits = end < 0 ? rest : rest[..end];
+                return ulong.TryParse(digits, CultureInfo.InvariantCulture, out var value) ? value : null;
+            }
+
+            return null;
+        }
+    }
+
     /// <summary>Records a confirmation, replacing any earlier one.</summary>
     /// <param name="kitChecksum">The kit's SHA-256, lowercase hex.</param>
     /// <param name="confirmedAtUnixMilliseconds">When the operator confirmed.</param>

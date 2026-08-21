@@ -605,6 +605,21 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// the same way the Maintenance card already reads this result. Null from a
 /// service older than contract 1.15.
 /// </param>
+/// <param name="KitStatus">
+/// Whether the installation's recovery kit has been saved —
+/// <c>"never_saved"</c> or <c>"saved"</c> (FR-KIT-005). Two values, not
+/// three: an installation kit carries no destinations, so the requirement's
+/// staleness trigger cannot fire, and its salt, Argon2id parameters and
+/// sealing public key are fixed for the life of the installation, so nothing
+/// else can make it stale either (ADR-0013 as amended). Carried on the result
+/// every client already polls, because "surfaced continuously" means visible
+/// outside the ceremony, not only during it. Null from a service older than
+/// contract 1.15.
+/// </param>
+/// <param name="KitConfirmedAt">
+/// When the kit was confirmed saved, Unix milliseconds, or null when none has
+/// been. What lets a console say how long ago rather than merely whether.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -616,7 +631,9 @@ public sealed record ServiceDescriptionResult(
     string? RestoreGrantRecipient = null,
     string? SetupState = null,
     string? DeviceId = null,
-    string? LogLevel = null) : ServiceResult;
+    string? LogLevel = null,
+    string? KitStatus = null,
+    ulong? KitConfirmedAt = null) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

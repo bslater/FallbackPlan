@@ -78,6 +78,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// paired remote console redacted, and set_log_level is refused to a
     /// remote caller outright. describe_service carries the effective
     /// level so a console can show it without a second round trip.
+    /// 1.15 also carries the recovery kit's status on describe_service
+    /// (FR-KIT-005): never_saved or saved, with when it was confirmed. Two
+    /// values rather than the three the requirement's wording implies —
+    /// an installation kit carries no destinations, so the stated staleness
+    /// trigger cannot fire, and its salt, parameters and sealing key are
+    /// fixed for the installation's life, so nothing else can make it
+    /// stale either (ADR-0013 as amended). Surfaced continuously rather
+    /// than only during the ceremony, which is what "continuously" means.
     /// </remarks>
     public static ContractVersion Current { get; } = new(1, 15);
 
