@@ -364,9 +364,21 @@ public sealed class InstallationCredentialStore(string stateDirectory)
         }
     }
 
-    /// <summary>Persists the installation provisioning.</summary>
+    /// <summary>
+    /// Persists the installation provisioning, unless one is already held.
+    /// </summary>
     /// <param name="provisioning">What setup derived.</param>
-    public void Save(InstallationProvisioning provisioning)
+    /// <returns><see langword="false"/> when this installation was already set up.</returns>
+    /// <remarks>
+    /// <b>Never overwrites</b>, and that is the point rather than caution. A
+    /// second provisioning carries a second salt, so replacing this file
+    /// would leave every archive already written unopenable by the passphrase
+    /// that made it. The handler checks first and refuses politely; this is
+    /// what makes the refusal true rather than merely likely, because two
+    /// setups submitted at once would both pass a check-then-act. Once-ness
+    /// belongs to the filesystem, where the rename is atomic.
+    /// </remarks>
+    public bool TrySave(InstallationProvisioning provisioning)
     {
         ThrowHelper.ThrowIfNull(provisioning);
 
@@ -374,16 +386,28 @@ public sealed class InstallationCredentialStore(string stateDirectory)
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
 
         var bytes = provisioning.ToBytes();
+        var temporary = path + ".tmp";
         try
         {
-            var temporary = path + ".tmp";
             File.WriteAllBytes(temporary, bytes);
             if (!OperatingSystem.IsWindows())
             {
                 File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
 
-            File.Move(temporary, path, overwrite: true);
+            try
+            {
+                File.Move(temporary, path, overwrite: false);
+                return true;
+            }
+            catch (IOException)
+            {
+                // Somebody got there first. The loser cleans up after itself
+                // rather than leaving key material in a .tmp beside the real
+                // one.
+                File.Delete(temporary);
+                return false;
+            }
         }
         finally
         {

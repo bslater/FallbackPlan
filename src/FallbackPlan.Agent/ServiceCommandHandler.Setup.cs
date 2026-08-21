@@ -13,6 +13,15 @@ namespace FallbackPlan.Agent;
 /// </summary>
 public sealed partial class ServiceCommandHandler
 {
+    /// <summary>
+    /// Said in two places — the check, and the race that check cannot close —
+    /// because they are the same situation arriving a moment apart and should
+    /// not read as two different problems.
+    /// </summary>
+    private const string AlreadySetUp =
+        "This installation is already set up. Its passphrase can never be changed — that is what "
+        + "makes the archives readable at all — so setup runs exactly once (ADR-0044, ADR-0042 §11).";
+
     private ServiceResult ProvisionInstallation(ProvisionInstallationCommand command)
     {
         if (Scope == CallerScope.Remote)
@@ -36,8 +45,7 @@ public sealed partial class ServiceCommandHandler
             // is where that is enforced rather than merely documented.
             return new ServiceError(
                 ServiceErrorReason.Refused,
-                "This installation is already set up. Its passphrase can never be changed — that is what "
-                + "makes the archives readable at all — so setup runs exactly once (ADR-0044, ADR-0042 §11).");
+                AlreadySetUp);
         }
 
         byte[] envelope;
@@ -64,9 +72,31 @@ public sealed partial class ServiceCommandHandler
                 "The setup envelope does not open — it was sealed to a different service's recipient key.");
         }
 
-        using (var provisioning = new InstallationProvisioning(credential, kdfSalt, kdfParameters))
+        InstallationProvisioning provisioning;
+        try
         {
-            runtime.InstallationCredential.Save(provisioning);
+            provisioning = new InstallationProvisioning(credential, kdfSalt, kdfParameters);
+        }
+        catch (ArgumentException)
+        {
+            // Ownership passes to the provisioning only once it exists, so a
+            // refused construction leaves the credential ours to zero.
+            credential.Dispose();
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, "The setup envelope does not carry a usable derivation.");
+        }
+
+        using (provisioning)
+        {
+            if (!runtime.InstallationCredential.TrySave(provisioning))
+            {
+                // Lost a race with another setup. Same answer as the check
+                // above, because it is the same situation arriving a
+                // moment later.
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    AlreadySetUp);
+            }
         }
 
         return new ConfigurationChangeResult(

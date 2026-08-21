@@ -251,6 +251,33 @@ public sealed class InstallationCredentialTests : IDisposable
         Assert.IsTrue(runtime.IsSetUp);
     }
 
+    [TestMethod]
+    public void Store_ASecondProvisioning_IsRefusedByTheFilesystemRatherThanOverwritten()
+    {
+        // The handler checks first and refuses politely. This is what makes
+        // that refusal true rather than merely likely: two setups submitted
+        // at once would both pass a check-then-act, and the loser would
+        // replace a salt that archives already record.
+        var store = new InstallationCredentialStore(_harness.StateDirectory);
+        var first = Save(store);
+
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+        var secondSalt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        using var passphrase = Passphrase.Create("an entirely different second attempt");
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, parameters, secondSalt, KdfValidationMode.CreateRepository);
+        using var second = new InstallationProvisioning(
+            RepositoryWriteCredential.FromBytes(authority.Credential.ToBytes()), secondSalt, parameters);
+
+        Assert.IsFalse(store.TrySave(second));
+
+        using var held = store.TryLoad();
+        SequenceAssert.AreEqual(first, held!.KdfSalt.ToArray());
+        Assert.IsFalse(
+            File.Exists(Path.Combine(_harness.StateDirectory, "write-credentials", "installation.bin.tmp")),
+            "the loser must not leave key material in a .tmp beside the real one");
+    }
+
     /// <summary>Provisions the installation as setup would, returning the salt it used.</summary>
     private static byte[] Save(InstallationCredentialStore store)
     {
@@ -263,7 +290,7 @@ public sealed class InstallationCredentialTests : IDisposable
         using var provisioning = new InstallationProvisioning(
             RepositoryWriteCredential.FromBytes(authority.Credential.ToBytes()), salt, parameters);
 
-        store.Save(provisioning);
+        Assert.IsTrue(store.TrySave(provisioning));
         return salt;
     }
 
