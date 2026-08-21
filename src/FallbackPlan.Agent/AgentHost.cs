@@ -484,14 +484,19 @@ public static class AgentHost
                 // that starts alongside the service is not told "nothing is
                 // listening" while a ten-hour backup runs. The binding state was
                 // seeded from the remote listener's bound endpoint above.
-                var handler = new ServiceCommandHandler(runtime, bindingState);
+                // One handler per listener over the same runtime, so each
+                // knows where its caller came from. RemoteBindingState says
+                // only whether the remote binding is on; a verb that must be
+                // refused to a remote console needs to know that THIS caller
+                // is remote (ADR-0044 §5).
+                var localHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Local);
 
                 // The remote socket bound before the handler existed so its
                 // endpoint could seed the binding state; it begins serving now
                 // that the handler exists.
-                remoteListener?.Bind(handler);
+                remoteListener?.Bind(new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote));
 
-                await using var localListener = LocalServiceListener.Start(handler, stateDirectory);
+                await using var localListener = LocalServiceListener.Start(localHandler, stateDirectory);
                 if (!once)
                 {
                     output.WriteLine($"{DateTimeOffset.Now:u}  listening on {localListener.Address}");

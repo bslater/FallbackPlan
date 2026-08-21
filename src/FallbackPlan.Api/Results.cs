@@ -573,6 +573,14 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// §4), lowercase hex. What a client seals write-only provisioning and
 /// restore-grant envelopes to — public by construction, never sensitive.
 /// </param>
+/// <param name="SetupState">
+/// Whether this installation has been set up — <c>"ready"</c> or
+/// <c>"setup_required"</c> (ADR-0044 §7, FR-SVC-011). A client meeting
+/// <c>setup_required</c> shows the passphrase ceremony in place of its normal
+/// views, because nothing behind that gate can work yet. Null from a service
+/// older than contract 1.13, which a client reads as "cannot tell" and so as
+/// no reason to interrupt anybody.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -581,4 +589,5 @@ public sealed record ServiceDescriptionResult(
     bool RemoteBindingEnabled,
     int ActiveJobs,
     string? ArchivesRoot = null,
-    string? RestoreGrantRecipient = null) : ServiceResult;
+    string? RestoreGrantRecipient = null,
+    string? SetupState = null) : ServiceResult;

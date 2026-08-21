@@ -29,9 +29,22 @@ namespace FallbackPlan.Agent;
 /// so it runs where the person typed it.
 /// </para>
 /// </remarks>
-public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingState remoteBinding)
+public sealed partial class ServiceCommandHandler(
+    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local)
     : IFallbackPlanService
 {
+    /// <summary>Where the caller on this session came from.</summary>
+    /// <remarks>
+    /// One handler used to serve both listeners, and
+    /// <see cref="RemoteBindingState"/> says only whether the remote binding
+    /// is <em>on</em> — never whether <em>this</em> caller arrived over it.
+    /// Refusing a verb to a remote console needs the second fact, so the host
+    /// builds one handler per listener over the same runtime. Defaulting to
+    /// <see cref="CallerScope.Local"/> keeps every one-shot verb and every
+    /// test that constructs a handler directly meaning what it meant before.
+    /// </remarks>
+    private CallerScope Scope => scope;
+
     /// <inheritdoc/>
     public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
@@ -338,6 +351,7 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
         CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
+        ProvisionInstallationCommand setup => ProvisionInstallation(setup),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -1996,7 +2010,27 @@ public sealed partial class ServiceCommandHandler(ServiceRuntime runtime, Remote
             remoteBinding.Enabled,
             runtime.Queue.ActiveCount,
             runtime.Options.ArchivesRoot,
-            runtime.GrantRecipient.PublicKeyHex);
+            runtime.GrantRecipient.PublicKeyHex,
+            runtime.IsSetUp ? "ready" : "setup_required");
+}
+
+/// <summary>
+/// Where the caller on a session arrived from (ADR-0044 §5).
+/// </summary>
+/// <remarks>
+/// The listener that owns the session knows this and nothing else does: the
+/// remote listener presents <see cref="Remote"/>, the local one
+/// <see cref="Local"/>. It exists because refusing a verb to a remote console
+/// is a per-caller question, and the only fact the handler had was whether
+/// the remote binding was listening at all.
+/// </remarks>
+public enum CallerScope
+{
+    /// <summary>Over the local binding — a Unix socket or named pipe on this machine.</summary>
+    Local,
+
+    /// <summary>Over the remote binding — a paired device elsewhere (ADR-0028 §6).</summary>
+    Remote,
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

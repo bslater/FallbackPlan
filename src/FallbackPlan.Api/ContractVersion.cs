@@ -53,8 +53,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// describe_service, and the sealed-record count on verification results
     /// so a records-level sweep of a write-only set reads as neither damage
     /// nor a clean content check.
+    /// 1.13 added first-run setup (ADR-0044): provision_installation
+    /// carrying the sealed write bundle for the installation rather than for
+    /// a named set — a service on its first run has no sets — and the setup
+    /// state on describe_service, so a client learns it must capture the
+    /// passphrase before anything else. Local callers only; a paired remote
+    /// console is refused.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 12);
+    public static ContractVersion Current { get; } = new(1, 13);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

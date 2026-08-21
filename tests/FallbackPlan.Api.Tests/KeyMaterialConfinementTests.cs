@@ -114,10 +114,17 @@ public sealed class KeyMaterialConfinementTests
             .ToList();
 
         CollectionAssert.AreEquivalent(
-            new[] { nameof(ProvisionWriteOnlySetCommand), nameof(OpenRestoreSourceCommand) },
+            new[]
+            {
+                nameof(ProvisionWriteOnlySetCommand),
+                nameof(ProvisionInstallationCommand),
+                nameof(OpenRestoreSourceCommand),
+            },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
-            "Sealed envelopes are permitted on exactly provision_write_only_set and open_restore_source "
-            + "(NFR-SEC-009 as amended by ADR-0042) — nowhere else.");
+            "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation and "
+            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) — nowhere "
+            + "else. This list grows only by decision, which is what keeps it a fence; widening it to a "
+            + "pattern that admits any verb named plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

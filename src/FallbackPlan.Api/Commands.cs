@@ -35,6 +35,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
+[JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
 [JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
@@ -326,6 +327,39 @@ public sealed record OpenRestoreSourceCommand(
 /// permitted shape).
 /// </param>
 public sealed record ProvisionWriteOnlySetCommand(string SetName, string Envelope) : ServiceCommand;
+
+/// <summary>
+/// First-run setup: gives this installation the passphrase everything
+/// derives from (ADR-0044 §2, FR-SVC-011).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The same ceremony as <see cref="ProvisionWriteOnlySetCommand"/> and the
+/// same sealed shape, addressed to the <b>installation</b> rather than to a
+/// named set — because a service on its first run has no sets, which is
+/// precisely the state this verb exists to leave behind. The client mints the
+/// salt, derives in its own process, seals to this service's published
+/// recipient key, and sends hex; the passphrase never crosses this contract.
+/// </para>
+/// <para>
+/// Every set's staging archive is then created from the stored credential on
+/// that set's first backup. There is no second setup: a v2 passphrase can
+/// never change (ADR-0042 §11), so a repeat is refused rather than obeyed —
+/// obeying it would mint a second, unrelated root and strand every archive
+/// written under the first.
+/// </para>
+/// <para>
+/// <b>Local callers only.</b> Choosing the one secret that can never be
+/// changed sits inside the line ADR-0028 §6 already draws around remote
+/// clients; a paired remote console is refused.
+/// </para>
+/// </remarks>
+/// <param name="Envelope">
+/// The provisioning envelope — write bundle plus KDF salt and parameters —
+/// sealed to the service's recipient key and rendered as hex (NFR-SEC-009's
+/// permitted shape, NFR-SEC-011).
+/// </param>
+public sealed record ProvisionInstallationCommand(string Envelope) : ServiceCommand;
 
 /// <summary>
 /// Closes a restore source. Idempotent — closing an unknown or already-closed

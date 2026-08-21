@@ -1,0 +1,230 @@
+using System.Security.Cryptography;
+using FallbackPlan.Agent;
+using FallbackPlan.Api;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
+
+namespace FallbackPlan.Hosts.Tests;
+
+/// <summary>
+/// The first-run setup verb over the service (contract 1.13, ADR-0044;
+/// FR-SVC-011, NFR-SEC-011): a service with no passphrase says so, one
+/// sealed envelope gives the installation its root, a second is refused
+/// because there is no changing it, and a remote caller may not run the
+/// ceremony at all.
+/// </summary>
+[TestClass]
+public sealed class FirstRunSetupTests : IDisposable
+{
+    private const string PassphraseText = "the one long passphrase of this installation";
+
+    private readonly HostHarness _harness = new();
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(5));
+
+    public void Dispose()
+    {
+        _timeout.Dispose();
+        _harness.Dispose();
+    }
+
+    [TestMethod]
+    public async Task Describe_AFreshService_AsksToBeSetUpAndStopsAskingOnceItIs()
+    {
+        // The whole point of the state: the refusal an unprovisioned set
+        // eventually raises arrives on a scheduler poll, hours after anybody
+        // could act on it. This arrives on the client's first question.
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.AreEqual("setup_required", (await DescribeAsync(handler)).SetupState);
+
+        await SetUpAsync(handler);
+
+        Assert.AreEqual("ready", (await DescribeAsync(handler)).SetupState);
+    }
+
+    [TestMethod]
+    public async Task Setup_AFreshService_SaysWhatTheOperatorHasJustCommittedTo()
+    {
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await SetUpAsync(handler);
+
+        // Three statements, and the third is the one that matters: a ceremony
+        // that captures an unchangeable master key without saying so has
+        // taken a decision on the operator's behalf.
+        Assert.IsTrue(
+            result.Lines.Any(line => line.Contains("never be changed", StringComparison.Ordinal)),
+            "the ceremony states that the passphrase cannot change");
+        Assert.IsTrue(
+            result.Lines.Any(line => line.Contains("unrecoverable", StringComparison.Ordinal)),
+            "the ceremony states the consequence of losing it");
+        Assert.IsTrue(
+            result.Lines.Any(line => line.Contains("never read your files back", StringComparison.Ordinal)),
+            "the ceremony states what the service can and cannot do afterwards");
+    }
+
+    [TestMethod]
+    public async Task Setup_RunTwice_IsRefusedRatherThanObeyed()
+    {
+        // A second envelope carries a second salt. Accepting it would leave
+        // every archive already written unopenable by the passphrase that
+        // made it — an "idempotent" verb that destroys the backup.
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        await SetUpAsync(handler);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ProvisionInstallationCommand(await EnvelopeAsync(handler)), _timeout.Token),
+            out var refusal);
+        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
+        Assert.Contains("already set up", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Setup_FromARemoteCaller_IsRefusedAndNamesWhereItRuns()
+    {
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var local = new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Local);
+        var remote = new ServiceCommandHandler(runtime, RemoteBindingState.On("127.0.0.1:9"), CallerScope.Remote);
+
+        var envelope = await EnvelopeAsync(local);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await remote.ExecuteAsync(new ProvisionInstallationCommand(envelope), _timeout.Token),
+            out var refusal);
+        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
+        Assert.Contains("own machine", refusal.Message, StringComparison.Ordinal);
+
+        // Refused, not merely reported: nothing was stored, so the local
+        // console can still run the ceremony afterwards.
+        Assert.AreEqual("setup_required", (await DescribeAsync(local)).SetupState);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await local.ExecuteAsync(new ProvisionInstallationCommand(envelope), _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task Setup_ANonHexEnvelope_IsRefusedByName()
+    {
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ProvisionInstallationCommand("not hex at all"), _timeout.Token),
+            out var refusal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason);
+        Assert.Contains("not hex", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Setup_AnEnvelopeSealedToAnotherService_IsRefusedAndChangesNothing()
+    {
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var stranger = ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32));
+        var envelope = SealProvision(Convert.ToHexStringLower(stranger), PassphraseText,
+            RandomNumberGenerator.GetBytes(KekDerivation.SaltLength));
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ProvisionInstallationCommand(envelope), _timeout.Token),
+            out var refusal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason);
+        Assert.Contains("different service", refusal.Message, StringComparison.Ordinal);
+        Assert.AreEqual("setup_required", (await DescribeAsync(handler)).SetupState);
+    }
+
+    [TestMethod]
+    public async Task Setup_ThenABackup_RunsWithNoPassphraseAnywhereAndSealsToTheChosenOne()
+    {
+        // The reported failure, run forwards: a service started with no
+        // passphrase used to refuse this set on every poll. After setup it
+        // backs it up, and the passphrase alone reproduces the archive's
+        // sealing key — which is what a restore will have to do.
+        _harness.WriteSourceFile("notes.txt", "protected from the first minute");
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await SetUpAsync(handler);
+
+        var progress = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var observation in progress)
+                {
+                    if (observation.Progress.State is JobState.Complete or JobState.CompletedWithFailures
+                        or JobState.FailedPermanent or JobState.FailedRecoverable)
+                    {
+                        return observation.Progress.State;
+                    }
+                }
+
+                return JobState.Pending;
+            },
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token));
+        Assert.AreEqual(JobState.Complete, await watching);
+
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+            new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
+        Assert.IsTrue(RepositoryLifecycle.IsWriteOnly(descriptor));
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, KdfValidationMode.OpenRepository);
+        SequenceAssert.AreEqual(
+            descriptor.SealingPublicKey.ToArray(), authority.Credential.SealingPublicKey.ToArray());
+    }
+
+    private async Task<ServiceDescriptionResult> DescribeAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+        return description;
+    }
+
+    private async Task<ConfigurationChangeResult> SetUpAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(new ProvisionInstallationCommand(await EnvelopeAsync(handler)), _timeout.Token),
+            out var result);
+        return result;
+    }
+
+    /// <summary>Seals a setup envelope to this service, as the console would.</summary>
+    private async Task<string> EnvelopeAsync(ServiceCommandHandler handler) =>
+        SealProvision(
+            (await DescribeAsync(handler)).RestoreGrantRecipient!, PassphraseText,
+            RandomNumberGenerator.GetBytes(KekDerivation.SaltLength));
+
+    private static string SealProvision(string recipientHex, string passphraseText, byte[] salt)
+    {
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, parameters, salt, KdfValidationMode.CreateRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealProvision(
+                Convert.FromHexString(recipientHex), authority, salt, parameters));
+    }
+
+    private async Task<ServiceRuntime> StartWithoutPassphraseAsync() =>
+        await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
+            passphrase: null,
+            _timeout.Token);
+}
