@@ -67,7 +67,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
-| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | **Specified only** | [notes](#0043--the-decision-is-made-the-abstraction-is-not-yet-threaded) |
+| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | **Partly built** | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests` · [notes](#0043--the-engine-logs-and-a-level-can-be-set-the-client-cannot-read-it-yet) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
 
 ---
@@ -190,9 +190,13 @@ Nothing is still ahead in this arc: FR-DEST-007's destination-removal warnings, 
 
 ---
 
-### 0043 — the decision is made, the abstraction is not yet threaded
+### 0043 — the engine logs, and a level can be set; the client cannot read it yet
 
-ADR-0043 is accepted and nothing has been built against it. The repository has no logging today: no `ILogger`, no log file, and two untyped `Action` delegates in the Agent standing in for one. What is decided is the shape — the abstraction package in every library and the sinks in the hosts, `[LoggerMessage]` partials with allocated event-id ranges, redaction by declared type applied where a record crosses the trust boundary, and contract 1.13's diagnostics verbs with a local-full, remote-redacted split. The requirement rows (FR-SVC-010, NFR-OPS-007) name what has to become true, and their traceability rows carry an explicit unmet marker until it is.
+Built: the abstraction in all twenty-four projects, a `Log.cs` of `[LoggerMessage]` partials per project with allocated event-id ranges, and `FallbackPlan.Diagnostics` holding the ring (Bodu's `ConcurrentCircularBuffer`), the async rolling file and the redacting renderer. Every host now composes a real `ILoggerFactory`: the agent and the console through `FallbackPlan.Diagnostics`, the web console and the recovery tool through a forty-line console sink each, because `DependencyRuleTests` pins their closures and a project reference would break both. The two untyped `Action` delegates are **deleted**, not deprecated, and their fifteen call sites are typed and levelled.
+
+The level is settable from three of its four sources: `--log-level` on every host, `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` (schema 4 — level, per-category overrides, retention, file size, ring capacity). Precedence is decided in one place, `LoggingOptions.TryResolveLevel`, and a name nobody recognises is refused by name rather than ignored. The vocabulary itself sits in `Domain.Diagnostics.LogLevels` so a file and a flag cannot drift into accepting different spellings.
+
+Not built: **the client half**. The diagnostics verbs (`get_diagnostics`, `set_log_level`, `read_log`) are unwritten — they take contract **1.15**, not the 1.13 this ADR names, since 1.13 went to first-run setup and 1.14 to the recovery kit. So the ring is filled and nothing reads it, a level cannot yet be changed without a restart, and there is no CLI `logs` verb and no console diagnostics view. FR-SVC-010's traceability row stays unmet until those land.
 
 ## By phase
 

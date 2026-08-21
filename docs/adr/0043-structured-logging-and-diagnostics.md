@@ -194,7 +194,7 @@ because the level a machine needs is only ever known once it has already
 misbehaved, and asking someone to restart the service to find out why it
 crashed is asking them to destroy the evidence.
 
-Contract 1.13 adds `get_diagnostics`, `set_log_level` and a **paginated**
+Contract 1.15 adds `get_diagnostics`, `set_log_level` and a **paginated**
 `read_log` — paginated because `FrameCodec` caps a frame at 8 MiB and "send me
 everything" is not a thing a log reader may ask. Records are served from a
 bounded in-memory ring buffer with a monotonic sequence, modelled on
@@ -246,7 +246,11 @@ a per-session decorator rather than as a change to the contract interface.
 **Neutral**
 
 - Config gains a schema version (3 → 4). The migration machinery for that
-  already exists and was exercised at 2 → 3.
+  already exists and was exercised at 2 → 3. The 3 → 4 arm moves nothing: a
+  schema-3 file simply has no `logging` key, and the property stays null, which
+  is exactly "leave every logging decision to the host". The version still has
+  to rise, because `UnmappedMemberHandling.Disallow` makes a schema-4 file
+  handed to an older build a real compatibility event.
 - The two ad-hoc `Action<string…>` delegates disappear. Their call sites become
   typed and levelled; none of the behaviour they drove changes.
 
@@ -355,5 +359,13 @@ structure.
 
 | Date | Status | Note |
 |------|--------|------|
-| 2026-08 | Accepted | Abstractions in twenty-four projects; sinks in `FallbackPlan.Diagnostics`; contract 1.13 diagnostics verbs |
+| 2026-08 | Accepted | The shape decided: abstractions in the libraries, sinks in the hosts, redaction by declared type, event-id ranges |
+| 2026-08 | Accepted | Built: abstractions in twenty-four projects, per-project `Log.cs`, and the ring, rolling file and renderer in `FallbackPlan.Diagnostics` |
+| 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
+
+The diagnostics verbs remain unbuilt and move from the contract 1.13 this
+document originally named to **1.15**: 1.13 was taken by first-run setup
+([ADR-0044](0044-first-run-setup.md)) and 1.14 by the installation recovery kit
+([ADR-0013](0013-recovery-kit.md)). Until they land the ring is filled and
+nothing reads it, and a level change still needs a restart.
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |

@@ -72,20 +72,13 @@ public sealed record LoggingOptions
     /// <param name="text">The level name.</param>
     /// <param name="level">The parsed level.</param>
     /// <returns>Whether <paramref name="text"/> named a level.</returns>
-    public static bool TryParseLevel(string? text, out LogLevel level)
-    {
-        switch (text?.Trim().ToLowerInvariant())
-        {
-            case "trace" or "verbose": level = LogLevel.Trace; return true;
-            case "debug": level = LogLevel.Debug; return true;
-            case "info" or "information": level = LogLevel.Information; return true;
-            case "warn" or "warning": level = LogLevel.Warning; return true;
-            case "error": level = LogLevel.Error; return true;
-            case "critical" or "fatal": level = LogLevel.Critical; return true;
-            case "none" or "off": level = LogLevel.None; return true;
-            default: level = LogLevel.Information; return false;
-        }
-    }
+    /// <remarks>
+    /// The vocabulary itself lives in <see cref="Domain.Diagnostics.LogLevels"/>
+    /// so that <c>config.json</c> validation, which cannot see this assembly,
+    /// accepts exactly the names a flag accepts.
+    /// </remarks>
+    public static bool TryParseLevel(string? text, out LogLevel level) =>
+        Domain.Diagnostics.LogLevels.TryParse(text, out level);
 
     /// <summary>
     /// The environment variable that names the level, for a service started by
@@ -143,22 +136,12 @@ public sealed record LoggingOptions
     }
 
     private static string Unrecognised(string source, string text) =>
-        $"{source} '{text}' is not a log level — the levels are {string.Join(", ", LevelNames)}.";
+        $"{source} '{text}' is not a log level — the levels are {Domain.Diagnostics.LogLevels.NameList()}.";
 
     /// <summary>The names <see cref="TryParseLevel"/> accepts, for help text and refusals.</summary>
-    public static IReadOnlyList<string> LevelNames { get; } =
-        ["trace", "debug", "information", "warning", "error", "critical", "none"];
+    public static IReadOnlyList<string> LevelNames => Domain.Diagnostics.LogLevels.Names;
 
     /// <summary>Renders a level in the vocabulary <see cref="TryParseLevel"/> accepts.</summary>
     /// <param name="level">The level to name.</param>
-    public static string NameOf(LogLevel level) => level switch
-    {
-        LogLevel.Trace => "trace",
-        LogLevel.Debug => "debug",
-        LogLevel.Information => "information",
-        LogLevel.Warning => "warning",
-        LogLevel.Error => "error",
-        LogLevel.Critical => "critical",
-        _ => "none",
-    };
+    public static string NameOf(LogLevel level) => Domain.Diagnostics.LogLevels.NameOf(level);
 }

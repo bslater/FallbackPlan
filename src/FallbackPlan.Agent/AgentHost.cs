@@ -160,13 +160,21 @@ public static class AgentHost
             return 1;
         }
 
+        // What config.json asks for, if it can be read at all. A file the
+        // service will go on to refuse must not also stop it logging: the
+        // refusal is one of the first things worth having in the log, so a
+        // configuration that does not load leaves the level to the flag, the
+        // environment and the fallback, and the defect is reported through the
+        // ordinary path a moment later.
+        var configured = stateDirectory is null ? null : LoggingFromConfiguration(stateDirectory);
+
         // The level in force, resolved before any verb runs: the flag, then
-        // the environment, then Information (ADR-0043 §6). A name nobody
-        // recognises is refused here rather than quietly ignored.
+        // the environment, then config.json, then Information (ADR-0043 §6). A
+        // name nobody recognises is refused here rather than quietly ignored.
         if (!LoggingOptions.TryResolveLevel(
                 Get("--log-level"),
                 Environment.GetEnvironmentVariable(LoggingOptions.LevelVariable),
-                configured: null,
+                configured?.DefaultLevel(),
                 out var logLevel,
                 out var levelRefusal))
         {
@@ -179,11 +187,16 @@ public static class AgentHost
         // same file from two places. `run` also echoes to the console, which
         // is where the service's own lines have always gone; the one-shot
         // verbs print their result and leave the file to hold the detail.
+        var defaults = new LoggingOptions();
         using var logging = LoggingComposition.Create(
             new LoggingOptions
             {
                 Default = logLevel,
+                Categories = configured?.CategoryLevels() ?? defaults.Categories,
                 Directory = stateDirectory is null ? null : Path.Combine(stateDirectory, "logs"),
+                MaximumFileBytes = configured?.MaxFileBytes ?? defaults.MaximumFileBytes,
+                RetainFiles = configured?.RetainFiles ?? defaults.RetainFiles,
+                RingCapacity = configured?.RingCapacity ?? defaults.RingCapacity,
                 Console = args[0] == "run",
             },
             output);
@@ -826,6 +839,38 @@ public static class AgentHost
         {
             error.WriteLine("error: the passphrase does not open this repository.");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// The <c>logging</c> block from <c>&lt;state&gt;/config.json</c>, or null
+    /// when there is no readable configuration to ask.
+    /// </summary>
+    /// <param name="stateDirectory">The state directory holding the configuration.</param>
+    /// <remarks>
+    /// Deliberately silent about failure. This runs before there is anywhere to
+    /// report to, and every way the file can be wrong — missing, malformed,
+    /// a version this build does not read — is reported properly by the verb
+    /// that follows. Swallowing it here only decides what to log at; it never
+    /// decides whether the configuration is acceptable.
+    /// </remarks>
+    private static LoggingConfiguration? LoggingFromConfiguration(string stateDirectory)
+    {
+        try
+        {
+            return ClientConfiguration.Load(Path.Combine(stateDirectory, "config.json")).Logging;
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 

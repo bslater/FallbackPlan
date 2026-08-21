@@ -144,6 +144,66 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackupSetUnknownDestination, arg0, arg1);
 
     /// <summary>
+    /// Logging: '{0}' is not a log level — the levels are {1}.
+    /// </summary>
+    private static string ClientConfiguration_LoggingLevelUnknown => Get(nameof(ClientConfiguration_LoggingLevelUnknown));
+
+    /// <summary>
+    /// Logging: '{0}' is not a log level — the levels are {1}.
+    /// </summary>
+    internal static string FormatClientConfiguration_LoggingLevelUnknown(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_LoggingLevelUnknown, arg0, arg1);
+
+    /// <summary>
+    /// Logging: category '{0}' asks for level '{1}', which is not a log level — the levels are {2}.
+    /// </summary>
+    private static string ClientConfiguration_LoggingCategoryLevelUnknown => Get(nameof(ClientConfiguration_LoggingCategoryLevelUnknown));
+
+    /// <summary>
+    /// Logging: category '{0}' asks for level '{1}', which is not a log level — the levels are {2}.
+    /// </summary>
+    internal static string FormatClientConfiguration_LoggingCategoryLevelUnknown(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_LoggingCategoryLevelUnknown, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Logging: a category override must name a category; one of them is empty.
+    /// </summary>
+    internal static string ClientConfiguration_LoggingCategoryMustNotBeEmpty => Get(nameof(ClientConfiguration_LoggingCategoryMustNotBeEmpty));
+
+    /// <summary>
+    /// Logging: retain_files is {0}; it must be at least 1, or the log rolls into nothing.
+    /// </summary>
+    private static string ClientConfiguration_LoggingRetainFilesOutOfRange => Get(nameof(ClientConfiguration_LoggingRetainFilesOutOfRange));
+
+    /// <summary>
+    /// Logging: retain_files is {0}; it must be at least 1, or the log rolls into nothing.
+    /// </summary>
+    internal static string FormatClientConfiguration_LoggingRetainFilesOutOfRange(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_LoggingRetainFilesOutOfRange, arg0);
+
+    /// <summary>
+    /// Logging: max_file_bytes is {0}; it must be at least {1}, or a file rolls before it holds one useful session.
+    /// </summary>
+    private static string ClientConfiguration_LoggingMaxFileBytesOutOfRange => Get(nameof(ClientConfiguration_LoggingMaxFileBytesOutOfRange));
+
+    /// <summary>
+    /// Logging: max_file_bytes is {0}; it must be at least {1}, or a file rolls before it holds one useful session.
+    /// </summary>
+    internal static string FormatClientConfiguration_LoggingMaxFileBytesOutOfRange(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_LoggingMaxFileBytesOutOfRange, arg0, arg1);
+
+    /// <summary>
+    /// Logging: ring_capacity is {0}; it must be at least {1}, or a client reading the log misses records between two reads.
+    /// </summary>
+    private static string ClientConfiguration_LoggingRingCapacityOutOfRange => Get(nameof(ClientConfiguration_LoggingRingCapacityOutOfRange));
+
+    /// <summary>
+    /// Logging: ring_capacity is {0}; it must be at least {1}, or a client reading the log misses records between two reads.
+    /// </summary>
+    internal static string FormatClientConfiguration_LoggingRingCapacityOutOfRange(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_LoggingRingCapacityOutOfRange, arg0, arg1);
+
+    /// <summary>
     /// '{0}' declares schema_version {1}; this build reads version {2} only.
     /// </summary>
     private static string ClientConfiguration_DeclaresSchemaVersionBuildReads => Get(nameof(ClientConfiguration_DeclaresSchemaVersionBuildReads));
@@ -265,15 +325,15 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_RetentionMustBePositive, arg0, arg1);
 
     /// <summary>
-    /// '{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.
+    /// '{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.
     /// </summary>
     private static string ClientConfiguration_SchemaVersion1NeedsDestinations => Get(nameof(ClientConfiguration_SchemaVersion1NeedsDestinations));
 
     /// <summary>
-    /// '{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.
+    /// '{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.
     /// </summary>
-    internal static string FormatClientConfiguration_SchemaVersion1NeedsDestinations(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_SchemaVersion1NeedsDestinations, arg0);
+    internal static string FormatClientConfiguration_SchemaVersion1NeedsDestinations(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_SchemaVersion1NeedsDestinations, arg0, arg1);
 
     /// <summary>
     /// No job '{0}' exists in the journal.

@@ -2,6 +2,8 @@ using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
+using Microsoft.Extensions.Logging;
 using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
@@ -78,6 +80,137 @@ public sealed record BackupSetConfiguration
 }
 
 /// <summary>
+/// What this installation logs, and how much of it it keeps (ADR-0043 §6,
+/// FR-SVC-010) — the third of the four places a level can be named, after the
+/// <c>--log-level</c> flag and <c>FALLBACKPLAN_LOG_LEVEL</c> and before the
+/// host's own fallback.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is where a level is set once for the machine rather than for one
+/// invocation. A flag lasts as long as the command; a variable lasts as long
+/// as the shell; this survives a restart, which is what an installed service
+/// needs — it is started by the operating system, and nobody is there to pass
+/// it anything.
+/// </para>
+/// <para>
+/// Every field is optional and every absent field means "what the host would
+/// have chosen anyway", so a file that says nothing about logging behaves
+/// exactly as it did before this object existed. Levels are held as the names
+/// a person writes rather than as parsed values: this assembly cannot see
+/// <c>FallbackPlan.Diagnostics</c> (ADR-0043 §1 keeps the concrete logging
+/// package in that one project), and the names are validated here against the
+/// same vocabulary the flag uses.
+/// </para>
+/// </remarks>
+public sealed record LoggingConfiguration
+{
+    /// <summary>The smallest file size worth keeping — below this a file rolls before it holds a session.</summary>
+    public const long MinimumFileBytes = 64 * 1024;
+
+    /// <summary>The smallest ring worth reading — below this a client misses records between two reads.</summary>
+    public const int MinimumRingCapacity = 16;
+
+    /// <summary>The level for any category with no more specific rule, by name; null leaves it to the host.</summary>
+    [JsonPropertyName("level")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Level { get; init; }
+
+    /// <summary>
+    /// Per-category levels by name, matched by longest declared prefix — so
+    /// <c>FallbackPlan.Repository</c> covers <c>FallbackPlan.Repository.Packing</c>
+    /// unless that names itself. This is how "quiet everywhere, verbose in the
+    /// one place that is misbehaving" is said.
+    /// </summary>
+    [JsonPropertyName("categories")]
+    public IReadOnlyDictionary<string, string> Categories { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>How many rolled log files to keep, newest first; null leaves it to the host.</summary>
+    [JsonPropertyName("retain_files")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RetainFiles { get; init; }
+
+    /// <summary>How large one log file may grow before it rolls; null leaves it to the host.</summary>
+    [JsonPropertyName("max_file_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? MaxFileBytes { get; init; }
+
+    /// <summary>How many records the in-memory ring holds for clients to read; null leaves it to the host.</summary>
+    [JsonPropertyName("ring_capacity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RingCapacity { get; init; }
+
+    /// <summary>
+    /// The default level this file declares, parsed, or null when it declares
+    /// none. Only ever called after <see cref="ClientConfiguration.Load"/> has
+    /// validated the file, so an unparseable name here cannot happen.
+    /// </summary>
+    public LogLevel? DefaultLevel() =>
+        Level is { Length: > 0 } named && LogLevels.TryParse(named, out var level) ? level : null;
+
+    /// <summary>The per-category levels this file declares, parsed.</summary>
+    public IReadOnlyDictionary<string, LogLevel> CategoryLevels()
+    {
+        var levels = new Dictionary<string, LogLevel>(StringComparer.Ordinal);
+        foreach (var (category, named) in Categories)
+        {
+            if (LogLevels.TryParse(named, out var level))
+            {
+                levels[category] = level;
+            }
+        }
+
+        return levels;
+    }
+
+    internal void Validate()
+    {
+        if (Level is { Length: > 0 } && !LogLevels.TryParse(Level, out _))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_LoggingLevelUnknown(Level, LogLevels.NameList()));
+        }
+
+        foreach (var (category, named) in Categories)
+        {
+            if (string.IsNullOrWhiteSpace(category))
+            {
+                throw new ClientStateException(Strings.ClientConfiguration_LoggingCategoryMustNotBeEmpty);
+            }
+
+            if (!LogLevels.TryParse(named, out _))
+            {
+                throw new ClientStateException(
+                    Strings.FormatClientConfiguration_LoggingCategoryLevelUnknown(
+                        category, named, LogLevels.NameList()));
+            }
+        }
+
+        // Refused rather than clamped. A number somebody typed and a number the
+        // service silently replaced are the same file and different behaviour,
+        // and the difference only shows up when the log is needed.
+        if (RetainFiles is { } retain && retain < 1)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_LoggingRetainFilesOutOfRange(retain));
+        }
+
+        if (MaxFileBytes is { } bytes && bytes < MinimumFileBytes)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_LoggingMaxFileBytesOutOfRange(bytes, MinimumFileBytes));
+        }
+
+        if (RingCapacity is { } capacity && capacity < MinimumRingCapacity)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_LoggingRingCapacityOutOfRange(capacity, MinimumRingCapacity));
+        }
+    }
+}
+
+/// <summary>
 /// The client configuration file (architecture 11 §3): backup sets, roots,
 /// rules — schema-versioned, validated on load with unknown fields
 /// <b>rejected</b> (a typo'd field name silently ignored is a backup that
@@ -87,7 +220,7 @@ public sealed record BackupSetConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -106,6 +239,15 @@ public sealed record ClientConfiguration
     /// <summary>The configured backup sets.</summary>
     [JsonPropertyName("backup_sets")]
     public IReadOnlyList<BackupSetConfiguration> BackupSets { get; init; } = [];
+
+    /// <summary>
+    /// What this installation logs (ADR-0043 §6); null means every logging
+    /// decision is the host's, which is what a file written before schema 4
+    /// says by simply not mentioning it.
+    /// </summary>
+    [JsonPropertyName("logging")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoggingConfiguration? Logging { get; init; }
 
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
@@ -138,15 +280,28 @@ public sealed record ClientConfiguration
     }
 
     /// <summary>
-    /// Normalises a schema-2 file in memory (ADR-0040): each set's single
-    /// <c>root</c> becomes a one-entry <c>roots</c> list, and the file reads
-    /// as schema 3 from here on — the next <see cref="Save"/> writes it so.
-    /// A set speaking both forms, or neither, is a misread rather than a
-    /// guess.
+    /// Brings an older file up to the current schema in memory; the next
+    /// <see cref="Save"/> writes it so.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>2 → 3</b> (ADR-0040): each set's single <c>root</c> becomes a
+    /// one-entry <c>roots</c> list. A set speaking both forms, or neither, is
+    /// a misread rather than a guess.
+    /// </para>
+    /// <para>
+    /// <b>3 → 4</b> (ADR-0043): the file gains an optional <c>logging</c>
+    /// object. There is nothing to move — a schema-3 file simply has no
+    /// <c>logging</c> key, and the property stays null, which is precisely
+    /// "leave every logging decision to the host". The version still has to
+    /// rise, because <see cref="JsonUnmappedMemberHandling.Disallow"/> means a
+    /// schema-4 file handed to an older build is a real compatibility event
+    /// and must be refused by name rather than half-read.
+    /// </para>
+    /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -198,9 +353,11 @@ public sealed record ClientConfiguration
             // Version 1 gets the migration, not just the refusal: it is the
             // schema every pre-hub-and-spoke install wrote (ADR-0034).
             throw new ClientStateException(SchemaVersion == 1
-                ? Strings.FormatClientConfiguration_SchemaVersion1NeedsDestinations(path)
+                ? Strings.FormatClientConfiguration_SchemaVersion1NeedsDestinations(path, CurrentSchemaVersion)
                 : Strings.FormatClientConfiguration_DeclaresSchemaVersionBuildReads(path, SchemaVersion, CurrentSchemaVersion));
         }
+
+        Logging?.Validate();
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var destination in Destinations)
