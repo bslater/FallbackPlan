@@ -99,7 +99,11 @@ become comparable across sets, which is harmless and mildly useful; and
 repository ids remain independently random per archive, so the archives are
 still distinct repositories in every way the format cares about.
 
-### 3. Setup captures the passphrase and stops
+### 3. Setup captures the passphrase and generates the recovery kit
+
+*(§3 as first accepted read "captures the passphrase and stops", scoping the
+kit out. The amendment below replaces that; the reasoning it replaced is kept
+in the status history rather than silently rewritten.)*
 
 The ceremony is: state the consequence, take an explicit acknowledgement,
 capture the passphrase twice, derive, seal, provision. It does not create a
@@ -264,9 +268,50 @@ and unmigrated.
   what a floor is for; the ADR states the limitation rather than importing
   a corpus to hide it.
 
+## Amendment (2026-08): the ceremony ends with the recovery kit
+
+§3 above scoped the kit out, on the reasoning that a kit needs an archive and
+an archive needs a set and a destination — so including it would have grown a
+passphrase ceremony into the whole of §16.1. That reasoning was sound about
+the kit *format* and wrong about the product. The keys an installation
+recovers with come from `root = Argon2id(passphrase, salt, params)` and
+nothing else; no archive, no set and no destination enter the derivation. The
+repository identity the old kit format demanded was the only thing forcing
+the dependency, and [ADR-0013](0013-recovery-kit.md)'s amendment drops it.
+
+So setup gains a fourth step and the installation gains a third state:
+
+> `setup_required` → **`kit_required`** → `ready`
+
+**The kit is built in the client, never by the service.** That is not a new
+rule — `ServiceCommandHandler` has said since ADR-0028 that *"exporting a
+recovery kit is not a command; it re-derives the key-encryption key from a
+passphrase supplied per invocation, so it runs where the person typed it."*
+The setup ceremony is the one place holding the passphrase, so the kit is
+built there, in the same process and by the same derivation that produced the
+provisioning envelope. Argon2id runs once for both.
+
+**Setup is not complete until the operator says the kit is saved.** The
+service records the confirmation durably and `IsSetUp` requires it, so a
+closed browser tab or a crash between provisioning and confirming leaves the
+installation in `kit_required` and the ceremony resumes there. That is
+FR-KIT-004's acceptance criterion — "setup cannot complete without the
+confirmation" — as a state machine rather than as a modal nobody can be made
+to read.
+
+The confirmation records the kit's checksum, not the kit. The service never
+holds a copy: a kit stored on the machine being backed up is not a recovery
+kit, and a service that could hand one out would be a service that had made
+itself a second factor.
+
+**Still deliberately absent:** FR-KIT-003's QR rendering, and FR-KIT-005's
+never-generated/saved/stale model. Setup gets a durable "confirmed saved" and
+no more, and both remain recorded as unmet.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the model, scope, client set and strength policy fixed by the user: write-only format 2, passphrase-only ceremony, local console plus an agent verb, and a length floor with a strength estimate. Build sequenced as strength assessment → installation credential and the archive ladder → contract 1.13 with caller scope → console ceremony → agent verb and sweep |
 | 2026-08 | Accepted | Built end to end: the strength policy in Domain with the floor enforced only where a passphrase is chosen, the installation credential and the new rung in ServiceRuntime's archive ladder, contract 1.13's provision_installation with a caller scope so a remote console is refused, the console's three-step ceremony shown in place of its views, and the headless `fallbackplan-agent setup` verb — proven by service-level drills including a passphrase-free backup that seals to the chosen passphrase and a restore-side derivation check against each archive's descriptor |
+| 2026-08 | Amended | The ceremony no longer stops at the passphrase: it generates the installation recovery kit and will not complete until the operator confirms saving it (FR-KIT-004), adding a `kit_required` state between `setup_required` and `ready`. §3's original scoping is kept above rather than rewritten, because the reasoning it rested on is worth being able to find |

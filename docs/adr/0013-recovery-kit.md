@@ -80,9 +80,55 @@ Generated at first-run setup with explicit confirmation before setup completes �
 
 **No printable representation.** Rejected. A digital-only kit stored on the machine being backed up is not a recovery kit at all.
 
+## Amendment (2026-08): the kit describes an installation, not a repository
+
+The contents table above opens with a **Repository ID**, and the lifecycle
+line says the kit is "generated at first-run setup". Those two sentences
+cannot both be satisfied. A repository id means an archive, an archive means
+a backup set, a set means a destination — so honouring the identity field
+would have pushed the whole of §16.1's nine steps into a ceremony that exists
+to capture one passphrase. Building [ADR-0044](0044-first-run-setup.md)
+brought the collision into the open.
+
+The resolution is that the identity field was the mistaken half. Under
+ADR-0042 a write-only installation's keys derive from
+`root = Argon2id(passphrase, salt, params)` with **no repository identifier
+anywhere in the derivation**, and [ADR-0044](0044-first-run-setup.md) makes
+one root serve every archive an installation writes. So everything this kit
+exists to carry is known the moment the passphrase is chosen, and the id was
+never load-bearing for opening anything — only for saying which archive the
+kit came from, which is precisely the thing that stops one kit opening the
+others.
+
+**Kit format v2** therefore drops three fields, and each absence is a
+statement rather than an economy:
+
+- **repository id** — the archive supplies its own, from the descriptor the
+  recovering tool reads off the store it was pointed at. One installation,
+  one passphrase, one keypair, one kit; a kit that named one archive could
+  not open the rest.
+- **wrapped master key** — a write-only repository has none. This half was
+  already recorded in §2.1 of the specification.
+- **destination descriptors** — the kit is generated before any destination
+  is declared. A field that is empty in every kit anyone will hold teaches a
+  reader nothing, and *where the archives live* is knowledge the operator has
+  while *how to re-derive* is the only thing the kit can uniquely carry.
+
+What the kit gains is proof in both directions: the derived sealing public
+key is compared against the kit's copy **and** the archive's descriptor, so a
+wrong passphrase and a wrong archive fail differently and by name.
+
+**v1 kits are unaffected** — they remain valid and keep opening the
+repository they name. The consequence recorded above, that "destination
+changes make kits stale, requiring regeneration", no longer applies to a v2
+kit, which has no destinations to go stale. Whether an installation kit can
+go stale at all is left open rather than answered by omission
+(FR-KIT-005 remains unmet).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted | Built, specified as [`specifications/recovery-kit/`](../../specifications/recovery-kit/README.md), conformance-fixtured, and exercised by the clean-machine drill — restore from store plus kit plus passphrase, with per-line transcription checks. Shamir splitting stays deferred rather than rejected. |
+| 2026-08 | Amended | Kit format v2 describes an **installation** rather than a repository ([ADR-0044](0044-first-run-setup.md)): repository id, wrapped key and destinations are dropped, the archive supplies its own identity from its descriptor, and one kit opens every archive the passphrase wrote. v1 kits are untouched |
