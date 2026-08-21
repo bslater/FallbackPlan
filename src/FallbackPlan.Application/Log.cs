@@ -29,21 +29,18 @@ internal static partial class Log
         Message = "Configuration migrated from schema {From} to {To}")]
     internal static partial void ConfigurationMigrated(ILogger logger, int from, int to);
 
-    [LoggerMessage(
-        EventId = 3410, Level = LogLevel.Debug,
-        Message = "Set {SetName} is due: last completed {LastCompleted}, next run {NextRun}")]
-    internal static partial void SetDue(
-        ILogger logger, string setName, string lastCompleted, string nextRun);
-
-    [LoggerMessage(
-        EventId = 3411, Level = LogLevel.Debug,
-        Message = "Set {SetName} is not due yet; next run {NextRun}")]
-    internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
-
-    [LoggerMessage(
-        EventId = 3412, Level = LogLevel.Information,
-        Message = "Coalescing {Missed} missed runs for {SetName} into one catch-up")]
-    internal static partial void MissedRunsCoalesced(ILogger logger, int missed, string setName);
+    // 3410, 3411 and 3412 were declared here and have moved or gone.
+    //
+    // Due-ness is decided by the Agent's Scheduler, not by this assembly, and
+    // a project's Log class is internal to it — so the two due/not-due
+    // messages now live in the Agent's range beside the pass that emits them.
+    //
+    // 3412 reported how many missed runs were coalesced into one catch-up. It
+    // cannot be wired, because nothing counts them: Schedule.IsDue coalesces
+    // *structurally* — "is a run due" is one boolean comparison, so five
+    // slept-through occurrences owe exactly one run and are never enumerated
+    // (ADR-0027 §1). Reporting the number would mean adding a computation for
+    // no reason but to have something to log.
 
     [LoggerMessage(
         EventId = 3420, Level = LogLevel.Information,

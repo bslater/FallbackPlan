@@ -91,6 +91,17 @@ internal static partial class Log
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);
 
     [LoggerMessage(
+        EventId = 3740, Level = LogLevel.Debug,
+        Message = "Set {SetName} is due: last completed {LastCompleted}, next run {NextRun}")]
+    internal static partial void SetDue(
+        ILogger logger, string setName, string lastCompleted, string nextRun);
+
+    [LoggerMessage(
+        EventId = 3741, Level = LogLevel.Debug,
+        Message = "Set {SetName} is not due yet; next run {NextRun}")]
+    internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
+
+    [LoggerMessage(
         EventId = 3730, Level = LogLevel.Information,
         Message = "Service listening on the local binding")]
     internal static partial void LocalBindingUp(ILogger logger);

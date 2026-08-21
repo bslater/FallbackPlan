@@ -25,6 +25,17 @@ namespace FallbackPlan.Repository;
 /// </remarks>
 internal static partial class Log
 {
+    // 2020 (blob sealed), 2040 (record read) and 2041 (record sealed) were
+    // declared here and are deliberately gone rather than wired.
+    //
+    // 2020 duplicated Repository.Packing's 1610: blobs are sealed in Packing,
+    // and two messages for one event is how a log begins to disagree with
+    // itself. 2040 and 2041 sat on the per-record path — the hottest in the
+    // product — and 2041 was at Debug, so a million-file backup would have
+    // emitted a million Debug lines. That is a volume defect wearing a
+    // diagnostic's clothes; what a person actually needs at that layer is the
+    // per-file record above, which carries the counts.
+
     // ---------------------------------------------------------- publication
 
     [LoggerMessage(
@@ -79,12 +90,6 @@ internal static partial class Log
     // ---------------------------------------------------------------- blobs
 
     [LoggerMessage(
-        EventId = 2020, Level = LogLevel.Debug,
-        Message = "Sealed {Class} blob {BlobId} as {Key}: {Records} records, {Bytes} bytes, fill {Fill:P1}")]
-    internal static partial void BlobSealed(
-        ILogger logger, string @class, BlobId blobId, StoreBlobKey key, int records, long bytes, double fill);
-
-    [LoggerMessage(
         EventId = 2021, Level = LogLevel.Warning,
         Message = "Skipping blob {Key} while loading: {Reason} — contained to this blob, "
             + "every other blob still loads")]
@@ -115,16 +120,4 @@ internal static partial class Log
     internal static partial void RepositoryOpenRefused(ILogger logger, RepositoryId repository, string reason);
 
     // ----------------------------------------------------------------- read
-
-    [LoggerMessage(
-        EventId = 2040, Level = LogLevel.Trace,
-        Message = "Read {ObjectId} from blob {BlobId}: {Outcome}")]
-    internal static partial void RecordRead(
-        ILogger logger, ObjectId objectId, BlobId blobId, string outcome);
-
-    [LoggerMessage(
-        EventId = 2041, Level = LogLevel.Debug,
-        Message = "Content is sealed and no restore grant is held — {ObjectId} needs the passphrase "
-            + "(ADR-0042). Not damage")]
-    internal static partial void RecordSealed(ILogger logger, ObjectId objectId);
 }

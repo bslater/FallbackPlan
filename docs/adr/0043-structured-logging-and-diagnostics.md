@@ -372,8 +372,39 @@ named to **1.15**: 1.13 was taken by first-run setup
 **One thing this ADR did not anticipate**, recorded because it nearly cost the
 privacy guarantee its proof: declaring a `[LoggerMessage]` and calling it are
 separate acts, and phase 2 did far more of the first than the second. Sixty-one
-declarations still have no call site, and the eleven path-carrying ones on the
+declarations had no call site, and the eleven path-carrying ones on the
 publish-and-restore path had none — so the headline privacy test would have run
 over an empty capture and passed. `LoggingShapeTests` now refuses a declaration
-without a call site, against a frozen register that may shrink and never grow.
+without a call site, against a register that may shrink and never grow.
+
+### Amendment: three assemblies stay silent
+
+Emptying that register settled a question this ADR had answered too quickly.
+The level-discipline section above says "pure codecs in `Repository.Format` log
+at `Trace` only, so the recovery tool stays quiet". Wiring that turned out to
+cost more than it is worth, and the honest resolution is that those assemblies
+log **nothing at all**:
+
+- **`Repository.Format`** (36 files) and **`Repository.Crypto`** (21) expose
+  their work through *static* parse, encode and derive methods. Logging from
+  them means an `ILogger` parameter on the public API that the standalone
+  recovery tool and the committed conformance fixtures both call — in exactly
+  the two assemblies NFR-PORT-001 keeps smallest, for the machine that was
+  rebuilt this morning. A parameter added to every codec entry point to carry
+  three `Trace` messages is a poor trade, and the recovery tool "staying quiet"
+  is better served by having nothing to say.
+- **`Repository.Segmentation`**'s one message answered "why did a barely
+  changed file re-archive almost entirely" — which the publisher's per-file
+  record already answers, carrying the segment count and how many were written.
+
+What was lost with `Repository.Crypto`'s file was a good rule, so it is
+recorded here instead: **no message in this product takes a key, a passphrase,
+a salt or a derived scalar as a parameter** — not redacted, not hashed, not
+truncated. Specification 03 §8 forbids key material in any log, and the safest
+way to honour a rule like that is to leave no parameter it could be passed
+through.
+
+Two security-relevant events from that file are not lost either: a failed
+unwrap and a refused sealed envelope already surface as typed exceptions, which
+the hosts log by name at the boundary where the operation was asked for.
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |

@@ -98,8 +98,15 @@ public sealed class ServiceRuntime : IAsyncDisposable
         options.Logging?.Factory.CreateLogger(category.FullName!) ?? NullLogger.Instance;
 
     /// <summary>A logger for <typeparamref name="T"/>, or a silent one.</summary>
-    internal ILogger LoggerFor<T>() =>
-        Options.Logging?.Factory.CreateLogger(typeof(T).FullName!) ?? NullLogger.Instance;
+    internal ILogger LoggerFor<T>() => LoggerFor(typeof(T));
+
+    /// <summary>
+    /// A logger for a category named by type, for the static classes
+    /// <see cref="LoggerFor{T}"/> cannot express.
+    /// </summary>
+    /// <param name="category">The type whose full name names the category.</param>
+    internal ILogger LoggerFor(Type category) =>
+        Options.Logging?.Factory.CreateLogger(category.FullName!) ?? NullLogger.Instance;
 
     /// <summary>Durable local state — device and writer identity.</summary>
     public LocalState State { get; }
@@ -232,7 +239,23 @@ public sealed class ServiceRuntime : IAsyncDisposable
     public string ConfigurationPath => Path.Combine(Options.StateDirectory, "config.json");
 
     /// <summary>The current configuration, re-read so an edit takes effect without a restart.</summary>
+    /// <remarks>
+    /// Deliberately unlogged. This re-reads on every access, which is what
+    /// makes an edit take effect without a restart — and is also why a record
+    /// here would be a record several times a pass, turning "the configuration
+    /// was loaded" from a fact into noise. The load that is worth a line is
+    /// the one a person can point at: <see cref="LoadConfiguration"/>, called
+    /// when the service starts and when an edit is applied.
+    /// </remarks>
     public ClientConfiguration Configuration => ClientConfiguration.Load(ConfigurationPath);
+
+    /// <summary>
+    /// Reads the configuration as an event worth recording — the service
+    /// starting, or an edit taking effect.
+    /// </summary>
+    /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
+    public ClientConfiguration LoadConfiguration() =>
+        ClientConfiguration.Load(ConfigurationPath, LoggerFor<ClientConfiguration>());
 
     /// <summary>
     /// The per-set exclusion between a destructive retention apply and a
@@ -301,7 +324,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 new ServiceRuntime(options, writerRole, passphrase?.Clone(), state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
-                    Notices = NoticeStore.Open(options.StateDirectory),
+                    Notices = NoticeStore.Open(
+                        options.StateDirectory, Logger(options, typeof(NoticeStore))),
                 });
         }
         catch

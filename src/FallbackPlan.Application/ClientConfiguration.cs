@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using FallbackPlan.Application.Resources;
 
 namespace FallbackPlan.Application;
@@ -253,10 +254,13 @@ public sealed record ClientConfiguration
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
 
     /// <summary>Loads and validates; a missing file is the default configuration.</summary>
+    /// <param name="path">The configuration file.</param>
+    /// <param name="logger">Where the load, a migration or a refusal is recorded.</param>
     /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
-    public static ClientConfiguration Load(string path)
+    public static ClientConfiguration Load(string path, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+        var log = logger ?? NullLogger.Instance;
 
         if (!File.Exists(path))
         {
@@ -271,11 +275,34 @@ public sealed record ClientConfiguration
         }
         catch (JsonException exception)
         {
+            Log.ConfigurationRefused(log, "unreadable", exception.Message);
             throw new ClientStateException(Strings.FormatClientConfiguration_NotValidConfigurationFile(path, exception.Message), exception);
         }
 
+        var declared = configuration.SchemaVersion;
         configuration = Migrate(configuration, path);
-        configuration.Validate(path);
+
+        if (declared != configuration.SchemaVersion)
+        {
+            Log.ConfigurationMigrated(log, declared, configuration.SchemaVersion);
+        }
+
+        try
+        {
+            configuration.Validate(path);
+        }
+        catch (ClientStateException refusal)
+        {
+            // Logged where it is decided rather than left to each caller. A
+            // configuration the service is about to refuse is one of the most
+            // useful things a log can hold, and it is the same refusal either
+            // way — this only records it.
+            Log.ConfigurationRefused(log, "invalid", refusal.Message);
+            throw;
+        }
+
+        Log.ConfigurationLoaded(
+            log, configuration.SchemaVersion, configuration.BackupSets.Count, configuration.Destinations.Count);
         return configuration;
     }
 
