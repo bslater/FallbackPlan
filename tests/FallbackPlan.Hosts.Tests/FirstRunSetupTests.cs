@@ -5,6 +5,7 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
@@ -236,7 +237,8 @@ public sealed class FirstRunSetupTests : IDisposable
             var result = await HostHarness.RunAsync(
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+                "--kit-output", KitPath());
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("too weak", result.All, StringComparison.Ordinal);
@@ -256,7 +258,8 @@ public sealed class FirstRunSetupTests : IDisposable
         var first = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", KitPath());
 
         Assert.AreEqual(0, first.ExitCode, first.All);
         Assert.Contains("never be changed", first.All, StringComparison.Ordinal);
@@ -267,7 +270,8 @@ public sealed class FirstRunSetupTests : IDisposable
         var second = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", KitPath());
 
         Assert.AreEqual(2, second.ExitCode);
         Assert.Contains("already set up", second.All, StringComparison.Ordinal);
@@ -387,6 +391,58 @@ public sealed class FirstRunSetupTests : IDisposable
         Assert.HasCount(32, description.DeviceId!);
         SequenceAssert.AreEqual(runtime.State.DeviceId, Convert.FromHexString(description.DeviceId!));
     }
+
+    [TestMethod]
+    public async Task SetupVerb_WithoutAKitPath_RefusesRatherThanWaivingTheConfirmation()
+    {
+        // A headless operator cannot tick a box, so the path is required.
+        // Waiving the confirmation because there is no button would be
+        // letting the interface decide what the requirement means.
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("--kit-output", result.All, StringComparison.Ordinal);
+        Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_Acknowledged_WritesBothKitFormsAndReachesReady()
+    {
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        var kit = KitPath();
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss", "--kit-output", kit);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.IsTrue(File.Exists(kit), "the machine form");
+        Assert.IsTrue(File.Exists(kit + ".txt"), "the printable form");
+
+        // Both forms, identical content, and an installation kit at that.
+        var framed = await File.ReadAllBytesAsync(kit, _timeout.Token);
+        SequenceAssert.AreEqual(
+            framed,
+            RecoveryKitText.ParseToFramed(await File.ReadAllTextAsync(kit + ".txt", _timeout.Token)));
+        Assert.IsTrue(RecoveryKitCodec.Parse(framed).IsInstallationKit);
+
+        // Writing the kit is what completes setup for this verb.
+        await using var runtime = await StartWithoutPassphraseAsync();
+        Assert.AreEqual("ready", runtime.SetupState);
+
+        Assert.IsFalse(
+            (await File.ReadAllTextAsync(kit + ".txt", _timeout.Token))
+                .Contains(PassphraseText, StringComparison.Ordinal),
+            "the printable kit must not carry the passphrase");
+    }
+
+    /// <summary>Where this harness writes its kit.</summary>
+    private string KitPath() => Path.Combine(_harness.StateDirectory, "recovery-kit.fbpkrkit");
 
     private async Task<ServiceDescriptionResult> DescribeAsync(ServiceCommandHandler handler)
     {
