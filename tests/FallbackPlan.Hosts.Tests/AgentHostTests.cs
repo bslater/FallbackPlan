@@ -296,6 +296,41 @@ public sealed class AgentHostTests : IDisposable
         Assert.Contains("ADR-0034", result.Error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A log directory that cannot be opened is said once, on standard error,
+    /// and the verb runs anyway (ADR-0043 §6).
+    /// </summary>
+    /// <remarks>
+    /// Standard output is the stream that carries a verb's answer — a unit
+    /// file, a report, a list somebody is piping — so a diagnostics warning
+    /// belongs nowhere near it. The state directory here is unopenable by
+    /// construction rather than by permission: its parent is an ordinary file,
+    /// which no user can descend into.
+    /// </remarks>
+    [TestMethod]
+    public async Task AgentHost_WhenTheLogDirectoryCannotBeOpened_WarnsOnErrorAndCarriesOn()
+    {
+        var occupied = Path.Combine(Path.GetTempPath(), "fbp-agent-host-" + Guid.NewGuid().ToString("n"));
+        await File.WriteAllTextAsync(occupied, "a file has no children");
+
+        try
+        {
+            var result = await RunAsync("retention", "--state", Path.Combine(occupied, "state"));
+
+            Assert.Contains("diagnostics are not being written", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("diagnostics are not being written", result.Output, StringComparison.Ordinal);
+
+            // It got past composing logging and reached the verb, which is the
+            // half that used to be an access-denied stack trace.
+            Assert.Contains("usage is", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(occupied);
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose() => _harness.Dispose();
 }

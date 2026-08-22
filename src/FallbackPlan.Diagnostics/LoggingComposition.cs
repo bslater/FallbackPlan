@@ -32,6 +32,20 @@ public sealed class LoggingComposition : IDisposable
     /// <summary>The live level rules, so a level change needs no restart.</summary>
     public LevelSwitch Levels => _provider.Levels;
 
+    /// <summary>Whether records are reaching a file, rather than only the ring.</summary>
+    public bool DurableSink => _provider.HasDurableSink;
+
+    /// <summary>
+    /// Why the durable sink is absent, or null when it opened or was never
+    /// asked for.
+    /// </summary>
+    /// <remarks>
+    /// A host that has an error stream should say this once at startup. The
+    /// provider deliberately does not print it: only the host knows which of
+    /// its streams is an artifact somebody is redirecting.
+    /// </remarks>
+    public string? DurableSinkRefusal => _provider.DurableSinkRefusal;
+
     /// <summary>Builds a factory over the ring, the rolling file, and optionally the console.</summary>
     /// <param name="options">What to log and where to put it.</param>
     /// <param name="console">Where a foreground run writes, when one was asked for.</param>

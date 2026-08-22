@@ -55,7 +55,7 @@ public sealed partial class ServiceCommandHandler
             DefaultLevel: LogLevels.NameOf(options.Default),
             CategoryLevels: options.Categories.ToDictionary(
                 pair => pair.Key, pair => LogLevels.NameOf(pair.Value), StringComparer.Ordinal),
-            DurableSink: options.Directory is not null,
+            DurableSink: logging.DurableSink,
             RetainFiles: options.RetainFiles,
             MaximumFileBytes: options.MaximumFileBytes,
             RingCapacity: logging.Ring.Capacity,

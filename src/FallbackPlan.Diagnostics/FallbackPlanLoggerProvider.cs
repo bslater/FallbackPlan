@@ -30,10 +30,75 @@ public sealed class FallbackPlanLoggerProvider : ILoggerProvider
 
         _levels = new LevelSwitch(options);
         _ring = new LogRing(options.RingCapacity);
-        _file = options.Directory is null
-            ? null
-            : new RollingFileSink(options.Directory, options.MaximumFileBytes, options.RetainFiles);
+        _file = TryOpenFile(options, out var refusal);
         _console = options.Console ? console : null;
+        DurableSinkRefusal = refusal;
+    }
+
+    /// <summary>
+    /// Why the durable sink is absent, or null when it opened or was never
+    /// asked for. The host decides where to report it.
+    /// </summary>
+    public string? DurableSinkRefusal { get; }
+
+    /// <summary>Whether records are reaching a file, rather than only the ring.</summary>
+    public bool HasDurableSink => _file is not null;
+
+    /// <summary>
+    /// Opens the rolling file, or answers null when the directory cannot be
+    /// had.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A diagnostics sink that cannot open must not stop the process.</b>
+    /// Logs are diagnostics, not an operator channel (architecture 10 §3.1),
+    /// and a backup product that refuses to run because it cannot write its own
+    /// log file has its priorities inverted: the backup is the thing that
+    /// matters, and it can be performed perfectly while the log goes nowhere.
+    /// </para>
+    /// <para>
+    /// This is not hypothetical. <c>fallbackplan-agent install</c> is run by a
+    /// person, before the service account exists, and its state directory
+    /// points at a system location that person cannot create — so eagerly
+    /// creating the log directory took down the one verb whose entire job is to
+    /// set that account up, on every platform, with an access-denied stack
+    /// trace and no clue as to why.
+    /// </para>
+    /// <para>
+    /// Null is already the shape of "no durable sink" here, so degrading costs
+    /// no new state. What it does cost is one claim elsewhere:
+    /// <c>get_diagnostics</c> used to read <c>DurableSink</c> off the requested
+    /// directory, which was the same thing as the truth only while opening it
+    /// could not fail. It now reads <see cref="HasDurableSink"/>.
+    /// </para>
+    /// <para>
+    /// Nothing is printed from here: this type does not know stdout from
+    /// stderr, and one of its callers has a stdout that is a systemd unit file
+    /// somebody is redirecting into a file. The reason is exposed instead, and
+    /// the host picks the stream.
+    /// </para>
+    /// </remarks>
+    private static RollingFileSink? TryOpenFile(LoggingOptions options, out string? refusal)
+    {
+        refusal = null;
+
+        if (options.Directory is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return new RollingFileSink(options.Directory, options.MaximumFileBytes, options.RetainFiles);
+        }
+        catch (Exception failure)
+            when (failure is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            refusal =
+                $"diagnostics are not being written to '{options.Directory}': {failure.Message} "
+                + "Records are still captured in memory and readable through the diagnostics verbs.";
+            return null;
+        }
     }
 
     /// <summary>The buffer a client reads from.</summary>

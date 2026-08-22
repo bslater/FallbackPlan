@@ -55,3 +55,4 @@
 "FallbackPlan.Retention" = 89
 "FallbackPlan.Storage.Abstractions" = 81
 "FallbackPlan.Storage.Local" = 84
+"FallbackPlan.Web" = 65

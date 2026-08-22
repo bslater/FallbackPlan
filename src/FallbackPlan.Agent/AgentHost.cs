@@ -194,13 +194,23 @@ public static class AgentHost
             {
                 Default = logLevel,
                 Categories = configured?.CategoryLevels() ?? defaults.Categories,
-                Directory = stateDirectory is null ? null : Path.Combine(stateDirectory, "logs"),
+                Directory = LogDirectoryFor(args[0], stateDirectory),
                 MaximumFileBytes = configured?.MaxFileBytes ?? defaults.MaximumFileBytes,
                 RetainFiles = configured?.RetainFiles ?? defaults.RetainFiles,
                 RingCapacity = configured?.RingCapacity ?? defaults.RingCapacity,
                 Console = args[0] == "run",
             },
             output);
+
+        // Said once, on standard error, and never on standard output: `install`
+        // prints a service definition somebody redirects into a file, and a
+        // warning in the middle of a unit file is a corrupt unit file. A log
+        // that cannot be written is worth knowing about and is not worth
+        // stopping for — the verb below runs either way.
+        if (logging.DurableSinkRefusal is { } sinkRefusal)
+        {
+            error.WriteLine($"warning: {sinkRefusal}");
+        }
 
         // `notices` lists what awaits a human, or acknowledges one entry —
         // the durable third channel (architecture 10 §3.1): a peering that
@@ -919,6 +929,25 @@ public static class AgentHost
             return 1;
         }
     }
+
+    /// <summary>
+    /// Where this verb's records belong on disk, or null for the one verb that
+    /// has no business creating anything.
+    /// </summary>
+    /// <param name="verb">The verb about to run.</param>
+    /// <param name="stateDirectory">The state directory named on the command line, if one was.</param>
+    /// <remarks>
+    /// <c>install</c> prints a service definition and touches nothing, and the
+    /// state directory it names is the one the service will use <em>once the
+    /// account exists</em>. Creating a log directory there would be the wrong
+    /// act by whoever is running it: an operator with enough privilege to
+    /// register a service leaves behind a <c>logs</c> directory owned by
+    /// themselves, in the place the service account is about to be told to
+    /// write. Records still reach the ring, and this verb produces its answer
+    /// on the two streams either way.
+    /// </remarks>
+    private static string? LogDirectoryFor(string verb, string? stateDirectory) =>
+        stateDirectory is null || verb == "install" ? null : Path.Combine(stateDirectory, "logs");
 
     /// <summary>
     /// The <c>logging</c> block from <c>&lt;state&gt;/config.json</c>, or null
