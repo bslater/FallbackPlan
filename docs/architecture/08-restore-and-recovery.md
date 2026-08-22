@@ -182,9 +182,40 @@ A claim is deliberately asymmetric.
 
 The asymmetry follows from what an attacker gains. Someone who has stolen the passphrase can decrypt the data wherever they find it, so gating reads on a human buys nothing and costs real recoveries. Destroying a household's last surviving copy is a different act with a different blast radius, and it waits for the person who owns the disk. This is the case the malware scenario turns on: a compromised machine that claims can read what it could already decrypt, and cannot quietly delete the copy that outlived it.
 
-### 7.4 What this does not restore
+### 7.4 Recovering operation
 
-The same distinction §6 draws still holds, and is sharper here. A claim recovers **data**. It does not recover **operation**: schedules, retention policies, capture rules and the other destinations are configuration, and configuration is not in the kit. The user is told so plainly rather than left to infer protection from a successful restore.
+A claim recovers **data**. Recovering **operation** — resuming the schedule, the rules and the retention policy that were protecting that data — is the other half, and §6's distinction is at its sharpest here: a user looking at restored files has no way to tell whether anything is still protecting them.
+
+Most of the answer is already in the repository. Capture rules, segmentation and the dedup trust domain are in each snapshot's policy manifest; the root **labels** are the snapshot tree's own top-level names, persisted rather than derived ([ADR-0040](../adr/0040-multi-root-backup-sets.md)); the set ids come back with the claim itself. What was missing is what lived only in `config.json`: the set's name, the **paths** its labels pointed at, the schedule, and the retention policy.
+
+Those are carried by the **set-configuration object** ([format 11 §5](../../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object), [ADR-0047](../adr/0047-recovering-operation-after-total-loss.md)), written for a set on every publication and whenever its configuration changes.
+
+**It is sealed to a public key, and only the passphrase opens it.** The outer record is an ordinary standalone record, so the writer can locate and replace these objects while running; the configuration inside is sealed again to an X25519 recipient — the descriptor's own `fbp/seal/v2` key for a write-only repository, and a key derived from the master key for a v1 one. This matters because a v2 service is granted the entire structure plane by design ([ADR-0042](../adr/0042-write-only-repositories.md)): an unsealed record would hand a compromised hub the user's folder layout, schedule and rules. Sealed, the hub writes an envelope it can never open.
+
+**Destinations are deliberately not in it.** The repository is held *by* the destinations, and [ADR-0034 §5](../adr/0034-hub-and-spoke-destinations.md) keeps that list local as a privacy statement. Destinations come from the recovery kit, which the user holds and no peer does — which is another reason FR-KIT-004 will not let setup complete until the kit is saved.
+
+### 7.5 Resuming, step by step
+
+1. **Claim**, per §7.2. The answer names the set ids.
+2. **Read the configuration** — fetch the newest object under each set's prefix and open the envelope with the passphrase-derived scalar.
+3. **Take destinations from the kit.**
+4. **Confirm the paths.** Each root's path on the lost machine is shown as a *hint*, flagged where it does not exist here. This step stays a human decision: the new machine's layout may legitimately differ, and silently capturing the wrong tree under a name that says otherwise is worse than asking. The recovered retention policy is confirmed for the same reason — it governs deletion, and the signature that protects it defends against a destination, not against a compromised member.
+5. **Re-adopt staging.** The hub pulls the descriptor and `/keys/` back from the replica, writes them to a fresh staging path, and opens it. It does *not* create a new repository: history stays continuous, the peer keeps one repository per set, and fan-out sends only what the destination's inventory lacks, so nothing already safe re-crosses the wire. An empty staging archive is already a supported state ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md)).
+6. **The scheduler resumes.**
+
+The recovered machine is a **new writer** — `LocalState` mints a fresh `writer_id` when its state file is absent — which is exactly what [T-18](../threat-model.md#t-18-writer-identity-cloning)'s gapless-monotonic rule wants, and the opposite of re-using an identity whose sequence file was lost.
+
+**One cost is stated rather than discovered.** A fresh writer id means the previously written segments belong to another writer. Under the default `repository` dedup trust domain they are still reused. Under `device` — which [ADR-0042](../adr/0042-write-only-repositories.md) forces for write-only repositories, since they cannot read another writer's segments to verify reuse — the first backup after recovery re-uploads the entire source. On a domestic uplink that is days, and it belongs in the recovery summary the user reads.
+
+### 7.6 What still needs a person
+
+Bounded, and stated rather than left to be discovered:
+
+- **The paths**, confirmed against the hint (§7.5 step 4).
+- **The destinations**, from the kit — and a user who lost both machine and kit recovers their data from any peer that will re-pair, but cannot enumerate where their other copies live.
+- **Store credentials** for cloud destinations, which are in no kit and no repository by design ([§4.2](#42-what-is-deliberately-excluded)).
+
+A repository written before this revision carries no configuration object at all. Its data recovers exactly as §7.2 describes; its operation is rebuilt by hand.
 
 ---
 

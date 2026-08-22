@@ -71,6 +71,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
 | [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
+| [0047](adr/0047-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Specified only** | [notes](#0047--recovering-the-data-was-only-half-of-it) |
 
 ---
 
@@ -499,6 +500,52 @@ their negotiated feature, the ledger's token and public-key fields, the
 `claim_replicas` verb, and the drill that destroys both stores and
 recovers over the wire. The requirements it owes — FR-DR-001 through
 FR-DR-005 — carry honest untested markers in the
+[traceability matrix](requirements/traceability.md) until then.
+
+### 0047 — recovering the data was only half of it
+
+Specified only, alongside [0046](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built),
+and filed separately because the two are separable: a claim is useful on its
+own, for a restore. Neither finishes the disaster alone.
+
+0046 got a rebuilt machine to its data. This one answers what that machine
+knows afterwards, which today is nothing: capture rules and root labels are
+readable from the replica's own manifests, but the set's name, the **paths**
+its labels pointed at, its schedule and its retention policy lived only in
+`config.json` and died with the machine. A user looking at restored files has
+no way to tell whether anything is protecting them again.
+
+The answer is a **set-configuration object** — type `0x10` at
+`/config/<backup-set-id>/…`, [specification 11
+§5](../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object)
+— written on every publication and on every configuration change, with its
+payload **sealed to an asymmetric recipient** so only the passphrase opens it.
+That second seal is the load-bearing part: a v2 service is granted the whole
+structure plane by design (ADR-0042), so an unsealed record would hand a
+compromised write-only hub the user's folder layout, schedule and rules.
+`Repository.Crypto/ContentSealing` already provides the envelope, and both
+formats already have a recipient key, so no new construction is introduced.
+
+Two findings from writing it are worth keeping, because both were nearly
+implemented the other way:
+
+**A configuration change must not publish a snapshot.**
+`Retention/RetentionPlanner` buckets snapshots by time and keeps the newest per
+bucket, and `SnapshotFact` carries no kind — so a configuration snapshot
+published later the same day would be the newest in that day's bucket and would
+**expire the day's real backup**. A separate namespace avoids the interaction
+rather than teaching the component that decides deletions a new exception.
+
+**The object needs a stated collection root.** Nothing references it, so a
+reachability walk alone would collect every one of them and silently disarm
+recovery of operation — invisibly, since nothing else reads them while running.
+Recorded as [ADR-0009 Amendment
+6](adr/0009-garbage-collection-safety.md).
+
+What remains to build: the `fbp/recovery/v1` derivation, the object codec, the
+publication and configuration-change write paths, the reconstruction verb, and
+the console step that confirms recovered paths rather than capturing from them.
+FR-DR-006 through FR-DR-009 carry honest untested markers in the
 [traceability matrix](requirements/traceability.md) until then.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.

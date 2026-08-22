@@ -73,6 +73,8 @@ The two advisory hint objects are records as well, and their types are assigned 
 
 The collector's three objects are assigned the same way: **lease** `0x0D`, **tombstone** `0x0E`, **audit-period record** `0x0F` ([11](11-lifecycle-objects.md)). Nothing writes them before phase 4; the values are fixed now so the collector is built against a format rather than establishing one.
 
+The **set-configuration object** is `0x10` ([11 §5](11-lifecycle-objects.md#5-set-configuration-object)). It is the first assignment above `0x0F`, and it is deliberately not squeezed into the reserved `0x07`: that value stays reserved forever for the reason the row above gives.
+
 ### 3.2 What this does and does not protect
 
 Keying defends against the **store**. It does not defend against a **repository member**, because members hold the key.

@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-08
 **Requirements:** FR-DR-001, FR-DR-002, FR-DR-003, FR-DR-004, FR-DR-005, NFR-SEC-009
-**Related:** [ADR-0010](0010-local-store-separation.md), [ADR-0013](0013-recovery-kit.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md), [peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)
+**Related:** [ADR-0010](0010-local-store-separation.md), [ADR-0013](0013-recovery-kit.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0047](0047-recovering-operation-after-total-loss.md), [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md), [peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)
 
 ---
 
@@ -166,6 +166,12 @@ deliberately destroys protects nothing, while costing the user their data.
 
 ## Consequences
 
+- **This record recovers data and not operation, and that half is
+  [ADR-0047](0047-recovering-operation-after-total-loss.md).** A machine that
+  claims its replica can read every version of every file it kept and still
+  cannot tell itself what it was supposed to protect tomorrow. The two records
+  are deliberately separable — a claim is useful on its own, for a restore —
+  but neither finishes the disaster alone.
 - **The bare-metal recovery becomes a supported, testable path** rather
   than a scenario that reads as covered and is not. Its drill is the
   disaster-recovery sibling of [ADR-0013](0013-recovery-kit.md)'s kit

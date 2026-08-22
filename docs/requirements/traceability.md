@@ -115,6 +115,10 @@ Every cell here is an honest untested marker rather than a class name. The cerem
 | FR-DR-003 | [08 §7.2](../architecture/08-restore-and-recovery.md#72-the-claim) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
 | FR-DR-004 | [08 §7.2](../architecture/08-restore-and-recovery.md#72-the-claim) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
 | FR-DR-005 | [08 §7.3](../architecture/08-restore-and-recovery.md#73-reading-is-unattended-deleting-is-not) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-006 | [08 §7.4](../architecture/08-restore-and-recovery.md#74-recovering-operation) | [0047](../adr/0047-recovering-operation-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-007 | [08 §7.4](../architecture/08-restore-and-recovery.md#74-recovering-operation) | [0047](../adr/0047-recovering-operation-after-total-loss.md) | — *(untested; phase 2 — the sealing property needs a write-only service asserting against its own view)* | 2 |
+| FR-DR-008 | [08 §7.5](../architecture/08-restore-and-recovery.md#75-resuming-step-by-step) | [0047](../adr/0047-recovering-operation-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-009 | [08 §7.5](../architecture/08-restore-and-recovery.md#75-resuming-step-by-step) | [0047](../adr/0047-recovering-operation-after-total-loss.md) | — *(untested; phase 2)* | 2 |
 
 ### Write-only repositories
 
