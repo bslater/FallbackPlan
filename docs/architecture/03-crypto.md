@@ -49,6 +49,37 @@ Requirements:
 - **Data-key rotation** is a separate, explicitly invoked background rewrite. Conflating the two is a lesson from the prior art ([`00-overview.md` §5.4](00-overview.md#54-layered-repositories-over-a-minimal-blob-store)); users routinely believe changing a password re-encrypts their data, and the UI must say plainly that it does not.
 - Unattended agents may protect the KEK with an OS key store.
 
+### 2.1 The write-only hierarchy (format v2)
+
+A write-only repository ([ADR-0042](../adr/0042-write-only-repositories.md);
+format spec [03 §9](../../specifications/repository-format/03-keys.md)) has
+no master key, no KEK, no wrap step and no `/keys/` object. Everything
+derives from the passphrase:
+
+```text
+User passphrase  +  KDF salt & parameters (recorded in /repository-format)
+       |
+  Argon2id  →  root (never stored, never wrapped)
+       |
+       +── HKDF "fbp/seal/v2"        → X25519 scalar → sealing PUBLIC key (in the descriptor)
+       +── HKDF "fbp/metadata/v2"    ─┐
+       +── HKDF "fbp/signing/v2"      ├─ the WRITE BUNDLE: what the service
+       +── HKDF "fbp/content-id/v2"   │  holds — browse, plan, dedup, trim,
+       +── HKDF "fbp/key-id/v2"      ─┘  replicate, verify structure, and write
+```
+
+Data blobs seal their records under a fresh random per-blob content key,
+wrapped to the sealing public key; their footers — the record tables, the
+structure plane — derive from the **metadata** class key, so the write
+bundle still reads every blob's own structure. The private scalar exists
+only while a passphrase entry is alive: setup, adoption of a moved
+archive, or a restore grant inside a source handle. Each HKDF domain is
+independently one-way (NFR-SEC-010): the whole write bundle in hand yields
+neither the root, the passphrase, the scalar, nor any sibling key. The
+descriptor's public-key copy is the passphrase verifier — derive and
+compare, no decryption — and rule 6 above is load-bearing at setup: a v2
+passphrase can never change, and losing it loses the backup.
+
 ## 3. Nonce and key construction
 
 This is the one place in the system where a mistake is unrecoverable rather than merely expensive, so the construction is given in full rather than asserted.

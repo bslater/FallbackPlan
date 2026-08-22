@@ -82,6 +82,11 @@ internal static class Strings
     internal static string KeyedFileIdentity_DeviceIdentifierExactlyBytes => Get(nameof(KeyedFileIdentity_DeviceIdentifierExactlyBytes));
 
     /// <summary>
+    /// An empty password is refused. The primitive accepts one, so refusing is the engine's job (ADR-0045 §4).
+    /// </summary>
+    internal static string PasswordHash_EmptyPasswordRefused => Get(nameof(PasswordHash_EmptyPasswordRefused));
+
+    /// <summary>
     /// An empty passphrase is refused at repository creation. The primitive accepts one, so refusing is the engine's job (specification 03 §2.1).
     /// </summary>
     internal static string Passphrase_EmptyPassphraseRefusedRepositoryCreation => Get(nameof(Passphrase_EmptyPassphraseRefusedRepositoryCreation));
@@ -90,4 +95,84 @@ internal static class Strings
     /// The key-ID key is exactly 32 bytes.
     /// </summary>
     internal static string StoreBlobKeyDeriver_KeyIDKeyExactlyBytes => Get(nameof(StoreBlobKeyDeriver_KeyIDKeyExactlyBytes));
+
+    /// <summary>
+    /// The content key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_ContentKeyExactlyBytes => Get(nameof(ContentSealing_ContentKeyExactlyBytes));
+
+    /// <summary>
+    /// The content key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_ContentKeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_ContentKeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// The sealed content key does not open with this repository's restore material.
+    /// </summary>
+    internal static string ContentSealing_DoesNotOpen => Get(nameof(ContentSealing_DoesNotOpen));
+
+    /// <summary>
+    /// An X25519 key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_KeyExactlyBytes => Get(nameof(ContentSealing_KeyExactlyBytes));
+
+    /// <summary>
+    /// An X25519 key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_KeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_KeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// The recipient public key is a low-order point — sealing to it would derive an attacker-known secret, so it is refused.
+    /// </summary>
+    internal static string ContentSealing_LowOrderRecipient => Get(nameof(ContentSealing_LowOrderRecipient));
+
+    /// <summary>
+    /// The sealed share offers a low-order point and is refused.
+    /// </summary>
+    internal static string ContentSealing_LowOrderShare => Get(nameof(ContentSealing_LowOrderShare));
+
+    /// <summary>
+    /// A sealed content key is exactly {0} bytes.
+    /// </summary>
+    private static string ContentSealing_SealedExactlyBytes => Get(nameof(ContentSealing_SealedExactlyBytes));
+
+    /// <summary>
+    /// A sealed content key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatContentSealing_SealedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ContentSealing_SealedExactlyBytes, arg0);
+
+    /// <summary>
+    /// A serialised write credential is exactly {0} bytes with its magic intact.
+    /// </summary>
+    private static string RepositoryWriteCredential_SerialisedExactlyBytes => Get(nameof(RepositoryWriteCredential_SerialisedExactlyBytes));
+
+    /// <summary>
+    /// A serialised write credential is exactly {0} bytes with its magic intact.
+    /// </summary>
+    internal static string FormatRepositoryWriteCredential_SerialisedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryWriteCredential_SerialisedExactlyBytes, arg0);
+
+    /// <summary>
+    /// The derivation root is exactly {0} bytes.
+    /// </summary>
+    private static string WriteOnlyDerivation_RootExactlyBytes => Get(nameof(WriteOnlyDerivation_RootExactlyBytes));
+
+    /// <summary>
+    /// The derivation root is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatWriteOnlyDerivation_RootExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_RootExactlyBytes, arg0);
+
+    /// <summary>
+    /// This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).
+    /// </summary>
+    internal static string KeyHierarchy_NotWriteOnly => Get(nameof(KeyHierarchy_NotWriteOnly));
+
+    /// <summary>
+    /// A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).
+    /// </summary>
+    internal static string KeyHierarchy_WriteOnlyHoldsNoDataKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoDataKey));
 }

@@ -38,7 +38,7 @@ public sealed class RecoveryKitConformanceTests
         Assert.AreEqual(fields.GetProperty("minimum_tool_version").GetString(), kit.MinimumToolVersion);
         SequenceAssert.AreEqual(
             fields.GetProperty("repository_id").GetString(),
-            Convert.ToHexString(kit.RepositoryId.ToArray()).ToLowerInvariant());
+            Convert.ToHexString(kit.RepositoryId!.Value.ToArray()).ToLowerInvariant());
         Assert.AreEqual(fields.GetProperty("issued_at").GetUInt64(), kit.IssuedAt);
         Assert.AreEqual(fields.GetProperty("destination_count").GetInt32(), kit.Destinations.Count);
         Assert.AreEqual(fields.GetProperty("kdf").GetProperty("memory_kib").GetUInt32(), kit.KdfMemoryKiB);
@@ -68,6 +68,24 @@ public sealed class RecoveryKitConformanceTests
 
         var exception = Assert.ThrowsExactly<RecoveryKitFormatException>(() => RecoveryKitText.ParseToFramed(damaged));
         Assert.Contains("Line 02", exception.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void WriteOnlyKit_TheCommittedVector_ParsesEmptyHandedWithTheSealingKey()
+    {
+        // The eleven-key shape (ADR-0042; recovery-kit section 2.1): format
+        // version 2, key 5 EMPTY — the kit carries no key material at all —
+        // and key 11 the sealing public key the ceremony compares against.
+        var vector = Vectors.RootElement.GetProperty("write_only_kit");
+        var kit = RecoveryKitCodec.Parse(Convert.FromHexString(vector.GetProperty("framed_hex").GetString()!));
+        var fields = vector.GetProperty("fields");
+
+        Assert.AreEqual(
+            fields.GetProperty("repository_format_version").GetUInt16(), kit.RepositoryFormatVersion);
+        Assert.IsTrue(kit.KeyObject.IsEmpty, "a write-only kit carries no key material");
+        Assert.AreEqual(
+            fields.GetProperty("sealing_public_key").GetString(),
+            Convert.ToHexStringLower(kit.SealingPublicKey.ToArray()));
     }
 
     [TestMethod]
@@ -171,7 +189,7 @@ public sealed class RecoveryKitConformanceTests
             using var keys = RepositoryKeySet.FromMasterKey(bundle.MasterKey);
             var store = new LocalFileSystemObjectStore(FixtureStorePath(FixtureKitDirectory()));
 
-            using var reader = new RepositoryReader(kit.RepositoryId, keys, store);
+            using var reader = new RepositoryReader(kit.RepositoryId!.Value, keys, store);
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var manifestEntry = reader.AllRecords.Single(

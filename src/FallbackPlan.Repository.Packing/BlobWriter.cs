@@ -4,6 +4,8 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing.Resources;
@@ -41,17 +43,24 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly EncryptionProfile _encryptionProfile;
     private readonly RepositoryId _repositoryId;
     private readonly byte[] _blobKey;
+    private readonly byte[]? _contentKey;
 
-    // One key schedule per blob rather than per record. The blob key does not
+    // One key schedule per blob rather than per record. The keys do not
     // change for the writer's life, and AesGcm is not safe for concurrent use —
     // which is fine, because record sealing sits inside the ordered stage
-    // (ADR-0029 §1) by construction.
+    // (ADR-0029 §1) by construction. A v1 blob has one cipher for records and
+    // footer alike; a sealed v2 data blob has two — records under the random
+    // content key, the footer under the structure-derived blob key
+    // (ADR-0042 §2) — and _footerCipher is the same instance as _cipher
+    // exactly when the blob is not sealed-content.
     private readonly AesGcm _cipher;
+    private readonly AesGcm _footerCipher;
     private readonly string _spoolPath;
     private readonly FileStream _spool;
     private readonly IncrementalHash _digest;
     private readonly List<RecordTableEntry> _entries = [];
     private readonly SpoolPinnedConfiguration? _pinned;
+    private readonly ILogger _log;
     private bool _sealed;
     private bool _abandoned;
     private bool _spoolClosed;
@@ -64,14 +73,19 @@ public sealed class BlobWriter : IAsyncDisposable
         byte[] blobKey,
         string spoolPath,
         FileStream spool,
-        SpoolPinnedConfiguration? pinned)
+        SpoolPinnedConfiguration? pinned,
+        byte[]? contentKey = null,
+        ILogger? logger = null)
     {
+        _log = logger ?? NullLogger.Instance;
         _envelope = envelope;
         _profile = profile;
         _encryptionProfile = encryptionProfile;
         _repositoryId = repositoryId;
         _blobKey = blobKey;
-        _cipher = new AesGcm(blobKey, RecordCipher.TagLength);
+        _contentKey = contentKey;
+        _cipher = new AesGcm(contentKey ?? blobKey, RecordCipher.TagLength);
+        _footerCipher = contentKey is null ? _cipher : new AesGcm(blobKey, RecordCipher.TagLength);
         _spoolPath = spoolPath;
         _spool = spool;
         _pinned = pinned;
@@ -119,7 +133,8 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         string spoolDirectory,
         ReadOnlySpan<byte> blobSalt = default,
-        SpoolPinnedConfiguration? pinned = null)
+        SpoolPinnedConfiguration? pinned = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -161,21 +176,101 @@ public sealed class BlobWriter : IAsyncDisposable
         var spoolPath = Path.Combine(spoolDirectory, $"blob-{envelope.BlobId}.spool");
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
-        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned);
+        var writer = new BlobWriter(
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, logger: logger);
+        WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
+        return writer;
+    }
 
-        Span<byte> envelopeBytes = stackalloc byte[BlobEnvelope.Length];
-        envelope.WriteTo(envelopeBytes);
-        writer._spool.Write(envelopeBytes);
-        writer._digest.AppendData(envelopeBytes);
-        writer.CurrentLength = BlobEnvelope.Length;
+    /// <summary>
+    /// Creates a writer for a format-v2 <b>sealed data blob</b> (ADR-0042
+    /// §2): records encrypt under a fresh random content key that only the
+    /// repository's derived scalar can recover, while the footer encrypts
+    /// under the structure plane — <paramref name="structureKey"/> is the
+    /// METADATA class key — so a write-only holder still opens the blob's
+    /// record table. The envelope carries the content key sealed to
+    /// <paramref name="sealingPublicKey"/>, pinned to this repository and
+    /// blob.
+    /// </summary>
+    public static BlobWriter CreateSealed(
+        RepositoryId repositoryId,
+        WriterId writerId,
+        KeyGeneration keyGeneration,
+        ReadOnlySpan<byte> structureKey,
+        ReadOnlySpan<byte> sealingPublicKey,
+        ulong blobCounter,
+        EncryptionProfile encryptionProfile,
+        BlobWriteProfile profile,
+        string spoolDirectory,
+        ReadOnlySpan<byte> blobSalt = default,
+        SpoolPinnedConfiguration? pinned = null,
+        ILogger? logger = null)
+    {
+        ThrowHelper.ThrowIfNull(encryptionProfile);
+        ThrowHelper.ThrowIfNull(profile);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
+
+        if (encryptionProfile != EncryptionProfile.Aes256GcmV1)
+        {
+            throw new ArgumentException(Strings.BlobWriter_FormatVersionAdmitsOneRecord,
+                nameof(encryptionProfile));
+        }
+
+        Span<byte> salt = stackalloc byte[BlobKeyDeriver.BlobSaltLength];
+        if (blobSalt.IsEmpty)
+        {
+            RandomNumberGenerator.Fill(salt);
+        }
+        else if (blobSalt.Length == BlobKeyDeriver.BlobSaltLength)
+        {
+            blobSalt.CopyTo(salt);
+        }
+        else
+        {
+            throw new ArgumentException(Strings.FormatBlobWriter_BlobSaltExactlyBytes(BlobKeyDeriver.BlobSaltLength), nameof(blobSalt));
+        }
+
+        var blobId = BlobId.FromWriterCounter(writerId, blobCounter);
+        var contentKey = RandomNumberGenerator.GetBytes(32);
+        var sealedShare = SealedContentKey.Seal(sealingPublicKey, contentKey, repositoryId, blobId);
+
+        var envelope = new BlobEnvelope(
+            FormatLimits.SealedFormatVersion,
+            BlobClass.Data,
+            keyGeneration,
+            blobId,
+            salt,
+            blobCounter,
+            writerId,
+            sealedShare);
+
+        var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(structureKey, salt, writerId, blobCounter, blobKey);
+
+        Directory.CreateDirectory(spoolDirectory);
+        var spoolPath = Path.Combine(spoolDirectory, $"blob-{envelope.BlobId}.spool");
+        var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
+
+        var writer = new BlobWriter(
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, contentKey, logger);
+        WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
+        return writer;
+    }
+
+    private static void WriteEnvelopeAndCheckpoint(BlobWriter writer, BlobEnvelope envelope, SpoolPinnedConfiguration? pinned)
+    {
+        Span<byte> envelopeBytes = stackalloc byte[BlobEnvelope.MaxLength];
+        var written = envelopeBytes[..envelope.EnvelopeLength];
+        envelope.WriteTo(written);
+        writer._spool.Write(written);
+        writer._digest.AppendData(written);
+        writer.CurrentLength = envelope.EnvelopeLength;
 
         if (pinned is not null)
         {
             writer._spool.Flush(flushToDisk: true);
             writer.WriteCheckpoint();
         }
-
-        return writer;
     }
 
     /// <summary>
@@ -188,7 +283,9 @@ public sealed class BlobWriter : IAsyncDisposable
     /// directory, ADR-0028 §2), which is what makes an unpaired file garbage
     /// rather than another session's work in flight.
     /// </summary>
-    public static void SweepUnresumable(string spoolDirectory)
+    /// <param name="spoolDirectory">The writer's spool directory.</param>
+    /// <param name="logger">Where the count swept is recorded.</param>
+    public static void SweepUnresumable(string spoolDirectory, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
@@ -197,11 +294,14 @@ public sealed class BlobWriter : IAsyncDisposable
             return;
         }
 
+        var swept = 0;
+
         foreach (var spool in Directory.EnumerateFiles(spoolDirectory, "blob-*.spool"))
         {
             if (!File.Exists(SpoolCheckpoint.PathFor(spool)))
             {
                 File.Delete(spool);
+                swept++;
             }
         }
 
@@ -210,7 +310,16 @@ public sealed class BlobWriter : IAsyncDisposable
             if (!File.Exists(checkpoint[..^".checkpoint".Length]))
             {
                 File.Delete(checkpoint);
+                swept++;
             }
+        }
+
+        // Only when something was actually swept. A clean start does this on
+        // every publication and finds nothing; recording that would be a line
+        // per backup saying no work was needed.
+        if (swept > 0)
+        {
+            Log.UnresumableSwept(logger ?? NullLogger.Instance, swept);
         }
     }
 
@@ -250,8 +359,12 @@ public sealed class BlobWriter : IAsyncDisposable
         ReadOnlySpan<byte> classKey,
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
-        SpoolPinnedConfiguration current)
+        SpoolPinnedConfiguration current,
+        ushort expectedFormatVersion = FormatLimits.FormatVersion,
+        ILogger? logger = null)
     {
+        logger ??= NullLogger.Instance;
+
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
         ThrowHelper.ThrowIfNull(current);
@@ -275,6 +388,12 @@ public sealed class BlobWriter : IAsyncDisposable
 
         ResumeResult.MustRestart Discard(string reason)
         {
+            // Every restart passes through here, so this is the one place the
+            // reason has to be recorded. A restart is invisible from outside —
+            // the job still completes and the snapshot is still correct — and
+            // "why did the nightly get slower" is otherwise unanswerable.
+            Log.SpoolDiscarded(logger, reason);
+
             File.Delete(checkpointPath);
             if (File.Exists(spoolPath))
             {
@@ -318,9 +437,20 @@ public sealed class BlobWriter : IAsyncDisposable
             return Discard("encryption_profile_changed");
         }
 
-        if (checkpoint.FormatVersion != FormatLimits.FormatVersion)
+        if (checkpoint.FormatVersion != expectedFormatVersion)
         {
             return Discard("format_version_changed");
+        }
+
+        // A sealed v2 data blob's records authenticate only under the
+        // checkpointed content key (ADR-0042 §3); for it, classKey is the
+        // STRUCTURE (metadata) key the footer will seal under. A sealed
+        // checkpoint without its content key is unreadable state.
+        var sealedContent =
+            checkpoint.FormatVersion >= FormatLimits.SealedFormatVersion && checkpoint.BlobClass == BlobClass.Data;
+        if (sealedContent && checkpoint.ContentKey is null)
+        {
+            return Discard("content_key_missing");
         }
 
         if (checkpoint.KeyGeneration != keyGeneration)
@@ -358,7 +488,7 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobEnvelope envelope;
         try
         {
-            envelope = BlobEnvelope.Parse(spoolBytes.AsSpan(0, BlobEnvelope.Length));
+            envelope = BlobEnvelope.Parse(spoolBytes);
         }
         catch (BlobFormatException)
         {
@@ -370,18 +500,24 @@ public sealed class BlobWriter : IAsyncDisposable
             envelope.WriterId != checkpoint.WriterId ||
             envelope.KeyGeneration != checkpoint.KeyGeneration ||
             envelope.BlobClass != checkpoint.BlobClass ||
+            envelope.FormatVersion != checkpoint.FormatVersion ||
             !envelope.BlobSalt.SequenceEqual(checkpoint.BlobSalt.Span))
         {
             return Discard("envelope_checkpoint_mismatch");
         }
 
         // Derived before the walk rather than after it: the key is now walk
-        // input, because authenticating a record is what proves it.
+        // input, because authenticating a record is what proves it. For a
+        // sealed blob the walk key is the checkpointed content key — the
+        // authentication that follows is also what proves the checkpoint and
+        // the spool belong together — while the derived key seals the footer.
         var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(classKey, envelope.BlobSalt, envelope.WriterId, envelope.BlobCounter, blobKey);
+        var contentKey = sealedContent ? checkpoint.ContentKey!.Value.ToArray() : null;
+        var walkKey = contentKey ?? blobKey;
 
         var entries = new List<RecordTableEntry>();
-        var offset = BlobEnvelope.Length;
+        var offset = envelope.EnvelopeLength;
         var scratch = Array.Empty<byte>();
 
         // One reason for every way the walk can fail. Structural damage and a
@@ -393,6 +529,11 @@ public sealed class BlobWriter : IAsyncDisposable
         ResumeResult.MustRestart DiscardTail()
         {
             CryptographicOperations.ZeroMemory(blobKey);
+            if (contentKey is not null)
+            {
+                CryptographicOperations.ZeroMemory(contentKey);
+            }
+
             CryptographicOperations.ZeroMemory(scratch);
             return Discard("spool_tail_unauthenticated");
         }
@@ -446,7 +587,7 @@ public sealed class BlobWriter : IAsyncDisposable
             // this also refuses a spool belonging to another repository or a
             // record moved between ordinals (04 §4).
             if (!RecordCipher.TryOpen(
-                    blobKey,
+                    walkKey,
                     nonce,
                     aad,
                     spoolBytes.AsSpan(offset + RecordHeader.Length, storedLength),
@@ -478,10 +619,13 @@ public sealed class BlobWriter : IAsyncDisposable
         var spool = new FileStream(spoolPath, FileMode.Open, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
         spool.Seek(0, SeekOrigin.End);
 
-        var writer = new BlobWriter(envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current);
+        var writer = new BlobWriter(
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger);
         writer._digest.AppendData(spoolBytes);
         writer._entries.AddRange(entries);
         writer.CurrentLength = spoolBytes.Length;
+
+        Log.SpoolResumed(logger, envelope.BlobId, entries.Count, spoolBytes.Length);
 
         return new ResumeResult.Resumed(writer);
     }
@@ -603,8 +747,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         _abandoned = true;
 
-        _cipher.Dispose();
-        CryptographicOperations.ZeroMemory(_blobKey);
+        DisposeCiphers();
         _digest.Dispose();
 
         if (!_spoolClosed)
@@ -625,7 +768,8 @@ public sealed class BlobWriter : IAsyncDisposable
             _envelope.WriterId,
             _envelope.BlobCounter,
             _envelope.BlobId,
-            _pinned!);
+            _pinned!,
+            _contentKey?.ToArray());
 
         // Written once, at create. Every field is fixed for the blob's life
         // (05 §6.2), so there is nothing to keep current. Still replaced
@@ -634,6 +778,8 @@ public sealed class BlobWriter : IAsyncDisposable
         var temporary = checkpointPath + ".tmp";
         File.WriteAllBytes(temporary, checkpoint.Serialize());
         File.Move(temporary, checkpointPath, overwrite: true);
+
+        Log.SpoolCheckpointed(_log, _envelope.BlobId);
     }
 
     /// <summary>
@@ -656,8 +802,11 @@ public sealed class BlobWriter : IAsyncDisposable
         Span<byte> aad = stackalloc byte[FooterAad.Length];
         FooterAad.Write(_repositoryId, _envelope.FormatVersion, _envelope.BlobId, (uint)_entries.Count, aad);
 
+        // The structure plane's cipher: identical to the record cipher for
+        // every blob except a sealed v2 data blob, whose footer stays
+        // readable to the write bundle while its records do not.
         RecordCipher.Seal(
-            _cipher,
+            _footerCipher,
             nonce,
             aad,
             table,
@@ -684,14 +833,17 @@ public sealed class BlobWriter : IAsyncDisposable
         _spool.Flush(flushToDisk: true);
         await _spool.DisposeAsync().ConfigureAwait(false);
         _spoolClosed = true;
-        _cipher.Dispose();
-        CryptographicOperations.ZeroMemory(_blobKey);
+        DisposeCiphers();
 
         // A sealed blob is no longer resumable state; the sidecar goes.
         if (_pinned is not null)
         {
             File.Delete(SpoolCheckpoint.PathFor(_spoolPath));
         }
+
+        Log.BlobSealed(
+            _log, _envelope.BlobClass, _envelope.BlobId, _entries.Count, CurrentLength,
+            _envelope.FormatVersion);
 
         return new SealedBlob(
             _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest, _entries);
@@ -704,8 +856,7 @@ public sealed class BlobWriter : IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        _cipher.Dispose();
-        CryptographicOperations.ZeroMemory(_blobKey);
+        DisposeCiphers();
 
         if (_abandoned)
         {
@@ -736,6 +887,21 @@ public sealed class BlobWriter : IAsyncDisposable
             {
                 File.Delete(checkpointPath);
             }
+        }
+    }
+
+    private void DisposeCiphers()
+    {
+        _cipher.Dispose();
+        if (!ReferenceEquals(_footerCipher, _cipher))
+        {
+            _footerCipher.Dispose();
+        }
+
+        CryptographicOperations.ZeroMemory(_blobKey);
+        if (_contentKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_contentKey);
         }
     }
 }

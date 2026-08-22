@@ -9,7 +9,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// content-derived, because a retried publication re-seals under a fresh
 /// salt — and rendered in the store path as 26 lowercase base32 characters.
 /// </summary>
-public readonly struct DeltaId : IEquatable<DeltaId>
+public readonly struct DeltaId : IEquatable<DeltaId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a delta identifier in bytes.</summary>
     public const int Size = 16;
@@ -80,6 +80,14 @@ public readonly struct DeltaId : IEquatable<DeltaId>
 
     /// <inheritdoc />
     public override string ToString() => ToBase32();
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("delta", ToString(), 6);
 
     public static bool operator ==(DeltaId left, DeltaId right) => left.Equals(right);
 

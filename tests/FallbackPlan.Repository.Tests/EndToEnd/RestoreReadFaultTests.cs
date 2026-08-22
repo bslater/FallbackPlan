@@ -5,6 +5,7 @@ using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using FallbackPlan.Filesystem;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -97,7 +98,7 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
     {
         Source = source,
-        RootPath = "/",
+        Roots = [new ScanRoot("/")],
         DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
         BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = Enumerable.Repeat(seed, 16).ToArray(),

@@ -156,6 +156,54 @@ degraded set, never as silent non-replication.
 
 One supported platform's TLS stack cannot speak TLS 1.3 at all — its `SslStream` refuses the protocol outright — and negotiation needs both ends to overlap, so a build that offered only 1.3 would exclude that platform from peering with anybody, not merely from 1.3. Sessions now accept **TLS 1.2 or 1.3** on every platform ([spec 02 §1](../../specifications/peer-protocol/02-session.md#1-transport)): two 1.3-capable ends still land on 1.3 under RFC 8446's own downgrade protection, and nothing this decision guarantees derives from the version — identity was moved out of TLS by Amendment 1, and the channel-bound proof reads the exchanged certificates identically under both.
 
+## Amendment 4 (2026-08) — the invite-authenticated ceremony: pairing without two humans present at once
+
+The SAS ceremony requires both operators at both consoles in the same minute,
+comparing a string aloud. That is the right shape for two laptops on one desk
+and the wrong one for the site-to-site case the product exists for: two
+households, two schedules, one phone call. The web console makes it acute — a
+browser has no interactive `pair` listener to run.
+
+**The decision.** A second ceremony mode, gated by presence of an invite rather
+than by protocol version ([spec 01 §2.7](../../specifications/peer-protocol/01-identity-and-pairing.md#27-the-invite-authenticated-ceremony)).
+The would-be destination's operator issues a **one-time invite**: 21 bytes
+rendered as grouped base32 — a 4-byte public identifier, the storage role, and
+a 128-bit secret. Label, role and terms are committed at issue time; the store
+keeps only an HKDF-derived MAC key, so the code is displayed once and cannot be
+re-shown. The other operator receives it over a real conversation and enters
+code + address; their service dials and runs the ordinary key agreement, with
+one substitution: **in place of the string comparison, both sides prove
+possession of the code** — an HMAC-SHA-256 under the derived key, over the full
+transcript *and the TLS channel bindings*, one labelled proof per direction on
+the confirmations (`PairOffer` gains key 8, `PairConfirm` key 2). A Mallory
+relaying two connections holds two binding pairs and can satisfy neither side,
+exactly as it cannot make two humans' strings agree. The redeeming side derives
+its declared role as the complement of the role inside the code, so the two
+operators agree on who-stores-for-whom by agreeing on the code alone.
+
+**§2.4's two-approvals rule survives by reinterpretation, not exception.**
+Issuing the invite is the destination operator's approval — role, label and
+quota chosen then, enforced from then. Entering the code is the source
+operator's. What changes is *when*, not *whether*: the approvals become
+asynchronous, which is what the site-to-site case needed. The invite is spent
+atomically, exactly once, only after the redeemer's proof verifies; a failed or
+relayed attempt spends nothing. Unknown, expired and consumed all refuse with
+one new code (`invite_unknown`, 13) — which of the three it was is the
+issuer's business, not the dialler's.
+
+**The always-on listener now routes pairing.** The service's remote listener
+peeks the first frame: a `PairOffer` while unexpired invites exist runs the
+invite ceremony (auto-approved by MAC, never by prompt); anything else is the
+session handshake, handed on unchanged. A dialler with no valid invite is
+refused either way. Old builds fail closed: their listeners never accepted
+pairing at all, and an invite-mode offerer refuses any responder that does not
+prove the code back.
+
+**Entropy.** §2.6 sized thirty bits against a no-retries live comparison; the
+invite's 128-bit secret clears the same bar offline, single-use and expiring
+(default a day, ceiling thirty), with the derived-key-only store keeping a read
+of `pending-invites.json` from recovering the spoken code.
+
 ## Status history
 
 | Date | Status | Note |
@@ -165,3 +213,4 @@ One supported platform's TLS stack cannot speak TLS 1.3 at all — its `SslStrea
 | 2026-08 | Accepted | The decision stands after Amendment 1 rebuilt its mechanism: a transport keypair the repository knows nothing about, proven by a channel-bound signature in the protocol rather than by TLS. It is now built and carried over a real TLS socket, including a man-in-the-middle test the construction defeats and a pairing ceremony performed by two real processes; a paired console reaches the service and an unpaired one is refused. The [implementation status](../implementation-status.md#0030--the-socket-exists) says what remains — peer replication itself (specs 03–05). |
 | 2026-08 | Accepted (amended) | Amendment 2: the role joins the authenticated ceremony, endings produce notices with `Revoked` as the fallback signal, and the destination's terms are enforced at its own edge ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-08 | Accepted (amended) | Amendment 3: TLS 1.2 accepted alongside 1.3 — one supported platform's stack has no 1.3, and no guarantee here rests on the version. |
+| 2026-08 | Accepted (amended) | Amendment 4: the invite-authenticated ceremony — a spoken one-time code stands in for the string comparison, proofs bound to transcript and channel bindings, both approvals kept but made asynchronous. Built end to end: store, ceremony, listener routing, contract verbs and the web console's invite/pair flows. |

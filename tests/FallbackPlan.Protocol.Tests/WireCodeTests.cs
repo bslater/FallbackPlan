@@ -41,6 +41,7 @@ public sealed class WireCodeTests
         [10, PeerRefusalReason.PairingDeclined],
         [11, PeerRefusalReason.AuthenticationFailed],
         [12, PeerRefusalReason.StorageExhausted],
+        [13, PeerRefusalReason.InviteUnknown],
     ];
 
     [TestMethod]
@@ -49,9 +50,9 @@ public sealed class WireCodeTests
         Assert.AreEqual(code, (int)reason);
 
     [TestMethod]
-    public void RefusalReason_TheVocabulary_IsExactlyTheSpecificationsTwelve()
+    public void RefusalReason_TheVocabulary_IsExactlyTheSpecifications()
     {
-        // A thirteenth value added here without a row in 02 §8 would be a
+        // A value added here without a row in 02 §8 would be a
         // number this side sends and the specification does not define, which
         // is how a peer ends up answering "malformed" to a refusal.
         var declared = Enum.GetValues<PeerRefusalReason>().Select(reason => (int)reason).OrderBy(code => code);

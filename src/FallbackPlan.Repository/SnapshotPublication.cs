@@ -14,6 +14,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Repository;
 
@@ -30,8 +31,14 @@ public sealed record SnapshotJob
     /// <summary>The filesystem to capture from.</summary>
     public required IFileSystemSource Source { get; init; }
 
-    /// <summary>The capture root.</summary>
-    public required string RootPath { get; init; }
+    /// <summary>
+    /// The capture roots (ADR-0040). Exactly one root publishes the
+    /// pre-multi-root shape — the tree's root is the folder itself, the
+    /// label ignored. Several roots publish a synthetic root whose
+    /// top-level entries are the roots, each named by its label; labels are
+    /// then required, plain NFC components, and unique by raw bytes.
+    /// </summary>
+    public required IReadOnlyList<ScanRoot> Roots { get; init; }
 
     /// <summary>Scanner switches; <see cref="ScanOptions.Rules"/> is ignored — rules come from the strings below.</summary>
     public ScanOptions ScanOptions { get; init; } = new();
@@ -143,12 +150,56 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
+        // The last step to complete, so a throw can name where the publication
+        // got to. Held on the instance rather than threaded through: the writer
+        // lane serialises publications (ADR-0029 §1), so there is only ever one
+        // in flight against one of these.
+        _lastStep = PublicationStep.PublishIntent;
+
+        try
+        {
+            return await PublishCoreAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (Failed(failure, job))
+        {
+            // Unreachable: the filter records and then declines, so the
+            // exception continues to the caller with its stack intact. A catch
+            // that rethrew would work too, and would lose nothing but honesty
+            // about what this is for.
+            throw;
+        }
+    }
+
+    private PublicationStep _lastStep;
+
+    private void RecordStep(PublicationStep step, LogId snapshot)
+    {
+        _lastStep = step;
+        Log.PublicationStep(_logger, step, snapshot);
+    }
+
+    private bool Failed(Exception failure, SnapshotJob job)
+    {
+        Log.PublicationFailed(_logger, LogId.Snapshot(job.SnapshotId), _lastStep, failure);
+        return false;
+    }
+
+    private async ValueTask<PublishedTreeSnapshot> PublishCoreAsync(
+        SnapshotJob job, CancellationToken cancellationToken)
+    {
+        var snapshotForLog = LogId.Snapshot(job.SnapshotId);
+
         using var activity = EngineDiagnostics.Activities.StartActivity("publish");
         var publicationStarted = Stopwatch.GetTimestamp();
 
         // Probe first: rule case-sensitivity is the filesystem's, and the
-        // snapshot records what was actually observed.
-        var filesystem = job.Source.Probe(job.RootPath);
+        // snapshot records what was actually observed. Several roots record
+        // the conservative intersection, because source_filesystem is one
+        // signed statement per snapshot (ADR-0040).
+        var filesystem = job.Roots.Count == 1
+            ? job.Source.Probe(job.Roots[0].Path)
+            : SourceFilesystemIntersection.Intersect(
+                [.. job.Roots.Select(root => job.Source.Probe(root.Path))]);
 
         if (!PathRuleSet.TryCreate(
                 job.IncludeRules, job.ExcludeRules, caseSensitive: filesystem.CaseSensitive,
@@ -165,10 +216,10 @@ public sealed partial class PublicationOrchestrator
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
-        BlobWriter.SweepUnresumable(_spoolDirectory);
+        BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
 
         // A previous run's leftovers — crash or cancellation alike — get
         // their void deltas on this publication, not on a restart
@@ -193,7 +244,8 @@ public sealed partial class PublicationOrchestrator
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
+            _logger);
 
         // One targeted reader serves both things this publication reads back:
         // a renamed file's prior manifest (architecture 06 §4.2) and the
@@ -218,7 +270,7 @@ public sealed partial class PublicationOrchestrator
 
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, dedup);
+            _policy.BlobWriteProfile, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))
@@ -239,7 +291,7 @@ public sealed partial class PublicationOrchestrator
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
-                reader);
+                reader, _logger);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -254,8 +306,8 @@ public sealed partial class PublicationOrchestrator
             var reporter = new PublicationProgress(_progress, job.SnapshotId);
             reporter.Enter(JobState.Scanning);
 
-            await foreach (var scanEvent in job.Source
-                .ScanAsync(job.RootPath, options, cancellationToken).ConfigureAwait(false))
+            await foreach (var scanEvent in MultiRootScan
+                .ScanAsync(job.Source, job.Roots, options, cancellationToken).ConfigureAwait(false))
             {
                 await walker.ConsumeAsync(scanEvent, cancellationToken).ConfigureAwait(false);
                 reporter.Observe(JobState.Packing, walker.Files, walker.Failures.Count);
@@ -264,10 +316,12 @@ public sealed partial class PublicationOrchestrator
             var rootTreeId = walker.RootTreeId
                 ?? throw new InvalidOperationException(Strings.PublicationOrchestrator_ScanProducedNoRootDirectory);
             _observer?.AfterStep(PublicationStep.ScanSource);
+            RecordStep(PublicationStep.ScanSource, snapshotForLog);
 
             reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
             await session.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.SegmentAndSeal);
+            RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
             reporter.Observe(JobState.Publishing, walker.Files, walker.Failures.Count);
 
             // The error manifest exists exactly when something failed —
@@ -339,9 +393,11 @@ public sealed partial class PublicationOrchestrator
 
             await builder.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.UploadBlobs);
+            RecordStep(PublicationStep.UploadBlobs, snapshotForLog);
 
             // Step 5: every put's acknowledgement was awaited as it happened.
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
+            RecordStep(PublicationStep.VerifyAcknowledgements, snapshotForLog);
 
             // Step 6: index deltas referencing the now-durable blobs.
             var entries = new List<IndexEntry>();
@@ -373,6 +429,7 @@ public sealed partial class PublicationOrchestrator
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
+            RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded
             // by the advisory source-identity hints, so a hint the next
@@ -387,6 +444,7 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
+            RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).
             await journal.PublishAsync(
@@ -396,6 +454,7 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
+            RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
             // Step 9: the local job is complete — and the live catalogue
             // learns what was published without re-reading the store
@@ -408,6 +467,21 @@ public sealed partial class PublicationOrchestrator
             EngineDiagnostics.PublicationDuration.Record(
                 Stopwatch.GetElapsedTime(publicationStarted).TotalSeconds);
             _observer?.AfterStep(PublicationStep.Complete);
+            RecordStep(PublicationStep.Complete, snapshotForLog);
+
+            // Two records mark this moment and they answer different
+            // questions. PublicationComplete, from the single-stream path
+            // below, is the storage view — bytes, records, blobs. This is the
+            // operator's: how many files, and how many did not make it. The
+            // failure count appears nowhere else in the log, and it is the
+            // number somebody actually wants at two in the morning.
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                var files = walker.Files.Count;
+                var failures = walker.Failures.Count;
+                var logicalBytes = walker.Files.Sum(file => file.Archive?.LogicalLength ?? 0);
+                Log.SnapshotPublished(_logger, snapshotForLog, files, failures, logicalBytes);
+            }
 
             return new PublishedTreeSnapshot(
                 snapshotObjectId,
@@ -527,7 +601,8 @@ public sealed partial class PublicationOrchestrator
         CatalogueGate? catalogue,
         SourceIdentityKeyDeriver sourceKeys,
         HintSource? hints,
-        TargetedRecordReader? manifests)
+        TargetedRecordReader? manifests,
+        ILogger logger)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -541,7 +616,7 @@ public sealed partial class PublicationOrchestrator
 
         public ObjectId? RootTreeId { get; private set; }
 
-        public IReadOnlyList<PublishedFileVersion> Files => _files;
+        public List<PublishedFileVersion> Files => _files;
 
         public List<CaptureFailure> Failures => _failures;
 
@@ -583,6 +658,17 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 case ScanEvent.Leaf leaf:
+                    // The capture decision lives here, not in the scanner: a
+                    // source describes what exists and never decides what
+                    // happens to it (11 §2), so include rules are enforced
+                    // once, for every source alike (06 §7.1). Exclusions were
+                    // already pruned during the walk; this is the other half,
+                    // which was validated and recorded but never applied.
+                    if (!IsCaptured(leaf.Entry.RelativePath))
+                    {
+                        break;
+                    }
+
                     await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
                     break;
 
@@ -595,10 +681,29 @@ public sealed partial class PublicationOrchestrator
             }
         }
 
+        /// <summary>
+        /// Whether the include rules capture this path. NFC-normalised the way
+        /// the scanner normalises its own rule subjects, so both halves of the
+        /// dialect judge one spelling of the name.
+        /// </summary>
+        private bool IsCaptured(string relativePath) =>
+            options.Rules is not { } rules || rules.IsCaptured(relativePath.Normalize(NormalizationForm.FormC));
+
         private async ValueTask CloseDirectoryAsync(CancellationToken cancellationToken)
         {
             var frame = _frames.Pop();
             var isRoot = _frames.Count == 0;
+
+            // A directory that captured nothing and is not itself captured
+            // leaves no manifest: the tree records what the snapshot holds,
+            // not a skeleton of what it walked past. The cascade is natural —
+            // an empty child dropped here never reaches its parent's entries,
+            // so a subtree of nothing folds away bottom-up. The root always
+            // publishes; an empty snapshot is still a snapshot.
+            if (!isRoot && frame.Entries.Count == 0 && !IsCaptured(frame.Directory.RelativePath))
+            {
+                return;
+            }
 
             var name = isRoot ? "/"u8.ToArray() : frame.Directory.NameBytes;
             var headId = await TreeChainWriter.WriteAsync(
@@ -625,7 +730,7 @@ public sealed partial class PublicationOrchestrator
             // create (architecture 06 §1) — both for the content
             // short-circuits below and for the ancestry the manifest records.
             var prior = FindPriorVersion(entry);
-            var unchanged = IsContentUnchanged(entry, prior);
+            var unchanged = ChangeDetection.IsContentUnchanged(entry, prior);
             var metadataDigest = FileVersionManifestCodec.MetadataDigest(entry.Metadata);
 
             // The NFR-PERF-003 short-circuit: nothing about the file changed
@@ -640,10 +745,11 @@ public sealed partial class PublicationOrchestrator
             // extended attributes — a fidelity loss the surveyed changelog
             // records as a shipped fix, and one that only shows up at restore.
             if (unchanged &&
-                IsMetadataUnchanged(metadataDigest, prior!) &&
+                ChangeDetection.IsMetadataUnchanged(metadataDigest, prior!) &&
                 string.Equals(prior!.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
+                Log.FileUnchanged(logger, new LogPath(entry.RelativePath));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
@@ -700,6 +806,9 @@ public sealed partial class PublicationOrchestrator
 
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
                 EngineDiagnostics.ScanBytes.Add(entry.Length);
+                Log.FileCaptured(
+                    logger, new LogPath(entry.RelativePath), entry.Length,
+                    LastArchive?.SegmentReferences.Count ?? 0, LastArchive?.RecordsWritten ?? 0);
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
                 _files.Add(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
@@ -712,43 +821,10 @@ public sealed partial class PublicationOrchestrator
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
+                Log.FileFailed(logger, new LogPath(entry.RelativePath), exception.Message);
                 _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
             }
         }
-
-        /// <summary>
-        /// Whether the prior version states the same metadata this entry now
-        /// carries.
-        /// </summary>
-        /// <remarks>
-        /// A prior row with no digest is treated as changed. That is the
-        /// conservative direction and it is cheap: the consequence is one
-        /// manifest rewrite with no content read, whereas the other default
-        /// would silently drop a metadata change to save it.
-        /// </remarks>
-        private static bool IsMetadataUnchanged(ReadOnlyMemory<byte> digest, CatalogueTreeEntry prior) =>
-            prior.MetadataDigest is { } recorded && recorded.Span.SequenceEqual(digest.Span);
-
-        /// <summary>
-        /// Whether <paramref name="entry"/>'s content is provably the same as
-        /// <paramref name="prior"/>'s — identity, size, and modification time
-        /// all present and all equal.
-        /// </summary>
-        /// <remarks>
-        /// All three must be present, not merely non-contradictory. A rebuilt
-        /// catalogue holds no identities, so it disables both short-circuits
-        /// rather than weakening either: without identity, size and time alone
-        /// cannot tell an unchanged file from a different file at the same
-        /// path.
-        /// </remarks>
-        private static bool IsContentUnchanged(ScanEntry entry, CatalogueTreeEntry? prior) =>
-            entry.Kind == ScanEntryKind.File &&
-            prior is { EntryKind: EntryKind.File } &&
-            prior.ModifiedAt is { } priorModified && entry.Metadata.ModifiedAt == priorModified &&
-            prior.LogicalLength is { } priorLength && (ulong)entry.Length == priorLength &&
-            prior.IdentityDevice is { } priorDevice && prior.IdentityFileId is { } priorFileId &&
-            entry.Identity is { } identity &&
-            identity.Device == priorDevice && identity.FileId == priorFileId;
 
         /// <summary>
         /// The prior version's manifest, when this publication can read one

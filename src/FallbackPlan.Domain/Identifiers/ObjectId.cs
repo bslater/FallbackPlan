@@ -13,7 +13,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// under the content-ID key with an object-type domain separator — lives in
 /// the crypto layer, which is the only place key material is handled.
 /// </remarks>
-public readonly struct ObjectId : IEquatable<ObjectId>
+public readonly struct ObjectId : IEquatable<ObjectId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of an object identifier in bytes.</summary>
     public const int Size = 32;
@@ -92,6 +92,14 @@ public readonly struct ObjectId : IEquatable<ObjectId>
 
     /// <summary>Renders the identifier as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("obj", ToString(), 8);
 
     public static bool operator ==(ObjectId left, ObjectId right) => left.Equals(right);
 

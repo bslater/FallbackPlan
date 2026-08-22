@@ -265,6 +265,303 @@ public static class PairingCeremony
         }
     }
 
+    /// <summary>
+    /// Runs the offerer side of the invite-authenticated ceremony (01 §2.7,
+    /// ADR-0030 Amendment 3). No human is prompted here: the operator approved
+    /// by entering the code, and the code — proven by MAC over the transcript
+    /// and the channel bindings, in both directions — stands in for the string
+    /// comparison.
+    /// </summary>
+    /// <param name="stream">The pairing-only connection.</param>
+    /// <param name="keypair">This device's peer keypair.</param>
+    /// <param name="grants">The grant store to pin into on success.</param>
+    /// <param name="label">This device's human-chosen label.</param>
+    /// <param name="invite">The parsed invite code the far operator issued.</param>
+    /// <param name="initiatorBinding">The TLS initiator's channel binding.</param>
+    /// <param name="responderBinding">The TLS responder's channel binding.</param>
+    /// <param name="nowUnixMilliseconds">The pairing timestamp to record.</param>
+    /// <param name="cancellationToken">Cancels the ceremony.</param>
+    /// <returns>The result — a grant when both sides proved the code, a refusal otherwise.</returns>
+    public static async ValueTask<PairingResult> OfferWithInviteAsync(
+        Stream stream,
+        PeerKeypair keypair,
+        PeerGrantStore grants,
+        string label,
+        PairingInviteCode invite,
+        ReadOnlyMemory<byte> initiatorBinding,
+        ReadOnlyMemory<byte> responderBinding,
+        ulong nowUnixMilliseconds,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(keypair);
+        ThrowHelper.ThrowIfNull(grants);
+        ThrowHelper.ThrowIfNull(invite);
+
+        // The code carries the issuer's committed role; this side records the
+        // complement. One thing for two operators to agree on, not two.
+        var role = PeerRoles.Complement(invite.IssuerRole);
+        var inviteKey = invite.DeriveKey();
+
+        try
+        {
+            using var exchange = PairingExchange.Start();
+            var contribution = new PairingContribution(keypair.Identity, exchange.PublicKey, exchange.Nonce);
+            await PeerFrame.WriteAsync(
+                stream,
+                new PairOffer(contribution, label, PeerSessionNegotiation.CurrentVersion, role, invite.InviteId),
+                cancellationToken).ConfigureAwait(false);
+
+            // Read the acceptance with the refusal kept whole: the responder's
+            // InviteUnknown is the answer the operator acts on ("ask for a
+            // fresh code"), and folding it into a generic decline would hide
+            // exactly the sentence they need.
+            var acceptFrame = await ReadFrameOrNullAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (acceptFrame is null)
+            {
+                return Refused(cancellationToken);
+            }
+
+            if (acceptFrame.Value.Type == PeerMessageType.PairRefuse)
+            {
+                return new PairingResult(null, PairRefuse.Read(acceptFrame.Value.Body));
+            }
+
+            if (acceptFrame.Value.Type != PeerMessageType.PairAccept)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"Expected a pairing acceptance; the peer sent a {acceptFrame.Value.Type}.");
+            }
+
+            var accept = PairAccept.Read(acceptFrame.Value.Body);
+            var transcript = PairingTranscript.Build(
+                contribution, accept.Contribution, accept.SelectedVersion,
+                offererPins: role, responderPins: accept.RoleForOfferer);
+            var confirmation = PairingTranscript.ConfirmationBytes(transcript);
+
+            await PeerFrame.WriteAsync(
+                stream,
+                new PairConfirm(
+                    keypair.Sign(confirmation),
+                    PairingTranscript.InviteMac(
+                        inviteKey, offerer: true, transcript, initiatorBinding.Span, responderBinding.Span)),
+                cancellationToken).ConfigureAwait(false);
+
+            var frame = await ReadFrameOrNullAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (frame is null)
+            {
+                return Refused(cancellationToken);
+            }
+
+            var (type, body) = frame.Value;
+            if (type == PeerMessageType.PairRefuse)
+            {
+                return new PairingResult(null, PairRefuse.Read(body));
+            }
+
+            if (type != PeerMessageType.PairConfirm)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, $"Expected a pairing confirmation; the peer sent a {type}.");
+            }
+
+            var theirConfirm = PairConfirm.Read(body);
+            var expectedMac = PairingTranscript.InviteMac(
+                inviteKey, offerer: false, transcript, initiatorBinding.Span, responderBinding.Span);
+
+            // Both proofs are required: the signature says "I hold the key I
+            // offered"; the MAC says "and I am the service your invite came
+            // from" — a signature alone is any service at that address.
+            if (!accept.Contribution.Identity.Verify(confirmation, theirConfirm.Signature.Span)
+                || theirConfirm.InviteMac is not { } mac
+                || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(mac.Span, expectedMac))
+            {
+                var refusal = new PairRefuse(
+                    PeerRefusalReason.AuthenticationFailed,
+                    "The peer did not prove the invite this code belongs to.");
+                await PeerFrame.WriteAsync(stream, refusal, cancellationToken).ConfigureAwait(false);
+                throw new PeerProtocolException(refusal.Reason, refusal.Text);
+            }
+
+            var grant = new PeerGrant(
+                accept.Contribution.Identity, accept.Label, role, accept.Terms ?? PeerTerms.None,
+                nowUnixMilliseconds);
+            grants.Pin(grant);
+            return new PairingResult(grant, null);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(inviteKey);
+        }
+    }
+
+    /// <summary>
+    /// Runs the responder side of the invite-authenticated ceremony against a
+    /// pre-read offer (01 §2.7) — pre-read because the always-on listener must
+    /// see the first frame before it knows whether it holds a pairing or a
+    /// session (ADR-0030 Amendment 3).
+    /// </summary>
+    /// <param name="stream">The connection the offer arrived on.</param>
+    /// <param name="offer">The offer the listener already read.</param>
+    /// <param name="keypair">This device's peer keypair.</param>
+    /// <param name="grants">The grant store to pin into on success.</param>
+    /// <param name="label">This device's human-chosen label.</param>
+    /// <param name="invites">The pending invites this service will honour.</param>
+    /// <param name="initiatorBinding">The TLS initiator's channel binding.</param>
+    /// <param name="responderBinding">The TLS responder's channel binding.</param>
+    /// <param name="nowUnixMilliseconds">The pairing timestamp to record.</param>
+    /// <param name="cancellationToken">Cancels the ceremony.</param>
+    /// <returns>The result — a grant when the dialler proved the code, a refusal otherwise.</returns>
+    public static async ValueTask<PairingResult> AcceptWithInviteAsync(
+        Stream stream,
+        PairOffer offer,
+        PeerKeypair keypair,
+        PeerGrantStore grants,
+        string label,
+        PairingInviteStore invites,
+        ReadOnlyMemory<byte> initiatorBinding,
+        ReadOnlyMemory<byte> responderBinding,
+        ulong nowUnixMilliseconds,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowHelper.ThrowIfNull(stream);
+        ThrowHelper.ThrowIfNull(offer);
+        ThrowHelper.ThrowIfNull(keypair);
+        ThrowHelper.ThrowIfNull(grants);
+        ThrowHelper.ThrowIfNull(invites);
+
+        // One refusal for every way an invite can fail to exist — unknown,
+        // expired, consumed, role-mismatched. Which it was is the issuer's
+        // business, not the dialler's (01 §2.7).
+        if (offer.InviteId is not { } inviteId)
+        {
+            return await RefuseInviteAsync(
+                stream,
+                "This service pairs by invite. Ask its operator to issue one, or run the attended ceremony.",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var invite = invites.FindPending(inviteId.Span, nowUnixMilliseconds);
+        if (invite is null || offer.RoleForResponder != PeerRoles.Complement(invite.Role))
+        {
+            return await RefuseInviteAsync(
+                stream,
+                "No pending invite matches this code. It may have expired or already been redeemed; ask for a fresh one.",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var version = Math.Min(PeerSessionNegotiation.CurrentVersion, offer.HighestVersion);
+        if (version < PeerSessionNegotiation.OldestSupportedVersion)
+        {
+            var refusal = new PairRefuse(
+                PeerRefusalReason.VersionUnsupported,
+                $"This device speaks pairing versions {PeerSessionNegotiation.OldestSupportedVersion}"
+                + $"–{PeerSessionNegotiation.CurrentVersion} and was offered {offer.HighestVersion}.");
+            await PeerFrame.WriteAsync(stream, refusal, cancellationToken).ConfigureAwait(false);
+            return new PairingResult(null, refusal);
+        }
+
+        using var exchange = PairingExchange.Start();
+        var contribution = new PairingContribution(keypair.Identity, exchange.PublicKey, exchange.Nonce);
+        var terms = invite.Role is PeerRole.StoresHere or PeerRole.Both ? invite.Terms : null;
+        await PeerFrame.WriteAsync(
+            stream, new PairAccept(contribution, label, (ushort)version, terms, invite.Role), cancellationToken)
+            .ConfigureAwait(false);
+
+        var transcript = PairingTranscript.Build(
+            offer.Contribution, contribution, (ushort)version,
+            offererPins: offer.RoleForResponder, responderPins: invite.Role);
+        var confirmation = PairingTranscript.ConfirmationBytes(transcript);
+        var inviteKey = invite.InviteKey.ToArray();
+
+        try
+        {
+            // The offerer confirms first in this mode: nothing is committed
+            // here — no consumption, no pin, no confirmation — until its
+            // proof has verified, so a failed redemption spends nothing.
+            var frame = await ReadFrameOrNullAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (frame is null)
+            {
+                return Refused(cancellationToken);
+            }
+
+            var (type, body) = frame.Value;
+            if (type == PeerMessageType.PairRefuse)
+            {
+                return new PairingResult(null, PairRefuse.Read(body));
+            }
+
+            if (type != PeerMessageType.PairConfirm)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, $"Expected a pairing confirmation; the peer sent a {type}.");
+            }
+
+            var theirConfirm = PairConfirm.Read(body);
+            var expectedMac = PairingTranscript.InviteMac(
+                inviteKey, offerer: true, transcript, initiatorBinding.Span, responderBinding.Span);
+
+            if (!offer.Contribution.Identity.Verify(confirmation, theirConfirm.Signature.Span)
+                || theirConfirm.InviteMac is not { } mac
+                || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(mac.Span, expectedMac))
+            {
+                return await RefuseInviteAsync(
+                    stream,
+                    "The invite proof did not verify — the code entered was not the one this invite was issued with.",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            // First redeemer wins, exactly once, before anything is pinned.
+            if (!invites.Consume(invite.InviteIdHex, offer.Contribution.Identity.Fingerprint, nowUnixMilliseconds))
+            {
+                return await RefuseInviteAsync(
+                    stream,
+                    "No pending invite matches this code. It may have expired or already been redeemed; ask for a fresh one.",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            await PeerFrame.WriteAsync(
+                stream,
+                new PairConfirm(
+                    keypair.Sign(confirmation),
+                    PairingTranscript.InviteMac(
+                        inviteKey, offerer: false, transcript, initiatorBinding.Span, responderBinding.Span)),
+                cancellationToken).ConfigureAwait(false);
+
+            var grant = new PeerGrant(
+                offer.Contribution.Identity, invite.Label, invite.Role, invite.Terms, nowUnixMilliseconds);
+            grants.Pin(grant);
+            return new PairingResult(grant, null);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(inviteKey);
+        }
+    }
+
+    private static async ValueTask<PairingResult> RefuseInviteAsync(
+        Stream stream, string text, CancellationToken cancellationToken)
+    {
+        var refusal = new PairRefuse(PeerRefusalReason.InviteUnknown, text);
+        await PeerFrame.WriteAsync(stream, refusal, cancellationToken).ConfigureAwait(false);
+        return new PairingResult(null, refusal);
+    }
+
+    /// <summary>One frame, with a closed connection answered as null rather than thrown.</summary>
+    private static async ValueTask<(PeerMessageType Type, System.Formats.Cbor.CborReader Body)?> ReadFrameOrNullAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
     private static async ValueTask<T?> ReadAsync<T>(
         Stream stream,
         PeerMessageType expected,

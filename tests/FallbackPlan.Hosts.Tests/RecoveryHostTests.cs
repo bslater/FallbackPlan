@@ -130,6 +130,133 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
+    [DataRow("trace")]
+    [DataRow("verbose")]
+    [DataRow("debug")]
+    [DataRow("info")]
+    [DataRow("information")]
+    [DataRow("warn")]
+    [DataRow("warning")]
+    [DataRow("error")]
+    [DataRow("critical")]
+    [DataRow("fatal")]
+    [DataRow("none")]
+    [DataRow("off")]
+    public async Task RecoveryHost_EachSpellingOfALevel_IsAccepted(string level)
+    {
+        // The recovery tool carries its own forty-line sink rather than the
+        // shared composition (ADR-0043 §1), so its level vocabulary is a
+        // second implementation of the same promise. A spelling the service
+        // accepts and this tool rejects is a difference nobody would find
+        // until the day it matters.
+        var kit = await PrepareAsync();
+
+        var result = await RunAsync([.. KitArguments("open", kit), "--log-level", level]);
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+    }
+
+    [TestMethod]
+    public async Task RecoveryHost_AnUnknownLevel_IsRefusedNamingTheOnesThatExist()
+    {
+        var result = await RunAsync("open", "--log-level", "chatty");
+
+        // Refused before anything is opened, and refused with the list — a
+        // tool used once every few years cannot assume the operator remembers
+        // the vocabulary.
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("chatty", result.Error, StringComparison.Ordinal);
+        Assert.Contains("--log-level", result.Error, StringComparison.Ordinal);
+        Assert.Contains("warning", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RecoveryHost_AtInformation_WritesItsProgressToStandardError()
+    {
+        var kit = await PrepareAsync();
+
+        var result = await RunAsync([.. KitArguments("open", kit), "--log-level", "information"]);
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+
+        // Event ids, not prose: 3100 is the kit read and 3101 the keys
+        // derived, and those are what an operator quotes back down a phone.
+        Assert.Contains("3100", result.Error, StringComparison.Ordinal);
+        Assert.Contains("3101", result.Error, StringComparison.Ordinal);
+
+        // Diagnostics never contaminate the answer. `open` prints a report
+        // somebody may be reading or redirecting.
+        Assert.DoesNotContain("3100", result.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RecoveryHost_AtTheDefaultLevel_KeepsInformationToItself()
+    {
+        var kit = await PrepareAsync();
+
+        // Warning is the floor when nobody asks (ADR-0043 §6): the tool's own
+        // report is its output, and a wall of Information on top of it during
+        // a recovery is noise at the worst moment.
+        var result = await RunAsync(KitArguments("open", kit));
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.DoesNotContain("3100", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RecoveryHost_AtNone_SaysNothingEvenWhenSomethingIsWrong()
+    {
+        var kit = await PrepareAsync();
+        var variable = "FBP_RECOVERY_WRONG_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "not the passphrase at all");
+
+        try
+        {
+            var result = await RunAsync(
+                "open",
+                "--repo", _harness.RepositoryPath,
+                "--kit", kit,
+                "--passphrase-env", variable,
+                "--log-level", "none");
+
+            // The refusal itself still reaches the operator — that is the
+            // tool's answer, not its log. What `none` silences is 3102.
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.DoesNotContain("3102", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [TestMethod]
+    public async Task RecoveryHost_AWrongPassphraseAtWarning_RecordsTheRefusal()
+    {
+        var kit = await PrepareAsync();
+        var variable = "FBP_RECOVERY_WRONG_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "not the passphrase at all");
+
+        try
+        {
+            // 3102 is a Warning, so it clears the default floor without
+            // anybody asking — which is the point of it being a Warning.
+            var result = await RunAsync(
+                "open",
+                "--repo", _harness.RepositoryPath,
+                "--kit", kit,
+                "--passphrase-env", variable);
+
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("3102", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [TestMethod]
     public async Task RecoveryHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var kit = await PrepareAsync();

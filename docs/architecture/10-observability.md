@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
-**Built:** Yes — the status model, job states and instrumentation are all implemented — see [implementation status](../implementation-status.md).
+**Built:** Partly — the status model, job states and instrumentation are implemented; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -140,11 +140,27 @@ Redaction is **by type**, not by string pattern. A field is marked secret at the
 
 Including plaintext paths requires explicit per-bundle opt-in, with the consequence stated plainly — path names frequently reveal more about a person than file contents do.
 
+The boundary that decides this is the one the record **crosses**, not the one it was written at ([ADR-0043](../adr/0043-structured-logging-and-diagnostics.md) §4). The service's own log file sits inside the trust boundary — in a state directory only the service account may read, on the machine that already holds the files themselves — and records plaintext paths, because a support log that cannot name the file that failed answers almost none of the questions it exists to answer. Everything that leaves — the client diagnostics feed, an exported bundle — is rendered redacted, and a bundle that includes plaintext paths is the per-bundle opt-in above.
+
 ## 5. Telemetry
 
 No telemetry is transmitted off the device without explicit opt-in. When enabled, what is collected is enumerated in the UI, and it never includes paths, filenames, repository identifiers, destination endpoints, or anything derived from file content (NFR-PRIV-001..003).
 
 A backup product is trusted with the shape of a person's entire life. The default is that it tells nobody anything.
+
+## 6. Logging
+
+Logging answers the engineer's question, not the operator's. Status, progress and notices (§3.1) keep their jobs unchanged: anything a person must act on is a notice, and a log line is never the fix for a missing one. What logging adds is the record that lets someone reconstruct, days later and on a machine they cannot reach, why a blob was skipped, why deduplication stopped reusing, or why a resume restarted.
+
+Every shipped assembly emits through one abstraction, `ILogger`. Libraries reference the abstraction package only; the `LoggerFactory` and the sinks belong to the hosts — the same division §2's instruments already make, where the `Meter` is in-box and the exporter is somebody else's business. Every message is a source-generated `[LoggerMessage]` partial carrying a **stable event id**, so a log stays greppable by someone holding a number from a bug report rather than a sentence (NFR-OPS-007).
+
+Levels carry their ordinary meanings, tiered by layer. `Trace` is per-record and per-segment detail and the codecs go no higher, so the recovery tool stays quiet on a machine where quiet is the point. `Debug` is per-file and per-blob steps, resume decisions, discard reasons. `Information` is lifecycle. `Warning` is degraded and still going. `Error` and `Critical` mean what they say.
+
+Two sinks, both ours. A **rolling file** in the state directory is the durable record, size-capped with a retained-file count. A bounded **ring buffer** with a monotonic sequence — the same drop-oldest-and-say-so shape as the progress hub, for the same reason — is what a client reads. A client never receives a path to a log file: the service exposes no raw filesystem access (threat T-16), and a log reader is not where to make an exception.
+
+The effective level comes from a flag, the environment, `config.json`, then `Information` — and it is changeable while the service runs. The level a machine needs is only known once it has already misbehaved, and requiring a restart to raise it is requiring someone to destroy the evidence first. A level changed over the contract lasts until the service stops rather than being written back, so an afternoon of tracing cannot become a machine that has been at trace for eight months.
+
+What crosses to a client is **rendered**, never the record's raw name/value state: rendering is where redaction happens, so handing over the values would hand over exactly what redaction withholds. A local caller is served in full and a paired console redacted, and a paired console may read the log but not decide what goes into it.
 
 ---
 

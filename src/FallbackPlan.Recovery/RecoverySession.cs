@@ -5,6 +5,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
@@ -33,19 +34,157 @@ public sealed class RecoverySession : IDisposable
     private readonly IObjectStore _store;
     private readonly KeyHierarchy _hierarchy;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly RepositoryReadAuthority? _authority;
+    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
     private readonly List<BlobReader> _readers = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
-    private RecoverySession(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    private RecoverySession(
+        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, RepositoryReadAuthority? authority = null)
     {
         _store = store;
         RepositoryId = repositoryId;
         _hierarchy = hierarchy;
         _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _authority = authority;
+
+        if (authority is not null)
+        {
+            _sealedContentKeyOpener = envelope => SealedContentKey.Open(
+                authority.SealingPrivateKey, envelope.SealedContentKey, RepositoryId, envelope.BlobId);
+        }
     }
 
     /// <summary>The repository identity the kit names.</summary>
     public RepositoryId RepositoryId { get; }
+
+    /// <summary>
+    /// The descriptor object every repository publishes at its root
+    /// (repository-format 01 §6).
+    /// </summary>
+    /// <remarks>
+    /// Named here rather than taken from <c>RepositoryLifecycle</c>: the
+    /// recovery tool's dependency closure is deliberately
+    /// format/crypto/packing/storage only, so it reads the descriptor with
+    /// the format codec and does not reach the engine to learn a filename.
+    /// </remarks>
+    private static readonly ObjectKey DescriptorKey = ObjectKey.Parse("repository-format");
+
+    /// <summary>
+    /// Opens a session, reading the repository's own identity from the
+    /// archive when the kit does not carry one (specifications/recovery-kit
+    /// §2.2, §6; FR-KIT-006).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An <b>installation kit</b> names no repository, because one opens
+    /// every archive its passphrase wrote. The repository id is nonetheless
+    /// load-bearing — it is associated data for every record and every
+    /// sealed blob — so it comes from the descriptor of whichever archive
+    /// the operator pointed at. The kit supplies the keys; the archive
+    /// supplies its name.
+    /// </para>
+    /// <para>
+    /// The derivation is proved <b>twice</b>, and the two failures are
+    /// different questions with different answers. Against the kit's copy:
+    /// this is not the passphrase that made this kit. Against the
+    /// descriptor's: this kit belongs to a different installation than this
+    /// archive. Collapsing them into one message would leave somebody
+    /// retyping a passphrase that was right all along.
+    /// </para>
+    /// <para>
+    /// A <b>repository kit</b> is delegated to <see cref="Open"/> unchanged,
+    /// so one call site serves both and neither has to ask which it holds.
+    /// </para>
+    /// </remarks>
+    /// <param name="kit">The kit, of either format.</param>
+    /// <param name="passphrase">The repository passphrase.</param>
+    /// <param name="store">The archive to open.</param>
+    /// <param name="cancellationToken">Abandons the descriptor read.</param>
+    /// <returns>The opened session.</returns>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce the kit's keys.</exception>
+    /// <exception cref="RecoveryKitFormatException">The archive has no readable descriptor, or belongs to another installation.</exception>
+    public static async ValueTask<RecoverySession> OpenAsync(
+        RecoveryKit kit, Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(kit);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(store);
+
+        if (!kit.IsInstallationKit)
+        {
+            return Open(kit, passphrase, store);
+        }
+
+        var descriptor = await ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+
+        var authority = WriteOnlyDerivation.Derive(
+            passphrase,
+            new Argon2Parameters
+            {
+                MemoryKiB = kit.KdfMemoryKiB,
+                Iterations = kit.KdfIterations,
+                Parallelism = kit.KdfParallelism,
+            },
+            kit.KdfSalt.Span,
+            KdfValidationMode.OpenRepository);
+
+        try
+        {
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
+            {
+                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+            }
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
+            {
+                throw new RecoveryKitFormatException(
+                    Resources.Strings.RecoverySession_KitBelongsToAnotherInstallation);
+            }
+
+            return new RecoverySession(
+                store, descriptor.RepositoryId, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+        }
+        catch
+        {
+            authority.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Reads and parses the archive's descriptor.</summary>
+    private static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(
+        IObjectStore store, CancellationToken cancellationToken)
+    {
+        using var read = await store.OpenReadAsync(DescriptorKey, range: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (read.Outcome != OpenReadOutcome.Found)
+        {
+            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor);
+        }
+
+        using var memory = new MemoryStream();
+        await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+
+        // Every non-Ok outcome is the same answer here — this is not an
+        // archive this kit can open — but the tool still says which, because
+        // "not a repository" and "digest does not verify" send an operator
+        // to completely different places.
+        return RepositoryDescriptorCodec.Parse(memory.ToArray()) switch
+        {
+            DescriptorParseResult.Ok ok => ok.Descriptor,
+            DescriptorParseResult.NotARepository =>
+                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor),
+            DescriptorParseResult.IntegrityFailure =>
+                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead),
+            DescriptorParseResult.FormatViolation violation =>
+                throw new RecoveryKitFormatException(violation.Message),
+            var other =>
+                throw new RecoveryKitFormatException(
+                    Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead + " (" + other.GetType().Name + ")"),
+        };
+    }
 
     /// <summary>
     /// Opens a session: KEK from the kit's KDF parameters and the
@@ -58,12 +197,49 @@ public sealed class RecoverySession : IDisposable
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNull(store);
 
+        if (kit.IsInstallationKit)
+        {
+            // An installation kit names no repository, and the repository id
+            // is AAD for every record and every sealed blob — so it has to
+            // come from the archive's own descriptor, which this synchronous
+            // overload cannot read. OpenAsync is that path.
+            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_InstallationKitNeedsTheArchive);
+        }
+
         var parameters = new Argon2Parameters
         {
             MemoryKiB = kit.KdfMemoryKiB,
             Iterations = kit.KdfIterations,
             Parallelism = kit.KdfParallelism,
         };
+
+        // A write-only (format v2) kit carries no key object at all — the
+        // passphrase and the kit's public salt and parameters re-derive
+        // everything, proven by comparing the derived public key against the
+        // kit's copy (ADR-0042 §8). The session keeps the authority: its
+        // scalar is what opens each sealed blob's content key.
+        if (kit.RepositoryFormatVersion >= 2)
+        {
+            var authority = WriteOnlyDerivation.Derive(
+                passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
+            {
+                authority.Dispose();
+                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+            }
+
+            try
+            {
+                return new RecoverySession(
+                    store, kit.RepositoryId!.Value, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+            }
+            catch
+            {
+                authority.Dispose();
+                throw;
+            }
+        }
 
         using var derivation = KekDerivation.Derive(
             passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
@@ -76,7 +252,7 @@ public sealed class RecoverySession : IDisposable
         try
         {
             using var bundle = KeyBundleCodec.Decode(bundleCbor);
-            return new RecoverySession(store, kit.RepositoryId, new KeyHierarchy(bundle.MasterKey));
+            return new RecoverySession(store, kit.RepositoryId!.Value, new KeyHierarchy(bundle.MasterKey));
         }
         finally
         {
@@ -101,7 +277,8 @@ public sealed class RecoverySession : IDisposable
             try
             {
                 reader = await BlobReader.OpenAsync(
-                    _store, entry.Key, entry.Length, RepositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken)
+                    _store, entry.Key, entry.Length, RepositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken,
+                    _sealedContentKeyOpener)
                     .ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
@@ -210,6 +387,19 @@ public sealed class RecoverySession : IDisposable
                 {
                     var name = Encoding.UTF8.GetString(entry.Name.Span);
                     var path = prefix.Length == 0 ? name : prefix + "/" + name;
+
+                    // A tree entry's name is repository text, and this session
+                    // exists precisely for repositories in the worst state to
+                    // trust: a name that is not a plain component — '..', a
+                    // separator, a rooted form — would let Path.Combine below
+                    // write outside the chosen output. Refused per entry, with
+                    // the subtree it would have carried; the drill continues.
+                    if (!IsPlainName(name, out var why))
+                    {
+                        failed++;
+                        notes.Add($"FAILED {path}: refused — {why}");
+                        continue;
+                    }
 
                     if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                     {
@@ -329,6 +519,50 @@ public sealed class RecoverySession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether a tree-entry name is a single plain path component — the same
+    /// rule the full client's executor enforces, because both write
+    /// repository-supplied names under a chosen root.
+    /// </summary>
+    private static bool IsPlainName(string name, out string why)
+    {
+        why = string.Empty;
+
+        if (name.Length == 0)
+        {
+            why = "the tree names an empty component";
+            return false;
+        }
+
+        if (name is "." or "..")
+        {
+            why = $"the tree names a '{name}' component";
+            return false;
+        }
+
+        if (name.Contains('\0', StringComparison.Ordinal))
+        {
+            why = "the tree name contains a NUL";
+            return false;
+        }
+
+        if (name.Contains('/', StringComparison.Ordinal)
+            || name.Contains('\\', StringComparison.Ordinal)
+            || name.Contains(':', StringComparison.Ordinal))
+        {
+            why = "the tree name contains a separator or drive marker";
+            return false;
+        }
+
+        if (Path.IsPathRooted(name))
+        {
+            why = "the tree name is rooted";
+            return false;
+        }
+
+        return true;
+    }
+
     private async ValueTask<byte[]?> ReadRecordAsync(
         ObjectId objectId, string path, List<string> notes, CancellationToken cancellationToken)
     {
@@ -358,6 +592,7 @@ public sealed class RecoverySession : IDisposable
 
         _objectIdDeriver.Dispose();
         _hierarchy.Dispose();
+        _authority?.Dispose();
     }
 
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>

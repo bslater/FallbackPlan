@@ -13,7 +13,7 @@ namespace FallbackPlan.Application.Tests;
 [TestClass]
 public sealed class DestinationStatusTests
 {
-    private const string SetRoot = "/home/someone/documents";
+    private static readonly IReadOnlyList<string> SetRoot = ["/home/someone/documents"];
 
     private static DestinationConfiguration LocalPath(string path = "/mnt/vault") => new()
     {
@@ -122,6 +122,49 @@ public sealed class DestinationStatusTests
         Assert.AreEqual(
             FailureDomain.SameVolume,
             DestinationStatus.DomainOf(LocalPath(), SetRoot, Unknown));
+    }
+
+    [TestMethod]
+    public void DomainOf_AnyRootSharingTheDestinationVolume_DragsTheWholeSetToSameVolume()
+    {
+        // ADR-0040: the domain is one scalar per destination, so a multi-root
+        // set answers for its weakest root — one shared disk means losing
+        // that disk loses source and copy together.
+        static ulong? SharesWithSecondRoot(string path) => path switch
+        {
+            "/mnt/vault" => 7UL,
+            "/home/someone/documents" => 3UL,
+            _ => 7UL,
+        };
+
+        Assert.AreEqual(
+            FailureDomain.SameVolume,
+            DestinationStatus.DomainOf(
+                LocalPath(), ["/home/someone/documents", "/srv/photos"], SharesWithSecondRoot));
+    }
+
+    [TestMethod]
+    public void DomainOf_EveryRootOnItsOwnVolume_StillEarnsSameMachine()
+    {
+        Assert.AreEqual(
+            FailureDomain.SameMachine,
+            DestinationStatus.DomainOf(
+                LocalPath(), ["/home/someone/documents", "/srv/photos"], DistinctDevice));
+    }
+
+    [TestMethod]
+    public void DomainOf_OneRootUnanswerable_AnswersConservativelyForAll()
+    {
+        // A single unknown must poison the whole answer: guessing "different
+        // disk" for the root the platform will not describe would let a
+        // same-disk copy read as protection.
+        static ulong? SecondRootUnknown(string path) =>
+            path == "/srv/photos" ? null : (ulong)path.Length;
+
+        Assert.AreEqual(
+            FailureDomain.SameVolume,
+            DestinationStatus.DomainOf(
+                LocalPath(), ["/home/someone/documents", "/srv/photos"], SecondRootUnknown));
     }
 
     [TestMethod]

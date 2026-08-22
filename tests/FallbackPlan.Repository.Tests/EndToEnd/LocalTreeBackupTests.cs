@@ -62,7 +62,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         var job = new SnapshotJob
         {
             Source = new LocalFileSystemSource(),
-            RootPath = _sourceRoot,
+            Roots = [new ScanRoot(_sourceRoot)],
             DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
             BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
             SnapshotId = Enumerable.Repeat((byte)0x11, 16).ToArray(),

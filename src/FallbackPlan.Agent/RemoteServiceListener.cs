@@ -5,6 +5,8 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Protocol;
 using ProtocolIdentity = FallbackPlan.Protocol.PeerIdentity;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -30,7 +32,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly Socket _socket;
     private readonly string _agentVersion;
     private readonly IReadOnlyList<string>? _offeredFeatures;
-    private readonly Action<string>? _log;
+    private readonly ILogger _log;
     private readonly string? _replicasRoot;
     private readonly string? _spoolRoot;
     private readonly string? _stateDirectory;
@@ -39,7 +41,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
 
-    private IFallbackPlanService? _service;
+    private Func<IFallbackPlanService>? _services;
     private Task? _acceptLoop;
 
     private RemoteServiceListener(
@@ -47,7 +49,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         PeerGrantStore grants,
         Socket socket,
         string agentVersion,
-        Action<string>? log,
+        ILogger log,
         string? replicationStateDirectory,
         IReadOnlyList<string>? offeredFeatures)
     {
@@ -81,7 +83,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// <param name="endpoint">The interface and port to bind, already validated.</param>
     /// <param name="agentVersion">Informational build string for the session hello.</param>
     /// <param name="log">Optional sink for connection-level notes.</param>
-    /// <returns>The bound listener; call <see cref="Bind"/> to begin serving, dispose to stop.</returns>
+    /// <returns>The bound listener; call <see cref="Bind(IFallbackPlanService)"/> to begin serving, dispose to stop.</returns>
     /// <remarks>
     /// Binding and serving are two steps because the endpoint an OS-assigned
     /// port resolves to is what the service must report through
@@ -106,7 +108,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         PeerGrantStore grants,
         IPEndPoint endpoint,
         string agentVersion,
-        Action<string>? log = null,
+        ILogger? log = null,
         string? replicationStateDirectory = null,
         IReadOnlyList<string>? offeredFeatures = null)
     {
@@ -120,7 +122,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Bind(endpoint);
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
-                keypair, grants, socket, agentVersion, log, replicationStateDirectory, offeredFeatures);
+                keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
+                replicationStateDirectory, offeredFeatures);
         }
         catch
         {
@@ -135,13 +138,26 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     public void Bind(IFallbackPlanService service)
     {
         ThrowHelper.ThrowIfNull(service);
+        Bind(() => service);
+    }
 
-        if (_service is not null)
+    /// <summary>Begins accepting, building a service per authenticated peer connection.</summary>
+    /// <param name="services">
+    /// Called once per connection, so a per-connection decorator can hold that
+    /// connection's signed-in session (ADR-0045 §5). A paired device still has
+    /// to say which person is acting.
+    /// </param>
+    /// <remarks>Called once, after the socket is bound and the service is built.</remarks>
+    public void Bind(Func<IFallbackPlanService> services)
+    {
+        ThrowHelper.ThrowIfNull(services);
+
+        if (_services is not null)
         {
             throw new InvalidOperationException("The remote listener is already serving.");
         }
 
-        _service = service;
+        _services = services;
         _acceptLoop = AcceptAsync();
     }
 
@@ -199,12 +215,86 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Serves one invite-authenticated pairing (01 §2.7). No human is prompted
+    /// on this side: the operator approved when they issued the invite, and
+    /// the dialler's MAC over the transcript and channel bindings is what
+    /// proves it holds the code that issuance created.
+    /// </summary>
+    private async Task ServeInvitePairingAsync(PeerTlsConnection connection, System.Formats.Cbor.CborReader body)
+    {
+        if (_stateDirectory is null)
+        {
+            Log.PairingWithoutState(_log);
+            return;
+        }
+
+        try
+        {
+            var offer = PairOffer.Read(body);
+            var invites = PairingInviteStore.Open(_stateDirectory);
+            var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var result = await PairingCeremony.AcceptWithInviteAsync(
+                connection.Stream, offer, _keypair, _grants, Environment.MachineName, invites,
+                initiatorBinding: connection.RemoteBinding, responderBinding: connection.LocalBinding,
+                now, _stopping.Token).ConfigureAwait(false);
+
+            if (result.Grant is { } grant)
+            {
+                Log.PeerPaired(_log, grant.Label, grant.Identity.Fingerprint);
+
+                // Durable, not just a log line: the issuing operator learns who
+                // redeemed their invite even if they were away (FR-DEST-008's
+                // posture, applied to arrivals).
+                FallbackPlan.Application.NoticeStore.Open(_stateDirectory).Raise(
+                    $"pairing-invite-redeemed:{grant.Identity.Fingerprint}",
+                    $"'{grant.Label}' ({grant.Identity.Fingerprint}) redeemed a pairing invite and is now "
+                    + $"paired as {DescribeRole(grant.Role)}.",
+                    now);
+            }
+            else
+            {
+                Log.PairingRefused(
+                    _log, result.Refusal?.Reason.ToString() ?? "unknown", result.Refusal?.Text ?? string.Empty);
+            }
+        }
+        catch (PeerProtocolException refusal)
+        {
+            Log.PairingRefused(_log, refusal.Reason.ToString(), refusal.Message);
+        }
+    }
+
+    private static string DescribeRole(PeerRole role) => role switch
+    {
+        PeerRole.StoresHere => "a source whose backups store here",
+        PeerRole.StoresForUs => "a destination that stores for this device",
+        _ => "both a source and a destination",
+    };
+
     private async Task ServeAsync(Socket accepted)
     {
         try
         {
             await using var connection = await PeerTlsConnection.AcceptAsync(
                 accepted, DateTimeOffset.UtcNow, _stopping.Token).ConfigureAwait(false);
+
+            // The first frame decides what this connection is (ADR-0030
+            // Amendment 3): a pairing offer redeems an invite; anything else
+            // is the session handshake, handed on with the frame it opened
+            // with. An unpaired dialler with no valid invite is refused either
+            // way — by the ceremony there, by the authenticator here.
+            var first = await PeerFrame.ReadAsync(connection.Stream, _stopping.Token).ConfigureAwait(false);
+            if (first is null)
+            {
+                return;
+            }
+
+            if (first.Value.Type == PeerMessageType.PairOffer)
+            {
+                await ServeInvitePairingAsync(connection, first.Value.Body).ConfigureAwait(false);
+                return;
+            }
 
             PeerSession session;
             try
@@ -221,16 +311,18 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     connection, _keypair, _grants, _agentVersion, terms: null,
                     termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
                     offeredFeatures: _offeredFeatures,
+                    preread: first,
+                    logger: _log,
                     cancellationToken: _stopping.Token).ConfigureAwait(false);
             }
             catch (PeerProtocolException refusal)
             {
-                _log?.Invoke($"remote connection refused: {refusal.Reason} — {refusal.Message}");
+                Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
                 return;
             }
 
             var peer = DescribePeer(session.Peer.Identity);
-            _log?.Invoke($"remote peer authenticated: {peer}");
+            Log.PeerAuthenticated(_log, peer);
 
             // The grant's role decides which payload the open stream carries
             // (peer-protocol 03 §1). A peer entitled to store objects here speaks
@@ -240,14 +332,36 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             {
                 if (_replicasRoot is null)
                 {
-                    _log?.Invoke($"replication offered by {peer} but this service holds no replicas; closing");
+                    Log.ReplicationWithoutReplicas(_log, peer);
+                    return;
+                }
+
+                // The first payload frame routes the session: an owner asking
+                // to read its replica back speaks retrieval (peer-protocol
+                // 07, ADR-0041); everything else is the replication payload,
+                // handed its already-read first frame.
+                var payload = await PeerFrame.ReadAsync(session.Stream, _stopping.Token).ConfigureAwait(false);
+                if (payload is null)
+                {
+                    return;
+                }
+
+                if (payload.Value.Type == PeerMessageType.RetrieveOpen
+                    && session.Supports(PeerSessionNegotiation.RetrievalFeature))
+                {
+                    await RetrievalResponder.ServeAsync(
+                        _replicasRoot, session.Stream, session.Peer, _owners!,
+                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token)
+                        .ConfigureAwait(false);
+                    Log.RetrievalServed(_log, peer);
                     return;
                 }
 
                 var outcome = await ReplicationResponder.ServeAsync(
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
-                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token)
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token,
+                    preread: payload)
                     .ConfigureAwait(false);
 
                 if (outcome.Termination is { } termination)
@@ -266,30 +380,30 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         + $"{(termination.GraceDays > 0 ? $"; it suggests a {termination.GraceDays}-day grace" : string.Empty)}.",
                         now);
                     _grants.Revoke(session.Peer.Identity);
-                    _log?.Invoke($"peering terminated by {peer}");
+                    Log.PeeringTerminated(_log, peer);
                     return;
                 }
 
-                _log?.Invoke($"replicated {outcome.Committed} object(s) for repository {outcome.RepositoryId} from {peer}");
+                Log.Replicated(_log, outcome.Committed, peer);
                 return;
             }
 
             // The open TLS stream carries the command contract (ADR-0030;
             // peer-protocol 02 §9 withholds key material and plaintext).
-            await ServiceConnectionPump.RunAsync(session.Stream, _service!, peer, _log, _stopping.Token)
+            await ServiceConnectionPump.RunAsync(session.Stream, _services!(), peer, _log, _stopping.Token)
                 .ConfigureAwait(false);
         }
         catch (PeerProtocolException refusal)
         {
             // A replication exchange that violated the protocol was refused on
             // the wire by the responder; it ends this connection and no other.
-            _log?.Invoke($"remote connection refused: {refusal.Reason} — {refusal.Message}");
+            Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {
             // A remote client that drops, or a handshake that fails at the TLS
             // layer, ends its own connection and nothing else.
-            _log?.Invoke($"remote connection ended: {exception.Message}");
+            Log.RemoteEnded(_log, exception.Message);
         }
     }
 

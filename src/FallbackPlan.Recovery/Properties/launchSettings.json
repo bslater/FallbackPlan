@@ -1,0 +1,19 @@
+{
+  "profiles": {
+    "open (prove the kit and passphrase)": {
+      "commandName": "Project",
+      "commandLineArgs": "open --repo C:\\fbp\\archives\\<set-id> --kit C:\\fbp\\kit.fbpkit --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    },
+    "snapshots": {
+      "commandName": "Project",
+      "commandLineArgs": "snapshots --repo C:\\fbp\\archives\\<set-id> --kit C:\\fbp\\kit.fbpkit --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    },
+    "restore": {
+      "commandName": "Project",
+      "commandLineArgs": "restore --repo C:\\fbp\\archives\\<set-id> --kit C:\\fbp\\kit.fbpkit --passphrase-env FBP_PASSPHRASE --snapshot <snapshot-hex> --output C:\\fbp\\recovered --log-level information",
+      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+    }
+  }
+}

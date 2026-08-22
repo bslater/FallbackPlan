@@ -1,0 +1,32 @@
+{
+  "profiles": {
+    "init (create a repo)": {
+      "commandName": "Project",
+      "commandLineArgs": "init --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "a long local dev passphrase"
+      }
+    },
+    "init --write-only": {
+      "commandName": "Project",
+      "commandLineArgs": "init --write-only --acknowledge-loss --repo C:\\fbp\\repo-wo --passphrase-env FBP_PASSPHRASE",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "a long local dev passphrase"
+      }
+    },
+    "snapshots": {
+      "commandName": "Project",
+      "commandLineArgs": "snapshots --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "a long local dev passphrase"
+      }
+    },
+    "check": {
+      "commandName": "Project",
+      "commandLineArgs": "check --level records --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct --log-level debug",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "a long local dev passphrase"
+      }
+    }
+  }
+}

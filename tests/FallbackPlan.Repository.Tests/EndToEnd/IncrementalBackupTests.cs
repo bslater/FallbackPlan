@@ -11,6 +11,7 @@ using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
+using FallbackPlan.Filesystem;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -51,7 +52,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     private static SnapshotJob Job(FakeFileSystemSource source, byte snapshotSeed, ulong now = 1_722_600_000_000) => new()
     {
         Source = source,
-        RootPath = "/",
+        Roots = [new ScanRoot("/")],
         DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
         BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = Enumerable.Repeat(snapshotSeed, 16).ToArray(),

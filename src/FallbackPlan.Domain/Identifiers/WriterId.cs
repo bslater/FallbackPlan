@@ -9,7 +9,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// input and a journal path component; it is carried in every blob's cleartext
 /// envelope (specification 05 §2).
 /// </summary>
-public readonly struct WriterId : IEquatable<WriterId>
+public readonly struct WriterId : IEquatable<WriterId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a writer identifier in bytes.</summary>
     public const int Size = 16;
@@ -73,6 +73,14 @@ public readonly struct WriterId : IEquatable<WriterId>
 
     /// <summary>Renders the identifier as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("writer", ToString(), 8);
 
     public static bool operator ==(WriterId left, WriterId right) => left.Equals(right);
 

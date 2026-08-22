@@ -5,6 +5,8 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -56,12 +58,34 @@ public sealed class RepositoryReader : IDisposable
     private readonly RepositoryKeySet _keys;
     private readonly IObjectStore _store;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly byte[]? _sealingPrivateKey;
+    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
     private readonly List<BlobReader> _blobReaders = [];
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
+    private readonly ILogger _logger;
 
-    /// <summary>Creates a reader; call <see cref="LoadBlobsAsync"/> before reading.</summary>
-    public RepositoryReader(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
+    /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
+    public RepositoryReader(
+        RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store, ILogger? logger = null)
+        : this(repositoryId, keys, store, readAuthority: null, logger)
+    {
+    }
+
+    /// <summary>
+    /// Creates a reader holding a restore grant (ADR-0042 §5): sealed v2
+    /// data blobs' content keys open under
+    /// <paramref name="readAuthority"/>'s derived scalar. Without one, a
+    /// sealed blob's structure still loads and its record reads answer
+    /// <see cref="RecordReadOutcome.ContentSealed"/>. The scalar is copied
+    /// and zeroed on dispose; the authority stays the caller's to dispose.
+    /// </summary>
+    public RepositoryReader(
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        IObjectStore store,
+        RepositoryReadAuthority? readAuthority,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(store);
@@ -69,7 +93,16 @@ public sealed class RepositoryReader : IDisposable
         _repositoryId = repositoryId;
         _keys = keys;
         _store = store;
+        _logger = logger ?? NullLogger.Instance;
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
+
+        if (readAuthority is not null)
+        {
+            var sealingPrivateKey = readAuthority.SealingPrivateKey.ToArray();
+            _sealingPrivateKey = sealingPrivateKey;
+            _sealedContentKeyOpener = envelope =>
+                SealedContentKey.Open(sealingPrivateKey, envelope.SealedContentKey, _repositoryId, envelope.BlobId);
+        }
     }
 
     /// <summary>Every record-table entry across the loaded blobs.</summary>
@@ -118,7 +151,9 @@ public sealed class RepositoryReader : IDisposable
                     _repositoryId,
                     _keys.DeriveClassKey,
                     _objectIdDeriver,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    _sealedContentKeyOpener,
+                    _logger).ConfigureAwait(false);
             }
             catch (BlobFormatException exception)
             {
@@ -126,6 +161,7 @@ public sealed class RepositoryReader : IDisposable
                 // caught here on purpose: a transient store fault is not a
                 // damage finding, and treating it as one would silently
                 // narrow the loaded world on a flaky connection.
+                Log.BlobSkipped(_logger, entry.Key, exception.Message);
                 _skipped.Add(new SkippedBlob(entry.Key, exception.Message));
                 continue;
             }
@@ -140,7 +176,67 @@ public sealed class RepositoryReader : IDisposable
             }
         }
 
+        Log.BlobsLoaded(_logger, _blobReaders.Count, _repositoryId, _skipped.Count);
+
         return _blobReaders.Count;
+    }
+
+    /// <summary>
+    /// Opens only the named blobs — the targeted load (ADR-0041). The full
+    /// load reads every blob footer in the store, which over a remote
+    /// retrieval session would download footers for blobs the restore never
+    /// touches; a caller that already knows the blob set a plan needs (the
+    /// plan probe computes exactly that) hands it here instead. Skips and
+    /// duplicate handling are identical to the full load; a named blob that
+    /// is absent lands in <see cref="SkippedBlobs"/>, and its records read as
+    /// missing downstream — loudly, as always.
+    /// </summary>
+    /// <returns>The number of blobs opened, skips excluded.</returns>
+    public async ValueTask<int> LoadBlobsAsync(
+        IReadOnlyCollection<ObjectKey> blobStoreKeys, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(blobStoreKeys);
+
+        var opened = 0;
+        foreach (var key in blobStoreKeys)
+        {
+            var metadata = await _store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+            if (metadata.Metadata is not { } found)
+            {
+                _skipped.Add(new SkippedBlob(key, "the store does not hold this blob"));
+                continue;
+            }
+
+            BlobReader reader;
+            try
+            {
+                reader = await BlobReader.OpenAsync(
+                    _store,
+                    key,
+                    found.Length,
+                    _repositoryId,
+                    _keys.DeriveClassKey,
+                    _objectIdDeriver,
+                    cancellationToken,
+                    _sealedContentKeyOpener,
+                    _logger).ConfigureAwait(false);
+            }
+            catch (BlobFormatException exception)
+            {
+                _skipped.Add(new SkippedBlob(key, exception.Message));
+                continue;
+            }
+
+            _blobReaders.Add(reader);
+            opened++;
+
+            foreach (var record in reader.RecordTable)
+            {
+                _records.TryAdd(record.ObjectId, (reader, record));
+            }
+        }
+
+        return opened;
     }
 
     /// <summary>
@@ -287,5 +383,10 @@ public sealed class RepositoryReader : IDisposable
         }
 
         _objectIdDeriver.Dispose();
+
+        if (_sealingPrivateKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_sealingPrivateKey);
+        }
     }
 }

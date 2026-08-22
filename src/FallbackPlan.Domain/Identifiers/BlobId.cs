@@ -23,7 +23,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// the keyed <c>store_blob_key</c> (specification 02 §4.3).
 /// </para>
 /// </remarks>
-public readonly struct BlobId : IEquatable<BlobId>
+public readonly struct BlobId : IEquatable<BlobId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a blob identifier in bytes.</summary>
     public const int Size = 16;
@@ -107,6 +107,14 @@ public readonly struct BlobId : IEquatable<BlobId>
 
     /// <summary>Renders the identifier as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("blob", ToString(), 8);
 
     public static bool operator ==(BlobId left, BlobId right) => left.Equals(right);
 

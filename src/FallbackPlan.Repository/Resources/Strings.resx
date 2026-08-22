@@ -103,4 +103,16 @@
   <data name="struct_SourceKeyExactlyBytes" xml:space="preserve">
     <value>A source key is exactly {0} bytes.</value>
   </data>
+  <data name="RepositoryLifecycle_CredentialNotThisRepository" xml:space="preserve">
+    <value>The write credential does not belong to this repository: its sealing public key disagrees with the descriptor's (ADR-0042).</value>
+  </data>
+  <data name="RepositoryLifecycle_NotWriteOnlyRepository" xml:space="preserve">
+    <value>This repository is not write-only (format v2); open it with its passphrase through the key-object path.</value>
+  </data>
+  <data name="RepositoryLifecycle_PassphraseDoesNotReproduce" xml:space="preserve">
+    <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.</value>
+  </data>
+  <data name="RepositoryLifecycle_WriteOnlyNeedsDerivedOpen" xml:space="preserve">
+    <value>This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).</value>
+  </data>
 </root>

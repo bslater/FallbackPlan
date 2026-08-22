@@ -14,7 +14,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// under the key-ID key — lives in the crypto layer, which is the only place
 /// key material is handled.
 /// </remarks>
-public readonly struct StoreBlobKey : IEquatable<StoreBlobKey>
+public readonly struct StoreBlobKey : IEquatable<StoreBlobKey>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a store blob key in bytes.</summary>
     public const int Size = 16;
@@ -84,6 +84,14 @@ public readonly struct StoreBlobKey : IEquatable<StoreBlobKey>
 
     /// <summary>Renders the key as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("key", ToString(), 8);
 
     public static bool operator ==(StoreBlobKey left, StoreBlobKey right) => left.Equals(right);
 

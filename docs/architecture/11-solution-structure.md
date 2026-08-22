@@ -37,7 +37,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
 │   ├── FallbackPlan.Keystore/                ✓ platform unlock (ADR-0028 §9)
-│   ├── FallbackPlan.Web/
+│   ├── FallbackPlan.Web/                     ✓ local web console (ADR-0036)
 │   ├── FallbackPlan.Desktop/
 │   ├── FallbackPlan.Cli/                     ✓
 │   ├── FallbackPlan.Recovery/                ✓ standalone emergency restore
@@ -63,6 +63,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.PerformanceTests/        ✓
 │   ├── FallbackPlan.TestSupport/             ✓ platform gating, shared by test projects
 │   ├── FallbackPlan.Cli.Tests/               ✓ drives real commands in process
+│   ├── FallbackPlan.Web.Tests/               ✓ the web console over real loopback HTTP
 │   └── FallbackPlan.Hosts.Tests/             ✓ drives the Agent and Recovery hosts
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
@@ -92,7 +93,7 @@ That policy needs the map to say which half is which, and for a while it did not
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
 - **Third-party cryptography lives only where it is named.** The primitives .NET does not supply do not inherit the platform's audit posture, so each is confined rather than spread wherever a call site finds it convenient ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §3 and Amendment 2): Argon2id and XChaCha20-Poly1305 to `Repository.Crypto`, where a defect is already in the user's stored bytes; Ed25519 and X25519 to `Protocol`, where a defect costs a re-pairing. The allowlist is two projects by name, not a tier — widening it should take an argument.
-- **User interfaces depend on the client contract, never on the engine.** `Desktop` and `Web` reference `Api`'s client surface and nothing below it — not `Application`, not `Repository`, not a store provider. A UI that could open the repository directly would be a second writer, which [`04-concurrency-and-publication.md` §9](04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous) forbids, and it would let a front end derive status by its own rules rather than the service's.
+- **User interfaces depend on the client contract, never on the engine.** `Desktop` and `Web` reference `Api`'s client surface and nothing below it — not `Application`, not `Repository`, not a store provider. A UI that could open the repository directly would be a second writer, which [`04-concurrency-and-publication.md` §9](04-concurrency-and-publication.md#9-two-different-concurrencies-and-why-conflating-them-is-dangerous) forbids, and it would let a front end derive status by its own rules rather than the service's. `Web` is the first front end held to it ([ADR-0036](../adr/0036-local-web-console.md)): the rule is enforced at the IL and as an exact project-reference whitelist, and unlike the CLI it has no direct-mode exception at all.
 - **`Cli` is a client too**, with one exception: its direct mode ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §3) takes the writer role when no service is running, so it alone among the front ends may reference `Application`. That exception is why the CLI is the one place the rule must be checked rather than assumed.
 - **`Recovery` references neither `Api` nor `Application`.** It speaks to no service in any topology (NFR-OPS-005).
 
@@ -199,6 +200,7 @@ The neutral model exists so that the same import pipeline serves an importer for
 |---------|--------|------|
 | Runtime | .NET 10 LTS | |
 | Command surface, both bindings | Local: Unix domain socket / named pipe. Remote: TLS over TCP, off by default | [ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §5 |
+| Local web console | Kestrel (in-box shared framework), loopback only, per-run token; embedded static page, no framework | [ADR-0036](../adr/0036-local-web-console.md) |
 | Typed control operations | gRPC | Transport-independent contract; the binding is chosen per §5, not per message |
 | Remote client authentication | Paired device identity, pinned on approval | Reuses [09 §3](09-replication-and-peers.md#3-pairing); no password, no token file |
 | Repository server | ASP.NET Core | A separate remote-destination gateway, not the client surface |

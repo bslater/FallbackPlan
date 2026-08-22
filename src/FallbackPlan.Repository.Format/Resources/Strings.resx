@@ -499,4 +499,13 @@
   <data name="TombstoneCodec_RequiredKeyMissing" xml:space="preserve">
     <value>A tombstone omits required key {0} (11 §3).</value>
   </data>
+  <data name="RecoveryKitCodec_WriteOnlyKitShape" xml:space="preserve">
+    <value>A write-only (format v2) kit carries the 32-byte sealing public key and no key object; every actual key re-derives from the passphrase (ADR-0042).</value>
+  </data>
+  <data name="RecoveryKitCodec_InstallationKitShape" xml:space="preserve">
+    <value>An installation kit names no repository, carries no key object and lists no destination, and must carry a 32-byte sealing public key.</value>
+  </data>
+  <data name="RecoveryKitCodec_RepositoryKitOmitsRepositoryId" xml:space="preserve">
+    <value>A repository kit must name the repository it opens.</value>
+  </data>
 </root>

@@ -1,5 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain.Jobs;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -77,14 +79,14 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task[] _workers;
-    private readonly Action<string, Exception?>? _log;
+    private readonly ILogger _log;
     private long _arrival;
 
     /// <summary>Starts the queue's workers.</summary>
     /// <param name="log">Where to report a job that failed outside its own handler.</param>
-    public JobScheduler(Action<string, Exception?>? log = null)
+    public JobScheduler(ILogger? log = null)
     {
-        _log = log;
+        _log = log ?? NullLogger.Instance;
 
         // One worker per lane. The writer lane is one by decision, not by
         // accident; the reader lane is one for now because restores are
@@ -260,7 +262,7 @@ public sealed class JobScheduler : IAsyncDisposable
             {
                 // A job that throws past its own handler must not take the
                 // service down with it; the next scheduled pass still runs.
-                _log?.Invoke($"job {job!.JobId} ({job.Description}) failed", exception);
+                Log.JobFaulted(_log, job!.JobId, job.Description, exception);
             }
             finally
             {

@@ -1,5 +1,6 @@
 using System.Reflection;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 
@@ -146,6 +147,28 @@ public sealed class ValueSemanticsTests
             CdcParameters.Create(1024 * 1024, 256 * 1024, 8 * 1024 * 1024),
             CdcParameters.Create(1024 * 1024, 256 * 1024, 8 * 1024 * 1024),
             CdcParameters.Create(512 * 1024, 128 * 1024, 4 * 1024 * 1024));
+    }
+
+    /// <summary>
+    /// The redaction wrappers are value types too, and they earn the same
+    /// scrutiny for a sharper reason: they are compared and hashed while
+    /// deciding whether two log records concern the same file or the same
+    /// snapshot. An equality that answers wrongly there does not corrupt data —
+    /// it tells an operator that one file failed twice when two failed once,
+    /// which is worse than saying nothing.
+    /// </summary>
+    [TestMethod]
+    public void RedactionWrappers_ComparedAndHashed_HonourTheValueContract()
+    {
+        AssertValueSemantics(
+            LogId.Snapshot(Pattern(16, 1)),
+            LogId.Snapshot(Pattern(16, 1)),
+            LogId.Snapshot(Pattern(16, 2)));
+
+        AssertValueSemantics(
+            LogPath.FromString("/home/someone/tax return.pdf"),
+            LogPath.FromString("/home/someone/tax return.pdf"),
+            LogPath.FromString("/home/someone/other.pdf"));
     }
 
     [TestMethod]

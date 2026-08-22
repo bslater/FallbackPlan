@@ -18,6 +18,12 @@ namespace FallbackPlan.Repository.Format.Descriptor;
 /// <param name="CreatedAt">Informational creation timestamp, milliseconds since the epoch (key 6).</param>
 /// <param name="CreatedBy">Informational implementation name and version (key 7).</param>
 /// <param name="UnstableFormat">True while the format is unfrozen — readers surface a prominent warning (key 8).</param>
+/// <param name="SealingPublicKey">
+/// A write-only (format v2) repository's X25519 sealing public key (key 9;
+/// ADR-0042 §1) — the key file contents seal to, and the derive-and-compare
+/// wrong-passphrase verifier. Not a secret, exactly like the salt beside it.
+/// Empty for format v1.
+/// </param>
 public sealed record RepositoryDescriptor(
     RepositoryId RepositoryId,
     ushort FormatVersion,
@@ -27,7 +33,8 @@ public sealed record RepositoryDescriptor(
     ReadOnlyMemory<byte> KdfSalt,
     ulong CreatedAt,
     string CreatedBy,
-    bool UnstableFormat);
+    bool UnstableFormat,
+    ReadOnlyMemory<byte> SealingPublicKey = default);
 
 /// <summary>
 /// The outcome of parsing a candidate descriptor — each refusal is a

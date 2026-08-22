@@ -72,7 +72,7 @@ public sealed class HostileCultureTests
             {
                 Id = new string('a', 32),
                 Name = "docs",
-                Root = "/data/docs",
+                Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
                 Schedule = "every 30m",
                 Destinations =
                 [

@@ -27,7 +27,7 @@ It is written to the same standard as the [repository format](../repository-form
 
 ## Documents
 
-All seven documents are now written; the table says which are also implemented. The set spent its first months deliberately incomplete, with the missing parts stated here rather than discovered by an implementer halfway through — the alternative, drafting the remainder thinly so the set *looked* whole, is how a specification becomes something nobody can build from.
+All eight documents are now written; the table says which are also implemented. The set spent its first months deliberately incomplete, with the missing parts stated here rather than discovered by an implementer halfway through — the alternative, drafting the remainder thinly so the set *looked* whole, is how a specification becomes something nobody can build from.
 
 | # | Document | Covers | Status |
 |---|----------|--------|--------|
@@ -38,12 +38,15 @@ All seven documents are now written; the table says which are also implemented. 
 | 04 | [Verification](04-verification.md) | The keyed random-range challenge and its sampling policy | Written; implemented |
 | 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
 | 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
+| 07 | [Retrieval](07-retrieval.md) | An owner reading its own replica back: listing, ranged reads, the owner inventory | Written; implemented |
 
 Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, in `FallbackPlan.Protocol`: the keypair and its durable device key, the pairing ceremony (key agreement, transcript, short authentication string, confirmation signature and the four messages that carry them), grants (01 §3) and terms (01 §4), and the whole session layer of 02 — the four-state machine, channel-bound authentication, framing with its pre-allocation bounds, version selection and feature negotiation, and the coarse refusal codes. `FallbackPlan.Protocol.Tests` exercises all of it over loopback TCP, including the man-in-the-middle relay that channel binding defeats; `FallbackPlan.Hosts.Tests` performs the pairing ceremony between two real operating-system processes.
 
 Documents 01 and 02 are the two that [ADR-0028 §5](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)'s remote binding was blocked on: a console pairs and opens a session by the same rules a peer does, and carries a different payload over it. They were written first for that reason, and that binding now exists — a paired console reaches the service over the wire, an unpaired one is refused.
 
 Document 03 is now written, and its base object exchange is implemented: a source pushes a repository's objects to a paired destination over an Open session, the destination stores the ciphertext it cannot read, and the transfer is resumable because each object commits whole or not at all. `FallbackPlan.Hosts.Tests` proves it end to end over loopback — a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica. What 03 defers to a later slice is the optimization, not the mechanism: a compact object-set filter (an optional negotiated feature) in place of the explicit inventory, and snapshot-scoped replication in place of the whole-repository scope.
+
+Document 07 is now written and implemented (ADR-0041): an owner opens its own replica over the session — attribution-authorised, read-only, ciphertext both ways — lists and range-reads it, and a hub that lost its staging archive restores from a peer over the wire alone; `FallbackPlan.Hosts.Tests` proves that drill end to end between two live services.
 
 Document 05 is now written and its enforcement implemented: a destination attributes each replica to the peer that offered it, refuses `terms_refused` at the object boundary when the peer's quota would be crossed, refuses `storage_exhausted` when its own storage fails, and announces its current terms in every hello so a source learns a narrowing before the first refusal. Document 04 is written and implemented: challenges ride the replication session after the acknowledgement, a tampered byte at the destination fails the proof and is recorded durably at the source, and the same fact is earned by local-path replicas through direct read-back — both destination kinds answer to bytes, not to their word.
 

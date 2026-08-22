@@ -18,8 +18,17 @@ namespace FallbackPlan.Protocol;
 /// <param name="Label">Human-chosen, for display only, carrying no authority.</param>
 /// <param name="HighestVersion">The highest protocol version the offerer speaks.</param>
 /// <param name="RoleForResponder">The role the offerer will record for the responder (01 §2.2 key 7) — declared on the wire so both grants are approved together (ADR-0030 Amendment 2).</param>
+/// <param name="InviteId">
+/// The invite this offer redeems (01 §2.7, key 8) — the public lookup handle,
+/// never the secret. Absent in the human-compared ceremony. It is a claim like
+/// everything else here: the invite MAC on the confirmations is what proves it.
+/// </param>
 public sealed record PairOffer(
-    PairingContribution Contribution, string Label, ushort HighestVersion, PeerRole RoleForResponder) : IPeerMessage
+    PairingContribution Contribution,
+    string Label,
+    ushort HighestVersion,
+    PeerRole RoleForResponder,
+    ReadOnlyMemory<byte>? InviteId = null) : IPeerMessage
 {
     /// <summary>The most bytes a human-chosen label may occupy (00 §2.3).</summary>
     public const int MaximumLabelBytes = 256;
@@ -31,7 +40,7 @@ public sealed record PairOffer(
     public PeerMessageType Type => PeerMessageType.PairOffer;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 6;
+    public int BodyEntryCount => InviteId is null ? 6 : 7;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -45,6 +54,12 @@ public sealed record PairOffer(
         writer.WriteUInt32(HighestVersion);
         writer.WriteInt32(7);
         writer.WriteUInt32((byte)RoleForResponder);
+
+        if (InviteId is { } inviteId)
+        {
+            writer.WriteInt32(8);
+            writer.WriteByteString(inviteId.Span);
+        }
     }
 
     /// <summary>Reads an offer from a body positioned after the message type.</summary>
@@ -56,7 +71,8 @@ public sealed record PairOffer(
         ThrowHelper.ThrowIfNull(reader);
 
         var fields = PairingCbor.ReadFields(reader, hasTerms: false);
-        return new PairOffer(fields.Contribution(), fields.Label, fields.Version, fields.CheckedRole());
+        return new PairOffer(
+            fields.Contribution(), fields.Label, fields.Version, fields.CheckedRole(), fields.CheckedInviteId());
     }
 
     /// <summary>Whether two offers say the same thing.</summary>
@@ -67,7 +83,13 @@ public sealed record PairOffer(
         && PairingCbor.SameContribution(Contribution, other.Contribution)
         && string.Equals(Label, other.Label, StringComparison.Ordinal)
         && HighestVersion == other.HighestVersion
-        && RoleForResponder == other.RoleForResponder;
+        && RoleForResponder == other.RoleForResponder
+        && (InviteId, other.InviteId) switch
+        {
+            (null, null) => true,
+            ({ } ours, { } theirs) => ours.Span.SequenceEqual(theirs.Span),
+            _ => false,
+        };
 
     /// <inheritdoc/>
     public override int GetHashCode() =>
@@ -153,13 +175,24 @@ public sealed record PairAccept(
 /// fingerprint a human has just read aloud and matched.
 /// </remarks>
 /// <param name="Signature">Ed25519 over <see cref="PairingTranscript.ConfirmationBytes"/>.</param>
-public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
+/// <param name="InviteMac">
+/// The invite proof (01 §2.7, key 2): HMAC-SHA-256 under the code-derived key
+/// over the transcript and the connection's channel bindings. Present exactly
+/// when the ceremony is invite-authenticated — it is what stands in for the
+/// humans' string comparison, and covering the bindings is what makes a relay
+/// fail the way a mismatched string does.
+/// </param>
+public sealed record PairConfirm(
+    ReadOnlyMemory<byte> Signature, ReadOnlyMemory<byte>? InviteMac = null) : IPeerMessage
 {
+    /// <summary>The invite MAC's length: HMAC-SHA-256.</summary>
+    public const int InviteMacLength = 32;
+
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.PairConfirm;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 1;
+    public int BodyEntryCount => InviteMac is null ? 1 : 2;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -168,6 +201,12 @@ public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
 
         writer.WriteInt32(1);
         writer.WriteByteString(Signature.Span);
+
+        if (InviteMac is { } mac)
+        {
+            writer.WriteInt32(2);
+            writer.WriteByteString(mac.Span);
+        }
     }
 
     /// <summary>Reads a confirmation from a body positioned after the message type.</summary>
@@ -179,15 +218,20 @@ public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
         ThrowHelper.ThrowIfNull(reader);
 
         byte[]? signature = null;
+        byte[]? inviteMac = null;
         PeerCbor.ReadEntries(reader, key =>
         {
-            if (key == 1)
+            switch (key)
             {
-                signature = reader.ReadByteString();
-            }
-            else
-            {
-                reader.SkipValue();
+                case 1:
+                    signature = reader.ReadByteString();
+                    break;
+                case 2:
+                    inviteMac = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
             }
         });
 
@@ -198,14 +242,30 @@ public sealed record PairConfirm(ReadOnlyMemory<byte> Signature) : IPeerMessage
                 $"A pairing confirmation is {PeerKeypair.SignatureLength} bytes.");
         }
 
-        return new PairConfirm(signature);
+        if (inviteMac is not null && inviteMac.Length != InviteMacLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, $"An invite proof is {InviteMacLength} bytes.");
+        }
+
+        // The branch matters: converting a null byte[] to ReadOnlyMemory<byte>?
+        // produces a NON-null empty memory, and an absent proof must stay
+        // absent — an empty one would be "present and wrong".
+        return inviteMac is { } mac ? new PairConfirm(signature, mac) : new PairConfirm(signature);
     }
 
     /// <summary>Whether two confirmations are the same bytes.</summary>
     /// <param name="other">The confirmation to compare.</param>
     /// <returns><see langword="true"/> when the signatures match.</returns>
     public bool Equals(PairConfirm? other) =>
-        other is not null && Signature.Span.SequenceEqual(other.Signature.Span);
+        other is not null
+        && Signature.Span.SequenceEqual(other.Signature.Span)
+        && (InviteMac, other.InviteMac) switch
+        {
+            (null, null) => true,
+            ({ } ours, { } theirs) => ours.Span.SequenceEqual(theirs.Span),
+            _ => false,
+        };
 
     /// <inheritdoc/>
     public override int GetHashCode() => Signature.Length;
@@ -333,8 +393,34 @@ internal static class PairingCbor
         string Label,
         ushort Version,
         PeerTerms? Terms,
-        byte Role)
+        byte Role,
+        byte[]? InviteId)
     {
+        /// <summary>The invite identifier, refused when present at the wrong length.</summary>
+        /// <returns>The identifier, or null when the offer carries none.</returns>
+        /// <exception cref="PeerProtocolException">The identifier is not the shape 01 §2.7 defines.</exception>
+        /// <remarks>
+        /// Statements, not a switch expression: a switch whose natural type is
+        /// <c>byte[]?</c> converts its null result through the user-defined
+        /// conversion, which turns absent into present-and-empty.
+        /// </remarks>
+        public ReadOnlyMemory<byte>? CheckedInviteId()
+        {
+            if (InviteId is null)
+            {
+                return null;
+            }
+
+            if (InviteId.Length != PairingInviteCode.InviteIdLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"An invite identifier is {PairingInviteCode.InviteIdLength} bytes.");
+            }
+
+            return InviteId;
+        }
+
         /// <summary>The declared role, refused when absent or out of vocabulary.</summary>
         /// <returns>The role.</returns>
         /// <exception cref="PeerProtocolException">The message carries no valid role — a build predating the negotiated role must pair again (ADR-0030 Amendment 2).</exception>
@@ -372,6 +458,7 @@ internal static class PairingCbor
         ushort version = 0;
         PeerTerms? terms = null;
         byte role = 0;
+        byte[]? inviteId = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -404,13 +491,16 @@ internal static class PairingCbor
                 case 7:
                     role = (byte)PeerCbor.ReadUInt16(reader);
                     break;
+                case 8 when !hasTerms:
+                    inviteId = reader.ReadByteString();
+                    break;
                 default:
                     reader.SkipValue();
                     break;
             }
         });
 
-        return new Fields(identity, ephemeral, nonce, label, version, terms, role);
+        return new Fields(identity, ephemeral, nonce, label, version, terms, role, inviteId);
     }
 
     private static PeerTerms ReadTerms(CborReader reader)

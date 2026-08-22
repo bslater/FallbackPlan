@@ -32,6 +32,7 @@ public sealed class VectorFileTests
     private static readonly Dictionary<string, bool> ExpectedFiles = new()
     {
         ["keys.json"] = true,
+        ["write-only.json"] = true,
         ["identifiers.json"] = true,
         ["records.json"] = true,
         ["segmentation.json"] = true,

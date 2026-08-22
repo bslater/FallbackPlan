@@ -14,6 +14,8 @@ consumes, committed to the repository so that a plain `git clone` and a GitHub
 | `Bodu.Security.Cryptography` | 0.2.0 | same feed, same commit (depends on `Bodu.Core 0.2.0`) — Argon2id, cross-verified against Konscious on every CI run |
 | `Bodu.Text.Encoding` | 0.2.0 | same feed, same commit (depends on `Bodu.Core 0.2.0`) — base32 rendering of identifiers, behind the strict lowercase adapter in `FallbackPlan.Domain.Base32` |
 | `Bodu.Globalization.Recurrence` | 0.2.0 | same feed, same commit (depends on `Bodu.Core 0.2.0`) — schedule occurrence arithmetic, behind `FallbackPlan.Application.Schedule` ([ADR-0027 §1](../../docs/adr/0027-services-scheduling-status-telemetry.md), [requirements](../../docs/bodu-recurrence-requirements.md)) |
+| `Bodu.Collections.Concurrent` | 0.2.0 | `local-packages/` feed of <https://github.com/bslater/bodu.git> at commit `591b152` ("Add the missing Bodu.Text.Serialization package README ahead of the v0.3.0 release (#658)") — the lock-free Vyukov MPMC `ConcurrentCircularBuffer<T>` behind `FallbackPlan.Diagnostics.LogRing`, the buffer a client reads diagnostics from ([ADR-0043 §6](../../docs/adr/0043-structured-logging-and-diagnostics.md)) |
+| `Bodu.Collections` | 0.2.0 | same feed, same commit — not used directly; it is `Bodu.Collections.Concurrent`'s declared dependency (depends on `Bodu.Core 0.2.0`) |
 
 Upstream versions the four in lock-step, so they are taken and upgraded
 together: a mixed set would pair assemblies that were never built or tested

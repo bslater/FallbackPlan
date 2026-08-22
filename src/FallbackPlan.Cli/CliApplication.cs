@@ -3,6 +3,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Cli;
 using FallbackPlan.Domain;
@@ -20,6 +21,8 @@ using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
 using RestoreResult = FallbackPlan.Repository.RestoreResult;
+using FallbackPlan.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Cli;
 
@@ -85,9 +88,58 @@ public static class CliApplication
         {
             Description = "Fingerprint of the pinned service to expect when using --connect (the key it was paired to must answer).",
         };
+        var logLevelOption = new Option<string?>("--log-level")
+        {
+            Description =
+                "How much to log to standard error: trace, debug, information, warning, error, critical or none. "
+                + "Reads FALLBACKPLAN_LOG_LEVEL when absent; warnings and above otherwise.",
+            Recursive = true,
+        };
+
+        // The level is read straight from the arguments rather than from the
+        // parse result: every handler below closes over the composition, so it
+        // has to exist before the commands that use it are built. The option is
+        // still declared — recursively, on the root — so the parser accepts it
+        // wherever it is written and `--help` describes it.
+        string? LogLevelArgument()
+        {
+            for (var i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--log-level")
+                {
+                    return args[i + 1];
+                }
+            }
+
+            return null;
+        }
+
+        if (!LoggingOptions.TryResolveLevel(
+                LogLevelArgument(),
+                Environment.GetEnvironmentVariable(LoggingOptions.LevelVariable),
+                configured: null,
+                out var logLevel,
+                out var levelRefusal,
+                fallback: LogLevel.Warning))
+        {
+            error.WriteLine($"error: {levelRefusal}");
+            return 1;
+        }
+
+        // The console's own output is its result, not its log, so nothing
+        // below Warning reaches standard error unless somebody asked for it —
+        // and no file sink at all, because `<state>/logs` belongs to the
+        // service that owns the state directory, not to a command passing
+        // through it (ADR-0043 §6).
+        using var logging = LoggingComposition.Create(
+            new LoggingOptions { Default = logLevel, Directory = null, Console = true },
+            error);
+        var sessionLogger = logging.Factory.CreateLogger<CliSession>();
+        var catalogueLogger = logging.Factory.CreateLogger<Catalogue>();
 
         var root = new RootCommand(
             "FallbackPlan — encrypted backup: repository tooling, backup and restore, and the console for a running service");
+        root.Options.Add(logLevelOption);
 
         Command WithSession(Command command)
         {
@@ -176,7 +228,7 @@ public static class CliApplication
         }
 
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
-            Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken);
+            Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken, sessionLogger);
 
         // An engineering verb — one the service contract carries no command for
         // — takes the device's writer role for its duration and says so. Direct
@@ -192,7 +244,8 @@ public static class CliApplication
                 PassphraseEnv(parse),
                 parse.GetValue(stateOption),
                 writerRole: true,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                sessionLogger).ConfigureAwait(false);
 
             error.WriteLine(
                 $"mode: direct — '{verb}' has no service equivalent, so this command holds the writer role for "
@@ -218,7 +271,8 @@ public static class CliApplication
                     PassphraseEnv(parse),
                     parse.GetValue(stateOption),
                     parse.GetValue(directOption),
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    sessionLogger).ConfigureAwait(false);
 
             await using (gateway.ConfigureAwait(false))
             {
@@ -298,10 +352,22 @@ public static class CliApplication
                 Description = "Informational creator string recorded in the descriptor.",
                 DefaultValueFactory = _ => "fallbackplan-cli/0.1",
             };
+            var writeOnlyOption = new Option<bool>("--write-only")
+            {
+                Description = "Create a write-only (format 2) repository (ADR-0042): every key derives from the "
+                    + "passphrase, nothing is stored, content seals to a public key. Requires --acknowledge-loss.",
+            };
+            var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
+            {
+                Description = "Acknowledge that a write-only repository's passphrase can never change and that "
+                    + "losing it loses the backup irrecoverably.",
+            };
             var command = new Command("init", "Create a new repository at --repo (keys first, descriptor last).");
             command.Options.Add(repoOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(createdByOption);
+            command.Options.Add(writeOnlyOption);
+            command.Options.Add(acknowledgeLossOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -309,6 +375,35 @@ public static class CliApplication
                 var store = new LocalFileSystemObjectStore(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
+
+                if (parse.GetValue(writeOnlyOption))
+                {
+                    // The loss acknowledgement is the ceremony, not a speed
+                    // bump (ADR-0042 §11, architecture 03 §1 rule 6): there
+                    // is no recovery path to offer later, so consent is
+                    // collected before the descriptor exists.
+                    if (!parse.GetValue(acknowledgeLossOption))
+                    {
+                        throw new CliFailureException(
+                            "A write-only repository's passphrase can never change, and if it is lost the backup "
+                            + "is unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
+                            + "to accept this (ADR-0042).");
+                    }
+
+                    var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                        store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        cancellationToken).ConfigureAwait(false);
+                    using (created)
+                    using (authority)
+                    {
+                        output.WriteLine($"created write-only repository {Base32.Encode(created.RepositoryId.ToArray())}");
+                        output.WriteLine(
+                            "the passphrase is the only key: it can never change, and losing it loses the backup.");
+                    }
+
+                    output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
+                    return 0;
+                }
 
                 using var repository = await RepositoryLifecycle.CreateAsync(
                     store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
@@ -345,6 +440,13 @@ public static class CliApplication
                         CdcParameters = CdcParameters.Default,
                     }
                     : CapturePolicy.Default;
+
+                // A write-only repository takes the device trust domain
+                // (ADR-0042): verify-on-reuse reads content, which it cannot.
+                if (session.Repository.Keys.WriteOnly)
+                {
+                    policy = policy with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device };
+                }
 
                 var orchestrator = new PublicationOrchestrator(
                     policy,
@@ -442,7 +544,7 @@ public static class CliApplication
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                 var objectId = ParseObjectId(parse.GetValue(idArgument)!);
 
-                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                 if (!reader.TryLocateRecord(objectId, out _, out var entry))
@@ -540,7 +642,7 @@ public static class CliApplication
             {
                 using var session = await OpenWritingSessionAsync(parse, "rebuild-index", cancellationToken).ConfigureAwait(false);
                 var cataloguePath = parse.GetValue(catalogueOption) ?? session.CataloguePath;
-                using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(cataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 IReadOnlyList<DamageFinding> findings;
                 if (parse.GetValue(forensicOption))
@@ -564,7 +666,9 @@ public static class CliApplication
                         throw new CliFailureException(Strings.CliApplication_TargetSnapshotRequiresForensicCheckpoint);
                     }
 
-                    var loader = new IndexLoader(session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+                    var loader = new IndexLoader(
+                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy,
+                        logging.Factory.CreateLogger<IndexLoader>());
 
                     // Precedence rule 3 (specification 07 §3) needs to know
                     // which blobs the store still holds, and this is the only
@@ -572,10 +676,11 @@ public static class CliApplication
                     // blob is live and serves locations into blobs collection
                     // removed — the index naming an object no blob holds.
                     using var inventory = new RepositoryReader(
-                        session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                        session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
-                    var report = await new CatalogueRebuilder(loader).RebuildAsync(
+                    var report = await new CatalogueRebuilder(
+                        loader, logging.Factory.CreateLogger<CatalogueRebuilder>()).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
                         gapPatienceGenerations: 2,
@@ -628,7 +733,7 @@ public static class CliApplication
                     using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
                     error.WriteLine("mode: direct — verifying one file version has no service equivalent.");
 
-                    using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                    using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                     var read = await reader.ReadSegmentAsync(ParseObjectId(manifestIdHex), cancellationToken).ConfigureAwait(false);
@@ -641,7 +746,14 @@ public static class CliApplication
                     var fileResult = await engine.VerifyFileAsync(
                         FileVersionManifestCodec.Decode(read.Plaintext!), reader, cancellationToken).ConfigureAwait(false);
 
-                    output.WriteLine(fileResult.Ok ? "file: OK (every segment and the whole-file hash verified)" : $"file: FAILED — {fileResult.Detail}");
+                    // Sealed content is a stated incapacity, not damage
+                    // (ADR-0042): still not a success — the file was NOT
+                    // verified — but never reported as corrupt.
+                    output.WriteLine(fileResult.Ok
+                        ? "file: OK (every segment and the whole-file hash verified)"
+                        : fileResult.NeedsRestoreGrant
+                            ? $"file: NOT CHECKED — {fileResult.Detail}"
+                            : $"file: FAILED — {fileResult.Detail}");
                     return fileResult.Ok ? 0 : 2;
                 }
 
@@ -667,7 +779,7 @@ public static class CliApplication
             {
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
 
-                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+                using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
                 ObjectId manifestId;
@@ -789,7 +901,8 @@ public static class CliApplication
                         PassphraseEnv(parse),
                         parse.GetValue(stateOption),
                         parse.GetValue(directOption),
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        sessionLogger).ConfigureAwait(false);
 
                 await using (gateway.ConfigureAwait(false))
                 {
@@ -854,7 +967,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 var snapshots = catalogue.EnumerateSnapshots();
                 if (snapshots.Count == 0)
@@ -920,7 +1033,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
 
                 var snapshotId = Convert.FromHexString(parse.GetValue(snapshotArgument)!);
                 var path = parse.GetValue(pathArgument) ?? string.Empty;
@@ -1035,6 +1148,32 @@ public static class CliApplication
                 parse,
                 (gateway, token) => gateway.SyncAsync(
                     parse.GetValue(setOption), parse.GetValue(destinationOption), token),
+                cancellationToken)));
+        }
+
+        // -------------------------------------------------------------- changes
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Compare only this backup set; the default (first) set otherwise.",
+            };
+            var limitOption = new Option<int?>("--limit")
+            {
+                Description = "The most paths listed per bucket; counts stay exact past it.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "changes",
+                "What changed under a set's source since its last backup (ADR-0038): new, updated, moved, "
+                + "deleted, and files the rules no longer include. Read-only; nothing is captured."));
+            command.Options.Add(setOption);
+            command.Options.Add(limitOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.PreviewSetChangesAsync(
+                    parse.GetValue(setOption), parse.GetValue(limitOption), token),
                 cancellationToken)));
         }
 
@@ -1158,6 +1297,138 @@ public static class CliApplication
 
         // ---------------------------------------------------------------- pair
 
+
+
+        // Opens a connection for a session verb. Unlike every other CLI path
+        // this has no direct-mode fallback and should not: a session is minted
+        // by a running service and means nothing without one, so "no service"
+        // is the answer rather than a reason to do the work here instead.
+        static async Task<IFallbackPlanClient> ConnectForSessionAsync(
+            string stateDirectory, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await LocalServiceClient
+                    .ConnectAsync(stateDirectory, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException unreachable)
+            {
+                throw new CliFailureException(
+                    $"{unreachable.Message} Sessions are held by the running service, so there is nobody "
+                    + "to sign in to until one is up.",
+                    unreachable);
+            }
+        }
+        // `login` and `logout` — who is acting, rather than which process may
+        // connect (ADR-0045 §1). Neither opens a repository: the service holds
+        // the accounts, and this end holds only the token it is handed back.
+        {
+            var loginStateOption = new Option<string>("--state")
+            {
+                Description = "The service's state directory — where its local socket and this session live.",
+                Required = true,
+            };
+            var userOption = new Option<string>("--user")
+            {
+                Description = "The account name.",
+                Required = true,
+            };
+            var passwordVariableOption = new Option<string>("--password-env")
+            {
+                Description =
+                    "The environment variable holding the password. A password is named by variable and "
+                    + "never given on a command line, where it would reach the shell history and every "
+                    + "process listing on the machine (FR-USR-006).",
+                Required = true,
+            };
+
+            var login = new Command(
+                "login",
+                "Sign in to a running service and cache the session, so later commands need no password.");
+            login.Options.Add(loginStateOption);
+            login.Options.Add(userOption);
+            login.Options.Add(passwordVariableOption);
+            root.Subcommands.Add(login);
+
+            login.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(loginStateOption)!;
+                var user = parse.GetValue(userOption)!;
+                var variable = parse.GetValue(passwordVariableOption)!;
+
+                if (Environment.GetEnvironmentVariable(variable) is not { Length: > 0 } password)
+                {
+                    throw new CliFailureException(
+                        $"the environment variable '{variable}' is not set. The password is passed by name, "
+                        + "never on the command line (FR-USR-006).");
+                }
+
+                var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                await using (client.ConfigureAwait(false))
+                {
+                    var answered = await client
+                        .ExecuteAsync(new LoginCommand(user, password), cancellationToken)
+                        .ConfigureAwait(false);
+
+                    switch (answered)
+                    {
+                        case SessionResult session:
+                            new SessionCache(state).Save(session);
+                            output.WriteLine($"signed in as {session.User} ({session.Role.ToLowerInvariant()})");
+                            return 0;
+
+                        case ServiceError refusal:
+                            throw new CliFailureException(refusal.Message);
+
+                        default:
+                            throw new CliFailureException(
+                                $"the service answered with {answered.GetType().Name}.");
+                    }
+                }
+            }));
+
+            var logoutState = new Option<string>("--state")
+            {
+                Description = "The service's state directory.",
+                Required = true,
+            };
+            var logout = new Command("logout", "End this session at the service and forget it here.");
+            logout.Options.Add(logoutState);
+            root.Subcommands.Add(logout);
+
+            logout.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(logoutState)!;
+                var cache = new SessionCache(state);
+                var who = cache.User;
+
+                // The local cache is cleared whatever the service says. A
+                // service that is down cannot revoke, and leaving a token here
+                // that the operator believes they have signed out of is the
+                // worse of the two failures — the session dies with that
+                // process anyway (ADR-0045 §5).
+                try
+                {
+                    var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                    await using (client.ConfigureAwait(false))
+                    {
+                        await cache.PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                        await client.ExecuteAsync(new LogoutCommand(), cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (CliFailureException)
+                {
+                    error.WriteLine(
+                        "note: the service could not be reached, so nothing was revoked there. The session "
+                        + "is forgotten here, and no session survives a service restart.");
+                }
+
+                cache.Clear();
+                output.WriteLine(who is null ? "signed out" : $"signed out {who}");
+                return 0;
+            }));
+        }
         {
             // Not a session verb: pairing needs no repository or passphrase,
             // only the console's own state directory to hold its identity and
@@ -1238,6 +1509,124 @@ public static class CliApplication
             }));
         }
 
+        // ---------------------------------------------------------------- logs
+
+        {
+            var levelFilterOption = new Option<string?>("--level")
+            {
+                Description = "Show records at this level and above: trace, debug, information, warning, error, critical.",
+            };
+            var sinceOption = new Option<long>("--since")
+            {
+                Description = "Start after this sequence number. 0 starts at the oldest record still held.",
+            };
+            var tailOption = new Option<int>("--tail")
+            {
+                Description = "Show at most this many of the most recent records.",
+                DefaultValueFactory = _ => 50,
+            };
+            var followOption = new Option<bool>("--follow")
+            {
+                Description = "Keep reading as records arrive, until interrupted.",
+            };
+
+            var command = WithRemoteCapableSession(new Command(
+                "logs",
+                "Read the service's diagnostic log (ADR-0043 §6). Needs a running service: the records live "
+                + "in its memory, so there is no --direct equivalent."));
+            command.Options.Add(levelFilterOption);
+            command.Options.Add(sinceOption);
+            command.Options.Add(tailOption);
+            command.Options.Add(followOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                // The one read verb with no local path. Every other one can fall
+                // back to reading the repository itself; this cannot, because the
+                // ring is in the running service's memory and a service that is
+                // not running has no log to show. So it takes the service's
+                // address directly — --state for the local binding, --connect for
+                // a paired one — and never opens a repository it does not need.
+                var remote = ResolveRemote(parse, direct: false);
+                var state = parse.GetValue(stateOption);
+                if (remote is null && state is not { Length: > 0 })
+                {
+                    throw new CliFailureException(
+                        "logs reads a running service, so it needs to know which one: pass --state <dir> for the "
+                        + "service on this machine, or --connect <host:port> --fingerprint <fp> for a paired one. "
+                        + "There is no --direct mode — the records are in the service's memory, not in the repository.");
+                }
+
+                var level = parse.GetValue(levelFilterOption);
+                var tail = Math.Max(parse.GetValue(tailOption), 1);
+                var follow = parse.GetValue(followOption);
+                var cursor = parse.GetValue(sinceOption);
+
+                async ValueTask<LogRecordsResult> ReadAsync(long since, int maximum)
+                {
+                    var request = new ReadLogCommand(since, maximum, level);
+                    if (remote is { } target)
+                    {
+                        return await QueryRemoteAsync<LogRecordsResult>(target, request, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    LocalServiceClient client;
+                    try
+                    {
+                        client = await LocalServiceClient.ConnectAsync(
+                            state!, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+                        await new SessionCache(state!)
+                            .PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (ServiceConnectionException unreachable)
+                    {
+                        // Nothing listening is an ordinary condition here, not a
+                        // crash. Everywhere else in the CLI it means "do the work
+                        // in this process instead"; this verb has no such
+                        // fallback, so it has to say what it found.
+                        throw new CliFailureException(
+                            $"{unreachable.Message} Logs are held by the running service, so there is nothing "
+                            + "to read until one is up.",
+                            unreachable);
+                    }
+
+                    await using (client.ConfigureAwait(false))
+                    {
+                        return await client.ExecuteAsync(request, cancellationToken).ConfigureAwait(false) switch
+                        {
+                            LogRecordsResult page => page,
+                            ServiceError failure => throw new CliFailureException(failure.Message),
+                            var other => throw new CliFailureException(
+                                $"the service answered with {other.GetType().Name}."),
+                        };
+                    }
+                }
+
+                if (remote is not null)
+                {
+                    // Said once, because it changes what the records mean: a
+                    // paired console reads redacted, so a path is a hash here
+                    // and the whole path on the machine that holds the files.
+                    error.WriteLine("mode: service (remote) — records are redacted for a paired caller (ADR-0043 §4).");
+                }
+
+                var first = await ReadAsync(cursor, tail).ConfigureAwait(false);
+                WriteLogPage(first, output, error);
+                cursor = first.NextSequence;
+
+                while (follow && !cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                    var page = await ReadAsync(cursor, 200).ConfigureAwait(false);
+                    WriteLogPage(page, output, error);
+                    cursor = page.NextSequence;
+                }
+
+                return 0;
+            }));
+        }
+
         // -------------------------------------------------------------- status
 
         {
@@ -1276,7 +1665,7 @@ public static class CliApplication
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+                using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, catalogueLogger);
                 var configuration = ClientConfiguration.Load(session.ConfigurationPath);
                 var jobs = JobStateStore.Open(session.StateDirectory);
                 var repoPath = Repo(parse);
@@ -1291,7 +1680,7 @@ public static class CliApplication
                     ? configuration.BackupSets
                     : [new BackupSetConfiguration
                        {
-                           Id = Hex(session.BackupSetId), Name = "(default)", Root = string.Empty,
+                           Id = Hex(session.BackupSetId), Name = "(default)", Roots = [],
                        }];
 
                 foreach (var set in sets)
@@ -1311,7 +1700,7 @@ public static class CliApplication
                         destinations.Add(DestinationStatus.Describe(
                             reference.Ref,
                             configuration.FindDestination(reference.Ref),
-                            set.Root,
+                            [.. set.Roots.Select(root => root.Path)],
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
                             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -1357,6 +1746,42 @@ public static class CliApplication
 
         return await root.Parse(args).InvokeAsync(configuration).ConfigureAwait(false);
 
+    }
+
+    /// <summary>
+    /// Writes one page of log records, and says when records were missed.
+    /// </summary>
+    /// <param name="page">The page the service answered with.</param>
+    /// <param name="output">Where the records go.</param>
+    /// <param name="error">Where the gap notice goes, so a redirect keeps the records clean.</param>
+    /// <remarks>
+    /// The dropped notice is not decoration. A reader that has fallen behind the
+    /// ring has missed records, which is a different fact from a quiet service,
+    /// and a client that renders the two alike will one day have somebody
+    /// reporting that nothing happened during the hour everything did.
+    /// </remarks>
+    private static void WriteLogPage(LogRecordsResult page, TextWriter output, TextWriter error)
+    {
+        if (page.Dropped)
+        {
+            error.WriteLine(
+                "warning: records were dropped before this page — the service logged faster than this reader "
+                + "was reading. Raise ring_capacity in config.json, or read more often.");
+        }
+
+        foreach (var record in page.Records)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{record.Sequence,-8}  " +
+                $"{DateTimeOffset.FromUnixTimeMilliseconds(record.TimestampUnixMilliseconds):u}  " +
+                $"{record.Level,-11}  {record.EventId,-5}  {record.Category}  {record.Message}"));
+
+            if (record.ExceptionType is { Length: > 0 })
+            {
+                output.WriteLine($"{string.Empty,-8}  {record.ExceptionType}: {record.ExceptionMessage}");
+            }
+        }
     }
 
     /// <summary>

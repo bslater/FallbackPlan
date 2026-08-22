@@ -10,6 +10,7 @@ using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Segmentation;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Repository;
 
@@ -47,6 +48,7 @@ public sealed class FileArchiver
     private readonly string _spoolDirectory;
     private readonly SpoolPinnedConfiguration _pinned;
     private readonly IIntentScope? _intentScope;
+    private readonly ILogger? _logger;
 
     /// <summary>Creates an archiver over a validated policy.</summary>
     /// <exception cref="ArgumentException">The policy is invalid — the message names each defect (FR-ARCH-007).</exception>
@@ -59,7 +61,8 @@ public sealed class FileArchiver
         IObjectStore store,
         IBlobCounterAllocator counters,
         string spoolDirectory,
-        IIntentScope? intentScope = null)
+        IIntentScope? intentScope = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(policy);
         ThrowHelper.ThrowIfNull(keys);
@@ -75,6 +78,7 @@ public sealed class FileArchiver
                 nameof(policy));
         }
 
+        _logger = logger;
         _policy = policy;
         _pinned = SpoolPinnedConfiguration.FromPolicy(
             policy,
@@ -143,5 +147,5 @@ public sealed class FileArchiver
     /// </summary>
     public ArchiveSession OpenSession(ReusePredicate? mayReuseSegment = null) => new(
         _policy, _repositoryId, _writerId, _generation, _keys, _store, _counters, _spoolDirectory, _pinned, _intentScope,
-        mayReuseSegment);
+        mayReuseSegment, _logger);
 }

@@ -1,4 +1,6 @@
 using Bodu;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Protocol;
 
@@ -30,6 +32,7 @@ public sealed class PeerAuthenticator
     private readonly PeerIdentity? _expected;
 
     private SessionAuth? _theirs;
+    private readonly ILogger _log;
 
     /// <summary>Starts authentication for a connection whose TLS has completed.</summary>
     /// <param name="keypair">This device's peer keypair.</param>
@@ -42,17 +45,20 @@ public sealed class PeerAuthenticator
     /// this; a responder never does, because an inbound connection announces
     /// nothing until <see cref="Accept"/>.
     /// </param>
+    /// <param name="logger">Where a pairing outcome is recorded (ADR-0043).</param>
     public PeerAuthenticator(
         PeerKeypair keypair,
         PeerGrantStore grants,
         PeerSessionRole role,
         ReadOnlySpan<byte> ourTlsPublicKeyHash,
         ReadOnlySpan<byte> theirTlsPublicKeyHash,
-        PeerIdentity? expected = null)
+        PeerIdentity? expected = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
 
+        _log = logger ?? NullLogger.Instance;
         _keypair = keypair;
         _grants = grants;
         Role = role;
@@ -109,18 +115,26 @@ public sealed class PeerAuthenticator
         {
             // 01 §2.5. This is the case that matters: the operator asked to
             // reach one device and something else answered.
+            Log.IdentityChanged(_log, _expected.Fingerprint);
             throw new PeerProtocolException(
                 PeerRefusalReason.IdentityChanged,
                 $"Peer {_expected.Fingerprint} was expected; {theirs.Identity.Fingerprint} answered.");
         }
 
-        var grant = _grants.Find(theirs.Identity)
-            ?? throw new PeerProtocolException(
-                _grants.IsRevoked(theirs.Identity) ? PeerRefusalReason.Revoked : PeerRefusalReason.NotPaired,
-                _grants.IsRevoked(theirs.Identity)
+        var grant = _grants.Find(theirs.Identity);
+        if (grant is null)
+        {
+            var revoked = _grants.IsRevoked(theirs.Identity);
+            Log.PairingRefused(_log, theirs.Identity.Fingerprint, revoked ? "revoked" : "not paired");
+            throw new PeerProtocolException(
+                revoked ? PeerRefusalReason.Revoked : PeerRefusalReason.NotPaired,
+                revoked
                     ? $"The pairing with peer {theirs.Identity.Fingerprint} was ended."
                     : $"No grant exists for peer {theirs.Identity.Fingerprint}.");
+        }
 
+        var role = grant.Role.ToString();
+        Log.PairingAccepted(_log, theirs.Identity.Fingerprint, role);
         _theirs = theirs;
         Peer = grant;
 
@@ -165,12 +179,32 @@ public sealed class PeerAuthenticator
     }
 
     /// <summary>Records that 02 §4 completed, opening the session.</summary>
+    /// <param name="features">What the two sides agreed on, for the record.</param>
     /// <exception cref="PeerProtocolException">The session is not authenticated.</exception>
-    public void Open()
+    public void Open(IReadOnlyList<string>? features = null)
     {
         Require(PeerSessionState.Authenticated);
         State = PeerSessionState.Open;
+
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            var agreed = features is { Count: > 0 } ? string.Join(", ", features) : "(none negotiated)";
+            Log.SessionEstablished(_log, Peer?.Identity.Fingerprint ?? "(unknown)", agreed);
+        }
     }
+
+    /// <summary>
+    /// Records that a session ended before or during use, for the peer this
+    /// authenticator was serving.
+    /// </summary>
+    /// <param name="reason">Why it ended.</param>
+    /// <remarks>
+    /// Separate from <see cref="PeerProtocolException"/> rather than logged
+    /// where one is thrown: a session also fails by the other end simply
+    /// going away, which throws nothing here at all.
+    /// </remarks>
+    public void Failed(string reason) =>
+        Log.SessionFailed(_log, Peer?.Identity.Fingerprint ?? _expected?.Fingerprint ?? "(unknown)", reason);
 
     /// <summary>Whether a message type may be sent or received in the current state (02 §2).</summary>
     /// <param name="type">The message type.</param>
@@ -202,7 +236,10 @@ public sealed class PeerAuthenticator
             or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
             or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
             or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck
-            or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof =>
+            or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
+            or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
+            or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
+            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData =>
             state == PeerSessionState.Open,
 
         _ => false,

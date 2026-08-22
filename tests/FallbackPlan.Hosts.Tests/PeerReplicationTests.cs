@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using FallbackPlan.Agent;
+using FallbackPlan.Application;
 using FallbackPlan.Api;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
@@ -197,7 +198,7 @@ public sealed class PeerReplicationTests : IDisposable
                 {
                     Id = _source.DocsSetId,
                     Name = "docs",
-                    Root = _source.SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
                     Schedule = "every 4h",
                     Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
                 },
@@ -299,7 +300,7 @@ public sealed class PeerReplicationTests : IDisposable
                 {
                     Id = _source.DocsSetId,
                     Name = "docs",
-                    Root = _source.SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
                     Schedule = "every 4h",
                     Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
                 },
@@ -351,7 +352,7 @@ public sealed class PeerReplicationTests : IDisposable
                 {
                     Id = _source.DocsSetId,
                     Name = "docs",
-                    Root = _source.SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
                     Schedule = "every 4h",
                     Destinations = [new FallbackPlan.Application.SetDestinationReference { Ref = "friend" }],
                 },

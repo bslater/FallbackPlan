@@ -2,6 +2,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -38,9 +39,13 @@ public sealed class ArchiveHandle : IDisposable
     /// <summary>The catalogue's path, for read paths opening their own connection.</summary>
     public required string CataloguePath { get; init; }
 
+    /// <summary>The catalogue's logger, so a read connection is as diagnosable as the writer's.</summary>
+    public ILogger? CatalogueLogger { get; init; }
+
     /// <summary>Opens a second catalogue connection for a read path (ADR-0029 §4).</summary>
     /// <returns>A catalogue the caller owns and must dispose.</returns>
-    public CatalogueDb OpenReadCatalogue() => CatalogueDb.Open(CataloguePath, Repository.RepositoryId);
+    public CatalogueDb OpenReadCatalogue() =>
+        CatalogueDb.Open(CataloguePath, Repository.RepositoryId, CatalogueLogger);
 
     /// <inheritdoc />
     public void Dispose()

@@ -2,6 +2,9 @@ using Bodu;
 using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using FallbackPlan.Domain.Diagnostics;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -17,18 +20,18 @@ namespace FallbackPlan.Api.Transport;
 /// </remarks>
 public sealed class LocalServiceListener : IAsyncDisposable
 {
-    private readonly IFallbackPlanService _service;
+    private readonly Func<IFallbackPlanService> _services;
     private readonly string _address;
-    private readonly Action<string>? _log;
+    private readonly ILogger _log;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
     private Socket? _socket;
     private Task? _acceptLoop;
 
-    private LocalServiceListener(IFallbackPlanService service, string address, Action<string>? log)
+    private LocalServiceListener(Func<IFallbackPlanService> services, string address, ILogger log)
     {
-        _service = service;
+        _services = services;
         _address = address;
         _log = log;
     }
@@ -43,14 +46,34 @@ public sealed class LocalServiceListener : IAsyncDisposable
     /// <param name="stateDirectory">The state directory whose service this is.</param>
     /// <param name="log">Optional sink for connection-level notes.</param>
     /// <returns>The running listener; dispose to stop.</returns>
-    public static LocalServiceListener Start(IFallbackPlanService service, string stateDirectory, Action<string>? log = null)
+    public static LocalServiceListener Start(
+        IFallbackPlanService service, string stateDirectory, ILogger? log = null)
     {
         ThrowHelper.ThrowIfNull(service);
+        return Start(() => service, stateDirectory, log);
+    }
+
+    /// <summary>
+    /// Starts listening, building a service per accepted connection.
+    /// </summary>
+    /// <param name="services">
+    /// Called once per connection. This is what lets a per-connection decorator
+    /// hold that connection's signed-in session (ADR-0045 §5) without any verb
+    /// or any other listener learning about it; the overload above is the
+    /// unchanged shape for a service that has no per-connection state.
+    /// </param>
+    /// <param name="stateDirectory">The state directory whose service this is.</param>
+    /// <param name="log">Optional sink for connection-level notes.</param>
+    /// <returns>The running listener; dispose to stop.</returns>
+    public static LocalServiceListener Start(
+        Func<IFallbackPlanService> services, string stateDirectory, ILogger? log = null)
+    {
+        ThrowHelper.ThrowIfNull(services);
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
         LocalEndpoint.PrepareDirectory(stateDirectory);
         var address = LocalEndpoint.AddressFor(stateDirectory);
-        var listener = new LocalServiceListener(service, address, log);
+        var listener = new LocalServiceListener(services, address, log ?? NullLogger.Instance);
 
         if (OperatingSystem.IsWindows())
         {
@@ -61,6 +84,8 @@ public sealed class LocalServiceListener : IAsyncDisposable
             listener.BindSocket(address);
             listener._acceptLoop = listener.AcceptSocketsAsync();
         }
+
+        Log.Listening(listener._log, new LogPath(address));
 
         return listener;
     }
@@ -190,7 +215,7 @@ public sealed class LocalServiceListener : IAsyncDisposable
         // connect, and PeerCredentials is identification for the log, not a
         // gate. Everything past this point is the same command contract the
         // remote binding runs once its peer session has opened.
-        await ServiceConnectionPump.RunAsync(stream, _service, peer.ToString(), _log, _stopping.Token)
+        await ServiceConnectionPump.RunAsync(stream, _services(), peer.ToString(), _log, _stopping.Token)
             .ConfigureAwait(false);
     }
 

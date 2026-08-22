@@ -2,9 +2,12 @@ using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Profiles;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
@@ -169,9 +172,85 @@ internal static class FuzzCorpus
                 bytes => StandaloneRecordFraming.Parse(bytes)),
 
             new("key-bundle", BuildKeyBundle(), bytes => Format.Keys.KeyBundleCodec.Decode(bytes).Dispose()),
+
+            // The write-only (format v2) parsers (ADR-0042): the 168-byte
+            // sealed envelope, the sidecar that carries a content key, and
+            // both recovery-kit body shapes.
+            new("sealed-blob-envelope", BuildSealedEnvelope(), bytes => BlobEnvelope.Parse(bytes)),
+            new("recovery-kit-v1", BuildRecoveryKit(writeOnly: false), bytes => RecoveryKitCodec.Parse(bytes)),
+            new("recovery-kit-v2", BuildRecoveryKit(writeOnly: true), bytes => RecoveryKitCodec.Parse(bytes)),
         };
 
         return seeds;
+    }
+
+    private static byte[] BuildSealedEnvelope()
+    {
+        var envelope = new BlobEnvelope(
+            FormatLimits.SealedFormatVersion,
+            BlobClass.Data,
+            new KeyGeneration(0),
+            Blob16(0x2C),
+            [.. Enumerable.Repeat((byte)0x5A, 32)],
+            42,
+            Writer,
+            [.. Enumerable.Range(0x10, 80).Select(value => (byte)value)]);
+        var bytes = new byte[BlobEnvelope.MaxLength];
+        envelope.WriteTo(bytes);
+        return bytes;
+    }
+
+    private static byte[] BuildRecoveryKit(bool writeOnly) => RecoveryKitCodec.Serialize(new RecoveryKit
+    {
+        KitFormatVersion = 1,
+        MinimumToolVersion = "0.1.0",
+        RepositoryId = Repo,
+        RepositoryFormatVersion = writeOnly ? FormatLimits.SealedFormatVersion : FormatLimits.FormatVersion,
+        KeyObject = writeOnly ? ReadOnlyMemory<byte>.Empty : "FBPKKEYS-fuzz-corpus-wrapped-key"u8.ToArray(),
+        KdfMemoryKiB = 8 * 1024,
+        KdfIterations = 1,
+        KdfParallelism = 1,
+        KdfSalt = Fill16(0x21),
+        Destinations = [new KitDestination("local-path", "file:///fuzz", "", "")],
+        IssuingDeviceId = Fill16(0x55),
+        IssuedAt = 1_722_600_000_000,
+        Instructions = "fuzz-corpus instructions",
+        SealingPublicKey = writeOnly ? Enumerable.Repeat((byte)0x9C, 32).ToArray() : ReadOnlyMemory<byte>.Empty,
+    });
+
+    /// <summary>
+    /// A committed v2 spool sidecar, content key included — written through
+    /// the public sealed writer into a throwaway spool so the internal
+    /// serialiser stays internal.
+    /// </summary>
+    public static byte[] SealedSpoolCheckpointSeed { get; } = BuildSealedSpoolCheckpoint();
+
+    private static byte[] BuildSealedSpoolCheckpoint()
+    {
+        var spool = Path.Combine(Path.GetTempPath(), "fbp-fuzz-corpus", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(spool);
+        try
+        {
+            var sealingPublic = ContentSealing.PublicKeyOf([.. Enumerable.Repeat((byte)0x61, 32)]);
+            var writer = BlobWriter.CreateSealed(
+                Repo, Writer, new KeyGeneration(0), new byte[32], sealingPublic, blobCounter: 3,
+                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+                pinned: new SpoolPinnedConfiguration(
+                    1, 65_536, 0, 0, CompressionProfile.None.Value, "none",
+                    EncryptionProfile.Aes256GcmV1.Value));
+            var payload = Enumerable.Repeat((byte)0x41, 256).ToArray();
+            writer.AppendRecordAsync(
+                    ObjectType.SegmentRecord, Object32(0x2D), CompressionProfile.None,
+                    (ulong)payload.Length, payload, CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+            writer.AbandonAsync().AsTask().GetAwaiter().GetResult();
+            writer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            return File.ReadAllBytes(Directory.GetFiles(spool, "*.checkpoint").Single());
+        }
+        finally
+        {
+            Directory.Delete(spool, recursive: true);
+        }
     }
 
     private static byte[] BuildKeyBundle()
@@ -224,4 +303,17 @@ internal static class FuzzCorpus
         CreatedAt: 1_722_600_000_000,
         CreatedBy: "fallbackplan-fuzz/1.0",
         UnstableFormat: true));
+
+    /// <summary>The v2 descriptor — key 9 and the required sealed-data-plane feature (ADR-0042).</summary>
+    public static byte[] DescriptorV2Seed { get; } = RepositoryDescriptorCodec.Serialize(new RepositoryDescriptor(
+        Repo,
+        FormatLimits.SealedFormatVersion,
+        RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+        OptionalFeatures: [],
+        new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },
+        KdfSalt: Fill16(0x0F),
+        CreatedAt: 1_722_600_000_000,
+        CreatedBy: "fallbackplan-fuzz/1.0",
+        UnstableFormat: true,
+        Enumerable.Repeat((byte)0x9C, 32).ToArray()));
 }

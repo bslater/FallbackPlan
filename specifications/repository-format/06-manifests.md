@@ -161,6 +161,18 @@ A tree MUST NOT contain two entries with the same `name` bytes. It MAY contain e
 > is a damage finding. An empty directory is a tree manifest with zero
 > entries.
 
+A writer capturing **several source folders into one snapshot** MAY publish
+a root tree whose `metadata` is empty and whose `name_normalisation` is
+*unknown*, with one subdirectory entry per source folder named by a plain
+label component and carrying that folder's real metadata — nothing in this
+shape is new normative surface; every constraint above (raw-byte entry
+order, unique names, `entry_kind` 3 resolution) applies unchanged, and a
+reader needs no knowledge of how the walk was rooted. When it does, the
+snapshot's single `source_filesystem` map (§6 key 12) records the
+**conservative intersection** of the folders' filesystems: case-insensitive
+if any is, capabilities only all can honour, the minimum of each limit.
+→ [ADR-0040](../../docs/adr/0040-multi-root-backup-sets.md)
+
 ## 6 Snapshot manifest
 
 Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a metadata record and as a standalone object at `/snapshots/<device-id>/<backup-set-id>/<snapshot-id>`, so a reader can enumerate snapshots from a bounded prefix without an index.

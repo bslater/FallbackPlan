@@ -67,4 +67,19 @@
   <data name="RecoveryHost_UnknownCommandRunWithHelp" xml:space="preserve">
     <value>Unknown command '{0}'. Run with --help.</value>
   </data>
+  <data name="RecoverySession_PassphraseDoesNotReproduce" xml:space="preserve">
+    <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.</value>
+  </data>
+  <data name="RecoverySession_InstallationKitNeedsTheArchive" xml:space="preserve">
+    <value>An installation kit does not name a repository; the archive supplies its own identity, so open it with the asynchronous overload that reads the descriptor.</value>
+  </data>
+  <data name="RecoverySession_ArchiveDescriptorDoesNotRead" xml:space="preserve">
+    <value>This archive's repository-format descriptor does not read as a descriptor.</value>
+  </data>
+  <data name="RecoverySession_ArchiveHasNoDescriptor" xml:space="preserve">
+    <value>This folder holds no repository-format descriptor, so it is not a FallbackPlan archive.</value>
+  </data>
+  <data name="RecoverySession_KitBelongsToAnotherInstallation" xml:space="preserve">
+    <value>The passphrase and kit agree with each other but not with this archive: this kit belongs to a different FallbackPlan installation.</value>
+  </data>
 </root>

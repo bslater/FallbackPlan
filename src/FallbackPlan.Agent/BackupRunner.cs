@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
 
@@ -32,6 +33,7 @@ public static class BackupRunner
     /// <param name="set">The set to run.</param>
     /// <param name="jobId">The journal entry to transition.</param>
     /// <param name="now">The clock, passed in so the caller decides it.</param>
+    /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
     /// <param name="cancellationToken">Cancels the backup.</param>
     /// <returns>What happened.</returns>
     public static async ValueTask<BackupOutcome> RunAsync(
@@ -39,7 +41,8 @@ public static class BackupRunner
         BackupSetConfiguration set,
         string jobId,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        bool full = false,
+        CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
@@ -48,11 +51,16 @@ public static class BackupRunner
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
         var progress = new BackupProgress(runtime.Progress, jobId);
 
-        if (!Directory.Exists(set.Root))
+        // Every root must be there, or the run refuses: capturing a snapshot
+        // silently missing a whole labelled subtree would make everything
+        // under it read "deleted" (ADR-0040). A vanished root may be an
+        // unmounted drive — recoverable; the next pass retries (10 §3).
+        var missing = set.Roots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path).ToList();
+        if (missing.Count > 0)
         {
-            // A vanished root may be an unmounted drive — recoverable; the next
-            // pass retries (10 §3).
-            var detail = $"root '{set.Root}' does not exist";
+            var detail = missing.Count == 1
+                ? $"root '{missing[0]}' does not exist"
+                : $"roots do not exist: '{string.Join("', '", missing)}'";
             jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail);
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", detail);
@@ -67,17 +75,30 @@ public static class BackupRunner
             // is internal, so nobody runs `init` for it (ADR-0034 §1).
             var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
 
+            // A full run empties both the parent list and the incremental
+            // baseline, exactly as direct mode does — the flag was accepted
+            // over the service and silently dropped before ADR-0038.
             var backupSetId = Convert.FromHexString(set.Id);
-            var prior = archive.Catalogue.EnumerateSnapshots()
-                .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
+            var prior = full
+                ? null
+                : archive.Catalogue.EnumerateSnapshots()
+                    .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
             var generation =
                 archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
                     ? archive.Repository.CurrentDataGeneration
                     : archive.Repository.CurrentMetadataGeneration;
 
+            // A write-only archive takes the device trust domain (ADR-0042):
+            // the repository domain's verify-on-reuse reads content, which a
+            // write-only holder cannot, and the orchestrator refuses the
+            // combination by name rather than degrading silently.
+            var policy = archive.Repository.Keys.WriteOnly
+                ? CapturePolicy.Default with { DedupTrustDomain = DedupTrustDomain.Device }
+                : CapturePolicy.Default;
+
             var orchestrator = new PublicationOrchestrator(
-                CapturePolicy.Default,
+                policy,
                 archive.Repository.RepositoryId,
                 runtime.Writer,
                 generation,
@@ -88,7 +109,8 @@ public static class BackupRunner
                 archive.SpoolDirectory,
                 observer: null,
                 archive.Catalogue,
-                progress);
+                progress,
+                runtime.LoggerFor<PublicationOrchestrator>());
 
             var snapshotId = RandomNumberGenerator.GetBytes(16);
             jobs.Transition(jobId, JobState.Publishing, nowMs);
@@ -96,8 +118,8 @@ public static class BackupRunner
             var published = await orchestrator.PublishAsync(
                 new SnapshotJob
                 {
-                    Source = new LocalFileSystemSource(),
-                    RootPath = set.Root,
+                    Source = new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>()),
+                    Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,
                     DeviceId = runtime.State.DeviceId,
@@ -136,6 +158,11 @@ public static class BackupRunner
                 detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
             progress.Enter(outcome);
+
+            // The set-changed notice's condition is "the last backup predates
+            // the settings", and this backup just captured under them
+            // (ADR-0038). A no-op when no such notice stands.
+            runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs);
 
             return new BackupOutcome(
                 set.Name,

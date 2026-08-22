@@ -89,6 +89,10 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 - The warnings-as-errors gate is **scoped to exclude `/external/`**. Vendored code is held to its own repository's standards, not ours; a submodule bump must not be able to fail our build on a style rule. Our own code remains at zero warnings, and the gate would still fail on a warning from `src/` or `tests/`.
 - `eng/check-links.py` excludes `/external/` for the same reason: the submodule carries its own documentation conventions.
 
+## Amendment 3 — X25519 becomes format-critical
+
+[ADR-0042](0042-write-only-repositories.md) seals a write-only repository's file contents to an X25519 public key, which moves the primitive across §1's line: a defect in X25519 as used there is no longer a re-pairing — it is in the user's stored bytes. The classification follows the use, not the library: **X25519 is now also permitted in `FallbackPlan.Repository.Crypto`, as a format-critical primitive**, alongside Argon2id and XChaCha20-Poly1305. Amendment 2's assembly allowlist of two projects is unchanged — this reclassifies what one of them may use the shared library *for* — and the architecture test's stated rationale is updated to match. It remains banned from `Repository.Format`, whose recovery-tool closure (NFR-PORT-001) stays minimal. The pre-beta cryptographic review's scope grows accordingly: X25519 as used for content sealing is format-critical review surface, not only ceremony surface.
+
 ## Amendment 2 — a second contained exception, for the peer protocol
 
 [ADR-0030](0030-peer-identity-and-pairing.md) needs Ed25519 and X25519. The platform supplies neither — .NET 10 has no standalone Ed25519 API (the `Ed25519` it names is a composite ML-DSA algorithm identifier) and no X25519 at all — so gate 1 of §2 holds for both, exactly as it holds for Argon2id.
@@ -150,3 +154,4 @@ Two clarifications from a supply-chain review of the scaffold, recorded here bec
 | 2026-08 | Accepted | Adopted with `Bodu.Core` in packing and `Bodu.Security.Cryptography` confined to crypto |
 | 2026-08 | Accepted (amended) | Amendment 1: gitlink-is-the-pin clarified; restore inputs pinned (explicit NuGetAudit, lockfiles + locked-mode CI, source mapping, graph-accurate transitive pins, explicit vulnerable-package gate) |
 | 2026-08 | Accepted (amended) | Amended by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md): submodule replaced by the committed `external/packages` feed; dependency-tier policy, five gates, and containment unchanged |
+| 2026-08 | Accepted (amended) | Amendment 3: X25519 reclassified format-critical for [ADR-0042](0042-write-only-repositories.md)'s content sealing — permitted in `Repository.Crypto`, still banned from `Repository.Format`; review scope widened |

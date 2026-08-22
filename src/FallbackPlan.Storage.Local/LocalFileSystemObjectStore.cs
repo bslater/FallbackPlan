@@ -2,6 +2,8 @@ using Bodu;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Storage.Local;
 
@@ -32,17 +34,21 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 
     private readonly string _root;
     private readonly string _spool;
+    private readonly ILogger _log;
 
     /// <summary>
     /// Creates a store rooted at <paramref name="rootPath"/>, creating the
     /// directory if it does not exist.
     /// </summary>
-    public LocalFileSystemObjectStore(string rootPath)
+    /// <param name="rootPath">Where the objects live.</param>
+    /// <param name="logger">Where per-object traffic is recorded (ADR-0043).</param>
+    public LocalFileSystemObjectStore(string rootPath, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
 
         _root = Path.GetFullPath(rootPath);
         _spool = Path.Combine(_root, SpoolDirectoryName);
+        _log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(_root);
     }
 
@@ -99,16 +105,19 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 
         if (range is not { } requested)
         {
+            Log.ObjectRead(_log, key, "whole");
             return ValueTask.FromResult(new OpenReadResult(stream));
         }
 
         if (requested.Offset + requested.Length > stream.Length)
         {
             stream.Dispose();
+            Log.OperationFailed(_log, "get", key, "the requested range runs past the end of the object");
             return ValueTask.FromResult(OpenReadResult.RangeNotSatisfiable);
         }
 
         stream.Seek(requested.Offset, SeekOrigin.Begin);
+        Log.ObjectRead(_log, key, "ranged");
 
         return ValueTask.FromResult(new OpenReadResult(new BoundedReadStream(stream, requested.Length)));
     }
@@ -160,6 +169,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
                 }
             }
 
+            var bytes = new FileInfo(tempPath).Length;
             Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
 
             try
@@ -174,6 +184,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
                 return new PutResult(PutOutcome.AlreadyExists);
             }
 
+            Log.ObjectPut(_log, key, bytes);
             return new PutResult(PutOutcome.Created);
         }
         catch
@@ -273,6 +284,7 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         }
 
         File.Delete(path);
+        Log.ObjectDeleted(_log, key);
 
         return ValueTask.FromResult(new DeleteResult(DeleteOutcome.Deleted));
     }

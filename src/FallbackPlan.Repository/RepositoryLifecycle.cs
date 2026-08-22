@@ -8,6 +8,8 @@ using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Repository.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -101,6 +103,26 @@ public static class RepositoryLifecycle
         Passphrase passphrase,
         RepositoryCreationSettings settings,
         ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateCoreAsync(
+            store, passphrase, settings, createdAtUnixMilliseconds, cancellationToken).ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.RepositoryId, created.Descriptor.FormatVersion,
+            writeOnly: false);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> CreateCoreAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        RepositoryCreationSettings settings,
+        ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
@@ -189,6 +211,386 @@ public static class RepositoryLifecycle
         }
     }
 
+    /// <summary>Whether a descriptor names a write-only (format v2) repository (ADR-0042).</summary>
+    public static bool IsWriteOnly(RepositoryDescriptor descriptor)
+    {
+        ThrowHelper.ThrowIfNull(descriptor);
+        return descriptor.FormatVersion >= FormatLimits.SealedFormatVersion;
+    }
+
+    /// <summary>
+    /// Reads and verifies the descriptor alone — discovery step 1, for
+    /// callers that need to know what they are looking at (which format,
+    /// which public key, which KDF parameters) before deciding how to open.
+    /// </summary>
+    /// <exception cref="RepositoryOpenException">The store holds no verifiable descriptor.</exception>
+    public static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(
+        IObjectStore store, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+
+        var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
+            ?? throw new RepositoryOpenException(Strings.RepositoryLifecycle_NoRepositoryFormatObjectExists);
+
+        return ParseDescriptorOrThrow(descriptorBytes);
+    }
+
+    /// <summary>
+    /// Creates a write-only (format v2) repository (ADR-0042 §1): random
+    /// identity and salt, the whole key material derived from the passphrase,
+    /// the sealing public key recorded in the descriptor — and <b>no</b>
+    /// <c>/keys/</c> object, because nothing is wrapped and nothing is
+    /// stored. The returned pair carries the write bundle for the service
+    /// and, this once, the read authority — creation holds the passphrase
+    /// anyway; the caller zeroes both by disposing.
+    /// </summary>
+    /// <exception cref="ArgumentException">The settings are invalid, or KDF parameters fall below the creation minimums.</exception>
+    /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
+    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateWriteOnlyAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        RepositoryCreationSettings settings,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateWriteOnlyCoreAsync(
+            store, passphrase, settings, createdAtUnixMilliseconds, cancellationToken).ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.Repository.RepositoryId,
+            created.Repository.Descriptor.FormatVersion, writeOnly: true);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateWriteOnlyCoreAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        RepositoryCreationSettings settings,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(passphrase);
+        ThrowHelper.ThrowIfNull(settings);
+
+        var validation = settings.Validate();
+        if (!validation.IsValid)
+        {
+            throw new ArgumentException(
+                "The creation settings are invalid: " + string.Join(", ", validation.Defects.Select(defect => defect.Name)),
+                nameof(settings));
+        }
+
+        Span<byte> repositoryIdBytes = stackalloc byte[RepositoryId.Size];
+        RandomNumberGenerator.Fill(repositoryIdBytes);
+        var repositoryId = RepositoryId.FromBytes(repositoryIdBytes);
+
+        var kdfSalt = new byte[KekDerivation.SaltLength];
+        RandomNumberGenerator.Fill(kdfSalt);
+
+        var authority = WriteOnlyDerivation.Derive(
+            passphrase, settings.KdfParameters, kdfSalt, KdfValidationMode.CreateRepository);
+        try
+        {
+            var descriptor = new RepositoryDescriptor(
+                repositoryId,
+                FormatLimits.SealedFormatVersion,
+                RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+                OptionalFeatures: [],
+                settings.KdfParameters,
+                kdfSalt,
+                createdAtUnixMilliseconds,
+                settings.CreatedBy,
+                UnstableFormat: true,
+                authority.Credential.SealingPublicKey.ToArray());
+
+            await PutWholeObjectAsync(store, DescriptorKey, RepositoryDescriptorCodec.Serialize(descriptor), cancellationToken)
+                .ConfigureAwait(false);
+
+            var opened = new OpenedRepository(
+                descriptor,
+                RepositoryKeySet.FromWriteCredential(authority.Credential),
+                KeyHierarchy.ForWriteOnly(authority.Credential),
+                KeyGeneration.Zero,
+                KeyGeneration.Zero,
+                kdfBelowCreationMinimums: false);
+
+            return (opened, authority);
+        }
+        catch
+        {
+            authority.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Creates a write-only repository from an already-derived write bundle —
+    /// the service's half of the provisioning ceremony (ADR-0042 §4): the
+    /// admin client ran Argon2id where the person typed, and what arrived
+    /// here is the credential plus the KDF salt and parameters the descriptor
+    /// must record so a later restore can re-derive. The service never held
+    /// the passphrase, which is exactly why this overload exists.
+    /// </summary>
+    /// <exception cref="ArgumentException">The salt is not exactly <see cref="KekDerivation.SaltLength"/> bytes.</exception>
+    /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
+    public static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        ReadOnlyMemory<byte> kdfSalt,
+        Argon2Parameters kdfParameters,
+        string createdBy,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateWriteOnlyFromCredentialCoreAsync(
+            store, credential, kdfSalt, kdfParameters, createdBy, createdAtUnixMilliseconds, cancellationToken)
+            .ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.RepositoryId, created.Descriptor.FormatVersion,
+            writeOnly: true);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialCoreAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        ReadOnlyMemory<byte> kdfSalt,
+        Argon2Parameters kdfParameters,
+        string createdBy,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(credential);
+        ThrowHelper.ThrowIfNull(kdfParameters);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(createdBy);
+
+        if (kdfSalt.Length != KekDerivation.SaltLength)
+        {
+            throw new ArgumentException(
+                $"The KDF salt must be exactly {KekDerivation.SaltLength} bytes.", nameof(kdfSalt));
+        }
+
+        Span<byte> repositoryIdBytes = stackalloc byte[RepositoryId.Size];
+        RandomNumberGenerator.Fill(repositoryIdBytes);
+        var repositoryId = RepositoryId.FromBytes(repositoryIdBytes);
+
+        var descriptor = new RepositoryDescriptor(
+            repositoryId,
+            FormatLimits.SealedFormatVersion,
+            RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+            OptionalFeatures: [],
+            kdfParameters,
+            kdfSalt.ToArray(),
+            createdAtUnixMilliseconds,
+            createdBy,
+            UnstableFormat: true,
+            credential.SealingPublicKey.ToArray());
+
+        await PutWholeObjectAsync(store, DescriptorKey, RepositoryDescriptorCodec.Serialize(descriptor), cancellationToken)
+            .ConfigureAwait(false);
+
+        return new OpenedRepository(
+            descriptor,
+            RepositoryKeySet.FromWriteCredential(credential),
+            KeyHierarchy.ForWriteOnly(credential),
+            KeyGeneration.Zero,
+            KeyGeneration.Zero,
+            kdfBelowCreationMinimums: !kdfParameters.ValidateCreationMinimums().IsValid);
+    }
+
+    /// <summary>
+    /// Opens a write-only repository with its write bundle — the service's
+    /// everyday open (ADR-0042 §5): no passphrase, no content capability.
+    /// The credential is verified against the descriptor's sealing public
+    /// key, so a bundle belonging to another repository — or derived from a
+    /// wrong passphrase — is refused by name before anything is read.
+    /// </summary>
+    /// <exception cref="RepositoryOpenException">The store holds no verifiable write-only repository, or the credential does not belong to it.</exception>
+    public static async ValueTask<OpenedRepository> OpenWriteOnlyAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenWriteOnlyCoreAsync(store, credential, cancellationToken).ConfigureAwait(false);
+            Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion, writeOnly: true);
+            return opened;
+        }
+        catch (RepositoryOpenException refusal)
+        {
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> OpenWriteOnlyCoreAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(credential);
+
+        var descriptor = await ReadWriteOnlyDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+
+        if (!credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
+        {
+            throw new RepositoryOpenException(Strings.RepositoryLifecycle_CredentialNotThisRepository);
+        }
+
+        return new OpenedRepository(
+            descriptor,
+            RepositoryKeySet.FromWriteCredential(credential),
+            KeyHierarchy.ForWriteOnly(credential),
+            KeyGeneration.Zero,
+            KeyGeneration.Zero,
+            kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);
+    }
+
+    /// <summary>
+    /// Opens a write-only repository for reading — the restore path
+    /// (ADR-0042 §4): derives the whole authority from the passphrase and
+    /// the descriptor's public salt and parameters, and proves it by
+    /// comparing the derived public key against the descriptor's copy. No
+    /// decryption is involved in the proof; equality is the verifier.
+    /// </summary>
+    /// <exception cref="RepositoryOpenException">The store holds no verifiable write-only repository.</exception>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this repository's keys.</exception>
+    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenWriteOnlyForReadCoreAsync(store, passphrase, cancellationToken)
+                .ConfigureAwait(false);
+            Log.RepositoryOpened(
+                log, opened.Repository.RepositoryId, opened.Repository.Descriptor.FormatVersion, writeOnly: true);
+            return opened;
+        }
+        catch (Exception refusal) when (refusal is RepositoryOpenException or KeyUnwrapFailedException)
+        {
+            // The wrong passphrase reaches here as a KeyUnwrapFailedException,
+            // and from an operator's side it is the same event as any other
+            // refusal to open: they pointed at an archive and did not get in.
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadCoreAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(passphrase);
+
+        var descriptor = await ReadWriteOnlyDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+
+        if (!TryDeriveReadAuthority(descriptor, passphrase, out var authority))
+        {
+            throw new KeyUnwrapFailedException(Strings.RepositoryLifecycle_PassphraseDoesNotReproduce);
+        }
+
+        try
+        {
+            var opened = new OpenedRepository(
+                descriptor,
+                RepositoryKeySet.FromWriteCredential(authority!.Credential),
+                KeyHierarchy.ForWriteOnly(authority.Credential),
+                KeyGeneration.Zero,
+                KeyGeneration.Zero,
+                kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);
+
+            return (opened, authority);
+        }
+        catch
+        {
+            authority!.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Derives a read authority from a passphrase against a write-only
+    /// descriptor and verifies it by public-key equality — the
+    /// derive-and-compare gate clients run where the person typed
+    /// (ADR-0042 §1, §4). False means the wrong passphrase; the authority is
+    /// disposed and nulled.
+    /// </summary>
+    public static bool TryDeriveReadAuthority(
+        RepositoryDescriptor descriptor, Passphrase passphrase, out RepositoryReadAuthority? authority)
+    {
+        ThrowHelper.ThrowIfNull(descriptor);
+        ThrowHelper.ThrowIfNull(passphrase);
+
+        var derived = WriteOnlyDerivation.Derive(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, KdfValidationMode.OpenRepository);
+
+        if (!derived.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
+        {
+            derived.Dispose();
+            authority = null;
+            return false;
+        }
+
+        authority = derived;
+        return true;
+    }
+
+    private static async ValueTask<RepositoryDescriptor> ReadWriteOnlyDescriptorAsync(
+        IObjectStore store, CancellationToken cancellationToken)
+    {
+        var descriptorBytes = await ReadWholeObjectAsync(store, DescriptorKey, cancellationToken).ConfigureAwait(false)
+            ?? throw new RepositoryOpenException(Strings.RepositoryLifecycle_NoRepositoryFormatObjectExists);
+
+        var descriptor = ParseDescriptorOrThrow(descriptorBytes);
+
+        return IsWriteOnly(descriptor)
+            ? descriptor
+            : throw new RepositoryOpenException(Strings.RepositoryLifecycle_NotWriteOnlyRepository);
+    }
+
+    private static RepositoryDescriptor ParseDescriptorOrThrow(byte[] descriptorBytes) =>
+        RepositoryDescriptorCodec.Parse(descriptorBytes) switch
+        {
+            DescriptorParseResult.Ok ok => ok.Descriptor,
+            DescriptorParseResult.NotARepository => throw new RepositoryOpenException(Strings.RepositoryLifecycle_ObjectRepositoryFormatNotFallbackPlan),
+            DescriptorParseResult.IntegrityFailure => throw new RepositoryOpenException(Strings.RepositoryLifecycle_DescriptorSDigestDoesNot),
+            DescriptorParseResult.UnsupportedRequiredFeatures unsupported => throw new RepositoryOpenException(
+                "The repository requires unimplemented features: " +
+                string.Join(", ", unsupported.Features.Select(feature => $"0x{feature:x4}")) +
+                " — refused, not guessed (specification 01 §3.2)."),
+            DescriptorParseResult.FormatViolation violation => throw new RepositoryOpenException(violation.Message),
+            var other => throw new RepositoryOpenException(Strings.FormatRepositoryLifecycle_UnrecognisedDescriptorParseOutcome(other)),
+        };
+
     /// <summary>
     /// Opens a repository through discovery steps 1–3 (specification 01 §6):
     /// fetch and verify the descriptor, derive the KEK from
@@ -197,6 +599,30 @@ public static class RepositoryLifecycle
     /// <exception cref="RepositoryOpenException">Any step refused — the message carries the distinct finding.</exception>
     /// <exception cref="KeyUnwrapFailedException">The passphrase is wrong or the key object tampered — deliberately indistinguishable (specification 03 §3).</exception>
     public static async ValueTask<OpenedRepository> OpenAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenCoreAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion, writeOnly: false);
+            return opened;
+        }
+        catch (Exception refusal) when (refusal is RepositoryOpenException or KeyUnwrapFailedException)
+        {
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> OpenCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         CancellationToken cancellationToken)
@@ -220,6 +646,14 @@ public static class RepositoryLifecycle
             DescriptorParseResult.FormatViolation violation => throw new RepositoryOpenException(violation.Message),
             var other => throw new RepositoryOpenException(Strings.FormatRepositoryLifecycle_UnrecognisedDescriptorParseOutcome(other)),
         };
+
+        // A write-only repository has no key object to unwrap — the v1 walk
+        // below would end in a misleading "no keys listed". Name the real
+        // situation instead.
+        if (IsWriteOnly(descriptor))
+        {
+            throw new RepositoryOpenException(Strings.RepositoryLifecycle_WriteOnlyNeedsDerivedOpen);
+        }
 
         // Step 2: the KEK, from the descriptor's public parameters. Stored
         // parameters are facts — below-minimum values are accepted and
@@ -307,6 +741,14 @@ public static class RepositoryLifecycle
         if (RepositoryDescriptorCodec.Parse(descriptorBytes) is not DescriptorParseResult.Ok { Descriptor: var descriptor })
         {
             throw new RepositoryOpenException(Strings.RepositoryLifecycle_DescriptorDoesNotVerify);
+        }
+
+        // A write-only repository has no key object to export: its kit
+        // carries no key material at all (ADR-0042 §8) and is built from the
+        // descriptor alone.
+        if (IsWriteOnly(descriptor))
+        {
+            throw new RepositoryOpenException(Strings.RepositoryLifecycle_WriteOnlyNeedsDerivedOpen);
         }
 
         using var derivation = KekDerivation.Derive(

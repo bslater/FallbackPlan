@@ -7,6 +7,8 @@ using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Repository.Index.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Index.Journal;
 
@@ -25,6 +27,7 @@ public sealed class JournalPublisher : IDisposable
     private readonly KeyHierarchy _hierarchy;
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly ILogger _log;
 
     /// <summary>Creates a publisher for one writer.</summary>
     public JournalPublisher(
@@ -32,12 +35,14 @@ public sealed class JournalPublisher : IDisposable
         RepositoryId repositoryId,
         WriterId writerId,
         KeyHierarchy hierarchy,
-        WriterSequence sequence)
+        WriterSequence sequence,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(hierarchy);
         ThrowHelper.ThrowIfNull(sequence);
 
+        _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -102,6 +107,11 @@ public sealed class JournalPublisher : IDisposable
         if (put.Outcome == PutOutcome.AlreadyExists &&
             !await StoredBytesMatchAsync(sealedObject, sequence, cancellationToken).ConfigureAwait(false))
         {
+            // The T-18 alarm, and the reason it is Critical rather than an
+            // exception message alone: the throw reaches the caller, but the
+            // record reaches whoever reads the log afterwards, which is who
+            // needs to know a device key may be in two places.
+            Log.SequenceAnomaly(_log, _writerId, sequence);
             throw new IOException(Strings.FormatJournalStore_StoreHeldDifferentRecordAtSequence(sequence));
         }
 

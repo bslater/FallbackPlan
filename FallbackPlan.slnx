@@ -4,17 +4,15 @@
     <Project Path="src/FallbackPlan.Api/FallbackPlan.Api.csproj" />
     <Project Path="src/FallbackPlan.Application/FallbackPlan.Application.csproj" />
     <Project Path="src/FallbackPlan.Cli/FallbackPlan.Cli.csproj" />
+    <Project Path="src/FallbackPlan.Diagnostics/FallbackPlan.Diagnostics.csproj" />
     <Project Path="src/FallbackPlan.Domain/FallbackPlan.Domain.csproj" />
     <Project Path="src/FallbackPlan.Filesystem.Local/FallbackPlan.Filesystem.Local.csproj" />
     <Project Path="src/FallbackPlan.Filesystem/FallbackPlan.Filesystem.csproj" />
     <Project Path="src/FallbackPlan.Import.Abstractions/FallbackPlan.Import.Abstractions.csproj" />
     <Project Path="src/FallbackPlan.Keystore/FallbackPlan.Keystore.csproj" />
     <Project Path="src/FallbackPlan.Protocol/FallbackPlan.Protocol.csproj" />
+    <Project Path="src/FallbackPlan.Recovery/FallbackPlan.Recovery.csproj" />
     <Project Path="src/FallbackPlan.Replication/FallbackPlan.Replication.csproj" />
-    <Project Path="src/FallbackPlan.Retention/FallbackPlan.Retention.csproj" />
-    <Project Path="src/FallbackPlan.Recovery/FallbackPlan.Recovery.csproj">
-      <Build Solution="Debug|*" Project="false" />
-    </Project>
     <Project Path="src/FallbackPlan.Repository.Catalogue/FallbackPlan.Repository.Catalogue.csproj" />
     <Project Path="src/FallbackPlan.Repository.Crypto/FallbackPlan.Repository.Crypto.csproj" />
     <Project Path="src/FallbackPlan.Repository.Format/FallbackPlan.Repository.Format.csproj" />
@@ -22,17 +20,18 @@
     <Project Path="src/FallbackPlan.Repository.Packing/FallbackPlan.Repository.Packing.csproj" />
     <Project Path="src/FallbackPlan.Repository.Segmentation/FallbackPlan.Repository.Segmentation.csproj" />
     <Project Path="src/FallbackPlan.Repository/FallbackPlan.Repository.csproj" />
-    <Project Path="src/FallbackPlan.Restore/FallbackPlan.Restore.csproj">
-      <Build Solution="Debug|*" Project="false" />
-    </Project>
+    <Project Path="src/FallbackPlan.Restore/FallbackPlan.Restore.csproj" />
+    <Project Path="src/FallbackPlan.Retention/FallbackPlan.Retention.csproj" />
     <Project Path="src/FallbackPlan.Storage.Abstractions/FallbackPlan.Storage.Abstractions.csproj" />
     <Project Path="src/FallbackPlan.Storage.Local/FallbackPlan.Storage.Local.csproj" />
+    <Project Path="src/FallbackPlan.Web/FallbackPlan.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FallbackPlan.Api.Tests/FallbackPlan.Api.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Application.Tests/FallbackPlan.Application.Tests.csproj" />
     <Project Path="tests/FallbackPlan.ArchitectureTests/FallbackPlan.ArchitectureTests.csproj" />
     <Project Path="tests/FallbackPlan.Cli.Tests/FallbackPlan.Cli.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Diagnostics.Tests/FallbackPlan.Diagnostics.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Domain.Tests/FallbackPlan.Domain.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Filesystem.Tests/FallbackPlan.Filesystem.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Hosts.Tests/FallbackPlan.Hosts.Tests.csproj" />
@@ -40,13 +39,12 @@
     <Project Path="tests/FallbackPlan.PerformanceTests/FallbackPlan.PerformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Protocol.Tests/FallbackPlan.Protocol.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Replication.Tests/FallbackPlan.Replication.Tests.csproj" />
-    <Project Path="tests/FallbackPlan.Retention.Tests/FallbackPlan.Retention.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.ConformanceTests/FallbackPlan.Repository.ConformanceTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.FuzzTests/FallbackPlan.Repository.FuzzTests.csproj" />
     <Project Path="tests/FallbackPlan.Repository.Tests/FallbackPlan.Repository.Tests.csproj" />
+    <Project Path="tests/FallbackPlan.Retention.Tests/FallbackPlan.Retention.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Storage.ContractTests/FallbackPlan.Storage.ContractTests.csproj" />
-    <Project Path="tests/FallbackPlan.TestSupport/FallbackPlan.TestSupport.csproj">
-      <Build Solution="Debug|*" Project="false" />
-    </Project>
+    <Project Path="tests/FallbackPlan.TestSupport/FallbackPlan.TestSupport.csproj" />
+    <Project Path="tests/FallbackPlan.Web.Tests/FallbackPlan.Web.Tests.csproj" />
   </Folder>
 </Solution>

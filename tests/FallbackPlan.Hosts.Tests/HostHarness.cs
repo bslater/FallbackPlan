@@ -136,7 +136,7 @@ public sealed class HostHarness : IDisposable
             {
                 Id = new string('a', 32),
                 Name = "docs",
-                Root = SourceRoot,
+                Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                 Schedule = schedule,
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
             },

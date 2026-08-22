@@ -49,6 +49,7 @@ Each message is a CBOR map carried in one frame ([02 §7](02-session.md#7-framin
 | 4 | `text` | Offerer label, for display (≤ 256 bytes) |
 | 5 | `u16` | Highest protocol version the offerer speaks |
 | 7 | `u8` | Storage role the offerer will record for the responder (§3 vocabulary: 1, 2 or 3) |
+| 8 | `bytes[4]` | Invite identifier (§2.7) — present exactly when this offer redeems an invite |
 
 **`PairAccept`** (responder → offerer)
 
@@ -67,6 +68,7 @@ Each message is a CBOR map carried in one frame ([02 §7](02-session.md#7-framin
 | Key | Type | Meaning |
 |-----|------|---------|
 | 1 | `bytes[64]` | Ed25519 signature over the transcript (§2.4) |
+| 2 | `bytes[32]` | Invite proof (§2.7) — present exactly in the invite-authenticated ceremony |
 
 **`PairRefuse`** (either → other)
 
@@ -124,6 +126,65 @@ This is the one place this specification constrains a user interface, and it doe
 An attacker relaying between two sessions must make both strings match, and cannot influence the derivation except by choosing its own ephemeral share and nonce. Thirty bits puts that at 2⁻³⁰ per attempt, and an attempt costs a full ceremony with two humans watching it fail.
 
 The number is chosen against *retries*, not against a single attempt. Twenty bits would still be 2⁻²⁰ once — but a failed pairing looks exactly like flaky software, so the humans try again, and an attacker who can provoke enough retries gets enough attempts. Thirty bits keeps that out of reach while staying short enough that someone will actually compare all six characters rather than the first two and the last one.
+
+### 2.7 The invite-authenticated ceremony
+
+The comparison of §2.3 requires both operators present in the same minute. The
+invite mode removes the simultaneity while keeping both approvals: the
+responder's operator approves by **issuing** a one-time invite, the offerer's
+by **entering** it. Between those two acts the invite is a spoken secret
+carried by a human conversation, exactly as the string was — just earlier.
+
+**The code.** 21 bytes, rendered as lowercase unpadded base32, displayed in
+hyphenated groups; a reader MUST accept the rendering with separators and case
+folded. Layout: `invite_id[4] ‖ role[1] ‖ secret[16]`. `invite_id` is a public
+lookup handle. `role` is the §3 vocabulary value the issuer commits to
+recording for the redeemer; the redeemer MUST derive its own declaration as the
+complement (1 ↔ 2, 3 ↔ 3). `secret` is fresh from a CSPRNG. An invite is
+single-use and expires; the issuer stores only the key derived below, so the
+code exists in the clear exactly once, at issue.
+
+**Key derivation** (00 §4 label form):
+
+```
+invite_key = HKDF-SHA-256(ikm = secret, salt = invite_id,
+                          info = "fbp-peer-v1:invite-key", L = 32)
+```
+
+**The ceremony** is §2.2's unchanged — same messages, same key agreement, same
+transcript — with three substitutions:
+
+1. The offer carries key 8. A responder honouring invites looks the invite up
+   by it; unknown, expired and consumed MUST all refuse with `invite_unknown`
+   (13) and MUST NOT reveal which of the three it was. A responder that
+   honours only invites — a service listener with no human present — refuses
+   an offer without key 8 the same way rather than degrading to a ceremony
+   nobody can approve.
+2. In place of the human comparison, each confirmation carries key 2:
+
+   ```
+   proof = HMAC-SHA-256(invite_key,
+       label ‖ transcript ‖ tls_binding_initiator ‖ tls_binding_responder)
+   ```
+
+   with `label` = `"fbp-peer-v1:invite:offerer"` or
+   `"fbp-peer-v1:invite:responder"` for the respective directions ([02
+   §3.2](02-session.md#32-the-bound-transcript)'s bindings, in that fixed order).
+   The transcript already covers both identities, both ephemerals, both nonces,
+   the version and both declared roles; the bindings tie the proof to this
+   connection. A relay therefore fails both proofs, exactly as it fails the
+   string comparison. Verification MUST be constant-time, and a missing or
+   failed proof MUST be treated as `authentication_failed` on the offerer side
+   and `invite_unknown` on the responder side.
+3. The responder MUST verify the offerer's proof, then consume the invite
+   (atomically, first redeemer wins), then confirm; the offerer confirms
+   first, immediately after the acceptance. A failed redemption MUST spend
+   nothing. The grants pinned are the ceremony's usual ones, with the
+   responder's label and terms taken from the invite as committed at issue.
+
+**Sizing.** §2.6 argued thirty bits against attended retries. The invite is
+unattended, so it carries 128 bits, expires (implementations SHOULD default to
+a day and cap at thirty), and dies on first use.
 
 ## 3 Grants
 

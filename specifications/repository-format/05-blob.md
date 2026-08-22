@@ -46,6 +46,22 @@ The envelope is cleartext because a reader must derive the blob key before it ca
 
 `blob_class` selects which key family to derive from — `data_key[generation]` or `metadata_key[generation]` ([03 §4](03-keys.md#4-derived-keys)).
 
+### 2.1 Format-v2 data blobs: the sealed content key
+
+In a write-only repository ([03 §9](03-keys.md#9-write-only-repositories-format-v2)), a **data-class** blob's envelope appends one further field:
+
+```text
+offset  size   field
+------  -----  -------------------------------------------------------------
+    88     80  sealed_content_key = ephemeral_public[32] ‖ ciphertext[32] ‖ tag[16]
+```
+
+Total: **168 bytes**. A v2 metadata-class blob keeps the 88-byte envelope.
+
+The blob's records encrypt under a fresh random 32-byte **content key** drawn at blob creation — the §3.1 ordinal-nonce construction unchanged, its uniqueness argument satisfied trivially by the random key. The content key is sealed to the repository's `sealing_public_key` ([01 §3.2](01-object-layout.md#32-body) key 9): X25519 with a fresh ephemeral keypair, HKDF-SHA256 over the shared secret with both public shares as salt and info `"fbp/seal-content/v2"`, AES-256-GCM with a zero nonce (the key is single-use by construction) and associated data `repository_id ‖ blob_id` — so a sealed share transplanted between blobs or repositories fails to open.
+
+The **recovery footer of a v2 data blob derives its blob key from `metadata_key[generation]`**, not the data family: the record table is structure, and the write-only holder must open it (rebuild, verification, sweep) while the record payloads stay sealed. A v2 data blob therefore has two keys — the content key for records, the metadata-derived blob key for the footer — and a reader without the sealing private key opens the structure whole and reports each record read as refused-for-want-of-a-grant, never as damage.
+
 ## 3 Recovery footer
 
 The footer is what makes a blob self-describing. Given the blob and the repository keys and **nothing else** — no index, no catalogue, no other object — every record in it can be located, decrypted, and verified.
@@ -168,7 +184,7 @@ No attacker and no unusual configuration is required: a crash, an unattended upd
 
 ### 6.2 Everything that could vary is pinned
 
-The checkpoint MUST record: `blob_salt`, `blob_id`, `blob_counter`, `key_generation`, segmentation profile and parameters, compression profile **and codec version**, and encryption profile.
+The checkpoint MUST record: `blob_salt`, `blob_id`, `blob_counter`, `key_generation`, segmentation profile and parameters, compression profile **and codec version**, and encryption profile. For a format-v2 data blob it MUST additionally record the blob's **content key** (§2.1) — resume authenticates the spooled records, and for a sealed blob only that key can. The checkpoint lives in the writer's owner-only state directory, on the machine that holds the same bytes as plaintext files, and is destroyed at seal (ADR-0042 §3).
 
 On resume, a writer MUST compare each against its current configuration. **Any mismatch forces a restart**, not a resume. A restarted blob draws a fresh `blob_salt` and is therefore a different key, so ordinals beginning again at zero reuse nothing.
 
