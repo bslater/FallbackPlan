@@ -76,6 +76,9 @@
   <data name="KeyedFileIdentity_DeviceIdentifierExactlyBytes" xml:space="preserve">
     <value>The device identifier is exactly 16 bytes.</value>
   </data>
+  <data name="PasswordHash_EmptyPasswordRefused" xml:space="preserve">
+    <value>An empty password is refused. The primitive accepts one, so refusing is the engine's job (ADR-0045 §4).</value>
+  </data>
   <data name="Passphrase_EmptyPassphraseRefusedRepositoryCreation" xml:space="preserve">
     <value>An empty passphrase is refused at repository creation. The primitive accepts one, so refusing is the engine's job (specification 03 §2.1).</value>
   </data>

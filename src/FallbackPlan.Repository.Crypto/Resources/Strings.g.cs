@@ -82,6 +82,11 @@ internal static class Strings
     internal static string KeyedFileIdentity_DeviceIdentifierExactlyBytes => Get(nameof(KeyedFileIdentity_DeviceIdentifierExactlyBytes));
 
     /// <summary>
+    /// An empty password is refused. The primitive accepts one, so refusing is the engine's job (ADR-0045 §4).
+    /// </summary>
+    internal static string PasswordHash_EmptyPasswordRefused => Get(nameof(PasswordHash_EmptyPasswordRefused));
+
+    /// <summary>
     /// An empty passphrase is refused at repository creation. The primitive accepts one, so refusing is the engine's job (specification 03 §2.1).
     /// </summary>
     internal static string Passphrase_EmptyPassphraseRefusedRepositoryCreation => Get(nameof(Passphrase_EmptyPassphraseRefusedRepositoryCreation));
