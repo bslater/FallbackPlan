@@ -53,6 +53,14 @@ public enum ObjectType : byte
 
     /// <summary>A repository-scoped audit-period record (specification 11 §4).</summary>
     AuditPeriodRecord = 0x0F,
+
+    /// <summary>
+    /// A set-configuration object (specification 11 §5): what a backup set was
+    /// configured to do, so a machine rebuilt from nothing can resume doing it.
+    /// Its payload is sealed to a recipient only the passphrase reproduces, so
+    /// a destination holding it — and the service that wrote it — read nothing.
+    /// </summary>
+    SetConfiguration = 0x10,
 }
 
 /// <summary>
@@ -64,11 +72,11 @@ public static class ObjectTypes
     /// Returns whether <paramref name="value"/> is an assigned object type.
     /// Rejects zero, the reserved store-key domain separator <c>0x07</c> —
     /// which stays reserved forever (specification 02 §3.1) — and everything
-    /// unassigned above <c>0x0F</c>: an unknown type in an object the reader
+    /// unassigned above <c>0x10</c>: an unknown type in an object the reader
     /// must interpret is refused, never guessed (specification 00 §3).
     /// </summary>
     public static bool IsValid(byte value) =>
-        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0F);
+        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x10);
 
     /// <summary>
     /// Converts a byte read from untrusted input into an
