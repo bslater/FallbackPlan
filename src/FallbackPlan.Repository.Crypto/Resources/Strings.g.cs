@@ -50,9 +50,29 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, BlobKeyDeriver_DestinationExactlyBytes, arg0);
 
     /// <summary>
+    /// The claim root is exactly 32 bytes.
+    /// </summary>
+    internal static string ClaimKeyDeriver_ClaimRootExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimRootExactlyBytes));
+
+    /// <summary>
+    /// The claim seed is exactly 32 bytes.
+    /// </summary>
+    internal static string ClaimKeyDeriver_ClaimSeedExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimSeedExactlyBytes));
+
+    /// <summary>
+    /// The claim token is exactly 16 bytes.
+    /// </summary>
+    internal static string ClaimKeyDeriver_ClaimTokenExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimTokenExactlyBytes));
+
+    /// <summary>
     /// The content-ID key is exactly 32 bytes.
     /// </summary>
     internal static string HardlinkGrouper_ContentIDKeyExactlyBytes => Get(nameof(HardlinkGrouper_ContentIDKeyExactlyBytes));
+
+    /// <summary>
+    /// The master key is exactly 32 bytes.
+    /// </summary>
+    internal static string RecoveryRecipient_MasterKeyExactlyBytes => Get(nameof(RecoveryRecipient_MasterKeyExactlyBytes));
 
     /// <summary>
     /// The KDF salt is exactly {0} bytes; got {1}.

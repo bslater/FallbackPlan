@@ -566,6 +566,160 @@ def write_only_vectors() -> dict:
     }
 
 
+def disaster_recovery_vectors() -> dict:
+    """Specification 11 section 5 and peer-protocol 07 section 5 -- the two
+    disaster-recovery keys."""
+    _x25519_self_test()
+    _ed25519_self_test()
+
+    # --- The recovery recipient (specification 03 section 4, format v1).
+    # Derived from the master key, so a v1 writer holds both halves and a
+    # recovering device rebuilds them from the passphrase. A v2 repository
+    # derives nothing here: it seals to the sealing public key its descriptor
+    # already carries (see write-only.json).
+    recovery_scalar = hkdf_expand(MASTER_KEY, b"fbp/recovery/v1", 32)
+    recovery_public = x25519_public(recovery_scalar)
+
+    # The envelope agreement of ADR-0042 section 4, which the set-configuration
+    # object reuses verbatim: a pinned ephemeral scalar stands in for the
+    # CSPRNG draw, and the AEAD key is extract-then-expand over the shared
+    # secret salted by both public shares. The AES-256-GCM step itself is not
+    # vectored here -- the generator cannot compute it (the aes-gcm.json
+    # posture) -- but its AAD is pinned, because that is what separates a
+    # configuration envelope from a provisioning or restore-grant one.
+    envelope_ephemeral = bytes(range(0x60, 0x80))
+    envelope_ephemeral_public = x25519_public(envelope_ephemeral)
+    envelope_shared = x25519(envelope_ephemeral, recovery_public)
+    envelope_key = hkdf_expand(
+        hkdf_extract(envelope_ephemeral_public + recovery_public, envelope_shared),
+        b"fbp/envelope/v2",
+        32,
+    )
+    assert x25519(recovery_scalar, envelope_ephemeral_public) == envelope_shared
+
+    # The recovery recipient must not collide with any other domain of the
+    # same root. This is the property that keeps a configuration envelope
+    # unreadable to a holder of any other derived key.
+    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
+    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
+    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32)
+
+    # --- The claim key (peer-protocol 07 section 5.2).
+    # The root is Argon2id output and is PINNED, exactly as write-only.json
+    # pins its own: no independent Argon2id exists in this generator. Both
+    # repository formats reach this same root from the passphrase, which is
+    # why the label carries no format suffix.
+    claim_root = bytes(range(0x80, 0xA0))
+    claim_token = bytes.fromhex("d0d1d2d3d4d5d6d7d8d9dadbdcdddedf")
+
+    claim_seed = hkdf_expand(claim_root, b"fbp/peer-claim/v1" + claim_token, 32)
+    claim_public = ed25519_public_key(claim_seed)
+
+    # A claim proof binds the repository, the destination's token, a fresh
+    # nonce, the session transcript and the claimant's own fingerprint, so it
+    # is inseparable from the connection that carried it.
+    repository_id = bytes.fromhex("11121314151617181920212223242526")
+    nonce = bytes([0x77]) * 32
+    transcript_hash = hashlib.sha256(b"peer-protocol 02 section 3.2 context").digest()
+    claimant_fingerprint = bytes([0x33]) * 32
+
+    proof_message = (
+        b"fbp-peer-v1:replica-claim"
+        + repository_id
+        + claim_token
+        + nonce
+        + transcript_hash
+        + claimant_fingerprint
+    )
+    claim_signature = ed25519_sign(claim_seed, proof_message)
+
+    # THE property the token exists for: another destination mints another
+    # token, so the same passphrase yields a different keypair there and a
+    # proof captured at one destination is inert at the other.
+    other_token = bytes.fromhex("e0e1e2e3e4e5e6e7e8e9eaebecedeeef")
+    other_seed = hkdf_expand(claim_root, b"fbp/peer-claim/v1" + other_token, 32)
+    other_public = ed25519_public_key(other_seed)
+    assert other_public != claim_public
+
+    return {
+        "description": (
+            "Disaster-recovery keys: the recovery recipient that seals a "
+            "set-configuration object (specification 11 section 5) and the "
+            "claim keypair that re-points a replica's attribution "
+            "(peer-protocol 07 section 5)."
+        ),
+        "independently_derived": True,
+        "recovery_recipient": {
+            "inputs": {
+                "master_key": MASTER_KEY.hex(),
+                "info": "fbp/recovery/v1",
+            },
+            "derived": {
+                "recovery_scalar": recovery_scalar.hex(),
+                "recovery_public_key": recovery_public.hex(),
+            },
+            "envelope_agreement": {
+                "ephemeral_scalar": envelope_ephemeral.hex(),
+                "ephemeral_public_key": envelope_ephemeral_public.hex(),
+                "shared_secret": envelope_shared.hex(),
+                "hkdf_salt": (envelope_ephemeral_public + recovery_public).hex(),
+                "hkdf_info": "fbp/envelope/v2",
+                "aead_key": envelope_key.hex(),
+                "aead_associated_data": "fbp/config/v1",
+                "comment": (
+                    "The AES-256-GCM seal (zero nonce) is deliberately not "
+                    "vectored; see aes-gcm.json. The associated data is pinned "
+                    "because it is what stops a configuration envelope opening "
+                    "as a provisioning or restore-grant one."
+                ),
+            },
+            "v2_note": (
+                "A format-v2 repository derives no recovery recipient. It seals "
+                "to the sealing public key of write-only.json, which its "
+                "descriptor already carries, so one construction serves both."
+            ),
+        },
+        "claim_key": {
+            "inputs": {
+                "claim_root": claim_root.hex(),
+                "claim_root_note": (
+                    "claim_root = Argon2id(passphrase, kdf_salt, kdf_parameters); "
+                    "pinned here because Argon2id has no independent "
+                    "implementation in this generator (see argon2id.json)."
+                ),
+                "claim_token": claim_token.hex(),
+                "info": "fbp/peer-claim/v1 || claim_token",
+            },
+            "derived": {
+                "claim_seed": claim_seed.hex(),
+                "claim_public_key": claim_public.hex(),
+            },
+            "proof": {
+                "repository_id": repository_id.hex(),
+                "nonce": nonce.hex(),
+                "transcript_hash": transcript_hash.hex(),
+                "claimant_fingerprint": claimant_fingerprint.hex(),
+                "message": proof_message.hex(),
+                "signature": claim_signature.hex(),
+                "comment": (
+                    "message = 'fbp-peer-v1:replica-claim' || repository_id || "
+                    "claim_token || nonce || sha256(session context) || "
+                    "claimant_fingerprint."
+                ),
+            },
+            "separation_checks": {
+                "comment": (
+                    "A second destination mints a second token, so the same "
+                    "passphrase produces a different keypair there. This is what "
+                    "makes a proof captured at one destination inert at another."
+                ),
+                "other_claim_token": other_token.hex(),
+                "other_claim_public_key": other_public.hex(),
+            },
+        },
+    }
+
+
 def identifier_vectors() -> dict:
     """Specification 02 -- content and object identifiers."""
     content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
@@ -1739,6 +1893,7 @@ def recovery_kit_vectors() -> dict:
 GROUPS = {
     "keys.json": keys_vectors,
     "write-only.json": write_only_vectors,
+    "disaster-recovery.json": disaster_recovery_vectors,
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
     "segmentation.json": segmentation_vectors,

@@ -64,8 +64,20 @@
   <data name="BlobKeyDeriver_DestinationExactlyBytes" xml:space="preserve">
     <value>The destination is exactly {0} bytes.</value>
   </data>
+  <data name="ClaimKeyDeriver_ClaimRootExactlyBytes" xml:space="preserve">
+    <value>The claim root is exactly 32 bytes.</value>
+  </data>
+  <data name="ClaimKeyDeriver_ClaimSeedExactlyBytes" xml:space="preserve">
+    <value>The claim seed is exactly 32 bytes.</value>
+  </data>
+  <data name="ClaimKeyDeriver_ClaimTokenExactlyBytes" xml:space="preserve">
+    <value>The claim token is exactly 16 bytes.</value>
+  </data>
   <data name="HardlinkGrouper_ContentIDKeyExactlyBytes" xml:space="preserve">
     <value>The content-ID key is exactly 32 bytes.</value>
+  </data>
+  <data name="RecoveryRecipient_MasterKeyExactlyBytes" xml:space="preserve">
+    <value>The master key is exactly 32 bytes.</value>
   </data>
   <data name="KekDerivation_KDFSaltExactlyBytesGot" xml:space="preserve">
     <value>The KDF salt is exactly {0} bytes; got {1}.</value>
