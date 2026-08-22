@@ -508,4 +508,37 @@
   <data name="RecoveryKitCodec_RepositoryKitOmitsRepositoryId" xml:space="preserve">
     <value>A repository kit must name the repository it opens.</value>
   </data>
+  <data name="SetConfigurationCodec_BackupSetIdExactlyBytes" xml:space="preserve">
+    <value>The backup set identifier is exactly 16 bytes.</value>
+  </data>
+  <data name="SetConfigurationCodec_ConfigurationCarriesUnknownKey" xml:space="preserve">
+    <value>The set configuration carries an unknown key.</value>
+  </data>
+  <data name="SetConfigurationCodec_ConfigurationIsMissingARequiredKey" xml:space="preserve">
+    <value>The set configuration is missing a required key.</value>
+  </data>
+  <data name="SetConfigurationCodec_ConfigurationNotCanonicalCBOR" xml:space="preserve">
+    <value>The set configuration is not canonical CBOR: {0}</value>
+  </data>
+  <data name="SetConfigurationCodec_RecordCarriesUnknownKey" xml:space="preserve">
+    <value>The set-configuration record carries an unknown key.</value>
+  </data>
+  <data name="SetConfigurationCodec_RecordIsMissingARequiredKey" xml:space="preserve">
+    <value>The set-configuration record is missing a required key.</value>
+  </data>
+  <data name="SetConfigurationCodec_RecordNotCanonicalCBOR" xml:space="preserve">
+    <value>The set-configuration record is not canonical CBOR: {0}</value>
+  </data>
+  <data name="SetConfigurationCodec_RetentionCarriesUnknownKey" xml:space="preserve">
+    <value>The retention policy carries an unknown key.</value>
+  </data>
+  <data name="SetConfigurationCodec_RetentionValueOutOfRange" xml:space="preserve">
+    <value>A retention value exceeds the representable range.</value>
+  </data>
+  <data name="SetConfigurationCodec_RootIsNotALabelAndPath" xml:space="preserve">
+    <value>A capture root is not a label and a path.</value>
+  </data>
+  <data name="SetConfigurationCodec_SignatureExactlyBytes" xml:space="preserve">
+    <value>The signature is exactly 64 bytes.</value>
+  </data>
 </root>
