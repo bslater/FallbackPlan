@@ -1297,6 +1297,138 @@ public static class CliApplication
 
         // ---------------------------------------------------------------- pair
 
+
+
+        // Opens a connection for a session verb. Unlike every other CLI path
+        // this has no direct-mode fallback and should not: a session is minted
+        // by a running service and means nothing without one, so "no service"
+        // is the answer rather than a reason to do the work here instead.
+        static async Task<IFallbackPlanClient> ConnectForSessionAsync(
+            string stateDirectory, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await LocalServiceClient
+                    .ConnectAsync(stateDirectory, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException unreachable)
+            {
+                throw new CliFailureException(
+                    $"{unreachable.Message} Sessions are held by the running service, so there is nobody "
+                    + "to sign in to until one is up.",
+                    unreachable);
+            }
+        }
+        // `login` and `logout` — who is acting, rather than which process may
+        // connect (ADR-0045 §1). Neither opens a repository: the service holds
+        // the accounts, and this end holds only the token it is handed back.
+        {
+            var loginStateOption = new Option<string>("--state")
+            {
+                Description = "The service's state directory — where its local socket and this session live.",
+                Required = true,
+            };
+            var userOption = new Option<string>("--user")
+            {
+                Description = "The account name.",
+                Required = true,
+            };
+            var passwordVariableOption = new Option<string>("--password-env")
+            {
+                Description =
+                    "The environment variable holding the password. A password is named by variable and "
+                    + "never given on a command line, where it would reach the shell history and every "
+                    + "process listing on the machine (FR-USR-006).",
+                Required = true,
+            };
+
+            var login = new Command(
+                "login",
+                "Sign in to a running service and cache the session, so later commands need no password.");
+            login.Options.Add(loginStateOption);
+            login.Options.Add(userOption);
+            login.Options.Add(passwordVariableOption);
+            root.Subcommands.Add(login);
+
+            login.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(loginStateOption)!;
+                var user = parse.GetValue(userOption)!;
+                var variable = parse.GetValue(passwordVariableOption)!;
+
+                if (Environment.GetEnvironmentVariable(variable) is not { Length: > 0 } password)
+                {
+                    throw new CliFailureException(
+                        $"the environment variable '{variable}' is not set. The password is passed by name, "
+                        + "never on the command line (FR-USR-006).");
+                }
+
+                var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                await using (client.ConfigureAwait(false))
+                {
+                    var answered = await client
+                        .ExecuteAsync(new LoginCommand(user, password), cancellationToken)
+                        .ConfigureAwait(false);
+
+                    switch (answered)
+                    {
+                        case SessionResult session:
+                            new SessionCache(state).Save(session);
+                            output.WriteLine($"signed in as {session.User} ({session.Role.ToLowerInvariant()})");
+                            return 0;
+
+                        case ServiceError refusal:
+                            throw new CliFailureException(refusal.Message);
+
+                        default:
+                            throw new CliFailureException(
+                                $"the service answered with {answered.GetType().Name}.");
+                    }
+                }
+            }));
+
+            var logoutState = new Option<string>("--state")
+            {
+                Description = "The service's state directory.",
+                Required = true,
+            };
+            var logout = new Command("logout", "End this session at the service and forget it here.");
+            logout.Options.Add(logoutState);
+            root.Subcommands.Add(logout);
+
+            logout.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(logoutState)!;
+                var cache = new SessionCache(state);
+                var who = cache.User;
+
+                // The local cache is cleared whatever the service says. A
+                // service that is down cannot revoke, and leaving a token here
+                // that the operator believes they have signed out of is the
+                // worse of the two failures — the session dies with that
+                // process anyway (ADR-0045 §5).
+                try
+                {
+                    var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                    await using (client.ConfigureAwait(false))
+                    {
+                        await cache.PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                        await client.ExecuteAsync(new LogoutCommand(), cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (CliFailureException)
+                {
+                    error.WriteLine(
+                        "note: the service could not be reached, so nothing was revoked there. The session "
+                        + "is forgotten here, and no session survives a service restart.");
+                }
+
+                cache.Clear();
+                output.WriteLine(who is null ? "signed out" : $"signed out {who}");
+                return 0;
+            }));
+        }
         {
             // Not a session verb: pairing needs no repository or passphrase,
             // only the console's own state directory to hold its identity and
@@ -1444,6 +1576,8 @@ public static class CliApplication
                     {
                         client = await LocalServiceClient.ConnectAsync(
                             state!, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+                        await new SessionCache(state!)
+                            .PresentAsync(client, cancellationToken).ConfigureAwait(false);
                     }
                     catch (ServiceConnectionException unreachable)
                     {

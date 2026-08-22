@@ -199,6 +199,13 @@ public static class OperationGateway
                 {
                     client = await LocalServiceClient.ConnectAsync(
                         session.StateDirectory, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+
+                    // Presented as the first thing on a fresh connection: the
+                    // service holds the session, this end holds only the token,
+                    // and a connection that never presents one is refused by
+                    // name a moment later (ADR-0045 §5).
+                    await new SessionCache(session.StateDirectory)
+                        .PresentAsync(client, cancellationToken).ConfigureAwait(false);
                 }
                 catch (ServiceConnectionException)
                 {
@@ -263,6 +270,13 @@ public static class OperationGateway
                 {
                     client = await LocalServiceClient.ConnectAsync(
                         session.StateDirectory, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+
+                    // Presented as the first thing on a fresh connection: the
+                    // service holds the session, this end holds only the token,
+                    // and a connection that never presents one is refused by
+                    // name a moment later (ADR-0045 §5).
+                    await new SessionCache(session.StateDirectory)
+                        .PresentAsync(client, cancellationToken).ConfigureAwait(false);
                 }
                 catch (ServiceConnectionException)
                 {
