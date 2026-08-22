@@ -194,19 +194,11 @@ public sealed class LoggingShapeTests
         "FallbackPlan.Api.CommandHandled",
         "FallbackPlan.Api.WatchOpened",
         "FallbackPlan.Api.Listening",
-        "FallbackPlan.Replication.ReplicationStarting",
-        "FallbackPlan.Replication.ObjectCopied",
-        "FallbackPlan.Replication.CopyFailed",
-        "FallbackPlan.Replication.ReplicationComplete",
         "FallbackPlan.Repository.PublicationFailed",
         "FallbackPlan.Repository.RepositoryCreated",
         "FallbackPlan.Repository.RepositoryOpened",
         "FallbackPlan.Repository.RepositoryOpenRefused",
         "FallbackPlan.Restore.Quarantined",
-        "FallbackPlan.Retention.PlanningRetention",
-        "FallbackPlan.Retention.RetentionPlanned",
-        "FallbackPlan.Retention.RetentionHeld",
-        "FallbackPlan.Retention.CollectionComplete",
     };
 
     /// <summary>Every declaration, with whether its own project calls it.</summary>

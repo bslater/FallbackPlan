@@ -250,7 +250,9 @@ public sealed partial class ServiceCommandHandler(
                     runtime.Writer,
                     apply,
                     now,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    set.Name,
+                    runtime.LoggerFor(typeof(Retention.RetentionRunner))).ConfigureAwait(false);
             }
             finally
             {

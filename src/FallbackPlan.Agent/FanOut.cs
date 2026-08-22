@@ -536,14 +536,16 @@ public static class FanOut
             if (keeps is not null)
             {
                 var converged = await StoreToStoreCopier.ConvergeAsync(
-                    archive.Store, replica, keeps, cancellationToken).ConfigureAwait(false);
+                    archive.Store, replica, keeps, cancellationToken,
+                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
                 copied = converged.Copied;
                 alreadyHeld = converged.AlreadyHeld;
             }
             else
             {
                 var outcome = await StoreToStoreCopier.CopyAsync(
-                    archive.Store, replica, cancellationToken).ConfigureAwait(false);
+                    archive.Store, replica, cancellationToken,
+                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
                 copied = outcome.Copied;
                 alreadyHeld = outcome.AlreadyHeld;
             }

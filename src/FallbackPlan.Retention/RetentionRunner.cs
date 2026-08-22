@@ -4,6 +4,8 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Domain.Identifiers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Retention;
 
@@ -39,6 +41,8 @@ public static class RetentionRunner
     /// <param name="apply">False: report only. True: tombstone, sweep and trim under the full gate.</param>
     /// <param name="nowUnixMilliseconds">The clock — policy windows and informational stamps only.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
+    /// <param name="setName">The set's name, for the log alone — the runner is handed a store, not a set.</param>
+    /// <param name="logger">Where the pass reports what it kept and what it took.</param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -50,8 +54,13 @@ public static class RetentionRunner
         WriterId writerId,
         bool apply,
         ulong nowUnixMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? setName = null,
+        ILogger? logger = null)
     {
+        var log = logger ?? NullLogger.Instance;
+        var set = setName ?? "the set";
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(destinations);
@@ -59,6 +68,8 @@ public static class RetentionRunner
         ThrowHelper.ThrowIfNull(trimVerificationFor);
 
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
+
+        Log.PlanningRetention(log, set, survey.Snapshots.Count);
 
         var selection = RetentionPlanner.Select(
             [.. survey.Snapshots.Select(snapshot => snapshot.Fact)],
@@ -127,6 +138,19 @@ public static class RetentionRunner
         var plan = CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
+        Log.RetentionPlanned(log, set, selection.Keep.Count, selection.Expire.Count);
+
+        // A veto stops the whole pass, not part of it: damage means the object
+        // graph cannot be trusted to say what is garbage, and a collector that
+        // guesses is the failure this design exists to prevent. Every reason is
+        // named, because "nothing was deleted" without one is indistinguishable
+        // from a pass that simply had nothing to do.
+        if (!plan.Deletable)
+        {
+            var vetoes = string.Join("; ", plan.Vetoes);
+            Log.RetentionHeld(log, set, vetoes);
+        }
+
         // The trim decides either way — the dry run must say what would go
         // (FR-GC-005) — and deletes only under apply, after the sweep.
         var trim = await StagingTrim.PlanAsync(
@@ -165,6 +189,8 @@ public static class RetentionRunner
         // The trim runs last: direct deletes of historic data blobs every
         // entitled destination verifiably holds (ADR-0034 §6). A blob the
         // sweep already removed counts nothing here.
+        var trimmedBlobs = 0;
+        var trimmedBytes = 0L;
         if (trim.Eligible.Count > 0)
         {
             var (trimmed, bytes, refused) = await StagingTrim.ExecuteAsync(
@@ -172,7 +198,12 @@ public static class RetentionRunner
                 .ConfigureAwait(false);
             lines.Add($"trimmed: {trimmed} historic data blob(s), {bytes} byte(s)");
             lines.AddRange(refused);
+            trimmedBlobs = trimmed;
+            trimmedBytes = bytes;
         }
+
+        Log.CollectionComplete(
+            log, swept.Deleted, swept.NotYetEligible, swept.TombstonesCleared, trimmedBlobs, trimmedBytes);
 
         return new RetentionReport(lines, gate.Held, written, swept);
     }
