@@ -127,6 +127,16 @@ public sealed record ScanOptions
     /// <summary>The compiled include/exclude rules; null captures everything.</summary>
     public PathRuleSet? Rules { get; init; }
 
+    /// <summary>
+    /// Prepended (with a joining <c>/</c>) to the NFC relative path when
+    /// consulting <see cref="Rules"/> — and to nothing else: emitted
+    /// <see cref="ScanEntry.RelativePath"/>s are unchanged. A multi-root
+    /// publication compiles its rules against label-prefixed subjects
+    /// (ADR-0040), and this is how the walk's own pruning judges the same
+    /// spelling the publisher will.
+    /// </summary>
+    public string? SubjectPrefix { get; init; }
+
     /// <summary>Whether to descend across mount points (default: stop and record, architecture 06 §1).</summary>
     public bool CrossMountBoundaries { get; init; }
 

@@ -537,11 +537,13 @@ public sealed class ServiceTests : IDisposable
 
         // An edit replaces the row rather than appending a second one with the
         // same identity, which is what "upsert" has to mean for a file the
-        // scheduler iterates.
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+        // scheduler iterates. Adding a rule is a material edit, so since
+        // ADR-0038 the answer names what changed rather than bare-acknowledging.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "photos", _harness.SourceRoot, "daily at 02:30", ["**/*.jpg"], [], ["vault"])),
-            _timeout.Token));
+            _timeout.Token), out var materialEdit);
+        Assert.Contains(line => line.Contains("include rules changed", StringComparison.Ordinal), materialEdit.Lines);
 
         Assert.IsInstanceOfType<BackupSetsResult>(
             await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var afterEdit);
@@ -578,7 +580,7 @@ public sealed class ServiceTests : IDisposable
                 {
                     Id = _harness.DocsSetId,
                     Name = "docs",
-                    Root = _harness.SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                     Schedule = "every 1h",
                     Retention = new RetentionConfiguration { KeepDaily = 7, MinGenerations = 2 },
                     Destinations = [new SetDestinationReference { Ref = "vault", Retention = overridden }],

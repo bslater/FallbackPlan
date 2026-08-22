@@ -1,5 +1,7 @@
 using Bodu;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Replication;
 
@@ -76,12 +78,21 @@ public static class StoreToStoreCopier
     /// <param name="source">The archive to read — a set's staging archive, ordinarily.</param>
     /// <param name="destination">The store to fill.</param>
     /// <param name="cancellationToken">Stops the copy; a re-run resumes from the destination's inventory.</param>
+    /// <param name="destinationName">The destination's configured name, for the log alone.</param>
+    /// <param name="logger">Where the pass reports itself.</param>
     /// <returns>What was copied and what was already there.</returns>
     public static async ValueTask<CopyOutcome> CopyAsync(
-        IObjectStore source, IObjectStore destination, CancellationToken cancellationToken)
+        IObjectStore source,
+        IObjectStore destination,
+        CancellationToken cancellationToken,
+        string? destinationName = null,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
+
+        var log = logger ?? NullLogger.Instance;
+        var name = destinationName ?? "the destination";
 
         // The destination's inventory, once: the diff that makes a catch-up
         // pass cost proportional to the gap rather than to the archive.
@@ -91,6 +102,8 @@ public static class StoreToStoreCopier
         {
             held.Add(entry.Key.Value);
         }
+
+        Log.ReplicationStarting(log, name, held.Count);
 
         var copied = 0L;
         var alreadyHeld = 0L;
@@ -133,9 +146,12 @@ public static class StoreToStoreCopier
                 else
                 {
                     copied++;
+                    Log.ObjectCopied(log, entry.Key);
                 }
             }
         }
+
+        Log.ReplicationComplete(log, name, "copy", copied, alreadyHeld, deleted: 0);
 
         return new CopyOutcome(copied, alreadyHeld);
     }
@@ -153,10 +169,20 @@ public static class StoreToStoreCopier
     /// <param name="destination">The replica store to converge.</param>
     /// <param name="keeps">Whether this destination's policy keeps a key. Identity and infrastructure keys must answer true.</param>
     /// <param name="cancellationToken">Stops the pass; a re-run converges from the destination's inventory.</param>
+    /// <param name="destinationName">The destination's configured name, for the log alone.</param>
+    /// <param name="logger">Where the pass reports itself.</param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
-        IObjectStore source, IObjectStore destination, Func<string, bool> keeps, CancellationToken cancellationToken)
+        IObjectStore source,
+        IObjectStore destination,
+        Func<string, bool> keeps,
+        CancellationToken cancellationToken,
+        string? destinationName = null,
+        ILogger? logger = null)
     {
+        var log = logger ?? NullLogger.Instance;
+        var name = destinationName ?? "the destination";
+
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNull(keeps);
@@ -167,6 +193,8 @@ public static class StoreToStoreCopier
         {
             held.Add(entry.Key.Value);
         }
+
+        Log.ReplicationStarting(log, name, held.Count);
 
         var copied = 0L;
         var alreadyHeld = 0L;
@@ -209,6 +237,7 @@ public static class StoreToStoreCopier
                 else
                 {
                     copied++;
+                    Log.ObjectCopied(log, entry.Key);
                 }
             }
         }
@@ -251,8 +280,16 @@ public static class StoreToStoreCopier
                 {
                     deleted++;
                 }
+                else
+                {
+                    // Counted as not-deleted and, until now, said nowhere: a
+                    // replica quietly keeping what its policy dropped.
+                    Log.ConvergeDeleteRefused(log, name, ObjectKey.Parse(key), outcome.Outcome);
+                }
             }
         }
+
+        Log.ReplicationComplete(log, name, "converge", copied, alreadyHeld, deleted);
 
         return new ConvergeOutcome(copied, alreadyHeld, deleted);
     }

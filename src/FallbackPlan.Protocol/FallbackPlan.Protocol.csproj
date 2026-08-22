@@ -19,4 +19,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- The logging abstraction only: ILogger, NullLogger and the
+       [LoggerMessage] source generator. Providers and sinks are the host's,
+       and a canary in DependencyRuleTests keeps them there (ADR-0043). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
 </Project>

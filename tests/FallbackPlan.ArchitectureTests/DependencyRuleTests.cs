@@ -68,6 +68,9 @@ public sealed class DependencyRuleTests
     /// <summary>The peer protocol (ADR-0030).</summary>
     private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
+    /// <summary>The local web console (ADR-0036) — an executable, loaded by name.</summary>
+    private static Assembly Web => Assembly.Load("FallbackPlan.Web");
+
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
@@ -76,7 +79,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -289,8 +292,9 @@ public sealed class DependencyRuleTests
                     .HaveDependencyOn("Bodu.Security.Cryptography")
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference third-party cryptography. " +
-                "Argon2id and XChaCha20-Poly1305 are confined to Repository.Crypto; Ed25519 and " +
-                "X25519 to Protocol (ADR-0019 §3, §5).");
+                "Argon2id, XChaCha20-Poly1305 and X25519-for-content-sealing are confined to " +
+                "Repository.Crypto; Ed25519 and X25519-for-pairing to Protocol " +
+                "(ADR-0019 §3, §5, Amendment 3; ADR-0042).");
         }
     }
 
@@ -409,6 +413,115 @@ public sealed class DependencyRuleTests
     {
         AssertProjectReferences(
             "FallbackPlan.Application", "<PackageReference Include=\"Bodu.Globalization.Recurrence\" />");
+    }
+
+    /// <summary>
+    /// Libraries take the logging ABSTRACTION; the concrete factory, the level
+    /// filtering and the sinks live in one project and are composed by a host
+    /// (ADR-0043 §1). This is ADR-0027 §3's rule for a second signal: the
+    /// instrumentation API is in-box and the exporter is somebody else's
+    /// business, so a provider package in a library would be the same mistake
+    /// as vendoring a collector.
+    ///
+    /// It matters most at the bottom of the stack. Repository.Format's closure
+    /// is the standalone recovery tool's closure, and the abstraction was
+    /// judged at ADR-0019's format-critical bar on the strength of being
+    /// managed-only interfaces. A sink dragged down there — with its file
+    /// handles, its timers and its buffering — would not clear that bar and
+    /// would not have been asked to.
+    /// </summary>
+    [TestMethod]
+    public void Logging_EveryAssemblyBesidesDiagnostics_TakesOnlyTheAbstraction()
+    {
+        var offenders = new List<string>();
+
+        foreach (var project in Directory.EnumerateFiles(
+            Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileNameWithoutExtension(project);
+            if (string.Equals(name, "FallbackPlan.Diagnostics", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(project);
+            // The closing quote matters: without it this also matches
+            // "…Logging.Abstractions", which every library is supposed to have.
+            if (text.Contains(
+                "<PackageReference Include=\"Microsoft.Extensions.Logging\" ", StringComparison.Ordinal))
+            {
+                offenders.Add(name);
+            }
+        }
+
+        Assert.IsEmpty(
+            offenders,
+            "Only FallbackPlan.Diagnostics may reference the concrete logging package; "
+            + $"found it in {string.Join(", ", offenders)}.");
+    }
+
+    /// <summary>
+    /// The positive half of the canary above, in the shape the cryptography
+    /// and recurrence rules already use: a prohibition that passes because
+    /// nothing anywhere references the package would keep passing after
+    /// somebody removed the containment it claims to enforce.
+    /// </summary>
+    [TestMethod]
+    public void Logging_ProjectFileCanary_StaysInDiagnostics()
+    {
+        AssertProjectReferences(
+            "FallbackPlan.Diagnostics", "<PackageReference Include=\"Microsoft.Extensions.Logging\" />");
+    }
+
+    /// <summary>
+    /// The diagnostics ring buffer is a collections dependency, and it belongs
+    /// to exactly one project (ADR-0043 §6). It is admitted at ADR-0019's
+    /// <em>operational</em> bar, which it clears because
+    /// <c>FallbackPlan.Diagnostics</c> is reached only by the Agent and the
+    /// CLI — never by <c>Repository.Format</c>, and therefore never by the
+    /// standalone recovery tool, whose closure is judged at the far stricter
+    /// format-critical bar.
+    ///
+    /// That reasoning is only sound while the containment holds, so it is a
+    /// test rather than a paragraph. If the buffer drifts into a lower layer,
+    /// the tier it was admitted under silently stops applying.
+    /// </summary>
+    [TestMethod]
+    public void CollectionsBuffer_EveryAssemblyBesidesDiagnostics_ReferencesItNowhere()
+    {
+        var offenders = new List<string>();
+
+        foreach (var project in Directory.EnumerateFiles(
+            Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileNameWithoutExtension(project);
+            if (string.Equals(name, "FallbackPlan.Diagnostics", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (File.ReadAllText(project).Contains("Bodu.Collections", StringComparison.Ordinal))
+            {
+                offenders.Add(name);
+            }
+        }
+
+        Assert.IsEmpty(
+            offenders,
+            "Only FallbackPlan.Diagnostics may reference the collections packages; "
+            + $"found one in {string.Join(", ", offenders)}.");
+    }
+
+    /// <summary>
+    /// The positive half: a prohibition that passes because nothing references
+    /// the package at all is a test that keeps passing after somebody deletes
+    /// the containment it claims to enforce.
+    /// </summary>
+    [TestMethod]
+    public void CollectionsBuffer_ProjectFileCanary_StaysInDiagnostics()
+    {
+        AssertProjectReferences(
+            "FallbackPlan.Diagnostics", "<PackageReference Include=\"Bodu.Collections.Concurrent\" />");
     }
 
     /// <summary>
@@ -581,6 +694,80 @@ public sealed class DependencyRuleTests
             reference.Count > 0,
             "The CLI's direct-mode exception exists only while it actually uses Application; if this canary "
             + "stops holding, the exception should be removed rather than left as dead permission.");
+    }
+
+    /// <summary>
+    /// 11 §2: user interfaces depend on the client contract, never on the
+    /// engine — and the web console has no direct-mode exception, because a
+    /// web server holding the writer role would be a second writer with a
+    /// network face (ADR-0036 §1). Enforced at both levels, in the Recovery
+    /// pattern: the IL (no reference to anything below the contract) and the
+    /// project file (an exact whitelist, so a transitive smuggle via a new
+    /// ProjectReference fails loudly).
+    /// </summary>
+    [TestMethod]
+    public void WebConsole_DependencyClosure_ReachesOnlyTheClientContract()
+    {
+        // ONE deliberate exception (ADR-0041): ConsoleRestoreGate verifies a
+        // restore passphrase locally — descriptor and wrapped key objects
+        // read off local disk, KEK derived where the person typed — so the
+        // passphrase never crosses the contract (NFR-SEC-009). It is scoped
+        // by name: every other console type must still reach only the
+        // contract, or the console stops being a client (11 §2, ADR-0036).
+        AssertPasses(
+            Types.InAssembly(Web)
+                .That()
+                .DoNotHaveName(nameof(FallbackPlan.Web.ConsoleRestoreGate))
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Restore",
+                    "FallbackPlan.Recovery",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Web must reference the client contract and nothing below it (11 §2, ADR-0036), "
+            + "except the restore gate (ADR-0041).");
+
+        // The gate itself may reach the crypto path and no further — never
+        // the engine, the protocol, or anything that could write.
+        AssertPasses(
+            Types.InAssembly(Web)
+                .That()
+                .HaveName(nameof(FallbackPlan.Web.ConsoleRestoreGate))
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Restore",
+                    "FallbackPlan.Recovery",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "The restore gate verifies a passphrase and nothing more (ADR-0041).");
+
+        var project = Path.Combine(RepositoryRoot(), "src", "FallbackPlan.Web", "FallbackPlan.Web.csproj");
+        var references = System.Text.RegularExpressions.Regex
+            .Matches(File.ReadAllText(project), "ProjectReference Include=\"[^\"]*\\\\([^\"\\\\]+)\\.csproj\"")
+            .Select(match => match.Groups[1].Value)
+            .Order()
+            .ToArray();
+
+        SequenceAssert.AreEqual(
+            ["FallbackPlan.Api", "FallbackPlan.Repository", "FallbackPlan.Storage.Local"], references);
     }
 
     /// <summary>

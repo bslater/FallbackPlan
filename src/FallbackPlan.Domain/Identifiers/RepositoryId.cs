@@ -9,7 +9,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// repository (specification 04 §4), so a record copied between repositories
 /// fails authentication.
 /// </summary>
-public readonly struct RepositoryId : IEquatable<RepositoryId>
+public readonly struct RepositoryId : IEquatable<RepositoryId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a repository identifier in bytes.</summary>
     public const int Size = 16;
@@ -79,6 +79,14 @@ public readonly struct RepositoryId : IEquatable<RepositoryId>
 
     /// <summary>Renders the identifier as lowercase hex for diagnostics.</summary>
     public override string ToString() => Convert.ToHexStringLower(ToArray());
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("repo", ToString(), 8);
 
     public static bool operator ==(RepositoryId left, RepositoryId right) => left.Equals(right);
 

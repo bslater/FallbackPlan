@@ -27,7 +27,80 @@ namespace FallbackPlan.Api;
 public readonly record struct ContractVersion(int Major, int Minor)
 {
     /// <summary>The version this build speaks.</summary>
-    public static ContractVersion Current { get; } = new(1, 6);
+    /// <remarks>
+    /// 1.7 added the configuration surface: set and destination CRUD, the
+    /// folder browser, draft validation, and the pairing-invite verbs
+    /// (ADR-0037). 1.8 added preview_set_changes / set_change_preview, made
+    /// upsert_backup_set answer a material root-or-rules edit with
+    /// configuration_change, and honours run_backup's full flag over the
+    /// service (ADR-0038). 1.9 added the operator-loop verbs —
+    /// list_notices / acknowledge_notice over the notices ledger and unpair
+    /// for ending a pairing from a console — and enriched list_directory
+    /// with modification times, change markers against the set's previous
+    /// snapshot, and the names deleted since it (ADR-0039). 1.10 added
+    /// multi-root sets (ADR-0040): roots on the set descriptor and on
+    /// preview_set_changes — upsert accepts roots or root, roots winning —
+    /// and the preview answers a draft with no saved set against an empty
+    /// baseline. 1.11 added the guided restore (ADR-0041):
+    /// open_restore_source / close_restore_source over per-set staging,
+    /// replica and peer sources; source, several paths, target, existing
+    /// and in-place options on the restore verbs; plan conflicts and the
+    /// persisted-receipt summary on their results; and the archives root on
+    /// describe_service. 1.12 added write-only repositories (ADR-0042):
+    /// provision_write_only_set carrying the sealed write bundle for both the
+    /// create and adopt ceremonies, the optional sealed restore-grant
+    /// envelope on open_restore_source, the grant-recipient public key on
+    /// describe_service, and the sealed-record count on verification results
+    /// so a records-level sweep of a write-only set reads as neither damage
+    /// nor a clean content check.
+    /// 1.13 added first-run setup (ADR-0044): provision_installation
+    /// carrying the sealed write bundle for the installation rather than for
+    /// a named set — a service on its first run has no sets — and the setup
+    /// state on describe_service, so a client learns it must capture the
+    /// passphrase before anything else. Local callers only; a paired remote
+    /// console is refused.
+    /// 1.14 finished that ceremony (ADR-0044's amendment, ADR-0013's):
+    /// confirm_recovery_kit records that the installation's kit was saved,
+    /// describe_service gains a kit_required state between setup_required
+    /// and ready plus this device's public identity for the kit to record,
+    /// and validate_set_draft answers a draft's roots and destinations with
+    /// a failure-domain warning (FR-SNP-007).
+    /// 1.15 opened the diagnostics the engine had been writing to nobody
+    /// (ADR-0043 §6, FR-SVC-010): get_diagnostics reports the levels in
+    /// force and whether a durable sink exists — never where it is (T-16);
+    /// read_log serves the in-memory ring by cursor, paginated because
+    /// FrameCodec caps a frame at 8 MiB and "send me everything" is not a
+    /// thing a log reader may ask; and set_log_level changes a level
+    /// without a restart, which matters because the level a machine needs
+    /// is only known once it has already misbehaved. Records cross
+    /// rendered rather than as their name/value state, because rendering
+    /// is where redaction happens: a local caller is served in full, a
+    /// paired remote console redacted, and set_log_level is refused to a
+    /// remote caller outright. describe_service carries the effective
+    /// level so a console can show it without a second round trip.
+    /// 1.15 also carries the recovery kit's status on describe_service
+    /// (FR-KIT-005): never_saved or saved, with when it was confirmed. Two
+    /// values rather than the three the requirement's wording implies —
+    /// an installation kit carries no destinations, so the stated staleness
+    /// trigger cannot fire, and its salt, parameters and sealing key are
+    /// fixed for the installation's life, so nothing else can make it
+    /// stale either (ADR-0013 as amended). Surfaced continuously rather
+    /// than only during the ceremony, which is what "continuously" means.
+    /// 1.16 gave the product a way to say who is acting (ADR-0045,
+    /// FR-USR-001..006): login mints a session, resume_session presents an
+    /// existing one on a new connection — which the web console needs,
+    /// because it opens a fresh connection for every request it relays —
+    /// logout revokes it, and list_users / create_user / delete_user /
+    /// change_password manage the accounts. describe_service carries who is
+    /// signed in and their role, and reports users_required when an
+    /// installation has finished setup but has no accounts yet. Sessions are
+    /// held in the service's memory alone, so a restart signs everyone out;
+    /// there is no session file, which is the stale-credential failure
+    /// ADR-0028 §5 rejected. A session token crosses on the two verbs that
+    /// mint and present it and nowhere else, and no password or hash reaches
+    /// any result or any log record.
+    /// </remarks>
+    public static ContractVersion Current { get; } = new(1, 16);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

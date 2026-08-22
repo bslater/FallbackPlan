@@ -73,8 +73,38 @@
   <data name="ClientConfiguration_BackupSetRootMustNot" xml:space="preserve">
     <value>Backup set '{0}': root must not be empty.</value>
   </data>
+  <data name="ClientConfiguration_BackupSetRootAndRoots" xml:space="preserve">
+    <value>Backup set '{0}' speaks both 'root' and 'roots'; a set carries exactly one of the two forms.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetRootPathsMustUnique" xml:space="preserve">
+    <value>Backup set '{0}' names the root '{1}' more than once.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetLabelInvalid" xml:space="preserve">
+    <value>Backup set '{0}': root label '{1}' is invalid — {2}.</value>
+  </data>
+  <data name="ClientConfiguration_BackupSetLabelsMustUnique" xml:space="preserve">
+    <value>Backup set '{0}': root label '{1}' is used more than once — labels name folders inside the snapshot, so they must stay distinct even case-insensitively.</value>
+  </data>
   <data name="ClientConfiguration_BackupSetUnknownDestination" xml:space="preserve">
     <value>Backup set '{0}' references destination '{1}', which is not declared.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingLevelUnknown" xml:space="preserve">
+    <value>Logging: '{0}' is not a log level — the levels are {1}.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingCategoryLevelUnknown" xml:space="preserve">
+    <value>Logging: category '{0}' asks for level '{1}', which is not a log level — the levels are {2}.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingCategoryMustNotBeEmpty" xml:space="preserve">
+    <value>Logging: a category override must name a category; one of them is empty.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingRetainFilesOutOfRange" xml:space="preserve">
+    <value>Logging: retain_files is {0}; it must be at least 1, or the log rolls into nothing.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingMaxFileBytesOutOfRange" xml:space="preserve">
+    <value>Logging: max_file_bytes is {0}; it must be at least {1}, or a file rolls before it holds one useful session.</value>
+  </data>
+  <data name="ClientConfiguration_LoggingRingCapacityOutOfRange" xml:space="preserve">
+    <value>Logging: ring_capacity is {0}; it must be at least {1}, or a client reading the log misses records between two reads.</value>
   </data>
   <data name="ClientConfiguration_DeclaresSchemaVersionBuildReads" xml:space="preserve">
     <value>'{0}' declares schema_version {1}; this build reads version {2} only.</value>
@@ -110,7 +140,7 @@
     <value>Backup set '{0}': retention values for '{1}' must be positive.</value>
   </data>
   <data name="ClientConfiguration_SchemaVersion1NeedsDestinations" xml:space="preserve">
-    <value>'{0}' declares schema_version 1; this build reads version 2 (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2.</value>
+    <value>'{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.</value>
   </data>
   <data name="JobStateStore_NoJobExistsJournal" xml:space="preserve">
     <value>No job '{0}' exists in the journal.</value>

@@ -1,6 +1,8 @@
 using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Application;
 
@@ -43,6 +45,7 @@ public sealed class NoticeStore
     private readonly string _path;
     private readonly List<Notice> _notices;
     private readonly Lock _gate = new();
+    private ILogger _log = NullLogger.Instance;
 
     private NoticeStore(string path, List<Notice> notices)
     {
@@ -75,7 +78,9 @@ public sealed class NoticeStore
     }
 
     /// <summary>Opens (or creates) the ledger in <paramref name="stateDirectory"/>.</summary>
-    public static NoticeStore Open(string stateDirectory)
+    /// <param name="stateDirectory">The state directory holding the ledger.</param>
+    /// <param name="logger">Where a raised or acknowledged notice is recorded.</param>
+    public static NoticeStore Open(string stateDirectory, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
@@ -83,18 +88,18 @@ public sealed class NoticeStore
 
         if (!File.Exists(path))
         {
-            return new NoticeStore(path, []);
+            return new NoticeStore(path, []) { _log = logger ?? NullLogger.Instance };
         }
 
         try
         {
             var notices = JsonSerializer.Deserialize<List<Notice>>(File.ReadAllText(path), SerializerOptions) ?? [];
-            return new NoticeStore(path, notices);
+            return new NoticeStore(path, notices) { _log = logger ?? NullLogger.Instance };
         }
         catch (JsonException)
         {
             File.Move(path, path + ".corrupt", overwrite: true);
-            return new NoticeStore(path, []);
+            return new NoticeStore(path, []) { _log = logger ?? NullLogger.Instance };
         }
     }
 
@@ -143,6 +148,12 @@ public sealed class NoticeStore
             };
             _notices.Add(notice);
             Save();
+
+            // Only a genuinely new notice is logged. A refresh above keeps the
+            // same identity and the same "since when", so recording it again
+            // would turn one durable condition into a stream of events and
+            // make the log look like something was repeatedly going wrong.
+            Log.NoticeRaised(_log, notice.Key, notice.Message);
             return notice;
         }
     }
@@ -191,6 +202,7 @@ public sealed class NoticeStore
 
             _notices[index] = _notices[index] with { AcknowledgedAt = nowUnixMilliseconds };
             Save();
+            Log.NoticeAcknowledged(_log, _notices[index].Key);
             return true;
         }
     }

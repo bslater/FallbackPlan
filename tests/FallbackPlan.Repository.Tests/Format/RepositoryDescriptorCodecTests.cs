@@ -40,6 +40,73 @@ public sealed class RepositoryDescriptorCodecTests
         SequenceAssert.AreEqual<ushort>([7], ok.Descriptor.OptionalFeatures);
     }
 
+    private static RepositoryDescriptor SampleV2() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatLimits.SealedFormatVersion,
+        RequiredFeatures = [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+        SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray(),
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_EncodedAndDecoded_RoundTripsTheSealingKey()
+    {
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV2());
+
+        // A format-v2 descriptor (ADR-0042 §1): the sealing public key rides
+        // key 9, the sealed-data-plane feature is required, and this reader
+        // implements it — so the parse proceeds rather than refusing.
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.SealedFormatVersion, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual(
+            SampleV2().SealingPublicKey.ToArray(), ok.Descriptor.SealingPublicKey.ToArray());
+        SequenceAssert.AreEqual<ushort>(
+            [RepositoryDescriptorCodec.FeatureSealedDataPlane], ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_TheKeyAndVersionDisagreeing_IsRefusedAtSerialize()
+    {
+        // A v2 descriptor without its verifier, or a v1 descriptor claiming
+        // one, is a caller bug — refused before anything is stored.
+        Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
+            SampleV2() with { SealingPublicKey = ReadOnlyMemory<byte>.Empty }));
+        Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
+            Sample() with { SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray() }));
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_TheSealingKeyTampered_IsAnIntegrityFailure()
+    {
+        // Self-locating tamper: serialize twice with one sealing-key byte
+        // changed, and the first differing offset IS the encoded key. A
+        // swapped verifier must never parse as valid — the digest refuses it
+        // as damage before any derive-and-compare could be misled.
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV2());
+        var mutatedKey = SampleV2().SealingPublicKey.ToArray();
+        mutatedKey[5] ^= 0x01;
+        var mutated = RepositoryDescriptorCodec.Serialize(SampleV2() with { SealingPublicKey = mutatedKey });
+
+        var keyOffset = Enumerable.Range(0, bytes.Length).First(i => bytes[i] != mutated[i]);
+        bytes[keyOffset] ^= 0x01;
+
+        Assert.IsInstanceOfType<DescriptorParseResult.IntegrityFailure>(RepositoryDescriptorCodec.Parse(bytes));
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV2_AnUnknownRequiredFeatureBesideTheSealedPlane_IsRefused()
+    {
+        // The real sealed-data-plane bit passes; anything unknown beside it
+        // still refuses cleanly through the required-features path — a v3
+        // capability never half-reads on a v2-only build.
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV2() with
+        {
+            RequiredFeatures = [RepositoryDescriptorCodec.FeatureSealedDataPlane, 0x7F],
+        });
+
+        Assert.IsInstanceOfType<DescriptorParseResult.UnsupportedRequiredFeatures>(
+            RepositoryDescriptorCodec.Parse(bytes));
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_EncodedTwice_ProducesIdenticalBytes()
     {

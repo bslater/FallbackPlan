@@ -123,6 +123,8 @@ Include and exclude rules operate on the canonical path form, are evaluated dete
 
 A path excluded by policy is distinct from a path that failed to be captured. The first is in the policy manifest; the second is in the error manifest. Conflating them is how users end up believing they have a backup of something they excluded two years ago.
 
+A backup set captures one or more source folders into a single snapshot (FR-SNP-008). With several, each folder appears at the snapshot root under a label persisted in configuration, and rule subjects are `<label>/<relative>` — evaluated during the walk so an excluded subtree is still pruned rather than scanned and discarded. Every folder must exist or the run refuses recoverably naming each missing one, because capturing without a folder would publish a snapshot in which its whole labelled subtree reads "deleted". A single-folder set keeps the pre-multi-root snapshot shape exactly. → [ADR-0040](../adr/0040-multi-root-backup-sets.md)
+
 ---
 
 **Previous:** [05 — Storage providers](05-storage-providers.md) · **Next:** [07 — Retention and garbage collection](07-retention-and-gc.md)

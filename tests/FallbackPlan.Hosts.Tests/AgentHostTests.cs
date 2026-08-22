@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Application;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -27,6 +28,100 @@ public sealed class AgentHostTests : IDisposable
 
         Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("--passphrase-env", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The level the host will run at, proven by what the rolling file holds
+    /// after a one-pass run: the binding-up record is Information, so it is
+    /// present at debug and absent at error.
+    /// </summary>
+    private async Task<bool> LoggedAtInformationAsync(params string[] extra)
+    {
+        var logs = Path.Combine(_harness.StateDirectory, "logs");
+        if (Directory.Exists(logs))
+        {
+            Directory.Delete(logs, recursive: true);
+        }
+
+        string[] args =
+            ["run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--once"];
+        // 0 is a clean pass and 2 is "a set failed" — this harness has no
+        // repository, so the set fails and that is fine. 1 is the one code
+        // that would mean the host never got as far as logging, which is
+        // exactly what these tests would otherwise mistake for a level.
+        var result = await RunAsync([.. args, .. extra]);
+        Assert.AreNotEqual(1, result.ExitCode, result.Error);
+
+        var file = Path.Combine(logs, "fallbackplan-current.log");
+        for (var attempt = 0; attempt < 100 && !File.Exists(file); attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        return File.Exists(file);
+    }
+
+    [TestMethod]
+    public async Task AgentHost_ALogLevelNobodyRecognises_IsRefusedNamingTheOnesThatExist()
+    {
+        // Refused rather than ignored: silently falling back to Information
+        // after a typo is how somebody spends an afternoon wondering why
+        // --log-level changed nothing.
+        var result = await RunAsync(
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--once", "--log-level", "dbeug");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("dbeug", result.Error, StringComparison.Ordinal);
+        Assert.Contains("information", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AgentHost_TheConfiguredLevel_IsInForceWithNoFlagAndNoVariable()
+    {
+        // The third source (ADR-0043 §6): the one that survives a restart,
+        // which is what an installed service needs — nobody is there to pass
+        // it a flag.
+        _harness.WriteConfiguration("every 1h");
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path) with
+        {
+            Logging = new LoggingConfiguration { Level = "error" },
+        };
+        configuration.Save(path);
+
+        Assert.IsFalse(
+            await LoggedAtInformationAsync(),
+            "config.json asked for error; an Information record must not reach the file.");
+    }
+
+    [TestMethod]
+    public async Task AgentHost_TheFlag_OutranksTheConfiguredLevel()
+    {
+        _harness.WriteConfiguration("every 1h");
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        (ClientConfiguration.Load(path) with { Logging = new LoggingConfiguration { Level = "error" } })
+            .Save(path);
+
+        Assert.IsTrue(
+            await LoggedAtInformationAsync("--log-level", "debug"),
+            "The flag names the level for this invocation and outranks the file.");
+    }
+
+    [TestMethod]
+    public async Task AgentHost_AConfigurationThatWillNotLoad_StillStartsLogging()
+    {
+        // The chicken and egg: a file the service is about to refuse must not
+        // also stop it logging, because the refusal is one of the first things
+        // worth having in the log.
+        await File.WriteAllTextAsync(
+            Path.Combine(_harness.StateDirectory, "config.json"), "{ this is not json");
+
+        var result = await RunAsync(
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--once");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("config.json", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -199,6 +294,41 @@ public sealed class AgentHostTests : IDisposable
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("--archives", result.Error, StringComparison.Ordinal);
         Assert.Contains("ADR-0034", result.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A log directory that cannot be opened is said once, on standard error,
+    /// and the verb runs anyway (ADR-0043 §6).
+    /// </summary>
+    /// <remarks>
+    /// Standard output is the stream that carries a verb's answer — a unit
+    /// file, a report, a list somebody is piping — so a diagnostics warning
+    /// belongs nowhere near it. The state directory here is unopenable by
+    /// construction rather than by permission: its parent is an ordinary file,
+    /// which no user can descend into.
+    /// </remarks>
+    [TestMethod]
+    public async Task AgentHost_WhenTheLogDirectoryCannotBeOpened_WarnsOnErrorAndCarriesOn()
+    {
+        var occupied = Path.Combine(Path.GetTempPath(), "fbp-agent-host-" + Guid.NewGuid().ToString("n"));
+        await File.WriteAllTextAsync(occupied, "a file has no children");
+
+        try
+        {
+            var result = await RunAsync("retention", "--state", Path.Combine(occupied, "state"));
+
+            Assert.Contains("diagnostics are not being written", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("diagnostics are not being written", result.Output, StringComparison.Ordinal);
+
+            // It got past composing logging and reached the verb, which is the
+            // half that used to be an access-denied stack trace.
+            Assert.Contains("usage is", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(occupied);
+        }
     }
 
     /// <inheritdoc />

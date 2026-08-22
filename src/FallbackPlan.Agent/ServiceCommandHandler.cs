@@ -29,9 +29,22 @@ namespace FallbackPlan.Agent;
 /// so it runs where the person typed it.
 /// </para>
 /// </remarks>
-public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingState remoteBinding)
+public sealed partial class ServiceCommandHandler(
+    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local)
     : IFallbackPlanService
 {
+    /// <summary>Where the caller on this session came from.</summary>
+    /// <remarks>
+    /// One handler used to serve both listeners, and
+    /// <see cref="RemoteBindingState"/> says only whether the remote binding
+    /// is <em>on</em> — never whether <em>this</em> caller arrived over it.
+    /// Refusing a verb to a remote console needs the second fact, so the host
+    /// builds one handler per listener over the same runtime. Defaulting to
+    /// <see cref="CallerScope.Local"/> keeps every one-shot verb and every
+    /// test that constructs a handler directly meaning what it meant before.
+    /// </remarks>
+    private CallerScope Scope => scope;
+
     /// <inheritdoc/>
     public async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
@@ -51,6 +64,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     $"restore {restore.SnapshotId}",
                     token => RunRestoreAsync(restore, token),
                     cancellationToken).ConfigureAwait(false),
+                OpenRestoreSourceCommand openSource => await OnReaderLaneAsync(
+                    $"open restore source {openSource.SetName}",
+                    token => OpenRestoreSourceAsync(openSource, token),
+                    cancellationToken).ConfigureAwait(false),
                 VerifyCommand verify => await OnReaderLaneAsync(
                     $"verify {verify.Level}",
                     token => VerifyAsync(verify, token),
@@ -58,6 +75,10 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 CheckCommand check => await OnReaderLaneAsync(
                     $"check {check.Level}",
                     token => CheckAsync(check, token),
+                    cancellationToken).ConfigureAwait(false),
+                PreviewSetChangesCommand preview => await OnReaderLaneAsync(
+                    $"rescan {preview.SetName ?? "(default set)"}",
+                    token => PreviewSetChangesAsync(preview, token),
                     cancellationToken).ConfigureAwait(false),
                 RetentionCommand retention => await OnWriterLaneAsync(
                     retention.Apply ? "retention apply" : "retention plan",
@@ -229,7 +250,9 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     runtime.Writer,
                     apply,
                     now,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    set.Name,
+                    runtime.LoggerFor(typeof(Retention.RetentionRunner))).ConfigureAwait(false);
             }
             finally
             {
@@ -308,11 +331,33 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     {
         ListBackupSetsCommand => ListBackupSets(),
         UpsertBackupSetCommand upsert => UpsertBackupSet(upsert),
+        DeleteBackupSetCommand deleteSet => DeleteBackupSet(deleteSet),
+        ListDestinationsCommand => ListDestinations(),
+        UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
+        DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
+        ListPairingsCommand => ListPairings(),
+        GetDiagnosticsCommand => GetDiagnostics(),
+        SetLogLevelCommand setLevel => SetLogLevel(setLevel),
+        ReadLogCommand readLog => ReadLog(readLog),
+        BrowseFoldersCommand browse => BrowseFolders(browse),
+        ValidateSetDraftCommand draft => ValidateSetDraft(draft),
+        CreatePairingInviteCommand invite => CreatePairingInvite(invite),
+        ListPairingInvitesCommand => ListPairingInvites(),
+        RevokePairingInviteCommand revoke => RevokePairingInvite(revoke),
+        PairWithInviteCommand pair => await PairWithInviteAsync(pair, cancellationToken).ConfigureAwait(false),
+        ListNoticesCommand listNotices => ListNotices(listNotices),
+        AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
+        UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
+        CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
+        ProvisionWriteOnlySetCommand provision =>
+            await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
+        ProvisionInstallationCommand setup => ProvisionInstallation(setup),
+        ConfirmRecoveryKitCommand confirm => ConfirmRecoveryKit(confirm),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -376,6 +421,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         return null;
     }
 
+    /// <summary>The subtree prefixes a restore command names; several win over one (ADR-0041).</summary>
+    private static IReadOnlyList<string> PrefixesOf(IReadOnlyList<string>? paths, string? path) =>
+        paths is { Count: > 0 } ? paths
+        : path is { Length: > 0 } ? [path]
+        : [];
+
     /// <summary>Plans a restore without performing it — a catalogue walk plus one store probe per located blob.</summary>
     private async ValueTask<ServiceResult> PlanRestoreAsync(PlanRestoreCommand command, CancellationToken cancellationToken)
     {
@@ -384,40 +435,97 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             return invalid!;
         }
 
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, error) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+            return error!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
-        var plan = RestorePlanner.Plan(
-            catalogue, snapshotId, command.Path ?? string.Empty, RestoreTargetProfile.ForLocalPlatform());
-
-        if (plan.Items.Count == 0)
+        if (context.Source is { } source)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"The catalogue knows nothing under snapshot {command.SnapshotId}"
-                + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        // What a plan is for: the objects it needs and cannot find, reported
-        // before any byte moves rather than discovered part-way through. The
-        // catalogue alone cannot answer this — it is a cache, and a cache
-        // ahead of the store says "nothing missing" about the very objects
-        // the store has lost — so each located blob is probed against the
-        // store, one memoized metadata call per distinct blob. The manifest
-        // blob alone is not enough: an item's SEGMENTS live in other blobs —
-        // after a staging trim, precisely the ones no longer here (ADR-0034
-        // §6) — so each manifest is read (metadata never trims) and its
-        // referenced blobs are probed too (FR-RST-003).
-        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
-        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(archive.Repository.Keys.ContentIdKey);
+        try
+        {
+            using var catalogue = context.OpenCatalogue();
+            var plan = RestorePlanner.Plan(
+                catalogue, snapshotId, PrefixesOf(command.Paths, command.Path),
+                RestoreTargetProfile.ForLocalPlatform());
+
+            if (plan.Items.Count == 0)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"The catalogue knows nothing under snapshot {command.SnapshotId}"
+                    + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
+            }
+
+            var (missing, _) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+            return new RestorePlanResult(
+                plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
+                (long)plan.SpaceEstimateBytes,
+                missing,
+                plan.Conflicts.Count,
+                plan.Conflicts.Count == 0
+                    ? null
+                    : [.. plan.Conflicts.Take(20).Select(conflict => $"{conflict.Path} — {conflict.Reason}")],
+                plan.Degradations.Count == 0
+                    ? null
+                    : [.. plan.Degradations.Select(degradation => degradation.Detail)]);
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// What a plan is for: the objects it needs and cannot find, reported
+    /// before any byte moves rather than discovered part-way through. The
+    /// catalogue alone cannot answer this — it is a cache, and a cache
+    /// ahead of the store says "nothing missing" about the very objects
+    /// the store has lost — so each located blob is probed against the
+    /// store, one memoized metadata call per distinct blob. The manifest
+    /// blob alone is not enough: an item's SEGMENTS live in other blobs —
+    /// after a staging trim, precisely the ones no longer here (ADR-0034
+    /// §6) — so each manifest is read (metadata never trims) and its
+    /// referenced blobs are probed too (FR-RST-003). The keys that answered
+    /// are returned too: they are exactly the blob set a run needs, which is
+    /// what the targeted load opens instead of every footer in the store.
+    /// </summary>
+    private static async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
+        RestoreContext context,
+        Repository.Catalogue.Catalogue catalogue,
+        RestorePlan plan,
+        CancellationToken cancellationToken)
+    {
+        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(context.Keys.KeyIdKey);
+        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(context.Keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
-        var blobPresent = new Dictionary<Domain.Identifiers.BlobId, bool>();
+        var blobKeys = new Dictionary<Domain.Identifiers.BlobId, ObjectKey?>();
         var missing = new List<string>();
+        var needed = new HashSet<ObjectKey>();
+
+        async ValueTask<bool> PresentAsync(Repository.Catalogue.ResolvedLocation location)
+        {
+            if (!blobKeys.TryGetValue(location.BlobId, out var key))
+            {
+                key = await FindBlobKeyAsync(
+                    context.Store, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId), cancellationToken)
+                    .ConfigureAwait(false);
+                blobKeys[location.BlobId] = key;
+            }
+
+            if (key is { } found)
+            {
+                needed.Add(found);
+                return true;
+            }
+
+            return false;
+        }
 
         foreach (var item in plan.Items)
         {
@@ -432,16 +540,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 continue;
             }
 
-            if (!blobPresent.TryGetValue(location.BlobId, out var present))
-            {
-                var blobKey = location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId);
-                present =
-                    await BlobExistsAsync(archive, BlobClass.Metadata, blobKey, cancellationToken).ConfigureAwait(false)
-                    || await BlobExistsAsync(archive, BlobClass.Data, blobKey, cancellationToken).ConfigureAwait(false);
-                blobPresent[location.BlobId] = present;
-            }
-
-            if (!present)
+            if (!await PresentAsync(location).ConfigureAwait(false))
             {
                 missing.Add(item.Path);
                 continue;
@@ -451,7 +550,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             // absence — verify's business, and nothing this plan can name
             // segments from.
             var manifest = await ReadManifestAsync(
-                archive, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                context, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
                 .ConfigureAwait(false);
             if (manifest is null)
             {
@@ -462,32 +561,16 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
             foreach (var referenced in references)
             {
-                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation)
-                {
-                    missing.Add(item.Path);
-                    break;
-                }
-
-                if (!blobPresent.TryGetValue(segmentLocation.BlobId, out var segmentPresent))
-                {
-                    var segmentBlobKey = segmentLocation.StoreBlobKey ?? keyDeriver.Derive(segmentLocation.BlobId);
-                    segmentPresent =
-                        await BlobExistsAsync(archive, BlobClass.Data, segmentBlobKey, cancellationToken).ConfigureAwait(false)
-                        || await BlobExistsAsync(archive, BlobClass.Metadata, segmentBlobKey, cancellationToken).ConfigureAwait(false);
-                    blobPresent[segmentLocation.BlobId] = segmentPresent;
-                }
-
-                if (!segmentPresent)
+                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
+                    || !await PresentAsync(segmentLocation).ConfigureAwait(false))
                 {
                     missing.Add(item.Path);
                     break;
                 }
             }
         }
-        return new RestorePlanResult(
-            plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
-            (long)plan.SpaceEstimateBytes,
-            missing);
+
+        return (missing, needed);
     }
 
     /// <summary>
@@ -496,7 +579,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     /// snapshot's manifests cluster in a few metadata blobs.
     /// </summary>
     private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
-        ArchiveHandle archive,
+        RestoreContext context,
         Domain.Identifiers.ObjectId objectId,
         Repository.Catalogue.ResolvedLocation location,
         Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
@@ -512,12 +595,12 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             Repository.Packing.BlobReader? reader;
             try
             {
-                var metadata = await archive.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+                var metadata = await context.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
                 reader = metadata.Metadata is not { Length: > 0 }
                     ? null
                     : await Repository.Packing.BlobReader.OpenAsync(
-                        archive.Store, storeKey, metadata.Metadata.Length, archive.Repository.RepositoryId,
-                        archive.Repository.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
+                        context.Store, storeKey, metadata.Metadata.Length, context.RepositoryId,
+                        context.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
                         .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is Repository.Packing.BlobFormatException or IOException)
@@ -619,22 +702,34 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         }
     }
 
-    private static async ValueTask<bool> BlobExistsAsync(
-        ArchiveHandle archive, BlobClass blobClass, Domain.Identifiers.StoreBlobKey blobKey, CancellationToken cancellationToken)
+    /// <summary>
+    /// The store key a blob actually exists under, trying both classes — or
+    /// null. A store that cannot answer reads as missing: the plan's job is
+    /// to warn before bytes move, and "unreachable" warrants the warning as
+    /// much as "absent". The found key is what the run's targeted load opens.
+    /// </summary>
+    private static async ValueTask<ObjectKey?> FindBlobKeyAsync(
+        Storage.Abstractions.IObjectStore store,
+        Domain.Identifiers.StoreBlobKey blobKey,
+        CancellationToken cancellationToken)
     {
-        try
+        foreach (var blobClass in new[] { BlobClass.Metadata, BlobClass.Data })
         {
-            var metadata = await archive.Store.GetMetadataAsync(
-                Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey), cancellationToken).ConfigureAwait(false);
-            return metadata.Found && metadata.Metadata!.Length > 0;
+            var key = Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey);
+            try
+            {
+                var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+                if (metadata.Found && metadata.Metadata!.Length > 0)
+                {
+                    return key;
+                }
+            }
+            catch (IOException)
+            {
+            }
         }
-        catch (IOException)
-        {
-            // A store that cannot answer is reported as missing: the plan's
-            // job is to warn before bytes move, and "unreachable" warrants
-            // the warning as much as "absent".
-            return false;
-        }
+
+        return null;
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
@@ -645,40 +740,101 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             return invalid!;
         }
 
-        if (string.IsNullOrWhiteSpace(command.OutputDirectory))
+        var toOriginal = command.Target == "original";
+        if (command.Target is not (null or "folder" or "original"))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, $"'{command.Target}' is not a restore target (folder | original).");
+        }
+
+        if (!toOriginal && string.IsNullOrWhiteSpace(command.OutputDirectory))
         {
             return new ServiceError(ServiceErrorReason.InvalidArgument, "A restore needs an output directory.");
         }
 
+        ExistingDestinationPolicy existing;
+        switch (command.Existing)
+        {
+            case null:
+                existing = ExistingDestinationPolicy.Preserve;
+                break;
+            case "rename":
+                existing = ExistingDestinationPolicy.WriteBeside;
+                break;
+            case "overwrite":
+                existing = ExistingDestinationPolicy.Replace;
+                break;
+            default:
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"'{command.Existing}' is not an existing-file policy (rename | overwrite).");
+        }
+
         var target = RestoreTargetProfile.ForLocalPlatform();
-
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, error) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound, $"No set's archive holds snapshot {command.SnapshotId}.");
+            return error!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
-        var plan = RestorePlanner.Plan(catalogue, snapshotId, command.Path ?? string.Empty, target);
-        if (plan.Items.Count == 0)
+        if (context.Source is { } source)
         {
-            return new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        using var reader = new RepositoryReader(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-
-        // The output directory is a path on the machine running the service:
-        // a restore commanded from elsewhere writes here and the caller is told
-        // what happened, never sent the files (ADR-0028 §6).
-        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
-            plan,
-            command.OutputDirectory,
-            new RestoreExecutionOptions
+        try
+        {
+            using var catalogue = context.OpenCatalogue();
+            var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
+            if (plan.Items.Count == 0)
             {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"The catalogue knows nothing under snapshot {command.SnapshotId}.");
+            }
+
+            // The original-location mapping is resolved BEFORE anything is
+            // read or written (plan-before-transfer): every top-level slice
+            // must name a configured root, or the run is refused whole.
+            IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)> slices;
+            if (toOriginal)
+            {
+                var (resolved, refusal) = SliceForOriginal(catalogue, snapshotId, plan);
+                if (resolved is null)
+                {
+                    return refusal!;
+                }
+
+                slices = resolved;
+            }
+            else
+            {
+                slices = [(plan, command.OutputDirectory, string.Empty)];
+            }
+
+            using var reader = new RepositoryReader(
+                context.RepositoryId, context.Keys, context.Store, context.Source?.ReadAuthority);
+            if (context.Source is null)
+            {
+                await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // A source may be remote: open only the blobs the plan needs,
+                // known exactly from the same probe the plan verb runs
+                // (ADR-0041).
+                var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+                await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
+            }
+
+            var options = new RestoreExecutionOptions
+            {
+                DestinationMode = command.InPlace || toOriginal
+                    ? RestoreDestinationMode.InPlace
+                    : RestoreDestinationMode.Quarantine,
+                ExistingDestination = existing,
+
                 // A fresh identifier per run, not per snapshot: two restores of
                 // one snapshot must displace into distinct stores, or the second
                 // overwrites the first's displaced copies — the single shared
@@ -686,31 +842,171 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 // made every restore of a snapshot share one.
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            },
-            cancellationToken).ConfigureAwait(false);
+            };
 
-        // Files, not entries. The receipt records a created directory as
-        // "restored" too, but the contract documents this field as files
-        // written — and PlanRestore counts the same way, so a caller comparing
-        // the plan against the outcome is comparing like with like.
-        var directories = plan.Items
-            .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
-            .Select(item => item.Path)
-            .ToHashSet(StringComparer.Ordinal);
+            // The output directory is a path on the machine running the
+            // service: a restore commanded from elsewhere writes here and the
+            // caller is told what happened, never sent the files (ADR-0028 §6).
+            var executor = new RestoreExecutor(reader, target, runtime.LoggerFor<RestoreExecutor>());
+            var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
+            foreach (var (slice, outputDirectory, labelPrefix) in slices)
+            {
+                receipts.Add((
+                    await executor.ExecuteAsync(slice, outputDirectory, options, cancellationToken).ConfigureAwait(false),
+                    labelPrefix));
+            }
 
-        return new RestoreResult(
-            // A degraded file's content was written and verified, so it counts
-            // among the files written; the Outcome below carries the shortfall
-            // (Partial), exactly as it carries a skipped symlink's.
-            receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
-            receipt.Items.Count(item => item.Outcome == "failed"),
-            // Where the files actually are, not where the caller pointed.
-            // Historical content quarantines by default (FR-RST-006), so the
-            // two differ, and a caller told the wrong one cannot find its data.
-            receipt.WrittenTo,
-            // The outcome the executor computed — carried whole so a Partial
-            // restore is not reported to a remote client as success (FR-RST-005).
-            receipt.Outcome.ToString().ToLowerInvariant());
+            var receipt = MergeReceipts(receipts);
+            var receiptPath = PersistReceipt(receipt, options.RunId);
+
+            // Files, not entries. The receipt records a created directory as
+            // "restored" too, but the contract documents this field as files
+            // written — and PlanRestore counts the same way, so a caller
+            // comparing the plan against the outcome is comparing like with
+            // like.
+            var directories = plan.Items
+                .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+                .Select(item => item.Path)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
+            return new RestoreResult(
+                // A degraded file's content was written and verified, so it
+                // counts among the files written; the Outcome carries the
+                // shortfall (Partial), exactly as it carries a skipped
+                // symlink's.
+                receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
+                failures.Count,
+                // Where the files actually are, not where the caller pointed.
+                // Historical content quarantines by default (FR-RST-006), so
+                // the two differ, and a caller told the wrong one cannot find
+                // its data.
+                receipt.WrittenTo,
+                // The outcome the executor computed — carried whole so a
+                // Partial restore is not reported to a remote client as
+                // success (FR-RST-005).
+                receipt.Outcome.ToString().ToLowerInvariant(),
+                Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
+                Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
+                Displaced: receipt.Displaced.Count,
+                WrittenBeside: receipt.Items.Count(item => item.WrittenAs is not null),
+                ReceiptPath: receiptPath,
+                FailedSample: failures.Count == 0
+                    ? null
+                    : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")]);
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The per-root slices of an original-location restore (ADR-0041). A
+    /// single-root set restores the whole plan into its root; a multi-root
+    /// set's plan paths are label-prefixed (ADR-0040), so the items group by
+    /// first component, each slice's paths shed the label, and each runs
+    /// into its root — refused whole, naming the label, when any slice's
+    /// label no longer maps to a configured root.
+    /// </summary>
+    private (IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? Slices, ServiceError? Refusal)
+        SliceForOriginal(Repository.Catalogue.Catalogue catalogue, byte[] snapshotId, RestorePlan plan)
+    {
+        var row = catalogue.EnumerateSnapshots()
+            .FirstOrDefault(candidate => candidate.SnapshotId.Span.SequenceEqual(snapshotId));
+        var setId = row is null ? null : Convert.ToHexStringLower(row.BackupSetId.Span);
+        var set = setId is null
+            ? null
+            : runtime.Configuration.BackupSets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, setId, StringComparison.Ordinal));
+        if (set is null)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "This snapshot's set is no longer configured — restore to a chosen folder instead."));
+        }
+
+        if (set.Roots.Count == 1)
+        {
+            return ([(plan, set.Roots[0].Path, string.Empty)], null);
+        }
+
+        var byLabel = plan.Items
+            .GroupBy(item => item.Path.Split('/')[0], StringComparer.Ordinal)
+            .ToList();
+        var slices = new List<(RestorePlan, string, string)>();
+        foreach (var group in byLabel)
+        {
+            var root = set.Roots.FirstOrDefault(candidate =>
+                string.Equals(candidate.Label, group.Key, StringComparison.Ordinal));
+            if (root is null)
+            {
+                return (null, new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"'{group.Key}' is not one of the set's root labels any more — restore to a chosen folder instead."));
+            }
+
+            var prefix = group.Key + "/";
+            var items = group
+                .Where(item => item.Path.Length > prefix.Length)
+                .Select(item => item with { Path = item.Path[prefix.Length..] })
+                .ToList();
+            slices.Add((
+                new RestorePlan
+                {
+                    SnapshotId = plan.SnapshotId,
+                    Items = items,
+                    Conflicts = plan.Conflicts,
+                    Degradations = plan.Degradations,
+                },
+                root.Path,
+                prefix));
+        }
+
+        return (slices, null);
+    }
+
+    /// <summary>One receipt for the run, whichever way it was sliced.</summary>
+    private static RestoreReceipt MergeReceipts(List<(RestoreReceipt Receipt, string LabelPrefix)> receipts)
+    {
+        if (receipts.Count == 1 && receipts[0].LabelPrefix.Length == 0)
+        {
+            return receipts[0].Receipt;
+        }
+
+        static string Prefixed(string prefix, string path) => prefix.Length == 0 ? path : prefix + path;
+        var worst = receipts.Max(entry => entry.Receipt.Outcome);
+        return new RestoreReceipt
+        {
+            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+            SnapshotId = receipts[0].Receipt.SnapshotId,
+            StartedAt = receipts.Min(entry => entry.Receipt.StartedAt),
+            CompletedAt = receipts.Max(entry => entry.Receipt.CompletedAt),
+            Items = [.. receipts.SelectMany(entry => entry.Receipt.Items.Select(item => item with
+            {
+                Path = Prefixed(entry.LabelPrefix, item.Path),
+                WrittenAs = item.WrittenAs is null ? null : Prefixed(entry.LabelPrefix, item.WrittenAs),
+            }))],
+            Displaced = [.. receipts.SelectMany(entry =>
+                entry.Receipt.Displaced.Select(path => Prefixed(entry.LabelPrefix, path)))],
+            WrittenTo = string.Join("; ", receipts.Select(entry => entry.Receipt.WrittenTo)),
+            Outcome = worst,
+        };
+    }
+
+    /// <summary>
+    /// Persists the receipt (FR-RST-004): the executor builds it and until
+    /// now nobody kept it, which made "the restore succeeded" an impression
+    /// rather than a checkable claim once the dialog closed.
+    /// </summary>
+    private string PersistReceipt(RestoreReceipt receipt, string runId)
+    {
+        Directory.CreateDirectory(runtime.ReceiptsRoot);
+        var path = Path.Combine(runtime.ReceiptsRoot, $"{runId}.json");
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, receipt.ToJson());
+        File.Move(temporary, path, overwrite: true);
+        return path;
     }
 
     /// <summary>Verifies every stored blob of every set's archive at the requested level.</summary>
@@ -723,6 +1019,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
 
         var examined = 0L;
         var failures = 0L;
+        var sealedRecords = 0L;
 
         foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -738,10 +1035,14 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 {
                     failures++;
                 }
+
+                // Sealed content on a write-only set is a stated incapacity,
+                // never a failure and never a silent pass (ADR-0042).
+                sealedRecords += result.RecordsSealed;
             }
         }
 
-        return new VerificationResult(examined, failures, canonical);
+        return new VerificationResult(examined, failures, canonical, sealedRecords);
     }
 
     /// <summary>Health across every set's archive: the blob sweep, the journal survey, and the catalogue's damage findings.</summary>
@@ -763,6 +1064,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         {
             using (var verifier = new VerifyEngine(archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store))
             {
+                var sealedRecords = 0L;
                 await foreach (var entry in archive.Store
                     .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
                     .ConfigureAwait(false))
@@ -773,6 +1075,18 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     {
                         findings.Add($"{set.Name}: blob {entry.Key.Value}: {result.Detail}");
                     }
+
+                    sealedRecords += result.RecordsSealed;
+                }
+
+                // The stated incapacity, once per set rather than per blob: a
+                // records-level check of a write-only set must say what it
+                // could not check (ADR-0042), never read as a clean content
+                // sweep — and never as damage.
+                if (sealedRecords > 0)
+                {
+                    findings.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"{set.Name}: {sealedRecords} record(s) are sealed to the repository public key — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
                 }
             }
 
@@ -807,37 +1121,97 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(
             [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
-                set.Id, set.Name, set.Root, set.Schedule, set.IncludeRules, set.ExcludeRules,
-                [.. set.Destinations.Select(reference => reference.Ref)]))]);
+                set.Id, set.Name,
+                // Root carries the first root for pre-1.10 clients; Roots is
+                // the whole truth (ADR-0040).
+                set.Roots[0].Path,
+                set.Schedule, set.IncludeRules, set.ExcludeRules,
+                [.. set.Destinations.Select(reference => reference.Ref)],
+                ToPolicyDescriptor(set.Retention),
+                ToOverrideDescriptors(set.Destinations),
+                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))]))]);
 
     private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
     {
         var configuration = runtime.Configuration;
 
-        // The command names destinations; a retention override stays a
-        // configuration-file concern until a client needs to write one.
-        // An upsert keeps any override the set already carried per name.
+        // The schedule is validated here, at the command boundary, and not in
+        // configuration load — ADR-0035 §1's blast-radius rule: a throw on
+        // the load path stops every set backing up over one typo. Unvalidated,
+        // a bad schedule saves cleanly and fails permanently at the next
+        // pass, which is the worse discovery (ADR-0037 §2).
+        if (ScheduleDefect(command.Set.Schedule) is { } scheduleDefect)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect);
+        }
+
+        // The roots (ADR-0040): a 1.10 client speaks `roots`, older ones the
+        // single `root`; the labels a multi-root set needs are materialised
+        // HERE, once, and persisted — deriving them on read would let a later
+        // sibling silently shift an existing root's coordinates.
+        IReadOnlyList<BackupRootConfiguration> requestedRoots =
+            command.Set.Roots is { Count: > 0 } draftRoots
+                ? [.. draftRoots.Select(root => new BackupRootConfiguration { Path = root.Path, Label = root.Label })]
+                : !string.IsNullOrWhiteSpace(command.Set.Root)
+                    ? [new BackupRootConfiguration { Path = command.Set.Root }]
+                    : [];
+        if (requestedRoots.Count == 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, "A backup set needs at least one root folder.");
+        }
+
+        var resolvedRoots = ClientConfiguration.DeriveLabels(requestedRoots);
+
+        // What the command does not carry is preserved, never zeroed: a 1.6
+        // client's upsert leaves retention exactly as it stood. A carried
+        // policy with every field absent is the explicit "none" (ADR-0037).
         var existing = configuration.BackupSets
             .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
+
+        // The 1↔N transitions change the rule coordinate system (ADR-0040):
+        // growing past one root prefixes the old root's anchored rules with
+        // its new label; shrinking back strips the survivor's. Only rules the
+        // set already had are rewritten — a rule the client just sent is
+        // trusted to speak the new coordinates.
+        var (includeRules, excludeRules, reanchored) = ReanchorRules(
+            existing, resolvedRoots, command.Set.IncludeRules, command.Set.ExcludeRules);
+
         var replacement = new BackupSetConfiguration
         {
             Id = command.Set.Id,
             Name = command.Set.Name,
-            Root = command.Set.Root,
+            Roots = resolvedRoots,
             Schedule = command.Set.Schedule,
-            IncludeRules = command.Set.IncludeRules,
-            ExcludeRules = command.Set.ExcludeRules,
-            Retention = existing?.Retention,
-            Destinations = [.. command.Set.Destinations.Select(name =>
-                existing?.Destinations.FirstOrDefault(reference =>
-                    string.Equals(reference.Ref, name, StringComparison.Ordinal))
-                ?? new SetDestinationReference { Ref = name })],
+            IncludeRules = includeRules,
+            ExcludeRules = excludeRules,
+            Retention = ToRetention(command.Set.Retention, existing?.Retention),
+            Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
+            {
+                Ref = name,
+                Retention = command.Set.DestinationRetention is { } overrides
+                    // A carried map is the complete truth: named entries set
+                    // (empty clears), unnamed destinations carry no override.
+                    ? ToRetention(overrides.GetValueOrDefault(name), existing: null)
+                    // No map at all preserves whatever the set held, by name.
+                    : existing?.Destinations.FirstOrDefault(reference =>
+                        string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Retention,
+            })],
         };
 
-        var sets = configuration.BackupSets
-            .Where(set => !string.Equals(set.Id, replacement.Id, StringComparison.Ordinal))
-            .Append(replacement)
-            .ToList();
+        // Replace in place: the first set is the default RunBackupCommand
+        // runs, and status renders declaration order — an edit must not
+        // reshuffle either (ADR-0037 §5).
+        var sets = configuration.BackupSets.ToList();
+        var index = sets.FindIndex(set => string.Equals(set.Id, replacement.Id, StringComparison.Ordinal));
+        if (index >= 0)
+        {
+            sets[index] = replacement;
+        }
+        else
+        {
+            sets.Add(replacement);
+        }
 
         try
         {
@@ -851,7 +1225,176 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        // A material edit — the root or the rules — changes what the next
+        // snapshot will hold, so it is answered with what changed and, when
+        // there is a last backup to compare with, a rescan is queued whose
+        // finding stands as a notice until that next backup completes
+        // (ADR-0038). Schedule and retention edits change when and how long,
+        // not what, and stay a plain acknowledgement.
+        if (existing is not null && IsMaterialChange(existing, replacement))
+        {
+            var lines = new List<string>();
+            var oldRoots = existing.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
+            var newRoots = replacement.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
+            foreach (var added in replacement.Roots.Where(root => !oldRoots.Contains(root.Path)))
+            {
+                lines.Add(replacement.Roots.Count > 1
+                    ? $"root added: '{added.Path}' as '{added.Label}'"
+                    : $"root changed to: '{added.Path}'");
+            }
+
+            foreach (var removed in existing.Roots.Where(root => !newRoots.Contains(root.Path)))
+            {
+                lines.Add($"root removed: '{removed.Path}'");
+            }
+
+            if (!existing.IncludeRules.SequenceEqual(replacement.IncludeRules, StringComparer.Ordinal))
+            {
+                lines.Add($"include rules changed ({existing.IncludeRules.Count} -> {replacement.IncludeRules.Count})");
+            }
+
+            if (!existing.ExcludeRules.SequenceEqual(replacement.ExcludeRules, StringComparer.Ordinal))
+            {
+                lines.Add($"exclude rules changed ({existing.ExcludeRules.Count} -> {replacement.ExcludeRules.Count})");
+            }
+
+            if (reanchored)
+            {
+                lines.Add(
+                    "Saved rules were re-anchored to the new root coordinates — anchored rules gained or "
+                    + "lost the root's label prefix so they keep meaning what they meant.");
+            }
+
+            if (runtime.ArchiveExists(replacement.Id))
+            {
+                SetChangeScan.Enqueue(runtime, replacement);
+                lines.Add(
+                    "A rescan against the last backup was queued; its findings will stand as a notice " +
+                    "until the next backup completes.");
+            }
+            else
+            {
+                lines.Add("This set has not backed up yet; its first backup captures under these settings.");
+            }
+
+            return new ConfigurationChangeResult(lines);
+        }
+
         return new AcknowledgedResult();
+    }
+
+    /// <summary>
+    /// Whether an edit changed what the next snapshot will hold — the roots
+    /// or the rules, compared as sets so mere reordering is not material.
+    /// </summary>
+    private static bool IsMaterialChange(BackupSetConfiguration existing, BackupSetConfiguration replacement) =>
+        !existing.Roots.Select(root => (root.Path, root.Label))
+            .ToHashSet()
+            .SetEquals(replacement.Roots.Select(root => (root.Path, root.Label)))
+        || !existing.IncludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.IncludeRules)
+        || !existing.ExcludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.ExcludeRules);
+
+    /// <summary>
+    /// The 1↔N coordinate transitions (ADR-0040), applied per rule and only
+    /// to rules the set already carried: growing past one root prefixes the
+    /// old root's anchored rules (those containing <c>/</c>) with its new
+    /// label; shrinking to one strips the survivor's prefix — a stripped rule
+    /// left with no <c>/</c> becomes an exact-path regex, because a bare name
+    /// is the any-depth shorthand and would silently widen. Shorthand rules
+    /// are depth-independent and never touched.
+    /// </summary>
+    private static (IReadOnlyList<string> Includes, IReadOnlyList<string> Excludes, bool Reanchored) ReanchorRules(
+        BackupSetConfiguration? existing,
+        IReadOnlyList<BackupRootConfiguration> resolvedRoots,
+        IReadOnlyList<string> includeRules,
+        IReadOnlyList<string> excludeRules)
+    {
+        if (existing is null)
+        {
+            return (includeRules, excludeRules, false);
+        }
+
+        Func<string, string>? transform = null;
+        if (existing.Roots.Count == 1 && resolvedRoots.Count > 1
+            && resolvedRoots.FirstOrDefault(root =>
+                string.Equals(root.Path, existing.Roots[0].Path, StringComparison.Ordinal)) is { Label: { } label })
+        {
+            transform = rule =>
+                !rule.StartsWith("re:", StringComparison.Ordinal) && rule.Contains('/', StringComparison.Ordinal)
+                    ? label + "/" + rule
+                    : rule;
+        }
+        else if (existing.Roots.Count > 1 && resolvedRoots.Count == 1
+            && existing.Roots.FirstOrDefault(root =>
+                string.Equals(root.Path, resolvedRoots[0].Path, StringComparison.Ordinal)) is { Label: { } survivor })
+        {
+            var prefix = survivor + "/";
+            transform = rule =>
+            {
+                if (rule.StartsWith("re:", StringComparison.Ordinal)
+                    || !rule.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return rule;
+                }
+
+                var stripped = rule[prefix.Length..];
+                if (stripped.Contains('/', StringComparison.Ordinal))
+                {
+                    return stripped;
+                }
+
+                // A single component would read as **/<name>; an exact-path
+                // regex keeps the top-level anchoring — unless it carries
+                // glob syntax, which has no mechanical regex twin, where the
+                // glob stays and honestly widens. Escaped by hand: the
+                // dialect's subset refuses backslash-alphanumeric escapes,
+                // which Regex.Escape emits for whitespace.
+                return stripped.AsSpan().IndexOfAny('*', '?') >= 0
+                    ? stripped
+                    : "re:" + EscapeRegexLiteral(stripped);
+            };
+        }
+
+        if (transform is null)
+        {
+            return (includeRules, excludeRules, false);
+        }
+
+        var oldIncludes = existing.IncludeRules.ToHashSet(StringComparer.Ordinal);
+        var oldExcludes = existing.ExcludeRules.ToHashSet(StringComparer.Ordinal);
+        var reanchored = false;
+
+        List<string> Apply(IReadOnlyList<string> rules, HashSet<string> saved)
+        {
+            var result = new List<string>(rules.Count);
+            foreach (var rule in rules)
+            {
+                var next = saved.Contains(rule) ? transform(rule) : rule;
+                reanchored |= !string.Equals(next, rule, StringComparison.Ordinal);
+                result.Add(next);
+            }
+
+            return result;
+        }
+
+        return (Apply(includeRules, oldIncludes), Apply(excludeRules, oldExcludes), reanchored);
+    }
+
+    /// <summary>Escapes a literal for a rules-v1 regex rule — metacharacters only, staying inside the pinned subset.</summary>
+    private static string EscapeRegexLiteral(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length + 4);
+        foreach (var character in text)
+        {
+            if (character is '\\' or '.' or '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '|' or '^' or '$')
+            {
+                builder.Append('\\');
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
     }
 
     private ServiceResult RunBackup(RunBackupCommand command)
@@ -879,7 +1422,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         // durable stamp goes through ToUnixTimeMilliseconds, which is
         // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
-        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true);
+        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
 
         // A committed snapshot starts its fan-out promptly rather than waiting
         // for the next pass (ADR-0034 §3); the pass still catches up anything
@@ -1181,7 +1724,7 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                     Convert.ToHexString(row.BackupSetId.Span).ToLowerInvariant(),
                     row.CapturedAt,
                     row.CaptureStatus,
-                    0,
+                    catalogue.CountFiles(row.SnapshotId.Span),
                     destinations));
             }
         }
@@ -1240,22 +1783,116 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
                 ServiceErrorReason.InvalidArgument, $"'{command.SnapshotId}' is not a hex snapshot identifier.");
         }
 
-        var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-        if (archive is null)
+        var (context, contextError) = await ResolveRestoreContextAsync(
+            command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return new ServiceError(ServiceErrorReason.NotFound, $"No snapshot '{command.SnapshotId}' exists.");
+            return command.Source is null
+                ? new ServiceError(ServiceErrorReason.NotFound, $"No snapshot '{command.SnapshotId}' exists.")
+                : contextError!;
         }
 
-        using var catalogue = archive.OpenReadCatalogue();
+        if (context.Source is { } source)
+        {
+            await source.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+        using var catalogue = context.OpenCatalogue();
         var path = command.Path ?? string.Empty;
         var entries = catalogue.ListDirectory(snapshotId, path);
+
+        // The set's previous snapshot, when one exists: EnumerateSnapshots is
+        // newest first, so the predecessor is the next same-set row after
+        // this one. Both listings name a path identically, so the comparison
+        // is a dictionary join — two queries, never one per entry.
+        var rows = catalogue.EnumerateSnapshots();
+        var current = rows.FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId));
+        Repository.Catalogue.CatalogueSnapshot? previous = null;
+        if (current is not null)
+        {
+            previous = rows
+                .SkipWhile(row => !row.SnapshotId.Span.SequenceEqual(snapshotId))
+                .Skip(1)
+                .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(current.BackupSetId.Span));
+        }
+
+        Dictionary<string, Repository.Catalogue.CatalogueTreeEntry>? before = null;
+        if (previous is not null)
+        {
+            before = catalogue.ListDirectory(previous.SnapshotId.Span, path)
+                .ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+        }
+
+        // What the entry's recorded object says: equal ids are the same
+        // statement — an unchanged file re-emits its prior manifest's id
+        // verbatim, so the comparison is exact. A directory makes no claim:
+        // its id is the tree chain head, whose recorded metadata mixes in
+        // access times the scan itself perturbs, so a folder-level marker
+        // would read "changed" as noise — open the folder and its own
+        // entries answer (ADR-0039).
+        string? ChangeOf(Repository.Catalogue.CatalogueTreeEntry entry) =>
+            before is null || entry.EntryKind == Domain.EntryKind.DirectoryPlaceholder ? null
+            : !before.TryGetValue(entry.Path, out var prior) ? "new"
+            : prior.ObjectId == entry.ObjectId ? "same"
+            : "changed";
+
+        List<string>? deleted = null;
+        if (before is not null)
+        {
+            var present = entries.Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal);
+            deleted = [.. before.Keys
+                .Where(priorPath => !present.Contains(priorPath))
+                .Select(priorPath => priorPath.Split('/')[^1])
+                .Order(StringComparer.Ordinal)];
+        }
+
+        // The documented vocabulary is file | directory | symlink | special —
+        // the enum's own name for a directory row is its internal
+        // "placeholder" framing, which leaked to the wire before ADR-0039 and
+        // matched no client's check.
+        static string KindOf(Domain.EntryKind kind) => kind switch
+        {
+            Domain.EntryKind.DirectoryPlaceholder => "directory",
+            _ => kind.ToString().ToLowerInvariant(),
+        };
+
         return new DirectoryResult(
             path,
             [.. entries.Select(entry => new DirectoryEntryDescriptor(
                 entry.Path.Split('/')[^1],
-                entry.EntryKind.ToString().ToLowerInvariant(),
-                (long)(entry.LogicalLength ?? 0)))]);
+                KindOf(entry.EntryKind),
+                (long)(entry.LogicalLength ?? 0),
+                entry.ModifiedAt,
+                ChangeOf(entry)))],
+            deleted,
+            previous is null ? null : Convert.ToHexStringLower(previous.SnapshotId.Span));
+        }
+        finally
+        {
+            context.Source?.Gate.Release();
+        }
     }
+
+    /// <summary>
+    /// The notices, structured (FR-DEST-008, ADR-0039): identity for
+    /// acknowledgement, key for grouping, raised-at for age — everything the
+    /// status strings flatten away. Oldest first, so the longest-waiting
+    /// notice reads first.
+    /// </summary>
+    private NoticesResult ListNotices(ListNoticesCommand command) =>
+        new([.. (command.IncludeAcknowledged
+                ? runtime.Notices.Notices.OrderBy(notice => notice.RaisedAt)
+                : runtime.Notices.Unacknowledged.OrderBy(notice => notice.RaisedAt))
+            .Select(notice => new NoticeDescriptor(
+                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt))]);
+
+    /// <summary>A person has seen the notice; it stays on record (FR-DEST-008).</summary>
+    private ServiceResult AcknowledgeNotice(AcknowledgeNoticeCommand command) =>
+        runtime.Notices.Acknowledge(command.Id, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            ? new AcknowledgedResult()
+            : new ServiceError(ServiceErrorReason.NotFound, $"No unacknowledged notice '{command.Id}' exists.");
 
     private async ValueTask<ServiceResult> GetStatusAsync(CancellationToken cancellationToken)
     {
@@ -1320,7 +1957,8 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
         {
             var destination = configuration.FindDestination(reference.Ref);
             var input = DestinationStatus.Describe(
-                reference.Ref, destination, set.Root, runtime.DestinationSync.Find(set.Id, reference.Ref),
+                reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
+                runtime.DestinationSync.Find(set.Id, reference.Ref),
                 lastCompleted, nowMs, DeviceIdOf);
 
             inputs.Add(input);
@@ -1376,7 +2014,35 @@ public sealed class ServiceCommandHandler(ServiceRuntime runtime, RemoteBindingS
             Environment.MachineName,
             runtime.Options.StateDirectory,
             remoteBinding.Enabled,
-            runtime.Queue.ActiveCount);
+            runtime.Queue.ActiveCount,
+            runtime.Options.ArchivesRoot,
+            runtime.GrantRecipient.PublicKeyHex,
+            runtime.SetupState,
+            Convert.ToHexStringLower(runtime.State.DeviceId),
+            runtime.Options.Logging is { } logging
+                ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
+                : null,
+            runtime.KitConfirmation.Status,
+            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds);
+}
+
+/// <summary>
+/// Where the caller on a session arrived from (ADR-0044 §5).
+/// </summary>
+/// <remarks>
+/// The listener that owns the session knows this and nothing else does: the
+/// remote listener presents <see cref="Remote"/>, the local one
+/// <see cref="Local"/>. It exists because refusing a verb to a remote console
+/// is a per-caller question, and the only fact the handler had was whether
+/// the remote binding was listening at all.
+/// </remarks>
+public enum CallerScope
+{
+    /// <summary>Over the local binding — a Unix socket or named pipe on this machine.</summary>
+    Local,
+
+    /// <summary>Over the remote binding — a paired device elsewhere (ADR-0028 §6).</summary>
+    Remote,
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

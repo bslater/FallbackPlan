@@ -1,8 +1,10 @@
 using Bodu;
 using System.Globalization;
 using System.Net;
+using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Keystore;
 using FallbackPlan.Protocol;
@@ -11,6 +13,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -50,6 +53,9 @@ public static class AgentHost
                   fallbackplan-agent run    --archives <root> --state <dir> [--passphrase-env <VAR>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
+                  fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
+                                            --acknowledge-loss --kit-output <path>
+                                            --user <name> --password-env <VAR>
                   fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
@@ -67,11 +73,30 @@ public static class AgentHost
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
 
+                Every verb accepts --log-level <trace|debug|information|warning|
+                error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
+                when the flag is absent (ADR-0043 §6). Logs go to <state>/logs;
+                `run` echoes them to the console as well.
+
                 Backup sets, their destinations and their schedules come from
                 <state>/config.json. Each set's staging archive lives under
                 --archives as <root>/<set id>, created on the set's first backup
                 (ADR-0034). Missed runs coalesce to one catch-up run per set
                 (ADR-0027 §1).
+
+                `setup` gives a fresh installation the passphrase everything derives
+                from (ADR-0044). It is for headless installs with no browser; the
+                console runs the same ceremony with the warnings spelled out.
+                Derivation happens here and only the sealed bundle reaches the
+                service, so the passphrase is named by environment variable and
+                never appears on the command line. It runs exactly once: a v2
+                passphrase can never be changed, so a second attempt is refused
+                rather than obeyed. --acknowledge-loss is required, because losing
+                the passphrase makes every backup unrecoverable and there is no
+                reset, no export and no support path. --kit-output names where to
+                write the recovery kit, which setup does not complete without: the
+                binary form goes there and the printable form to '<path>.txt'. The
+                kit is ONE factor — store it apart from the passphrase.
 
                 `unlock` stores the passphrase in this account's platform keystore so
                 scheduled backups run with nobody present; `run` then needs no
@@ -129,11 +154,62 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
+        }
+
+        // What config.json asks for, if it can be read at all. A file the
+        // service will go on to refuse must not also stop it logging: the
+        // refusal is one of the first things worth having in the log, so a
+        // configuration that does not load leaves the level to the flag, the
+        // environment and the fallback, and the defect is reported through the
+        // ordinary path a moment later.
+        var configured = stateDirectory is null ? null : LoggingFromConfiguration(stateDirectory);
+
+        // The level in force, resolved before any verb runs: the flag, then
+        // the environment, then config.json, then Information (ADR-0043 §6). A
+        // name nobody recognises is refused here rather than quietly ignored.
+        if (!LoggingOptions.TryResolveLevel(
+                Get("--log-level"),
+                Environment.GetEnvironmentVariable(LoggingOptions.LevelVariable),
+                configured?.DefaultLevel(),
+                out var logLevel,
+                out var levelRefusal))
+        {
+            error.WriteLine($"error: {levelRefusal}");
+            return 1;
+        }
+
+        // One composition for the process. The sinks own a file handle and a
+        // rotation policy, so a verb that built a second would be rolling the
+        // same file from two places. `run` also echoes to the console, which
+        // is where the service's own lines have always gone; the one-shot
+        // verbs print their result and leave the file to hold the detail.
+        var defaults = new LoggingOptions();
+        using var logging = LoggingComposition.Create(
+            new LoggingOptions
+            {
+                Default = logLevel,
+                Categories = configured?.CategoryLevels() ?? defaults.Categories,
+                Directory = LogDirectoryFor(args[0], stateDirectory),
+                MaximumFileBytes = configured?.MaxFileBytes ?? defaults.MaximumFileBytes,
+                RetainFiles = configured?.RetainFiles ?? defaults.RetainFiles,
+                RingCapacity = configured?.RingCapacity ?? defaults.RingCapacity,
+                Console = args[0] == "run",
+            },
+            output);
+
+        // Said once, on standard error, and never on standard output: `install`
+        // prints a service definition somebody redirects into a file, and a
+        // warning in the middle of a unit file is a corrupt unit file. A log
+        // that cannot be written is worth knowing about and is not worth
+        // stopping for — the verb below runs either way.
+        if (logging.DurableSinkRefusal is { } sinkRefusal)
+        {
+            error.WriteLine($"warning: {sinkRefusal}");
         }
 
         // `notices` lists what awaits a human, or acknowledges one entry —
@@ -147,7 +223,8 @@ public static class AgentHost
                 return 1;
             }
 
-            return Notices(stateDirectory, Get("--ack"), output, error);
+            return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         // The pairing verbs need the state directory and no repository — a
@@ -271,17 +348,14 @@ public static class AgentHost
             // The keystore is what makes unattended scheduled backup possible
             // at all (ADR-0028 section 9). An environment variable held for the
             // life of the process, and inherited by every child, is the thing
-            // it replaces.
+            // it replaces. Holding neither is a valid way to run since
+            // ADR-0042: a provisioned write-only set opens with its stored
+            // credential and no passphrase at all — a v1 set on such a start
+            // is refused per set, with the remedy named, when something
+            // actually tries to open it.
             try
             {
-                if (!PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue)
-                    || passphraseValue is null)
-                {
-                    error.WriteLine(
-                        "error: no passphrase. Either run `unlock --passphrase-env <VAR>` once to store it in this "
-                        + "account's keystore, or pass --passphrase-env on every run.");
-                    return 1;
-                }
+                PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue);
             }
             catch (KeystoreException exception)
             {
@@ -301,9 +375,14 @@ public static class AgentHost
         {
             try
             {
-                using var verbPassphrase = Passphrase.Create(passphraseValue);
+                using var verbPassphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
                 await using var verbRuntime = await ServiceRuntime.StartAsync(
-                    new ServiceOptions { ArchivesRoot = archivesRoot!, StateDirectory = stateDirectory },
+                    new ServiceOptions
+                    {
+                        ArchivesRoot = archivesRoot!,
+                        StateDirectory = stateDirectory,
+                        Logging = logging,
+                    },
                     verbPassphrase, cancellationToken).ConfigureAwait(false);
 
                 var handler = new ServiceCommandHandler(verbRuntime, RemoteBindingState.Off);
@@ -346,6 +425,262 @@ public static class AgentHost
                 error.WriteLine("error: the passphrase does not open this repository.");
                 return 1;
             }
+        }
+
+        // Setup speaks the same one-shot shape as the other verbs here: its
+        // own runtime for the duration, then the ceremony. It therefore
+        // inherits the state-directory refusal — a running service holds the
+        // writer role and is named rather than fought.
+        //
+        // Two commands rather than one, so it cannot use ServiceVerbAsync:
+        // the recipient key has to be read before there is anything to seal
+        // to. That is exactly what the console does over HTTP, and doing it
+        // the same way here keeps one ceremony rather than two.
+        // Written directly to the store rather than through a command: this
+        // process IS the service for the duration of the ceremony, so there is
+        // no connection to gate and no session to hold. The gate exists to ask
+        // "which person is acting" of a client, and setup has no client.
+        int CreateFirstAccount(string name, string password)
+        {
+            var store = UserStore.Open(stateDirectory);
+            if (store.HasAccounts)
+            {
+                error.WriteLine(
+                    "error: this installation already has accounts, so setup will not add another owner. "
+                    + "Use the console or the CLI to add an account (FR-USR-004).");
+                return 2;
+            }
+
+            var created = store.Create(name, password, UserRole.Owner);
+            if (!created.IsOk)
+            {
+                error.WriteLine(
+                    $"error: the first account was refused ({created.Outcome}). The installation is set up "
+                    + "and its kit is saved; add the account from the console or the CLI.");
+                return 2;
+            }
+
+            output.WriteLine($"owner          {created.User!.Name}");
+            return 0;
+        }
+
+        async Task<int> SetupVerbAsync(string kitOutput, string firstUser, string firstPassword)
+        {
+            byte[] kitFramed = [];
+
+            try
+            {
+                await using var setupRuntime = await ServiceRuntime.StartAsync(
+                    new ServiceOptions
+                    {
+                        ArchivesRoot = archivesRoot!,
+                        StateDirectory = stateDirectory,
+                        Logging = logging,
+                    },
+                    passphrase: null, cancellationToken).ConfigureAwait(false);
+
+                var handler = new ServiceCommandHandler(setupRuntime, RemoteBindingState.Off, CallerScope.Local);
+
+                if (await handler.ExecuteAsync(new Api.DescribeServiceCommand(), cancellationToken)
+                        .ConfigureAwait(false) is not Api.ServiceDescriptionResult
+                        { RestoreGrantRecipient.Length: > 0 } description)
+                {
+                    error.WriteLine("error: this service does not publish a grant-recipient key.");
+                    return 2;
+                }
+
+                string envelope;
+                using (var passphrase = Passphrase.Create(passphraseValue!))
+                {
+                    var parameters = Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters;
+                    var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(
+                        Repository.Crypto.KekDerivation.SaltLength);
+
+                    // Argon2id runs here, in the process the operator started.
+                    // What crosses is the sealed bundle (NFR-SEC-011) — and
+                    // the same derivation produces the recovery kit, so the
+                    // expensive part is paid once.
+                    using var authority = Repository.Crypto.WriteOnlyDerivation.Derive(
+                        passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
+                    envelope = Convert.ToHexStringLower(
+                        Repository.Crypto.WriteOnlyProvisioning.SealProvision(
+                            Convert.FromHexString(description.RestoreGrantRecipient), authority, salt, parameters));
+
+                    kitFramed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
+                        Repository.RecoveryKitFactory.BuildForInstallation(
+                            authority.Credential, salt, parameters,
+                            Convert.FromHexString(description.DeviceId ?? string.Empty),
+                            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+                }
+
+                var result = await handler.ExecuteAsync(
+                    new Api.ProvisionInstallationCommand(envelope), cancellationToken).ConfigureAwait(false);
+
+                switch (result)
+                {
+                    case Api.ConfigurationChangeResult change:
+                        foreach (var line in change.Lines)
+                        {
+                            output.WriteLine(line);
+                        }
+
+                        var written = await WriteKitAndConfirmAsync(handler, kitOutput, kitFramed)
+                            .ConfigureAwait(false);
+
+                        return written == 0
+                            ? CreateFirstAccount(firstUser, firstPassword)
+                            : written;
+
+                    case Api.ServiceError refusal:
+                        error.WriteLine($"error: {refusal.Message}");
+                        return 2;
+
+                    default:
+                        error.WriteLine($"error: unexpected result '{result.GetType().Name}'.");
+                        return 2;
+                }
+            }
+            catch (ClientStateException exception)
+            {
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
+        }
+
+        // Writing the kit and confirming it are one step here, because a
+        // headless operator cannot tick a box: the confirmation records that
+        // the kit reached durable storage, which for this verb is the file
+        // having been written where they asked for it.
+        async Task<int> WriteKitAndConfirmAsync(
+            ServiceCommandHandler handler, string kitOutput, byte[] kitFramed)
+        {
+            var textPath = kitOutput + ".txt";
+            try
+            {
+                await File.WriteAllBytesAsync(kitOutput, kitFramed, cancellationToken).ConfigureAwait(false);
+                await File.WriteAllTextAsync(
+                    textPath,
+                    Repository.Format.RecoveryKit.RecoveryKitText.Render(
+                        kitFramed,
+                        "This kit is ONE of the two things you need. The other is your passphrase, which is "
+                        + "not in here. Keep them apart."),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            {
+                // The installation has its passphrase; only the kit is
+                // missing. Saying which half succeeded is the difference
+                // between "run setup again" (which would be refused) and
+                // "fix the path and save the kit".
+                error.WriteLine(
+                    $"error: the installation is set up, but its recovery kit could not be written to "
+                    + $"'{kitOutput}': {failure.Message}. Save the kit from the console before relying on "
+                    + "this installation.");
+                return 2;
+            }
+
+            var checksum = Convert.ToHexStringLower(kitFramed.AsSpan(kitFramed.Length - 32));
+            var confirmed = await handler.ExecuteAsync(
+                new Api.ConfirmRecoveryKitCommand(checksum), cancellationToken).ConfigureAwait(false);
+
+            if (confirmed is Api.ServiceError refusal)
+            {
+                error.WriteLine($"error: {refusal.Message}");
+                return 2;
+            }
+
+            output.WriteLine($"recovery kit   {kitOutput}");
+            output.WriteLine($"kit (text)     {textPath}");
+            output.WriteLine(
+                "the kit is ONE factor — move it somewhere that is not this machine, and not beside the "
+                + "passphrase.");
+            return 0;
+        }
+
+        // `setup` gives a fresh installation its passphrase (ADR-0044) for
+        // headless hosts with no browser. Same ceremony as the console's:
+        // derive here, seal to this service's own recipient key, send hex.
+        // The passphrase is read from the named environment variable — it
+        // never goes on the command line, where a process list would hold
+        // the one secret that can never be changed.
+        if (args[0] == "setup")
+        {
+            if (passphraseValue is null)
+            {
+                error.WriteLine(
+                    "error: `setup` needs --passphrase-env <VAR> naming a set environment variable — the "
+                    + "passphrase is passed by name, never on the command line.");
+                return 1;
+            }
+
+            if (!args.Contains("--acknowledge-loss"))
+            {
+                // The acknowledgement is the ceremony, not a speed bump
+                // (ADR-0042 §11, ADR-0044 §3): there is no recovery path to
+                // offer later, so consent is collected before the derivation.
+                error.WriteLine(
+                    "error: this passphrase becomes the master key for the whole installation. It is never "
+                    + "stored, it can never be changed, and if it is lost every backup is unrecoverable — "
+                    + "there is no reset and no export. Re-run with --acknowledge-loss to accept this "
+                    + "(ADR-0044).");
+                return 1;
+            }
+
+            var assessment = Domain.Configuration.PassphraseStrength.Assess(passphraseValue);
+            if (!assessment.IsAcceptable)
+            {
+                error.WriteLine(
+                    $"error: that passphrase is too weak to be an installation's master key — it needs at "
+                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters, and more "
+                    + "than one repeated unit (ADR-0044 §6).");
+                return 1;
+            }
+
+            if (Get("--kit-output") is not { Length: > 0 } kitOutput)
+            {
+                // Setup does not complete without a saved kit (FR-KIT-004),
+                // and a headless operator has nowhere to click — so the path
+                // is required rather than the confirmation being waived for
+                // want of a button.
+                error.WriteLine(
+                    "error: `setup` needs --kit-output <path>. Setup is not complete until the recovery kit "
+                    + "is saved, and this is where it goes (ADR-0044, FR-KIT-004).");
+                return 1;
+            }
+
+            var firstUser = Get("--user");
+            var passwordVariable = Get("--password-env");
+
+            if (firstUser is null || passwordVariable is null)
+            {
+                // Setup captures the first account (FR-USR-001). A headless
+                // operator has nowhere to type one later, and an installation
+                // finished without an owner is one whose next caller becomes
+                // its owner.
+                error.WriteLine(
+                    "error: `setup` needs --user <name> and --password-env <VAR>. The installation's first "
+                    + "account is its owner, and it is captured here rather than left for whoever connects "
+                    + "next (ADR-0045 §6, FR-USR-001).");
+                return 1;
+            }
+
+            var firstPassword = Environment.GetEnvironmentVariable(passwordVariable);
+            if (string.IsNullOrEmpty(firstPassword))
+            {
+                error.WriteLine(
+                    $"error: the environment variable '{passwordVariable}' is not set. The password is "
+                    + "passed by name, never on the command line (FR-USR-006).");
+                return 1;
+            }
+
+            if (firstPassword.Length < UserStore.MinimumPasswordLength)
+            {
+                error.WriteLine(
+                    $"error: that password is shorter than {UserStore.MinimumPasswordLength} characters.");
+                return 1;
+            }
+
+            return await SetupVerbAsync(kitOutput, firstUser, firstPassword).ConfigureAwait(false);
         }
 
         // `retention [--apply]` runs one pass per configured set
@@ -448,13 +783,12 @@ public static class AgentHost
             ArchivesRoot = archivesRoot!,
             StateDirectory = stateDirectory,
             PollSeconds = pollSeconds,
-            Log = (message, exception) => output.WriteLine(
-                $"{DateTimeOffset.Now:u}  {message}{(exception is null ? string.Empty : $": {exception.Message}")}"),
+            Logging = logging,
         };
 
         try
         {
-            using var passphrase = Passphrase.Create(passphraseValue);
+            using var passphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
             await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -476,7 +810,7 @@ public static class AgentHost
                     var endpoint = new IPEndPoint(IPAddress.Parse(remoteBinding.Interface!), remoteBinding.Port);
                     remoteListener = RemoteServiceListener.Start(
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
-                        log: line => output.WriteLine($"{DateTimeOffset.Now:u}  {line}"),
+                        log: logging.Factory.CreateLogger<RemoteServiceListener>(),
                         replicationStateDirectory: stateDirectory);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
@@ -485,14 +819,47 @@ public static class AgentHost
                 // that starts alongside the service is not told "nothing is
                 // listening" while a ten-hour backup runs. The binding state was
                 // seeded from the remote listener's bound endpoint above.
-                var handler = new ServiceCommandHandler(runtime, bindingState);
+                // One handler per listener over the same runtime, so each
+                // knows where its caller came from. RemoteBindingState says
+                // only whether the remote binding is on; a verb that must be
+                // refused to a remote console needs to know that THIS caller
+                // is remote (ADR-0044 §5).
+                var localHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Local);
+                var remoteHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote);
+
+                // One account store and one session registry for the whole
+                // installation; one decorator per accepted connection, because
+                // "which person is acting" is the one piece of state that is
+                // genuinely per connection (ADR-0045 §5). Sessions live here
+                // and nowhere else, which is why stopping this process is what
+                // signs everybody out.
+                var users = UserStore.Open(stateDirectory);
+                var sessions = new SessionRegistry();
+                var authLog = logging.Factory.CreateLogger<AuthenticatingService>();
 
                 // The remote socket bound before the handler existed so its
                 // endpoint could seed the binding state; it begins serving now
                 // that the handler exists.
-                remoteListener?.Bind(handler);
+                remoteListener?.Bind(() => new AuthenticatingService(remoteHandler, users, sessions, authLog));
 
-                await using var localListener = LocalServiceListener.Start(handler, stateDirectory);
+                await using var localListener = LocalServiceListener.Start(
+                    () => new AuthenticatingService(localHandler, users, sessions, authLog),
+                    stateDirectory,
+                    logging.Factory.CreateLogger<LocalServiceListener>());
+
+                // Logged as well as printed, and the duplication is deliberate.
+                // Installed as a service there is no console to print to, and
+                // "what came up, and when" is the first thing anybody reading a
+                // support log needs. The printed lines stay because a
+                // foreground run is somebody waiting to see it start.
+                var hostLog = logging.Factory.CreateLogger(typeof(AgentHost).FullName!);
+                Log.LocalBindingUp(hostLog);
+                if (remoteListener is not null)
+                {
+                    var boundTo = remoteListener.Endpoint.ToString();
+                    Log.RemoteBindingUp(hostLog, boundTo, peerKeypair!.Identity.Fingerprint);
+                }
+
                 if (!once)
                 {
                     output.WriteLine($"{DateTimeOffset.Now:u}  listening on {localListener.Address}");
@@ -560,6 +927,57 @@ public static class AgentHost
         {
             error.WriteLine("error: the passphrase does not open this repository.");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Where this verb's records belong on disk, or null for the one verb that
+    /// has no business creating anything.
+    /// </summary>
+    /// <param name="verb">The verb about to run.</param>
+    /// <param name="stateDirectory">The state directory named on the command line, if one was.</param>
+    /// <remarks>
+    /// <c>install</c> prints a service definition and touches nothing, and the
+    /// state directory it names is the one the service will use <em>once the
+    /// account exists</em>. Creating a log directory there would be the wrong
+    /// act by whoever is running it: an operator with enough privilege to
+    /// register a service leaves behind a <c>logs</c> directory owned by
+    /// themselves, in the place the service account is about to be told to
+    /// write. Records still reach the ring, and this verb produces its answer
+    /// on the two streams either way.
+    /// </remarks>
+    private static string? LogDirectoryFor(string verb, string? stateDirectory) =>
+        stateDirectory is null || verb == "install" ? null : Path.Combine(stateDirectory, "logs");
+
+    /// <summary>
+    /// The <c>logging</c> block from <c>&lt;state&gt;/config.json</c>, or null
+    /// when there is no readable configuration to ask.
+    /// </summary>
+    /// <param name="stateDirectory">The state directory holding the configuration.</param>
+    /// <remarks>
+    /// Deliberately silent about failure. This runs before there is anywhere to
+    /// report to, and every way the file can be wrong — missing, malformed,
+    /// a version this build does not read — is reported properly by the verb
+    /// that follows. Swallowing it here only decides what to log at; it never
+    /// decides whether the configuration is acceptable.
+    /// </remarks>
+    private static LoggingConfiguration? LoggingFromConfiguration(string stateDirectory)
+    {
+        try
+        {
+            return ClientConfiguration.Load(Path.Combine(stateDirectory, "config.json")).Logging;
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 
@@ -672,8 +1090,51 @@ public static class AgentHost
         _ => "both",
     };
 
-    private static int Notices(string stateDirectory, string? acknowledgeId, TextWriter output, TextWriter error)
+    private static async Task<int> NoticesAsync(
+        string stateDirectory, string? acknowledgeId, TextWriter output, TextWriter error,
+        CancellationToken cancellationToken)
     {
+        // Through the running service when one is listening (ADR-0028 §3:
+        // liveness decides): its NoticeStore is the live writer, and a second
+        // process writing notices.json beside it would race the file. Direct
+        // access remains the no-service path — the notices must be readable
+        // at breakfast even when the agent is not running.
+        try
+        {
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+
+            if (acknowledgeId is not null)
+            {
+                var result = await client.ExecuteAsync(
+                    new AcknowledgeNoticeCommand(acknowledgeId), cancellationToken).ConfigureAwait(false);
+                if (result is ServiceError refusal)
+                {
+                    error.WriteLine($"error: {refusal.Message}");
+                    return 1;
+                }
+
+                output.WriteLine($"acknowledged {acknowledgeId}.");
+                return 0;
+            }
+
+            if (await client.ExecuteAsync(new ListNoticesCommand(), cancellationToken).ConfigureAwait(false)
+                is NoticesResult listed)
+            {
+                WriteNotices(
+                    output,
+                    [.. listed.Notices.Select(notice => (notice.Id, notice.RaisedAt, notice.Message))]);
+                return 0;
+            }
+
+            error.WriteLine("error: the service answered a notice listing with something else.");
+            return 1;
+        }
+        catch (ServiceConnectionException)
+        {
+            // No service holds the state directory; the file is ours to touch.
+        }
+
         var notices = FallbackPlan.Application.NoticeStore.Open(stateDirectory);
 
         if (acknowledgeId is not null)
@@ -688,11 +1149,18 @@ public static class AgentHost
             return 0;
         }
 
-        var pending = notices.Unacknowledged;
+        WriteNotices(
+            output,
+            [.. notices.Unacknowledged.Select(notice => (notice.Id, notice.RaisedAt, notice.Message))]);
+        return 0;
+    }
+
+    private static void WriteNotices(TextWriter output, IReadOnlyList<(string Id, ulong RaisedAt, string Message)> pending)
+    {
         if (pending.Count == 0)
         {
             output.WriteLine("no notices.");
-            return 0;
+            return;
         }
 
         foreach (var notice in pending)
@@ -700,8 +1168,6 @@ public static class AgentHost
             var raised = DateTimeOffset.FromUnixTimeMilliseconds((long)notice.RaisedAt);
             output.WriteLine($"[{notice.Id}] {raised:u}  {notice.Message}");
         }
-
-        return 0;
     }
 
     private static int ListPairings(string stateDirectory, TextWriter output)
@@ -738,23 +1204,18 @@ public static class AgentHost
 
         var grants = PeerGrantStore.Open(stateDirectory);
 
-        // Resolve the fingerprint to exactly one grant. A fingerprint is a
-        // display handle, never the identity — so an ambiguous prefix is
-        // refused rather than guessed, and revocation always acts on the full
-        // key (ADR-0030 §1).
-        var matches = grants.Grants
-            .Where(grant => grant.Identity.Fingerprint.StartsWith(fingerprint, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (matches.Count == 0)
+        // Resolution refuses ambiguity rather than guessing (ADR-0030 §1);
+        // the mechanics are shared with the contract's unpair command.
+        var (grant, matchCount) = PeerUnpairing.Resolve(grants, fingerprint);
+        if (matchCount == 0)
         {
             error.WriteLine($"error: no pairing matches '{fingerprint}'.");
             return 1;
         }
 
-        if (matches.Count > 1)
+        if (grant is null)
         {
-            error.WriteLine($"error: '{fingerprint}' matches {matches.Count} pairings; give more of the fingerprint.");
+            error.WriteLine($"error: '{fingerprint}' matches {matchCount} pairings; give more of the fingerprint.");
             return 1;
         }
 
@@ -765,86 +1226,21 @@ public static class AgentHost
         // at its next dial instead.
         if (!noNotify)
         {
-            var endpoint = to ?? EndpointFor(stateDirectory, matches[0].Identity.Fingerprint);
+            var endpoint = to ?? PeerUnpairing.EndpointFor(stateDirectory, grant.Identity.Fingerprint);
             if (endpoint is null)
             {
                 output.WriteLine("no endpoint known for the peer — it will learn of the ending at its next dial.");
             }
             else
             {
-                await TryNotifyTerminationAsync(
-                    stateDirectory, grants, matches[0], endpoint, output, cancellationToken).ConfigureAwait(false);
+                output.WriteLine(await PeerUnpairing.TryNotifyTerminationAsync(
+                    stateDirectory, grants, grant, endpoint, cancellationToken).ConfigureAwait(false));
             }
         }
 
-        grants.Revoke(matches[0].Identity);
-        output.WriteLine($"revoked the pairing with {matches[0].Label} ({matches[0].Identity.Fingerprint}).");
+        grants.Revoke(grant.Identity);
+        output.WriteLine($"revoked the pairing with {grant.Label} ({grant.Identity.Fingerprint}).");
         return 0;
-    }
-
-    /// <summary>The configured endpoint for a peer destination, when the address book has one.</summary>
-    private static string? EndpointFor(string stateDirectory, string peerFingerprint)
-    {
-        try
-        {
-            return ClientConfiguration.Load(Path.Combine(stateDirectory, "config.json")).Destinations
-                .FirstOrDefault(destination =>
-                    destination.Kind == DestinationKind.Peer
-                    && string.Equals(destination.Fingerprint, peerFingerprint, StringComparison.Ordinal))
-                ?.Endpoint;
-        }
-        catch (ClientStateException)
-        {
-            // An invalid configuration must not block a revocation.
-            return null;
-        }
-    }
-
-    private static async Task TryNotifyTerminationAsync(
-        string stateDirectory,
-        PeerGrantStore grants,
-        PeerGrant grant,
-        string endpoint,
-        TextWriter output,
-        CancellationToken cancellationToken)
-    {
-        if (!TryParseEndpoint(endpoint, out var host, out var port))
-        {
-            output.WriteLine($"'{endpoint}' is not host:port — the peer will learn of the ending at its next dial.");
-            return;
-        }
-
-        try
-        {
-            using var keypair = PeerKeypairStore.Open(stateDirectory);
-            await using var connection = await PeerTlsConnection.DialAsync(
-                host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
-            // A termination notice demands nothing of the peer beyond hearing
-            // it: this dial carries no feature requirement.
-            var session = await PeerSessionDriver.DialAsync(
-                connection, keypair, grants, grant.Identity, "fallbackplan-agent", terms: null,
-                cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-
-            if (!session.Supports(PeerSessionNegotiation.TerminationNoticeFeature))
-            {
-                // An older peer is simply not sent a type it cannot parse
-                // (02: unknown types hard-fail); it learns from the refusal.
-                output.WriteLine("the peer predates termination notices — it will learn at its next dial.");
-                return;
-            }
-
-            await PeerFrame.WriteAsync(
-                session.Stream,
-                new PeeringTermination("the operator ended the pairing", GraceDays: 30),
-                cancellationToken).ConfigureAwait(false);
-            output.WriteLine($"notified {grant.Label} that the peering has ended.");
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            output.WriteLine(
-                $"could not notify the peer ({exception.Message}) — it will learn of the ending at its next dial.");
-        }
     }
 
     /// <summary>
@@ -935,17 +1331,4 @@ public static class AgentHost
         : OperatingSystem.IsMacOS() ? "launchd"
         : "systemd";
 
-    private static bool TryParseEndpoint(string target, out string host, out int port)
-    {
-        host = string.Empty;
-        port = 0;
-        var colon = target.LastIndexOf(':');
-        if (colon <= 0 || colon == target.Length - 1)
-        {
-            return false;
-        }
-
-        host = target[..colon];
-        return int.TryParse(target[(colon + 1)..], CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
-    }
 }

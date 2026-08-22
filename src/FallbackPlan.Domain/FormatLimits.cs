@@ -11,6 +11,13 @@ public static class FormatLimits
     /// <summary>The repository format version this implementation writes.</summary>
     public const ushort FormatVersion = 1;
 
+    /// <summary>
+    /// The write-only repository format version (ADR-0042): file contents
+    /// sealed to the repository's public key, structure symmetric. Chosen at
+    /// repository creation, never converted to or from.
+    /// </summary>
+    public const ushort SealedFormatVersion = 2;
+
     /// <summary>Maximum stored (ciphertext) length of one record: 64 MiB.</summary>
     public const int MaxRecordStoredLength = 64 * 1024 * 1024;
 

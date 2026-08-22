@@ -163,7 +163,7 @@ public sealed class PeerRetentionTests : IDisposable
             {
                 Id = SetId,
                 Name = "docs",
-                Root = SourceRoot,
+                Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                 Schedule = "every 4h",
                 Destinations =
                 [

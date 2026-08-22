@@ -117,8 +117,18 @@ public sealed class SpoolCheckpoint
         WriterId writerId,
         ulong blobCounter,
         BlobId blobId,
-        SpoolPinnedConfiguration pinned)
+        SpoolPinnedConfiguration pinned,
+        ReadOnlyMemory<byte>? contentKey = null)
     {
+        // Empty is "none" — the shape a v1 writer's null byte[] arrives in
+        // through the implicit ReadOnlyMemory conversion — so only a PRESENT
+        // key of the wrong length is a caller defect.
+        if (contentKey is { Length: not (0 or 32) })
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatSpoolCheckpoint_ContentKeyExactlyBytes(32), nameof(contentKey));
+        }
+
         FormatVersion = formatVersion;
         BlobClass = blobClass;
         KeyGeneration = keyGeneration;
@@ -127,6 +137,7 @@ public sealed class SpoolCheckpoint
         BlobCounter = blobCounter;
         BlobId = blobId;
         Pinned = pinned;
+        ContentKey = contentKey;
     }
 
     /// <summary>The format version the spool was written under.</summary>
@@ -153,6 +164,15 @@ public sealed class SpoolCheckpoint
     /// <summary>The pinned configuration (05 §6.2).</summary>
     public SpoolPinnedConfiguration Pinned { get; }
 
+    /// <summary>
+    /// A v2 data blob's in-flight content key (ADR-0042 §3) — resume must
+    /// authenticate the spooled records, and for a sealed blob only this key
+    /// can. Held for the blob under construction only, on a machine that
+    /// holds the same bytes as plaintext files; destroyed with the sidecar
+    /// at seal. Null for every v1 blob and every metadata blob.
+    /// </summary>
+    public ReadOnlyMemory<byte>? ContentKey { get; }
+
     /// <summary>The sidecar path for a spool path.</summary>
     public static string PathFor(string spoolPath) => spoolPath + ".checkpoint";
 
@@ -163,6 +183,7 @@ public sealed class SpoolCheckpoint
         var length = 8 + 2 + 2 + 4 + 32 + 16 + 8 + 16
             + 2 + 8 + 8 + 8 + 2 + 2
             + 2 + codecVersion.Length
+            + (ContentKey?.Length ?? 0)
             + 32;
         var buffer = new byte[length];
         var span = buffer.AsSpan();
@@ -200,6 +221,12 @@ public sealed class SpoolCheckpoint
         codecVersion.CopyTo(span[offset..]);
         offset += codecVersion.Length;
 
+        if (ContentKey is { } contentKey)
+        {
+            contentKey.Span.CopyTo(span[offset..]);
+            offset += contentKey.Length;
+        }
+
         SHA256.HashData(span[..offset], span.Slice(offset, 32));
 
         return buffer;
@@ -222,8 +249,18 @@ public sealed class SpoolCheckpoint
             return false;
         }
 
+        // A v2 data blob's sidecar carries its 32-byte content key between
+        // the codec version and the hash; the version and class fields sit
+        // at fixed offsets, so the expected shape is known before the
+        // length check — and a sidecar of the other shape fails it, which
+        // resolves to restart exactly like any other unreadable sidecar.
+        var sidecarVersion = BinaryPrimitives.ReadUInt16BigEndian(data[8..]);
+        var sidecarClass = (BlobClass)BinaryPrimitives.ReadUInt16BigEndian(data[10..]);
+        var contentKeyLength =
+            sidecarVersion >= FormatLimits.SealedFormatVersion && sidecarClass == BlobClass.Data ? 32 : 0;
+
         var codecLength = BinaryPrimitives.ReadUInt16BigEndian(data[(FixedPrefix - 2)..]);
-        var total = FixedPrefix + codecLength + 32;
+        var total = FixedPrefix + codecLength + contentKeyLength + 32;
 
         if (data.Length != total)
         {
@@ -267,6 +304,13 @@ public sealed class SpoolCheckpoint
         offset += 2;
         offset += 2; // codec length, already read
         var codecVersion = Encoding.UTF8.GetString(data.Slice(offset, codecLength));
+        offset += codecLength;
+
+        byte[]? contentKey = null;
+        if (contentKeyLength > 0)
+        {
+            contentKey = data.Slice(offset, contentKeyLength).ToArray();
+        }
 
         checkpoint = new SpoolCheckpoint(
             formatVersion,
@@ -277,7 +321,8 @@ public sealed class SpoolCheckpoint
             counter,
             blobId,
             new SpoolPinnedConfiguration(
-                segProfile, segParameter1, segParameter2, segParameter3, compression, codecVersion, encryption));
+                segProfile, segParameter1, segParameter2, segParameter3, compression, codecVersion, encryption),
+            contentKey);
 
         return true;
     }

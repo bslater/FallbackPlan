@@ -38,6 +38,21 @@ public static class PeerRoles
 
         return known;
     }
+
+    /// <summary>
+    /// The role each side records when the other records
+    /// <paramref name="role"/>: who stores-here for one stores-for-us at the
+    /// other, and <see cref="PeerRole.Both"/> mirrors itself. What an invite's
+    /// redeemer derives from the issuer's committed role (01 §2.7).
+    /// </summary>
+    /// <param name="role">One side's declared role for its peer.</param>
+    /// <returns>The other side's.</returns>
+    public static PeerRole Complement(PeerRole role) => role switch
+    {
+        PeerRole.StoresHere => PeerRole.StoresForUs,
+        PeerRole.StoresForUs => PeerRole.StoresHere,
+        _ => PeerRole.Both,
+    };
 }
 
 /// <summary>

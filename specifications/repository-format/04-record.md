@@ -55,7 +55,7 @@ nonce = 12-byte big-endian encoding of `ordinal`
 
 Format version 1 has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
 
-Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track.
+Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track. In a format-v2 data blob the record key is the blob's random sealed content key rather than a derived one ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); everything else in this document — nonce, AAD, framing, the read sequence — applies to it unchanged.
 
 ## 4 Associated data
 

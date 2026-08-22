@@ -75,6 +75,9 @@ The magic string is checked first. An object that does not begin with it is not 
 | 6 | u64 | `created_at` — informational only |
 | 7 | text | `created_by` — implementation name and version, informational |
 | 8 | bool | `unstable_format` — `true` while the format is unfrozen |
+| 9 | bytes[32] | `sealing_public_key` — **format v2 only** ([03 §9](03-keys.md#9-write-only-repositories-format-v2)): the X25519 public key data-blob content keys seal to, and the derive-and-compare wrong-passphrase verifier. Not a secret, exactly like the salt. A v2 descriptor MUST carry it; a v1 descriptor MUST NOT |
+
+A format-v2 descriptor MUST list feature `0x0001` (`sealed-data-plane`) in `required_features`, so a reader that predates the sealed data plane refuses through the rule below with the identifier named rather than half-reading sealed blobs.
 
 A reader MUST refuse the repository if `required_features` contains any identifier it does not implement, naming the unimplemented identifier. It MUST NOT proceed on the assumption that an unknown feature is unimportant.
 

@@ -4,7 +4,7 @@
 
 ---
 
-Thirty decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Thirty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -54,12 +54,22 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Scheduling, job state, status, telemetry | **Built** | `FallbackPlan.Agent`, `Application/JobStateStore` · `Hosts.Tests/*` |
 | [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary | **Partly built** | `FallbackPlan.Api`, `Cli/OperationGateway` · [ADR §Implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) |
 | [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency | **Built** | `Repository/ArchiveSession` · [ADR §Implementation status](adr/0029-pipeline-and-service-concurrency.md#implementation-status-2026-08) |
-| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol` · [notes](#0030--the-socket-exists) |
+| [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol`, `Protocol/PairingInvite.cs` · [notes](#0030--the-socket-exists) |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
 | [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager | **Partly built** | `Agent/ServiceProcessHost.cs`, `Agent/WindowsServiceHost.cs`, `Agent/ServiceUnit.cs` · [notes](#0033--the-os-can-own-the-process) |
 | [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations | **Built** | `FallbackPlan.Replication`, `Agent/FanOut`, `Application/DestinationSyncStore`, `Retention/StagingTrim` · `Repository.Tests/EndToEnd/AgentPassTests`, `InterruptionTests/StoreCopyOrderTests`, `Retention.Tests/StagingTrimTests` · [notes](#0034--the-hub-fans-out-ages-and-trims) |
 | [0035](adr/0035-destination-fitness.md) | Destination fitness | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
+| [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
+| [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
+| [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
+| [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
+| [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
+| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
+| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
+| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
+| [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
+| [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
 
 ---
 
@@ -139,7 +149,7 @@ And now **the transport that carries it.** `PeerTlsConnection` opens TLS 1.3 ove
 
 The service side binds it. `RemoteServiceListener` (in `FallbackPlan.Agent`) accepts on an interface named by an explicit administrative act — `fallbackplan-agent run --remote-interface <addr> --remote-port <n>`, off by every default — admits only a peer it has a grant for, and then runs the ADR-0028 command contract over the opened session through the same dispatch the local binding uses (`ServiceConnectionPump`). `RemoteServiceClient` (in `FallbackPlan.Cli`) is the paired console's other end, and the shipped CLI now drives it: `fallbackplan <verb> --connect <host:port> --fingerprint <fp> --state <dir>` routes `backup`, `verify`, `check`, `restore`, `snapshots`, `ls`, `status`, `sync` and `retention` to a remote paired service, naming the pinned service by fingerprint because a grant records a key, never an address. The two exit criteria this was blocked on now hold end to end in `FallbackPlan.Hosts.Tests`, through both the client directly and the CLI surface: an unpaired console is refused as `not_paired` while the local binding still answers, and a restore commanded from a paired console **writes on the service's machine** — the console is told the counts and the path, never sent the files.
 
-And now the cargo the wire was built for: **peer replication** ([specification 03](../specifications/peer-protocol/README.md#documents)). Over an Open session, `ReplicationInitiator` (source) and `ReplicationResponder` (destination) move a repository's immutable objects — the source offers the repository, the destination declares what it already holds, and the source streams the rest in chunked frames, each object committed whole so an interrupted run resumes with no checkpoint. `RemoteServiceListener` routes on the peer's grant role: a peer entitled to store objects here speaks replication, a console speaks the command contract. The hub's fan-out drives it on every backup, and `fallbackplan-agent sync` drives it on demand — either way forwarding ciphertext the destination cannot read. `FallbackPlan.Hosts.Tests` proves it end to end over loopback: a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica — a source destroyed and recovered from its destination, the Phase-2 peer criterion in its first concrete form.
+And now the cargo the wire was built for: **peer replication** ([specification 03](../specifications/peer-protocol/README.md#documents)). Over an Open session, `ReplicationInitiator` (source) and `ReplicationResponder` (destination) move a repository's immutable objects — the source offers the repository, the destination declares what it already holds, and the source streams the rest in chunked frames, each object committed whole so an interrupted run resumes with no checkpoint. `RemoteServiceListener` routes on the peer's grant role: a peer entitled to store objects here speaks replication, a console speaks the command contract. The hub's fan-out drives it on every backup, and `fallbackplan-agent sync` drives it on demand — either way forwarding ciphertext the destination cannot read. `FallbackPlan.Hosts.Tests` proves it end to end over loopback: a source's objects mirror to a destination byte for byte, and the standalone recovery tool restores the original files from the replica — a source destroyed and recovered from its destination, the Phase-2 peer criterion in its first concrete form. `Hosts.Tests/AlternateSiteTests` now holds that criterion as an operator lives it — two live services paired by spoken invite, configured over the contract, the backup fanning out unattended, possession proven by the wire challenge, and both points in time restored after the source's archive is deleted, including a destination that was offline when the backup ran.
 
 And after [Amendment 2](adr/0030-peer-identity-and-pairing.md#amendment-2-2026-08--the-pairing-lifecycle-completes-roles-on-the-wire-endings-announced-terms-enforced), **the storage roles are negotiated in the ceremony**: each side declares, on the wire, the role it will record for the other (spec 01 §2.2 key 7), both declarations ride the transcript — so an intermediary that altered who-stores-for-whom would alter the string the humans compare, pinned by a test — and both pair verbs take `--role stores-here|stores-for-us|both`, showing the peer's declaration at the approval prompt. A build predating the negotiated role is refused as malformed, with pairing again as the stated fix.
 
@@ -177,9 +187,19 @@ The arc is built end to end; the sections below walk it in the order it landed. 
 
 Three postures are accepted and worth finding here rather than re-deriving: a peer's trim-time ledger claim rests on `SyncedSequence` alone, not the pair's current state — the same trust the replication gate holds, since a later failure does not unmake a completed sync (and a pass whose clock sits behind the last sync refuses the claim outright); the restore PLAN reports absence, never damage — a manifest that is present but will not read is verify's finding, and the plan passes over it; and minor-version feature probing does not exist yet, so a newer console's `sync` against an older service dies as a disconnect rather than a clean "this service is too old" — a known pre-1.0 limitation.
 
-Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no `destination remove` surface exists yet, so nothing warns that a removed destination still holds data. Quotas are enforced with the peer slices — see [0030](#0030--the-socket-exists). The negotiated pairing role and the termination notices landed with the peer slices — either side's ending now surfaces durably on both ends, and a fan-out refused `revoked` raises the notice itself — see [0030](#0030--the-socket-exists).
+Nothing is still ahead in this arc: FR-DEST-007's destination-removal warnings, the last named remainder, landed with [ADR-0037](adr/0037-configuration-over-the-command-contract.md) — `delete_destination` refuses while referenced and otherwise names what remains at the address. Quotas are enforced with the peer slices — see [0030](#0030--the-socket-exists). The negotiated pairing role and the termination notices landed with the peer slices — either side's ending now surfaces durably on both ends, and a fan-out refused `revoked` raises the notice itself — see [0030](#0030--the-socket-exists).
 
 ---
+
+### 0043 — the engine logs, a client reads it, and every declared message is emitted
+
+Built: the abstraction in all twenty-four projects, a `Log.cs` of `[LoggerMessage]` partials per project with allocated event-id ranges, and `FallbackPlan.Diagnostics` holding the ring (Bodu's `ConcurrentCircularBuffer`), the async rolling file and the redacting renderer. Every host now composes a real `ILoggerFactory`: the agent and the console through `FallbackPlan.Diagnostics`, the web console and the recovery tool through a forty-line console sink each, because `DependencyRuleTests` pins their closures and a project reference would break both. The two untyped `Action` delegates are **deleted**, not deprecated, and their fifteen call sites are typed and levelled.
+
+The level is settable from three of its four sources: `--log-level` on every host, `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` (schema 4 — level, per-category overrides, retention, file size, ring capacity). Precedence is decided in one place, `LoggingOptions.TryResolveLevel`, and a name nobody recognises is refused by name rather than ignored. The vocabulary itself sits in `Domain.Diagnostics.LogLevels` so a file and a flag cannot drift into accepting different spellings.
+
+The client half landed too. Contract **1.15** — not the 1.13 the ADR named, since 1.13 went to first-run setup and 1.14 to the recovery kit — carries `get_diagnostics`, a paginated `read_log` and `set_log_level`, reaching a `fallbackplan logs` verb (`--level`, `--since`, `--tail`, `--follow`) and the console's seventh view. A paired console reads redacted and may not set a level at all. FR-SVC-010's row is filled in.
+
+**Every declaration is called, and that is now a build rule.** Phase 2 declared 107 `[LoggerMessage]` messages and wired 46 of them; the other 61 read exactly like messages the engine emits while emitting nothing. They were frozen in `ArchitectureTests/LoggingShapeTests` as a register that could only shrink, and it has since been emptied — twelve declarations deleted with their reasons recorded in ADR-0043, several more reshaped where the declared message promised a count nothing computes or named something the code does not do, and the rest wired with a logger threaded from the host to the call site. The register and the "or is a known debt" half of the test are gone with it: the rule is simply that every declaration is called. Because a declaration having a call site does not prove a logger reaches it, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` and the retention drill assert by event id that records arrive through real publications, copies and passes.
 
 ## By phase
 
@@ -187,7 +207,7 @@ Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no 
 |-------|-------|
 | [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — with one stated qualifier: the compaction criterion is discharged by its preconditions (nothing physical decodes; supersession converges), the compactor itself being phase 4 |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
-| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, web UI, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007) |
+| [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
 | 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
@@ -198,6 +218,35 @@ Still ahead in this arc: only FR-DEST-007's destination-removal warnings — no 
 ## What keeps this true
 
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
+
+
+### 0045 — the product can say who is acting
+
+Built. The console's authority used to be a bearer token minted per run, so everyone holding the URL was indistinguishably "the operator" — no action attributable, no single person revocable — and the local socket authenticates a *uid*, which is a fact about a process rather than about a person. Contract **1.16** adds login, resume_session, logout and the four account verbs behind a decorator built per accepted connection.
+
+The ADR settles what the build has to honour: person-identity sits **inside** an already-authenticated channel, so [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §5's "no password, no token file, no port" is amended rather than reversed — no new listener, no credential needed to reach the socket, and a session that lives only in memory precisely because a token file is the failure mode §5 named. `PasswordHash` goes in `Repository.Crypto`, where Argon2id already lives and is cross-verified each CI run, rather than widening the two-assembly third-party-cryptography allowlist. Repeated failures throttle and never lock, because for a backup product being denied your own backups by someone else's deliberate failures is the worse outcome.
+
+Three things the build corrected in the decision, each recorded as an ADR amendment. A session cannot ride a connection — the web console opens a fresh one per relayed request — so it is minted once and *presented* by a connection through `resume_session`. Enforcement engages only once an installation has accounts, because refusing everything without a session bricks an existing installation on upgrade and leaves no door for the first account; `describe_service` reports `users_required` instead. And the browser holds a viewer's session rather than the console process, or one console would make every action attributable to whoever signed in first.
+
+The key-material canary caught six new contract members and was right to; they are carved out by exact name in the shape ADR-0042 established, with a second test that each carved-out name still exists and is still a string.
+
+### 0044 — the ceremony that two requirements have been waiting for
+
+Built, and both gaps it originally scoped out are now closed.
+
+The passphrase half: a service with no passphrase says so on `describe_service`, and the first client to connect walks the operator through choosing one. What made a passphrase-only ceremony possible is that the passphrase was never per-set — `WriteOnlyDerivation` takes no repository identifier, so one `(passphrase, salt, params)` triple stamps every archive an installation will ever create. Setup provisions the installation; each set's staging archive is created from that credential on its first backup, replacing the silent format-1 fallthrough in `ServiceRuntime.ArchiveForAsync`.
+
+**FR-KIT-004** was blocked by the kit *format*, not by the product: a kit demanded a repository id, which demanded an archive, a set and a destination. Kit format v2 drops it ([ADR-0013](adr/0013-recovery-kit.md)'s amendment), so the kit is generated inside the ceremony that already holds the passphrase — one Argon2id pass produces both it and the provisioning envelope — and setup stays in a `kit_required` state until the operator confirms saving it. Backups run in that state deliberately: stopping them over an unsaved kit would lose data to enforce a habit.
+
+**FR-SNP-007** lands on `validate_set_draft`, which the console already calls live while editing, so a set whose every destination sits inside its source's failure domain is warned at the moment it is chosen. It warns on every edit rather than only at first run, since the belief the requirement guards against can form at any point.
+
+Contract 1.14 carries `provision_installation`, `confirm_recovery_kit`, the setup state and device identity on `describe_service`, and the draft's roots and destinations. `CallerScope` is new and is the fact the code was missing — one handler served both listeners and `RemoteBindingState` said only whether the remote binding was on; the pending ADR-0043 diagnostics work reuses it. Q14 is answered: a floor of twelve plus a modest estimate, enforced where a passphrase is chosen and never in `Passphrase.Create`, which is on the restore path.
+
+Proven by drill rather than by test alone: setup writes both kit forms, two sets back up, the **entire state directory is deleted**, and the recovery tool opens each archive from the kit and the passphrase alone — restoring byte-identical files, and opening a second archive the kit was never generated against.
+
+**One requirement remains unmet and says so in its own traceability row.** FR-KIT-003: the transcribable text form is built and fixtured, the QR half is not — [recovery-kit §5](../specifications/recovery-kit/README.md#5-qr-form) pins the parameters and defers the rendering.
+
+**FR-KIT-005 is now met, with its third state recorded as inapplicable.** Kit status rides `describe_service` at contract 1.15 and shows on the console's Maintenance card whenever it is open, which is what "surfaced continuously" asks — as against surfacing it only inside a ceremony the operator saw once. It has **two** values rather than three, and the open question from the previous entry is answered rather than left to omission: an installation kit carries no destinations, so the requirement's staleness trigger cannot fire, and its salt, Argon2id parameters and sealing public key are fixed for the life of the installation — that is what makes one passphrase open every archive — so nothing else can stale it either. Regenerating one differs only in `issued_at`, which makes a checksum comparison meaningless and a freshness indicator theatre ([ADR-0013 amendment](adr/0013-recovery-kit.md#an-installation-kit-cannot-go-stale)).
 
 ### 0035 — a destination has to earn being relied on
 
@@ -216,6 +265,205 @@ The whole arc is built but for one named piece. Before it, the sixteen-range cha
 **Age and capacity** (`Application/StatusModel.cs`, `Application/DestinationCapacity.cs`, `Protocol/PeerReplicationMessages.cs`): a proof past its bound — seven days local, thirty peer — is named in the warnings without moving `ProtectionState`. A quota-bound peer reports its remaining headroom on the replication inventory frame, and the source warns below a tenth of the loan rather than refusing, because the existing boundary stop already refuses the exact object at the exact moment and keeps the partial progress. A local copy does not start below a 64 MiB free-space floor, recorded `Unavailable` so freeing space heals it unbidden.
 
 **What is not built: peer-side deep verification.** A peer replica has no readable object store this side of the wire — only the range challenge — so re-reading its bytes needs the session-establishment half of the push extracted first. The admission probe took the first half of that extraction (`Agent/PeerAddress.cs`); the rest is deferred and named rather than quietly omitted.
+
+### 0036 — the first front end beyond the CLI
+
+The local web console is built, and it is a client the way FR-SVC-001 always
+meant: `FallbackPlan.Web` references the command contract and nothing below it
+— a whitelist `ArchitectureTests/DependencyRuleTests` pins to exactly one
+project reference — connects over the same local binding the CLI uses, and has
+**no direct mode**, because a web server holding the writer role would be a
+second writer with a network face. `WebConsoleHost` binds `127.0.0.1` only,
+with no flag to widen it; `ConsoleAuth` is the per-run 256-bit token printed in
+the start-up URL plus the loopback `Host` check, which together close the
+cross-site-request and DNS-rebinding classes a local HTTP console invites. One
+endpoint relays any `ServiceCommand` and returns the service's result verbatim;
+one bridges `WatchAsync` onto server-sent events; the page itself — status
+matrix, snapshot browser, live jobs, notices, and the action surface with
+restore and retention-apply behind typed confirmations — is three embedded
+static files behind a `default-src 'self'` policy, no framework, nothing
+fetched at runtime. An unreachable service renders as **stale with the age of
+last contact**, never healthy and never failed (NFR-OPS-006). `Web.Tests`
+drives it over real loopback HTTP against a fake client; the refusals are
+asserted on status codes and closed-set error codes, not prose.
+
+**What is deliberately not built:** notice acknowledgement (the contract has no
+verb for it — the page says so and names the agent verb that does it) and
+anything Q18/Q19 gate — restored content never streams to the page, and the
+console serves the one operator who launched it. The set-editing UI, a stated
+non-goal at first shipping, has since landed with [ADR-0037](adr/0037-configuration-over-the-command-contract.md)
+— see the note below.
+
+### 0037 — the configuration lifecycle joins the contract
+
+Contract 1.7: set CRUD with retention and per-destination overrides riding the
+descriptor (null preserves, an empty policy clears — a 1.6 client's upsert
+changes nothing it cannot say), destination CRUD, `list_pairings`,
+`browse_folders` (names only, files on request for the selection tree),
+`validate_set_draft` (rule defects verbatim, schedules answered with their next
+occurrences), and ADR-0030 Amendment 4's invite verbs. The schedule is parsed
+at the boundary and refused with the parser's own defect — before this, a typo
+saved cleanly and failed permanently at the next pass. Deletes never cascade
+and never erase: a set removal names the staging archive and the copies each
+destination keeps (FR-DEST-007, met); a referenced destination refuses,
+naming its sets. Edits preserve list position; a destination rename follows
+through to referencing sets.
+
+Two things landed under this decision that are bigger than verbs. **Include
+rules are now enforced at capture** — `IsCaptured` had no production caller,
+so a set could say "photos/** only" in its signed policy manifest and capture
+everything; the filter now lives in `Repository/SnapshotPublication.cs`'s tree
+publisher, files skipped and empty non-captured directories folded away,
+proven by `Repository.Tests/SnapshotPublicationTests` failing first. And the
+**invite-authenticated pairing** of ADR-0030 Amendment 4: `PairingInviteStore`
+beside the grants, the ceremony's MAC-for-string substitution over transcript
+and channel bindings, the listener routing a first-frame `PairOffer` to it,
+and the whole path proven over real sockets — the Mallory relay defeated in
+invite mode, a spent code refused, nothing pinned on any failure
+(`Protocol.Tests/InvitePairingTests`, two real services in
+`Hosts.Tests/InvitePairingCommandTests`) — and the arc the invite exists for,
+invite to destination to unattended fan-out to restore after the source's
+loss, held together end to end in `Hosts.Tests/AlternateSiteTests`.
+
+The web console grew its Configuration surface over all of it: sets with the
+folder picker, the selection tree compiling to rules-v1, the schedule builder
+previewing real next runs, retention with full-replacement overrides,
+destination management, and the invite/pair-with-invite flows.
+
+### 0038 — a set edit answers with its meaning
+
+Contract 1.8. `preview_set_changes` walks a set's source — under its saved
+root and rules or a draft's — and diffs it against the last snapshot using
+the tree publisher's **own** unchanged predicates (`Repository/ChangeDetection.cs`,
+extracted, not copied), so the preview and the next backup are one judgement:
+new, updated, metadata-only, moved, deleted, and — kept deliberately apart —
+`no_longer_included`, the file a rule edit stopped capturing, which is not a
+loss the next backup would even see. Counts are exact; paths sample up to a
+cap because the result crosses the contract. A material `upsert_backup_set`
+(root or rules changed) answers `configuration_change` naming the edit and
+queues a fire-and-forget reader-lane rescan whose counts land as one durable
+per-set notice (`set-changed:{id}`), refreshed by later edits and resolved by
+the next backup that completes for the set. The CLI grew `changes`, the web
+set editor a preview button and a saved-with-meaning dialog — and a material
+edit saves only through a two-step confirmation: the comparison shown first,
+files that would stop being included called out with a danger-styled Apply,
+Back returning to the editor with the draft intact. And `run_backup`'s
+`full` flag — accepted and **silently dropped by the service** while direct
+mode honoured it — is plumbed through scheduler and runner, proven by a test
+that reads `FilesReused == 0` off the progress channel. Recorded costs, not
+fixed: a re-included file re-captures with severed ancestry (manifests are
+immutable), a root change reads as delete-all-plus-new-all, and a hand-edit
+of `config.json` bypasses the rescan hook — the next backup still applies it.
+
+### 0039 — the loops close where the operator lives
+
+Contract 1.9. Notices are a contract surface at last: `list_notices` answers
+the ledger structured — id, key, message, raised-at, acknowledged-at, oldest
+first, history behind a flag — and `acknowledge_notice` stamps rather than
+erases; the console's Notices view acknowledges per row, and the agent's
+`notices --ack` now routes through a listening service's live store
+(falling back to the file only when nothing holds the state directory),
+ending the second-writer race on `notices.json`. A pairing can be **ended**
+from a console: `unpair` shares the agent verb's mechanics verbatim
+(`Agent/PeerUnpairing.cs` — resolve-or-refuse-ambiguity, best-effort
+15-second-bounded termination announcement, revoke, tombstone), is refused
+while a configured destination references the fingerprint, and carries an
+optional endpoint because the honest order deletes the address book first.
+And `list_directory` became a small time machine: per-entry modification
+times, new/changed/same markers by recorded object identity against the
+set's previous snapshot, the names deleted since it as their own list, and
+the predecessor's id — folders deliberately claim nothing, because access
+times ride the tree head and the scan itself moves them. The wire `kind`
+finally says `directory` (the enum's `directoryplaceholder` had leaked, and
+no client's check matched it). The console grew the Pairings table, the
+explorer's badges, times, deleted rows and older/newer rail, folder pickers
+for restore output and destination paths, a confirmed full re-capture, and
+"what changed?" on the overview card.
+
+### 0040 — several folders, one snapshot
+
+Contract 1.10, configuration schema 3. A backup set now captures **several
+folders into one snapshot**: one root keeps the pre-multi-root byte shape
+exactly, and past one, `Filesystem/MultiRootScan.cs` stitches per-root scans
+under a synthetic `/` whose children are label-named directories in raw
+UTF-8 byte order, with rule subjects `<label>/<relative>` fed through
+`ScanOptions.SubjectPrefix` so walk pruning still works. The snapshot's one
+`source_filesystem` map is the conservative intersection of the per-root
+probes. Labels are materialised **once, at upsert** (leaf name, `root`
+fallback, numeric dedupe) and persisted — never derived on read — and the
+1↔N transitions re-anchor the saved rules (label prefix gained or lost; a
+stripped single component becomes an exact-path regex rather than widening
+to the any-depth shorthand), narrated in the material-change answer. The
+runner refuses recoverably naming every missing root; the preview verb
+gained draft `roots` and answers a brand-new set against an empty baseline;
+the failure domain answers for the weakest root. Restore needed no change:
+`<output>/<label>/…` through the existing planner. The console's editor
+became a machine-wide checkbox tree — marks inherit from the nearest marked
+ancestor, tri-state where a subtree disagrees — compiling to roots plus
+excludes only (the deepest fully-ticked folder *is* the root); re-ticking
+under an unticked parent triggers the exclude-wins wall (sibling
+enumeration plus the new-arrivals warning), and feedback is an instant
+summary plus a debounced draft-roots preview walk. Proven live end to end:
+reopen, second root, wall, save, backup, labelled browse.
+
+### 0041 — restore walks in through the front door
+
+Contract 1.11, receipt schema 4. Restore became a guided wizard — passphrase,
+source, effective date, files, target, run — and every step landed as engine
+or contract surface rather than page logic. The passphrase gate runs **in the
+console process** against the staging archive's own key files
+(`Web/ConsoleRestoreGate.cs`, a real KEK derivation), so NFR-SEC-009's wall
+stands untouched; the console dependency rule gained exactly one named
+exception for that class. Restore **sources** are server-side handles
+(`open_restore_source`): the staging archive, a local-path destination's
+replica, or a **paired peer's replica over the wire** — the latter via the
+new peer-protocol retrieval feature ([spec 07](../specifications/peer-protocol/07-retrieval.md),
+messages 272–277, owner inventory, identical refusals), with
+`Agent/PeerRetrievalObjectStore.cs` adapting the session so the repository
+open, catalogue rebuild-plus-projection and restore run over the wire
+unchanged — proven by a service-level drill that deletes the staging archive
+outright and restores byte-identical files from the peer. The planner takes a
+prefix **list** (one run, one receipt, ancestor subsumption); the run options
+finally reach the wire: `target: original` maps label slices back onto the
+set's configured roots, `existing: rename` is the new `WriteBeside` policy
+(`name (restored 2026-08-18).ext`, existing file untouched), `overwrite` is
+`Replace`, and absent options reproduce the old behaviour byte for byte. The
+receipt persists to `<state>/receipts/<run>.json` on every run. Runs against
+a source load only the plan's own blobs — a restore-sized transfer, not a
+repository-sized one. Proven live: a Playwright walk of all six steps,
+wrong-passphrase refusal included, ending on restored bytes and the receipt
+path.
+
+### 0042 — the hub that cannot read what it keeps
+
+Built end to end. Repository format v2 severs writing from reading: one
+passphrase — entered at setup, at adoption onto a new service instance,
+and at restore, and persisted nowhere — derives via Argon2id an X25519
+public key that seals file contents, plus the symmetric write bundle
+(metadata, content-id, key-id, signing) the service keeps so browsing,
+planning, dedup bookkeeping, trim, replication and structural
+verification work without it. The private key is never stored in any
+form; restore re-derives it, and the grant lives only inside a
+restore-source handle. Data-blob footers sit on the structure plane so a
+write-only holder still reads its own blobs' record tables; the sealed
+spool resumes via the checkpointed content key; verify-on-reuse answers
+`Unavailable` rather than pretending. Contract 1.12 carries the two
+ceremonies as sealed envelopes to the service's published recipient key
+— the one permitted transit shape (NFR-SEC-009 as amended, fenced both
+ways by `KeyMaterialConfinementTests`) — and the service starts without
+a passphrase when its sets are provisioned. The CLI creates with
+`init --write-only --acknowledge-loss` and derives its direct-mode
+authority from `--passphrase-env`; the console runs both ceremonies in
+its own process. Proven by the end-to-end drills in
+`WriteOnlyRepositoryTests` (repository), `WriteOnlySetTests` (service —
+including the machine-migration adoption: metadata unreadable on the new
+machine until the passphrase re-enters, wrong passphrase refused by
+public-key mismatch), `WriteOnlyCommandTests` (CLI),
+`WriteOnlyCeremonyTests` (console), the committed
+`fixture-repository-v2` read contract, and a live Playwright walk from
+the provisioning dialog to byte-identical restored files. Losing the
+passphrase loses the backup, acknowledged at setup; v2 has no
+passphrase change (03 §7).
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 

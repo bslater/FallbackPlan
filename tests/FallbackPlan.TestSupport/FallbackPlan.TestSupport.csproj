@@ -12,6 +12,11 @@
   <ItemGroup>
     <PackageReference Include="MSTest" />
     <PackageReference Include="FsCheck" />
+    <!-- RecordingLogger implements ILogger so any suite can assert on what a
+         component logged, and so the redaction boundary can be proven by test
+         rather than by review (ADR-0043 section 4). The abstraction only —
+         the providers stay in FallbackPlan.Diagnostics. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

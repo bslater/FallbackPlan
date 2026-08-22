@@ -9,7 +9,7 @@ namespace FallbackPlan.Domain.Identifiers;
 /// the store path as 26 lowercase base32 characters, exactly as
 /// <see cref="DeltaId"/> is.
 /// </summary>
-public readonly struct CheckpointId : IEquatable<CheckpointId>
+public readonly struct CheckpointId : IEquatable<CheckpointId>, Diagnostics.IRedactedValue
 {
     /// <summary>The exact size of a checkpoint identifier in bytes.</summary>
     public const int Size = 16;
@@ -80,6 +80,14 @@ public readonly struct CheckpointId : IEquatable<CheckpointId>
 
     /// <inheritdoc />
     public override string ToString() => ToBase32();
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4): a stable short
+    /// prefix, correlatable across records without being the correlatable
+    /// identifier NFR-PRIV-002 keeps off the wire.
+    /// </summary>
+    public string ToRedactedString() =>
+        Diagnostics.Redaction.Shorten("ckpt", ToString(), 6);
 
     public static bool operator ==(CheckpointId left, CheckpointId right) => left.Equals(right);
 

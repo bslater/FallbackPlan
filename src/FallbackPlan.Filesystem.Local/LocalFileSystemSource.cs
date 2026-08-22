@@ -6,6 +6,9 @@ using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
 using Microsoft.Win32.SafeHandles;
 using FallbackPlan.Filesystem.Local.Resources;
+using FallbackPlan.Domain.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Filesystem.Local;
 
@@ -24,8 +27,10 @@ namespace FallbackPlan.Filesystem.Local;
 /// Windows-specific capture (alternate streams, security descriptors) is
 /// implemented here and exercised by the CI matrix.
 /// </remarks>
-public sealed class LocalFileSystemSource : IFileSystemSource
+public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemSource
 {
+    private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
     /// <inheritdoc />
     public SourceFilesystemInfo Probe(string rootPath)
     {
@@ -109,14 +114,28 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
         var rootEntry = BuildEntry(full, relativePath: "", "/"u8.ToArray(), rootStat, options, root);
 
+        Log.ScanningRoot(_logger, new LogPath(full));
+        var files = 0;
+        var directories = 0;
+        var failures = 0;
+
         yield return new ScanEvent.EnterDirectory(rootEntry);
         await foreach (var scanEvent in WalkAsync(full, root, "", rootStat.Device, options, cancellationToken)
             .ConfigureAwait(false))
         {
+            switch (scanEvent)
+            {
+                case ScanEvent.Leaf: files++; break;
+                case ScanEvent.EnterDirectory: directories++; break;
+                case ScanEvent.Failure: failures++; break;
+                default: break;
+            }
+
             yield return scanEvent;
         }
 
         yield return new ScanEvent.LeaveDirectory(rootEntry);
+        Log.ScanComplete(_logger, new LogPath(full), files, directories, failures);
     }
 
     private async IAsyncEnumerable<ScanEvent> WalkAsync(
@@ -145,6 +164,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
         if (listingFailure is not null)
         {
+            Log.ListingFailed(_logger, new LogPath(directory), listingFailure.Detail);
             yield return new ScanEvent.Failure(listingFailure);
             yield break;
         }
@@ -166,6 +186,8 @@ public sealed class LocalFileSystemSource : IFileSystemSource
             // never read. Reported, not guessed at (06 §4.3).
             if (!RoundTrips(name, nameBytes))
             {
+                Log.EntryFailed(
+                    _logger, new LogPath(relativePath), "the name has no faithful UTF-8 representation");
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath,
                     CaptureFailureReason.NameNotRepresentable,
@@ -174,7 +196,9 @@ public sealed class LocalFileSystemSource : IFileSystemSource
                 continue;
             }
 
-            var rulesSubject = relativePath.Normalize(NormalizationForm.FormC);
+            var rulesSubject = options.SubjectPrefix is null
+                ? relativePath.Normalize(NormalizationForm.FormC)
+                : options.SubjectPrefix + "/" + relativePath.Normalize(NormalizationForm.FormC);
 
             if (options.Rules?.IsExcluded(rulesSubject) == true)
             {
@@ -189,6 +213,7 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
             if (!stated)
             {
+                Log.EntryFailed(_logger, new LogPath(relativePath), "vanished between listing and stat");
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath, CaptureFailureReason.NotFound, "The entry vanished between listing and stat."));
                 continue;
@@ -249,9 +274,11 @@ public sealed class LocalFileSystemSource : IFileSystemSource
 
                 if (options.Rules?.MayDescend(rulesSubject) == false)
                 {
+                    Log.Excluded(_logger, new LogPath(relativePath));
                     continue;
                 }
 
+                Log.EnteringDirectory(_logger, new LogPath(relativePath));
                 yield return new ScanEvent.EnterDirectory(directoryEntry);
                 await foreach (var scanEvent in WalkAsync(
                     fullPath, childScope, relativePath, rootDevice, options, cancellationToken).ConfigureAwait(false))

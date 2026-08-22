@@ -15,18 +15,25 @@ namespace FallbackPlan.Repository.Crypto;
 /// <remarks>
 /// An empty passphrase is refused here, at the engine level: Argon2id itself
 /// accepts a zero-length password, so refusing is this type's job, not the
-/// primitive's (specification 03 §2.1). A minimum <em>length</em> is a policy
-/// question tracked as Q14 in docs/open-questions.md;
-/// <see cref="RecommendedMinimumLength"/> carries the working value.
+/// primitive's (specification 03 §2.1). <b>Nothing further is refused here,
+/// deliberately.</b> A minimum length is policy, it is decided (ADR-0044 §6,
+/// settling open question Q14), and it is enforced where a passphrase is
+/// <em>chosen</em> rather than here, where one is <em>used</em> — this
+/// constructor is on the restore path, and a policy tightened on it would
+/// refuse to open repositories that were created legitimately under the older
+/// rule.
 /// </remarks>
 public sealed class Passphrase : IDisposable
 {
     /// <summary>
-    /// The working minimum length the engine will recommend once passphrase
-    /// policy is decided (open question Q14). Not yet enforced — only the
-    /// empty passphrase is refused, which is the specification's MUST.
+    /// The minimum length policy enforces at setup, forwarded from its single
+    /// source so the two cannot drift
+    /// (<see cref="Domain.Configuration.PassphraseStrength.MinimumLength"/>).
+    /// Not enforced <em>here</em>: only the empty passphrase is refused, which
+    /// is the specification's MUST — see the remarks on this type for why the
+    /// rest is applied elsewhere.
     /// </summary>
-    public const int RecommendedMinimumLength = 12;
+    public const int RecommendedMinimumLength = Domain.Configuration.PassphraseStrength.MinimumLength;
 
     private readonly byte[] _utf8;
 

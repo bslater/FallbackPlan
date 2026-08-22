@@ -194,17 +194,54 @@ AES-GCM is **not key-committing**: a ciphertext can be constructed that authenti
 
 | Operation | Rewrites | Cost |
 |-----------|----------|------|
-| Change passphrase | `/keys/<key-id>` only | Trivial |
+| Change passphrase | `/keys/<key-id>`, and `/repository-format` when the KDF salt is refreshed (a new salt SHOULD be drawn) | Trivial |
 | New data-key generation | Nothing; new writes use it | Trivial |
 | Full data-key rotation | Every blob, in the background | Proportional to repository size |
 
 Changing the passphrase does **not** re-encrypt data. A user interface MUST say so plainly, because users routinely believe otherwise, and a user who thinks a password change has protected them from an attacker holding old blobs is worse off than one who knows it has not.
+
+An earlier revision of the table said the change rewrote `/keys/<key-id>` *only* — but the KDF salt lives in `/repository-format` (01 §3.3), so a passphrase change that draws a fresh salt rewrites the descriptor too. The row now says what the operation actually touches.
+
+**Write-only repositories (format v2, [ADR-0042](../../docs/adr/0042-write-only-repositories.md)) have no passphrase change.** Every v2 key derives directly from the passphrase; changing it would change every derived key and orphan every sealed blob. A v2 repository's passphrase is fixed for its life — the remedy for a passphrase the user wishes to retire is a new repository.
 
 ## 8 What is never written down
 
 The passphrase, the KEK, the master key in unwrapped form, any derived key, and any blob key MUST NOT appear in any durable object, log, telemetry payload, crash dump, or configuration export.
 
 Redaction MUST be by declared type rather than by string matching, so that a newly added secret-bearing field is protected by construction rather than by someone remembering to add a pattern. → NFR-SEC-006
+
+## 9 Write-only repositories (format v2)
+
+A format-v2 repository ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)) severs writing from reading: file contents seal to an asymmetric public key, and the machine that writes backups holds nothing that opens them. Its key material derives **entirely and only** from the passphrase.
+
+### 9.1 Derivation
+
+```text
+root = Argon2id(passphrase, kdf_salt, kdf_parameters)      (32 bytes; §2's KDF, unchanged)
+
+sealing_scalar   = HKDF-Expand(root, "fbp/seal/v2",        32)   → X25519 keypair
+structure_root   = HKDF-Expand(root, "fbp/metadata/v2",    32)
+content_id_key   = HKDF-Expand(root, "fbp/content-id/v2",  32)
+key_id_key       = HKDF-Expand(root, "fbp/key-id/v2",      32)
+signing_root     = HKDF-Expand(root, "fbp/signing/v2",     32)
+
+metadata_key[g]  = HKDF-Expand(structure_root, "fbp/metadata-generation/v2" ‖ u32(g), 32)
+signing_seed[g]  = HKDF-Expand(signing_root,   "fbp/signing-generation/v2"  ‖ u32(g), 32)
+```
+
+The **write bundle** — everything except `sealing_scalar` and `root` — is what a service holds. Every member is an independent one-way HKDF output: possession of the whole bundle yields neither the root, nor the passphrase, nor the sealing private key, nor any sibling key. The per-generation keys expand from sub-roots rather than from `root` precisely so the bundle can derive them without carrying anything that walks back up.
+
+The sealing **public** key is recorded in the descriptor ([01 §3.2](01-object-layout.md#32-body) key 9) and doubles as the wrong-passphrase verifier: derive and compare, no decryption, no oracle beyond equality.
+
+### 9.2 What a v2 repository does not have
+
+- **No `/keys/` namespace.** There is no wrapped key object and no KEK: the descriptor's salt and parameters plus the passphrase reproduce everything. A v2 repository's `/keys/` prefix MUST be empty.
+- **No passphrase change** (§7): the passphrase is the root; changing it would change every derived key and orphan every sealed blob.
+- **No data-key family.** Data-class record content encrypts under per-blob random content keys sealed to the public key ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); data-blob *footers* and everything metadata-class use `metadata_key[g]` through the [§5](#5-per-blob-keys) construction unchanged.
+
+### 9.3 What is never written down, again
+
+§8 applies with the v2 additions: the `root`, the `sealing_scalar`, the write bundle's members, and any blob content key MUST NOT appear in any durable repository object. The one deliberate exception is the spool checkpoint's in-flight content key ([05 §6.2](05-blob.md#62-everything-that-could-vary-is-pinned)) — writer-local state, never a repository object, destroyed at seal.
 
 ---
 

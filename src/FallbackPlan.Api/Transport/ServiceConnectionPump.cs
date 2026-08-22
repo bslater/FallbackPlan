@@ -1,4 +1,7 @@
 using Bodu;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -23,18 +26,23 @@ public static class ServiceConnectionPump
     /// <param name="stream">The connected duplex stream. Not disposed here — the caller owns it.</param>
     /// <param name="service">The service to dispatch commands to.</param>
     /// <param name="clientDescription">How to name this client in log lines.</param>
-    /// <param name="log">Optional sink for connection-level notes.</param>
+    /// <param name="logger">Where connection-level diagnostics go (ADR-0043).</param>
     /// <param name="cancellationToken">Stops the pump when the listener is stopping.</param>
     /// <returns>A task that completes when the connection ends.</returns>
     public static async Task RunAsync(
         Stream stream,
         IFallbackPlanService service,
         string clientDescription,
-        Action<string>? log,
+        ILogger logger,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(stream);
         ThrowHelper.ThrowIfNull(service);
+
+        // Hoisted once: rendering it inside a log argument would be work done
+        // even when the level is off (CA1873), and the frames below want it
+        // anyway.
+        var serviceVersion = ContractVersion.Current.ToString();
 
         try
         {
@@ -51,31 +59,33 @@ public static class ServiceConnectionPump
                 await FrameCodec.WriteAsync(
                     stream,
                     new HelloAcknowledgementFrame(
-                        ContractVersion.Current.ToString(),
+                        serviceVersion,
                         false,
                         ContractVersion.DescribeMismatch(clientVersion, ContractVersion.Current)),
                     cancellationToken).ConfigureAwait(false);
+                Log.VersionRefused(logger, hello.ContractVersion, serviceVersion);
                 return;
             }
 
             await FrameCodec.WriteAsync(
                 stream,
-                new HelloAcknowledgementFrame(ContractVersion.Current.ToString(), true, null),
+                new HelloAcknowledgementFrame(serviceVersion, true, null),
                 cancellationToken).ConfigureAwait(false);
 
-            log?.Invoke($"accepted {hello.ClientName} from {clientDescription}");
-            await PumpAsync(stream, service, cancellationToken).ConfigureAwait(false);
+            Log.ClientConnected(logger, hello.ContractVersion, serviceVersion, accepted: true);
+            await PumpAsync(stream, service, logger, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException)
         {
             // A client that disconnects, or sends nonsense, ends its own
             // connection and nothing else. Bounded parsing is what makes that
             // true rather than hopeful (T-7).
-            log?.Invoke($"connection from {clientDescription} ended: {exception.Message}");
+            Log.ConnectionFailed(logger, exception.Message);
         }
     }
 
-    private static async Task PumpAsync(Stream stream, IFallbackPlanService service, CancellationToken cancellationToken)
+    private static async Task PumpAsync(
+        Stream stream, IFallbackPlanService service, ILogger logger, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -86,12 +96,36 @@ public static class ServiceConnectionPump
                     return;
 
                 case RequestFrame request:
-                    var result = await service.ExecuteAsync(request.Command, cancellationToken).ConfigureAwait(false);
+                {
+                    // Timed and named only when somebody is listening: reading
+                    // the type names is work, and CA1873 is an error, so both
+                    // land in locals behind the level check rather than in a
+                    // log argument.
+                    var timing = logger.IsEnabled(LogLevel.Debug);
+                    var startedAt = timing ? Stopwatch.GetTimestamp() : 0L;
+
+                    var result = await service.ExecuteAsync(request.Command, cancellationToken)
+                        .ConfigureAwait(false);
                     await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), cancellationToken)
                         .ConfigureAwait(false);
+
+                    if (timing)
+                    {
+                        // The verb and the result kind, never the command
+                        // itself: arguments carry set names, paths and sealed
+                        // envelopes, and none of those belong in a connection
+                        // log.
+                        var verb = request.Command.GetType().Name;
+                        var answered = result.GetType().Name;
+                        var elapsedMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                        Log.CommandHandled(logger, verb, answered, elapsedMs);
+                    }
+
                     break;
+                }
 
                 case WatchFrame:
+                    Log.WatchOpened(logger);
                     await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
                     return;
 

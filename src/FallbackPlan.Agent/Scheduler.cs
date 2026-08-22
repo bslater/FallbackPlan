@@ -1,6 +1,8 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
+using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace FallbackPlan.Agent;
 
@@ -48,7 +50,20 @@ public static class Scheduler
         var outcomes = new List<AgentSetOutcome>();
         var running = new List<Task<BackupOutcome>>();
 
-        foreach (var set in runtime.Configuration.BackupSets)
+        // The category names where the records come from, and this pass is a
+        // static class — which the generic overload cannot express, and which
+        // is why the analyzer's suggestion does not apply here.
+#pragma warning disable CA2263
+        var pass = runtime.LoggerFor(typeof(Scheduler));
+#pragma warning restore CA2263
+
+        // Read once per pass through the logged path, so "what was in force
+        // when this ran" is answerable afterwards — and so the loop below
+        // works from one snapshot rather than re-reading per set.
+        var configuration = runtime.LoadConfiguration();
+
+
+        foreach (var set in configuration.BackupSets)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -73,8 +88,27 @@ public static class Scheduler
 
             if (!schedule!.IsDue(anchor, now))
             {
-                outcomes.Add(new AgentSetOutcome(set.Name, "not-due", $"next: {schedule.NextRun(anchor, now):u}"));
+                var next = schedule.NextRun(anchor, now);
+                if (pass.IsEnabled(LogLevel.Debug))
+                {
+                    var nextRun = next.ToString("u", CultureInfo.InvariantCulture);
+                    Log.SetNotDue(pass, set.Name, nextRun);
+                }
+
+                outcomes.Add(new AgentSetOutcome(set.Name, "not-due", $"next: {next:u}"));
                 continue;
+            }
+
+            // The answer to "why did this not run" and "why did this run now",
+            // which is asked hours after anybody could have watched it happen.
+            // Formatted into locals inside the guard: CA1873 does not read
+            // IsEnabled, and it is right that an argument expression is
+            // evaluated whether or not anybody is listening.
+            if (pass.IsEnabled(LogLevel.Debug))
+            {
+                var lastCompleted = anchor?.ToString("u", CultureInfo.InvariantCulture) ?? "never";
+                var nextRun = schedule.NextRun(anchor, now).ToString("u", CultureInfo.InvariantCulture);
+                Log.SetDue(pass, set.Name, lastCompleted, nextRun);
             }
 
             running.Add(Enqueue(runtime, set, now, userInitiated: false));
@@ -254,9 +288,11 @@ public static class Scheduler
     /// <param name="set">The set to back up.</param>
     /// <param name="now">The clock.</param>
     /// <param name="userInitiated">Whether a person is waiting for it.</param>
+    /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
     /// <returns>The job's outcome, when it finishes.</returns>
     public static Task<BackupOutcome> Enqueue(
-        ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated)
+        ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated,
+        bool full = false)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
@@ -274,7 +310,8 @@ public static class Scheduler
                 try
                 {
                     completion.SetResult(
-                        await BackupRunner.RunAsync(runtime, set, job.Id, now, cancellationToken).ConfigureAwait(false));
+                        await BackupRunner.RunAsync(runtime, set, job.Id, now, full, cancellationToken)
+                            .ConfigureAwait(false));
                 }
                 catch (Exception exception)
                 {

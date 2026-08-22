@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Index;
 
@@ -67,13 +69,20 @@ public sealed class IndexLoader : IDisposable
     private readonly RepositoryId _repositoryId;
     private readonly KeyHierarchy _hierarchy;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private readonly ILogger _log;
 
     /// <summary>Creates a loader.</summary>
-    public IndexLoader(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    /// <param name="store">Where the index plane lives.</param>
+    /// <param name="repositoryId">The repository being loaded.</param>
+    /// <param name="hierarchy">The key hierarchy the objects open under.</param>
+    /// <param name="logger">Where the load's shape is recorded.</param>
+    public IndexLoader(
+        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(hierarchy);
 
+        _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _hierarchy = hierarchy;
@@ -256,6 +265,9 @@ public sealed class IndexLoader : IDisposable
                 resolved[group.Key] = winner;
             }
         }
+
+        Log.IndexLoaded(
+            _log, checked((uint)currentGeneration), deltas.Count, checkpoints.Count, findings.Count);
 
         return new IndexState(resolved, allEntries, deltas, checkpoints, unresolved, findings);
     }

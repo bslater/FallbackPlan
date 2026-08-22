@@ -49,7 +49,7 @@ public sealed class ClientConfigurationTests
     {
         Id = new string('a', 32),
         Name = name,
-        Root = "/data/docs",
+        Roots = [new BackupRootConfiguration { Path = "/data/docs" }],
         Destinations = destinations,
     };
 
@@ -419,5 +419,173 @@ public sealed class ClientConfigurationTests
             """);
 
         Assert.ThrowsExactly<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
+    }
+
+    [TestMethod]
+    public void Load_ASchemaTwoRoot_MigratesToRootsAndStaysThere()
+    {
+        // The shape every existing install wrote. It must read as schema 3
+        // without an edit, and the next save must write the new form
+        // (ADR-0040).
+        File.WriteAllText(ConfigPath, $$"""
+            { "schema_version": 2,
+              "destinations": [ { "id": "{{new string('1', 32)}}", "name": "usb", "kind": "local-path", "path": "/mnt/u" } ],
+              "backup_sets": [ { "id": "{{new string('a', 32)}}", "name": "docs", "root": "/data/docs", "destinations": [ "usb" ] } ] }
+            """);
+
+        var loaded = ClientConfiguration.Load(ConfigPath);
+
+        Assert.AreEqual(ClientConfiguration.CurrentSchemaVersion, loaded.SchemaVersion);
+        var set = Assert.ContainsSingle(loaded.BackupSets);
+        Assert.IsNull(set.Root);
+        Assert.AreEqual("/data/docs", Assert.ContainsSingle(set.Roots).Path);
+
+        loaded.Save(ConfigPath);
+        var written = File.ReadAllText(ConfigPath);
+        Assert.Contains("\"roots\"", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"root\":", written, StringComparison.Ordinal);
+        Assert.AreEqual("/data/docs", ClientConfiguration.Load(ConfigPath).BackupSets[0].Roots[0].Path);
+    }
+
+    [TestMethod]
+    public void Load_ASetSpeakingBothRootForms_IsRefused()
+    {
+        // Both forms at once is a misread, not extra information — guessing
+        // which wins would capture the wrong folders silently.
+        File.WriteAllText(ConfigPath, $$"""
+            { "schema_version": 3,
+              "destinations": [ { "id": "{{new string('1', 32)}}", "name": "usb", "kind": "local-path", "path": "/mnt/u" } ],
+              "backup_sets": [ { "id": "{{new string('a', 32)}}", "name": "docs", "root": "/data/docs",
+                "roots": [ { "path": "/data/docs" } ], "destinations": [ "usb" ] } ] }
+            """);
+
+        var exception = Assert.ThrowsExactly<ClientStateException>(() => ClientConfiguration.Load(ConfigPath));
+        Assert.Contains("both", exception.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Validate_AMultiRootSetWithoutLabels_IsRefused()
+    {
+        // Labels are the roots' snapshot coordinates; a multi-root set cannot
+        // be saved without them (they are materialized at edit time, never
+        // derived on read).
+        var configuration = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb")],
+            BackupSets = [Set("docs", Ref("usb")) with
+            {
+                Roots =
+                [
+                    new BackupRootConfiguration { Path = "/data/docs" },
+                    new BackupRootConfiguration { Path = "/data/pics" },
+                ],
+            }],
+        };
+
+        var exception = Assert.ThrowsExactly<ClientStateException>(() => configuration.Save(ConfigPath));
+        Assert.Contains("label", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public void Validate_LabelsDifferingOnlyInCase_AreRefused()
+    {
+        // A case-insensitive restore target would collapse the two into one
+        // folder, so uniqueness is case-insensitive on purpose.
+        var configuration = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb")],
+            BackupSets = [Set("docs", Ref("usb")) with
+            {
+                Roots =
+                [
+                    new BackupRootConfiguration { Path = "/data/docs", Label = "Docs" },
+                    new BackupRootConfiguration { Path = "/backup/docs", Label = "docs" },
+                ],
+            }],
+        };
+
+        Assert.ThrowsExactly<ClientStateException>(() => configuration.Save(ConfigPath));
+    }
+
+    [TestMethod]
+    public void Validate_DuplicateRootPaths_AreRefused()
+    {
+        var configuration = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb")],
+            BackupSets = [Set("docs", Ref("usb")) with
+            {
+                Roots =
+                [
+                    new BackupRootConfiguration { Path = "/data/docs", Label = "a" },
+                    new BackupRootConfiguration { Path = "/data/docs", Label = "b" },
+                ],
+            }],
+        };
+
+        Assert.ThrowsExactly<ClientStateException>(() => configuration.Save(ConfigPath));
+    }
+
+    [TestMethod]
+    public void LabelDefect_EachPathology_IsNamed()
+    {
+        Assert.IsNotNull(ClientConfiguration.LabelDefect(""));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("."));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect(".."));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("a/b"));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect(@"a\b"));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("c:"));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("a*b"));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("a?b"));
+        Assert.IsNotNull(ClientConfiguration.LabelDefect("e\u0301"), "a decomposed sequence is not NFC");
+        Assert.IsNotNull(ClientConfiguration.LabelDefect(new string('x', 256)));
+
+        Assert.IsNull(ClientConfiguration.LabelDefect("Documents"));
+        Assert.IsNull(ClientConfiguration.LabelDefect("caf\u00e9"));
+    }
+
+    [TestMethod]
+    public void DeriveLabels_LeafNamesWithACollision_GetNumericSuffixes()
+    {
+        var derived = ClientConfiguration.DeriveLabels(
+        [
+            new BackupRootConfiguration { Path = "/data/docs" },
+            new BackupRootConfiguration { Path = "/backup/docs" },
+            new BackupRootConfiguration { Path = "/pics/", Label = "Photos" },
+        ]);
+
+        Assert.AreEqual("docs", derived[0].Label);
+        Assert.AreEqual("docs-2", derived[1].Label);
+        Assert.AreEqual("Photos", derived[2].Label, "an explicit label is never rewritten");
+    }
+
+    [TestMethod]
+    public void DeriveLabels_ASingleRoot_IsLeftAlone()
+    {
+        // One root keeps the legacy snapshot shape; its label is unused and
+        // must not be invented.
+        var roots = new[] { new BackupRootConfiguration { Path = "/data/docs" } };
+
+        Assert.IsNull(Assert.ContainsSingle(ClientConfiguration.DeriveLabels(roots)).Label);
+    }
+
+    [TestMethod]
+    public void DeriveLabels_ADriveRoot_FallsBackRatherThanEmittingAnEmptyLabel()
+    {
+        var derived = ClientConfiguration.DeriveLabels(
+        [
+            new BackupRootConfiguration { Path = "C:\\" },
+            new BackupRootConfiguration { Path = "/" },
+        ]);
+
+        // "C:" strips to "C"; a bare "/" has no leaf at all and takes the
+        // fallback. Both must satisfy LabelDefect afterwards.
+        Assert.AreEqual("C", derived[0].Label);
+        Assert.AreEqual("root", derived[1].Label);
+        Assert.IsNull(ClientConfiguration.LabelDefect(derived[0].Label!));
+        Assert.IsNull(ClientConfiguration.LabelDefect(derived[1].Label!));
     }
 }

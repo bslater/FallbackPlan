@@ -186,6 +186,12 @@ internal sealed class TargetedRecordReader(
             RecordReadOutcome.Ok => ReuseVerification.Verified,
             null => ReuseVerification.Unavailable,
             RecordReadOutcome.UnsupportedProfile => ReuseVerification.Unavailable,
+
+            // A sealed record on a write-only hub was not read at all — the
+            // key is elsewhere, not the content wrong. Never a damage finding
+            // (ADR-0042 §7): the segment is re-archived rather than reused,
+            // exactly as any other unverifiable candidate.
+            RecordReadOutcome.ContentSealed => ReuseVerification.Unavailable,
             _ => ReuseVerification.Failed,
         };
     }

@@ -24,10 +24,27 @@ public enum VerifyLevel
 }
 
 /// <summary>The outcome of verifying one blob.</summary>
-public sealed record BlobVerifyResult(bool Ok, VerifyLevel Level, int RecordsVerified, string? Detail);
+/// <param name="Ok">Whether everything that could be checked passed.</param>
+/// <param name="Level">The level that ran.</param>
+/// <param name="RecordsVerified">How many records were content-verified (level 3).</param>
+/// <param name="Detail">What went wrong, or the stated incapacity when records were sealed.</param>
+/// <param name="RecordsSealed">
+/// How many records could not be content-verified because they are sealed
+/// to the repository public key (ADR-0042 §7). Not damage and not a pass:
+/// their structure and the blob's digest verified; their content needs a
+/// restore grant.
+/// </param>
+public sealed record BlobVerifyResult(bool Ok, VerifyLevel Level, int RecordsVerified, string? Detail, int RecordsSealed = 0);
 
 /// <summary>The outcome of verifying one file version (E4).</summary>
-public sealed record FileVerifyResult(bool Ok, string? Detail);
+/// <param name="Ok">Whether the file verified end to end.</param>
+/// <param name="Detail">What went wrong, or what could not be checked.</param>
+/// <param name="NeedsRestoreGrant">
+/// The file's segments are sealed (ADR-0042 §7): nothing was found wrong —
+/// content verification needs a restore grant. Distinct from damage so a
+/// caller never reports a sealed file as a corrupt one.
+/// </param>
+public sealed record FileVerifyResult(bool Ok, string? Detail, bool NeedsRestoreGrant = false);
 
 /// <summary>
 /// The verification engine (specification 05 §8; FR-RST-002, NFR-REL-004):
@@ -112,20 +129,37 @@ public sealed class VerifyEngine : IDisposable
 
             // Level 3: every record, 04 §6 in full, step 7 included.
             var verified = 0;
+            var contentSealed = 0;
             foreach (var entry in reader.RecordTable)
             {
                 var result = await reader.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
 
+                // A sealed record on a write-only holder is a stated
+                // incapacity, never a failure and never a silent pass
+                // (ADR-0042 §7): its structure and the blob's digest are
+                // verified; its content needs a restore grant.
+                if (result.Outcome == RecordReadOutcome.ContentSealed)
+                {
+                    contentSealed++;
+                    continue;
+                }
+
                 if (result.Outcome != RecordReadOutcome.Ok)
                 {
                     return new BlobVerifyResult(false, level, verified,
-                        $"Record {entry.ObjectId} at offset {entry.PhysicalOffset}: {result.Outcome} — {result.Detail}");
+                        $"Record {entry.ObjectId} at offset {entry.PhysicalOffset}: {result.Outcome} — {result.Detail}",
+                        contentSealed);
                 }
 
                 verified++;
             }
 
-            return new BlobVerifyResult(true, level, verified, null);
+            return new BlobVerifyResult(true, level, verified,
+                contentSealed == 0
+                    ? null
+                    : string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"{contentSealed} record(s) are sealed to the repository public key — structure verified; content verification needs a restore grant (ADR-0042)."),
+                contentSealed);
         }
     }
 
@@ -157,6 +191,16 @@ public sealed class VerifyEngine : IDisposable
             if (reference is { } segment)
             {
                 var read = await reader.ReadSegmentAsync(segment.ObjectId, cancellationToken).ConfigureAwait(false);
+
+                if (read.Outcome == RecordReadOutcome.ContentSealed)
+                {
+                    // Nothing is wrong with the file; nothing about its
+                    // content can be checked from here (ADR-0042 §7).
+                    return new FileVerifyResult(false,
+                        "The file's segments are sealed to the repository public key — content verification "
+                        + "needs a restore grant (ADR-0042); no damage was found.",
+                        NeedsRestoreGrant: true);
+                }
 
                 if (read.Outcome != RecordReadOutcome.Ok)
                 {

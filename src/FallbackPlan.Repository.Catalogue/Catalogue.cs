@@ -5,6 +5,8 @@ using FallbackPlan.Repository.Index;
 using System.Diagnostics;
 using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Catalogue;
 
@@ -77,8 +79,13 @@ public sealed record ResolvedLocation(
 public sealed class Catalogue : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly ILogger _log;
 
-    private Catalogue(SqliteConnection connection) => _connection = connection;
+    private Catalogue(SqliteConnection connection, ILogger? logger)
+    {
+        _connection = connection;
+        _log = logger ?? NullLogger.Instance;
+    }
 
     /// <summary>
     /// Opens (or creates) the catalogue at <paramref name="path"/> for
@@ -86,11 +93,12 @@ public sealed class Catalogue : IDisposable
     /// repository identity — deletes and recreates: it is a cache
     /// (FR-MAN-002).
     /// </summary>
-    public static Catalogue Open(string path, RepositoryId repositoryId)
+    public static Catalogue Open(string path, RepositoryId repositoryId, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
         var connection = Connect(path);
+        var disposition = "reused";
 
         if (!IsCompatible(connection, repositoryId))
         {
@@ -98,10 +106,13 @@ public sealed class Catalogue : IDisposable
             SqliteConnection.ClearAllPools();
             File.Delete(path);
             connection = Connect(path);
+            disposition = "discarded and recreated — schema version or repository identity did not match";
         }
 
         if (!HasSchema(connection))
         {
+            disposition = disposition == "reused" ? "created" : disposition;
+
             using var create = connection.CreateCommand();
             create.CommandText = CatalogueSchema.Ddl;
             create.ExecuteNonQuery();
@@ -118,7 +129,9 @@ public sealed class Catalogue : IDisposable
             stamp.ExecuteNonQuery();
         }
 
-        return new Catalogue(connection);
+        Log.CatalogueOpened(logger ?? NullLogger.Instance, repositoryId, disposition);
+
+        return new Catalogue(connection, logger);
     }
 
     /// <summary>Marks how this catalogue was produced: live, checkpoint-rebuild, or forensic-rebuild.</summary>
@@ -530,6 +543,46 @@ public sealed class Catalogue : IDisposable
         return entries;
     }
 
+    /// <summary>
+    /// Every non-directory entry of one snapshot, in path order — the
+    /// baseline a source comparison walks against (FR-SVC-009).
+    /// </summary>
+    public IReadOnlyList<CatalogueTreeEntry> EnumerateLeaves(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+            FROM tree_entries t
+            LEFT JOIN file_versions f ON f.object_id = t.object_id
+            WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
+            ORDER BY t.path;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+
+        var entries = new List<CatalogueTreeEntry>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            entries.Add(ReadTreeEntry(reader));
+        }
+
+        return entries;
+    }
+
+    /// <summary>How many non-directory entries one snapshot holds.</summary>
+    public long CountFiles(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM tree_entries
+            WHERE snapshot_id = $snapshot AND entry_kind <> $directory;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+        return (long)(command.ExecuteScalar() ?? 0L);
+    }
+
     private static CatalogueTreeEntry ReadTreeEntry(SqliteDataReader reader) => new(
         reader.GetString(0),
         (EntryKind)reader.GetInt64(1),
@@ -597,6 +650,11 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$blob", blobId is { } b ? b.ToArray() : DBNull.Value);
         command.Parameters.AddWithValue("$detail", finding.Detail);
         command.ExecuteNonQuery();
+
+        // Every finding funnels through here — live projection, checkpoint
+        // rebuild and the forensic walk alike — so one call site covers all
+        // three rather than three that can drift apart.
+        Log.DamageFound(_log, finding.Kind, finding.Detail);
     }
 
     /// <summary>Every recorded finding, in insertion order.</summary>

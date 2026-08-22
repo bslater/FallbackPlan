@@ -24,6 +24,13 @@ public enum RecordReadOutcome
     /// </summary>
     ContentMismatch,
 
+    /// <summary>
+    /// The record sits in a sealed v2 data blob and this reader holds no
+    /// restore grant (ADR-0042 §5): the structure opened, the content did
+    /// not, and nothing is damaged — the key is simply not here.
+    /// </summary>
+    ContentSealed,
+
     /// <summary>The record uses a profile this implementation does not support; refused, not guessed.</summary>
     UnsupportedProfile,
 }

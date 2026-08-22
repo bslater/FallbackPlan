@@ -7,6 +7,7 @@ using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Format.Manifests;
@@ -16,6 +17,7 @@ using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 using FallbackPlan.Cli.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Cli;
 
@@ -105,6 +107,20 @@ public interface IOperationGateway : IAsyncDisposable
     ValueTask<OperationReport> SyncAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Reports what changed under a set's source since its last backup —
+    /// new, updated, moved, deleted, and files the rules no longer include
+    /// (ADR-0038, FR-SVC-009). Only a service can serve this — the rescan
+    /// reads the set's staging catalogue under the service's runtime — so
+    /// direct mode refuses with directions.
+    /// </summary>
+    /// <param name="setName">The set to compare, or null for the default set.</param>
+    /// <param name="sampleLimit">The most paths listed per bucket; null takes the service default.</param>
+    /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <returns>The comparison, one line per finding.</returns>
+    ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Runs a retention pass per configured set (architecture 07). Only a
     /// service can serve this — retention needs the whole configuration, the
     /// sync ledger and the writer role — so direct mode refuses with
@@ -156,19 +172,21 @@ public static class OperationGateway
     /// holder, because the alternative is two processes writing as one writer.
     /// </param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The gateway; dispose to release whatever it holds.</returns>
     public static async ValueTask<IOperationGateway> OpenForWriteAsync(
         string repoPath,
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool forceDirect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
         // The session opens without the role first, because the default state
         // directory is derived from the repository id — so the address a client
         // would connect to is not knowable until the repository is open.
         var session = await CliSession.OpenAsync(
-            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken).ConfigureAwait(false);
+            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken, logger).ConfigureAwait(false);
 
         try
         {
@@ -181,6 +199,13 @@ public static class OperationGateway
                 {
                     client = await LocalServiceClient.ConnectAsync(
                         session.StateDirectory, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+
+                    // Presented as the first thing on a fresh connection: the
+                    // service holds the session, this end holds only the token,
+                    // and a connection that never presents one is refused by
+                    // name a moment later (ADR-0045 §5).
+                    await new SessionCache(session.StateDirectory)
+                        .PresentAsync(client, cancellationToken).ConfigureAwait(false);
                 }
                 catch (ServiceConnectionException)
                 {
@@ -197,7 +222,7 @@ public static class OperationGateway
             }
 
             session.TakeWriterRole();
-            return new DirectGateway(session);
+            return new DirectGateway(session, logger);
         }
         catch
         {
@@ -216,6 +241,7 @@ public static class OperationGateway
     /// <param name="stateDirectory">The state directory, or null for the default.</param>
     /// <param name="forceDirect">Whether <c>--direct</c> was given.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The gateway; dispose to release whatever it holds.</returns>
     /// <remarks>
     /// A read path never takes the writer role, so unlike the write gateway
@@ -229,10 +255,11 @@ public static class OperationGateway
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool forceDirect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
         var session = await CliSession.OpenAsync(
-            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken).ConfigureAwait(false);
+            repoPath, passphraseEnvironmentVariable, stateDirectory, cancellationToken, logger).ConfigureAwait(false);
 
         try
         {
@@ -243,6 +270,13 @@ public static class OperationGateway
                 {
                     client = await LocalServiceClient.ConnectAsync(
                         session.StateDirectory, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+
+                    // Presented as the first thing on a fresh connection: the
+                    // service holds the session, this end holds only the token,
+                    // and a connection that never presents one is refused by
+                    // name a moment later (ADR-0045 §5).
+                    await new SessionCache(session.StateDirectory)
+                        .PresentAsync(client, cancellationToken).ConfigureAwait(false);
                 }
                 catch (ServiceConnectionException)
                 {
@@ -257,7 +291,7 @@ public static class OperationGateway
                 }
             }
 
-            return new DirectGateway(session);
+            return new DirectGateway(session, logger);
         }
         catch
         {
@@ -380,12 +414,18 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
         var result = await SendAsync<VerificationResult>(
             new VerifyCommand(level), "a verification", cancellationToken).ConfigureAwait(false);
 
-        return new OperationReport(
-            result.Failures == 0,
-            [
-                string.Create(CultureInfo.InvariantCulture,
-                    $"verified {result.ObjectsChecked} blob(s) at level {result.Level}; {result.Failures} failure(s)"),
-            ]);
+        List<string> lines =
+        [
+            string.Create(CultureInfo.InvariantCulture,
+                $"verified {result.ObjectsChecked} blob(s) at level {result.Level}; {result.Failures} failure(s)"),
+        ];
+        if (result.SealedRecords > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"sealed   {result.SealedRecords} record(s) — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
+        }
+
+        return new OperationReport(result.Failures == 0, lines);
     }
 
     /// <inheritdoc/>
@@ -440,6 +480,57 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
             new SyncCommand(setName, destinationName), "a sync", cancellationToken).ConfigureAwait(false);
 
         return new OperationReport(true, result.Lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<SetChangePreviewResult>(
+            new PreviewSetChangesCommand(setName, SampleLimit: sampleLimit), "a change preview", cancellationToken)
+            .ConfigureAwait(false);
+
+        var lines = new List<string>
+        {
+            result.BaselineSnapshotId is { } baseline
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"set '{result.SetName}' vs snapshot {baseline} captured {DateTimeOffset.FromUnixTimeMilliseconds((long)(result.BaselineCapturedAt ?? 0)):u}")
+                : $"set '{result.SetName}' has never backed up — everything below is new",
+            string.Create(CultureInfo.InvariantCulture, $"{result.Unchanged} unchanged"),
+        };
+
+        AppendBucket(lines, "new", result.New);
+        AppendBucket(lines, "updated", result.Updated);
+        AppendBucket(lines, "metadata-only", result.MetadataOnly);
+        AppendBucket(lines, "moved", result.Moved);
+        AppendBucket(lines, "deleted", result.Deleted);
+        AppendBucket(lines, "no longer included by the rules", result.NoLongerIncluded);
+        if (result.Failures > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"{result.Failures} unreadable"));
+        }
+
+        return new OperationReport(true, lines);
+
+        static void AppendBucket(List<string> lines, string label, ChangeBucketDescriptor bucket)
+        {
+            if (bucket.Count == 0)
+            {
+                return;
+            }
+
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"{bucket.Count} {label}"));
+            foreach (var path in bucket.Sample)
+            {
+                lines.Add($"  {path}");
+            }
+
+            if (bucket.Count > bucket.Sample.Count)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"  … and {bucket.Count - bucket.Sample.Count} more"));
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -520,7 +611,7 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
 }
 
 /// <summary>The gateway that does the work in this process, holding the writer role.</summary>
-internal sealed class DirectGateway(CliSession session) : IOperationGateway
+internal sealed class DirectGateway(CliSession session, ILogger? logger = null) : IOperationGateway
 {
     /// <summary>The session this gateway works through — the verbs a service cannot serve still need it.</summary>
     public CliSession Session => session;
@@ -533,7 +624,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
     {
         ThrowHelper.ThrowIfNull(request);
 
-        string rootPath;
+        IReadOnlyList<ScanRoot> roots;
         IReadOnlyList<string> include, exclude;
         byte[] backupSetId;
 
@@ -542,25 +633,26 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             var configuration = ClientConfiguration.Load(session.ConfigurationPath);
             var set = configuration.FindSet(setName)
                 ?? throw new CliFailureException(Strings.FormatDirectGateway_NoBackupSetNamedExists(setName, session.ConfigurationPath));
-            rootPath = set.Root;
+            roots = [.. set.Roots.Select(root => new ScanRoot(root.Path, root.Label))];
             include = set.IncludeRules;
             exclude = set.ExcludeRules;
             backupSetId = Convert.FromHexString(set.Id);
         }
         else
         {
-            rootPath = request.Root ?? throw new CliFailureException(Strings.DirectGateway_PassRootDirectorySetName);
+            var rootPath = request.Root ?? throw new CliFailureException(Strings.DirectGateway_PassRootDirectorySetName);
+            roots = [new ScanRoot(rootPath)];
             include = request.IncludeRules;
             exclude = request.ExcludeRules;
             backupSetId = session.BackupSetId;
         }
 
-        if (!Directory.Exists(rootPath))
+        foreach (var root in roots.Where(root => !Directory.Exists(root.Path)))
         {
-            throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(rootPath));
+            throw new CliFailureException(Strings.FormatDirectGateway_NotDirectory(root.Path));
         }
 
-        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
 
         // Incremental against the newest snapshot of the same set the catalogue
         // knows — unless --full asks for a re-read.
@@ -569,8 +661,12 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             : catalogue.EnumerateSnapshots()
                 .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
+        // A write-only repository takes the device trust domain (ADR-0042):
+        // verify-on-reuse reads content, which it cannot.
         var orchestrator = new PublicationOrchestrator(
-            CapturePolicy.Default,
+            session.Repository.Keys.WriteOnly
+                ? CapturePolicy.Default with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device }
+                : CapturePolicy.Default,
             session.Repository.RepositoryId,
             session.Writer,
             session.CurrentGeneration,
@@ -589,7 +685,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
             new SnapshotJob
             {
                 Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
-                RootPath = rootPath,
+                Roots = roots,
                 IncludeRules = include,
                 ExcludeRules = exclude,
                 DeviceId = session.DeviceId,
@@ -644,6 +740,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         using var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
         var blobs = 0;
         var failures = 0;
+        var sealedRecords = 0L;
         List<string> lines = [];
 
         await foreach (var entry in session.Store
@@ -657,6 +754,8 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
                 failures++;
                 lines.Add($"FAILED {entry.Key.Value}: {result.Detail}");
             }
+
+            sealedRecords += result.RecordsSealed;
         }
 
         // Direct mode names the blob that failed. The contract carries only a
@@ -664,6 +763,11 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // in what they can say.
         lines.Add(string.Create(CultureInfo.InvariantCulture,
             $"verified {blobs} blob(s) at level {parsed}; {failures} failure(s)"));
+        if (sealedRecords > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"sealed   {sealedRecords} record(s) — structure verified; content verification needs a restore grant (ADR-0042). Not damage."));
+        }
 
         return new OperationReport(failures == 0, lines);
     }
@@ -678,6 +782,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         using (var verifier = new VerifyEngine(session.Repository.RepositoryId, session.Repository.Keys, session.Store))
         {
             var blobs = 0;
+            var sealedRecords = 0L;
             await foreach (var entry in session.Store
                 .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
             {
@@ -689,9 +794,16 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
                     problems++;
                     lines.Add($"blob FAILED  {entry.Key.Value}: {result.Detail}");
                 }
+
+                sealedRecords += result.RecordsSealed;
             }
 
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"blobs      {blobs} verified at {parsed}"));
+            if (sealedRecords > 0)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"sealed     {sealedRecords} record(s) — content verification needs a restore grant (ADR-0042). Not damage."));
+            }
         }
 
         using (var journalReader = new JournalReader(
@@ -712,7 +824,7 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
 
         if (File.Exists(session.CataloguePath))
         {
-            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+            using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
             var findings = catalogue.Findings();
             problems += findings.Count;
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"catalogue  {findings.Count} damage finding(s)"));
@@ -746,14 +858,14 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         var snapshotId = Convert.FromHexString(request.SnapshotId);
         var target = RestoreTargetProfile.ForLocalPlatform();
 
-        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
         var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
         if (plan.Items.Count == 0)
         {
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
-        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store);
+        using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
         await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -815,6 +927,13 @@ internal sealed class DirectGateway(CliSession session) : IOperationGateway
         // stamp live in the service's ledger, so a direct-mode pass would read
         // the same objects forever and never record that it had.
         throw new CliFailureException(Strings.DirectGateway_VerifyDestinationNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> PreviewSetChangesAsync(
+        string? setName, int? sampleLimit, CancellationToken cancellationToken) =>
+        // The rescan reads a set's staging catalogue, which the running
+        // service holds open — a second direct open would race its writer.
+        throw new CliFailureException(Strings.DirectGateway_ChangesNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken) =>

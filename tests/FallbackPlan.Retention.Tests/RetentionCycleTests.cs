@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Retention;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -55,7 +57,7 @@ public sealed class RetentionCycleTests : IDisposable
                 {
                     Id = SetId,
                     Name = "docs",
-                    Root = SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h",
                     Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
                     Destinations = [new SetDestinationReference { Ref = "vault" }],
@@ -212,7 +214,8 @@ public sealed class RetentionCycleTests : IDisposable
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
-    private async Task<RetentionReport> RunAsync(LocalFileSystemObjectStore store, bool apply, DateTimeOffset now)
+    private async Task<RetentionReport> RunAsync(
+        LocalFileSystemObjectStore store, bool apply, DateTimeOffset now, ILogger? logger = null)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
         using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
@@ -227,7 +230,45 @@ public sealed class RetentionCycleTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply,
             (ulong)now.ToUnixTimeMilliseconds(),
-            CancellationToken.None);
+            CancellationToken.None,
+            "docs",
+            logger);
+    }
+
+    [TestMethod]
+    public async Task RetentionPass_WithALogger_ReportsWhatItPlannedAndWhatItTook()
+    {
+        // Deletion is the one thing a backup product does that cannot be
+        // undone, and until now a pass did all of it silently. These are the
+        // ids, not the report lines: the report is returned to whoever asked,
+        // while the log is what survives to be read afterwards by somebody who
+        // did not ask and now needs to know what went.
+        const int PlanningRetention = 2900;
+        const int RetentionPlanned = 2901;
+        const int CollectionComplete = 2903;
+
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+        await BackUpAsync(day1.AddDays(2));
+
+        var log = new RecordingLogger();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await RunAsync(store, apply: true, now: day1.AddDays(2).AddHours(1), logger: log);
+
+        var planning = log.Records.Single(record => record.EventId == PlanningRetention);
+        Assert.AreEqual("docs", planning.Values.First(value => value.Key == "SetName").Value);
+        Assert.AreEqual(3, planning.Values.First(value => value.Key == "Snapshots").Value);
+
+        var planned = log.Records.Single(record => record.EventId == RetentionPlanned);
+        Assert.AreEqual(2, planned.Values.First(value => value.Key == "Retire").Value);
+
+        // The apply half reached the end: an early return on the dry-run path
+        // would leave this absent, which is exactly the difference worth being
+        // able to see in a log.
+        Assert.ContainsSingle(log.Records.Where(record => record.EventId == CollectionComplete));
     }
 
     private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)

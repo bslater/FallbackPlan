@@ -5,6 +5,7 @@ using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
+using FallbackPlan.Filesystem;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -71,7 +72,7 @@ public sealed class KitDrillTests : IDisposable
             new SnapshotJob
             {
                 Source = source,
-                RootPath = "/",
+                Roots = [new ScanRoot("/")],
                 DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
                 BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
                 SnapshotId = Enumerable.Repeat((byte)0x55, 16).ToArray(),

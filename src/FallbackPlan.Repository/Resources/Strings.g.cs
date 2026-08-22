@@ -155,4 +155,24 @@ internal static class Strings
     /// </summary>
     internal static string Formatstruct_SourceKeyExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, struct_SourceKeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// The write credential does not belong to this repository: its sealing public key disagrees with the descriptor's (ADR-0042).
+    /// </summary>
+    internal static string RepositoryLifecycle_CredentialNotThisRepository => Get(nameof(RepositoryLifecycle_CredentialNotThisRepository));
+
+    /// <summary>
+    /// This repository is not write-only (format v2); open it with its passphrase through the key-object path.
+    /// </summary>
+    internal static string RepositoryLifecycle_NotWriteOnlyRepository => Get(nameof(RepositoryLifecycle_NotWriteOnlyRepository));
+
+    /// <summary>
+    /// The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.
+    /// </summary>
+    internal static string RepositoryLifecycle_PassphraseDoesNotReproduce => Get(nameof(RepositoryLifecycle_PassphraseDoesNotReproduce));
+
+    /// <summary>
+    /// This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).
+    /// </summary>
+    internal static string RepositoryLifecycle_WriteOnlyNeedsDerivedOpen => Get(nameof(RepositoryLifecycle_WriteOnlyNeedsDerivedOpen));
 }

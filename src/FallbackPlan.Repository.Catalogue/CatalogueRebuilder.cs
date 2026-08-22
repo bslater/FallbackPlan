@@ -2,6 +2,8 @@ using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Catalogue;
 
@@ -21,12 +23,14 @@ public sealed record RebuildReport(
 public sealed class CatalogueRebuilder
 {
     private readonly IndexLoader _loader;
+    private readonly ILogger _log;
 
     /// <summary>Creates a rebuilder over a loader.</summary>
-    public CatalogueRebuilder(IndexLoader loader)
+    public CatalogueRebuilder(IndexLoader loader, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(loader);
         _loader = loader;
+        _log = logger ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -88,6 +92,8 @@ public sealed class CatalogueRebuilder
     {
         ThrowHelper.ThrowIfNull(target);
 
+        Log.RebuildStarting(_log, currentGeneration);
+
         var state = await _loader.LoadAsync(
             currentGeneration, gapPatienceGenerations, isSequenceAccountedAsync, blobState, cancellationToken)
             .ConfigureAwait(false);
@@ -138,6 +144,9 @@ public sealed class CatalogueRebuilder
         }
 
         target.SetSource("checkpoint-rebuild");
+
+        Log.RebuildComplete(
+            _log, state.AllEntries.Count, checkpointsApplied, deltasApplied, state.Findings.Count);
 
         return new RebuildReport(deltasApplied, checkpointsApplied, state.AllEntries.Count, state.Findings);
     }

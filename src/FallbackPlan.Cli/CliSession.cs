@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Cli;
 
@@ -46,12 +48,14 @@ public sealed class CliSession : IDisposable
         LocalFileSystemObjectStore store,
         OpenedRepository repository,
         string stateDirectory,
-        StateDirectoryLock? writerRole)
+        StateDirectoryLock? writerRole,
+        RepositoryReadAuthority? readAuthority)
     {
         Store = store;
         Repository = repository;
         StateDirectory = stateDirectory;
         _writerRole = writerRole;
+        ReadAuthority = readAuthority;
     }
 
     /// <summary>Whether this command took the writer role — i.e. is in direct mode.</summary>
@@ -60,6 +64,14 @@ public sealed class CliSession : IDisposable
     public LocalFileSystemObjectStore Store { get; }
 
     public OpenedRepository Repository { get; }
+
+    /// <summary>
+    /// The full read authority of a write-only repository (ADR-0042 §5).
+    /// Direct mode holds the passphrase, so it holds the whole capability —
+    /// derived at open, alive for the command, zeroed with the session. Null
+    /// on v1 repositories.
+    /// </summary>
+    public RepositoryReadAuthority? ReadAuthority { get; }
 
     public string StateDirectory { get; }
 
@@ -101,9 +113,19 @@ public sealed class CliSession : IDisposable
     }
 
     /// <summary>Opens an existing repository (01 §6 steps 1–3) and binds the state directory.</summary>
+    /// <param name="repoPath">The repository.</param>
+    /// <param name="passphraseEnvironmentVariable">The variable naming the passphrase.</param>
+    /// <param name="stateDirectory">The state directory, or null for the default.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
+    /// <returns>The session; dispose to release what it holds.</returns>
     public static ValueTask<CliSession> OpenAsync(
-        string repoPath, string passphraseEnvironmentVariable, string? stateDirectory, CancellationToken cancellationToken) =>
-        OpenAsync(repoPath, passphraseEnvironmentVariable, stateDirectory, writerRole: false, cancellationToken);
+        string repoPath,
+        string passphraseEnvironmentVariable,
+        string? stateDirectory,
+        CancellationToken cancellationToken,
+        ILogger? logger = null) =>
+        OpenAsync(repoPath, passphraseEnvironmentVariable, stateDirectory, writerRole: false, cancellationToken, logger);
 
     /// <summary>
     /// Opens a session, optionally taking the device's writer role for the
@@ -118,21 +140,40 @@ public sealed class CliSession : IDisposable
     /// alongside a service.
     /// </param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="logger">Where what the open noticed is recorded.</param>
     /// <returns>The session; dispose to release the role.</returns>
     public static async ValueTask<CliSession> OpenAsync(
         string repoPath,
         string passphraseEnvironmentVariable,
         string? stateDirectory,
         bool writerRole,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
-        var store = new LocalFileSystemObjectStore(repoPath);
+        var log = logger ?? NullLogger.Instance;
+
+        var store = new LocalFileSystemObjectStore(repoPath, log);
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
         OpenedRepository repository;
+        RepositoryReadAuthority? readAuthority = null;
         try
         {
-            repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            // A write-only repository has no key object to unwrap: direct
+            // mode derives the full authority from the passphrase and proves
+            // it against the descriptor (ADR-0042 §1) — same variable, same
+            // commands, different open underneath.
+            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+            if (RepositoryLifecycle.IsWriteOnly(descriptor))
+            {
+                (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+                    store, passphrase, cancellationToken, log).ConfigureAwait(false);
+            }
+            else
+            {
+                repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken, log)
+                    .ConfigureAwait(false);
+            }
         }
         catch (RepositoryOpenException exception)
         {
@@ -143,16 +184,17 @@ public sealed class CliSession : IDisposable
             throw new CliFailureException(exception.Message, exception);
         }
 
+        // Facts about the repository, not results of the command — so they go
+        // to the log, which is where somebody diagnosing "why did this stop
+        // reading" will look, rather than into the middle of a report.
         if (repository.UnstableFormatWarning)
         {
-            Console.Error.WriteLine(
-                "warning: this repository was written under an UNSTABLE format version — it may become unreadable by future releases (specification 01 §3.2).");
+            Log.UnstableFormat(log, repository.RepositoryId);
         }
 
         if (repository.KdfBelowCreationMinimums)
         {
-            Console.Error.WriteLine(
-                "warning: the repository's stored KDF parameters fall below current creation minimums (specification 03 §2).");
+            Log.KdfBelowMinimums(log, repository.RepositoryId);
         }
 
         var state = stateDirectory ?? DefaultStateDirectory(repository.RepositoryId);
@@ -172,11 +214,12 @@ public sealed class CliSession : IDisposable
             catch (ClientStateException exception)
             {
                 repository.Dispose();
+                readAuthority?.Dispose();
                 throw new CliFailureException(exception.Message, exception);
             }
         }
 
-        return new CliSession(store, repository, state, role);
+        return new CliSession(store, repository, state, role, readAuthority);
     }
 
     /// <summary>
@@ -230,6 +273,7 @@ public sealed class CliSession : IDisposable
     public void Dispose()
     {
         _writerRole?.Dispose();
+        ReadAuthority?.Dispose();
         Repository.Dispose();
     }
 }

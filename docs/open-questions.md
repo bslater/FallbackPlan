@@ -119,7 +119,13 @@ Specification 03 §2.1 requires refusing an empty passphrase (implemented — `P
 
 A related build decision is recorded here so it is not silently re-made: `InvariantGlobalization` was removed from `Directory.Build.props` (it had been set for reproducibility hardening) because NFC normalisation of passphrases — mandatory per 03 §2 — throws `PlatformNotSupportedException` for non-ASCII input in invariant mode. Correctness beat the hardening; the runtime now carries ICU. If invariant mode is ever wanted back, passphrase normalisation needs a vendored NFC path first.
 
-**Not decided** (the minimum length); the globalization removal is decided and recorded above.
+**Decided** (2026-08, [ADR-0044](adr/0044-first-run-setup.md) §6): **a floor of `Passphrase.RecommendedMinimumLength` (12) together with a small documented strength estimate**, enforced **at the setup boundary only**.
+
+Both halves of the question are answered. On *length alone versus a strength estimate*: a floor catches a four-character master key, and nothing else about length distinguishes `aaaaaaaaaaaa` from a real passphrase — so the floor is paired with an estimate scoring character-class variety and penalising a single repeated character, an unbroken run of one class, and short repeated cycles. Four bands; `TooShort` and `Weak` are refused, `Fair` and `Strong` pass. It is deliberately not zxcvbn: no dictionary, no breach corpus, and the ADR states that limitation rather than importing a corpus to hide it.
+
+On *what the recovery story says to a user whose old passphrase no longer meets the bar*: it says nothing, because the rule never reaches them. `Passphrase.Create` is on the restore path as well as the create path and keeps refusing exactly the empty string; the policy lives where passphrases are **chosen**, not where they are **used**. Tightening it later can therefore never refuse to open a repository that was made legitimately — which for a backup product would turn a hardening change into data loss.
+
+The globalization removal is decided and recorded above.
 
 ---
 

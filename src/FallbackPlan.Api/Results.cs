@@ -46,6 +46,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DirectoryResult), "directory")]
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
 [JsonDerivedType(typeof(RestoreResult), "restore")]
+[JsonDerivedType(typeof(RestoreSourceOpenedResult), "restore_source")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
 [JsonDerivedType(typeof(RetentionResult), "retention")]
@@ -54,6 +55,20 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
+[JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
+[JsonDerivedType(typeof(DestinationsResult), "destinations")]
+[JsonDerivedType(typeof(PairingsResult), "pairings")]
+[JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
+[JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
+[JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
+[JsonDerivedType(typeof(NoticesResult), "notices")]
+[JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
+[JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
+[JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
+[JsonDerivedType(typeof(DiagnosticsResult), "diagnostics")]
+[JsonDerivedType(typeof(LogRecordsResult), "log_records")]
+[JsonDerivedType(typeof(SessionResult), "session")]
+[JsonDerivedType(typeof(UserListResult), "users")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -64,14 +79,68 @@ public sealed record ServiceError(ServiceErrorReason Reason, string Message) : S
 /// <summary>A command that succeeded and has nothing to report.</summary>
 public sealed record AcknowledgedResult : ServiceResult;
 
+/// <summary>
+/// One retention policy, as the contract carries it (ADR-0037). Every field
+/// optional; a declared value must be positive — zero is refused as a typo,
+/// absent is how "no rule" is said (FR-GC-001's never-destructive default).
+/// </summary>
+/// <param name="KeepDaily">Keep one snapshot per calendar day, this many days.</param>
+/// <param name="KeepWeekly">Keep one per ISO week, this many weeks.</param>
+/// <param name="KeepMonthly">Keep one per calendar month, this many months.</param>
+/// <param name="MinGenerations">The floor the other rules cannot override.</param>
+/// <param name="DeferralDays">How long retention may wait on a lagging destination before warning (FR-GC-009).</param>
+public sealed record RetentionPolicyDescriptor(
+    int? KeepDaily = null,
+    int? KeepWeekly = null,
+    int? KeepMonthly = null,
+    int? MinGenerations = null,
+    int? DeferralDays = null)
+{
+    /// <summary>Whether every field is absent — the "no policy" spelling.</summary>
+    [JsonIgnore]
+    public bool IsEmpty =>
+        KeepDaily is null && KeepWeekly is null && KeepMonthly is null
+        && MinGenerations is null && DeferralDays is null;
+}
+
+/// <summary>One capture root of a backup set (ADR-0040).</summary>
+/// <param name="Path">The folder to capture.</param>
+/// <param name="Label">
+/// The root's name inside multi-root snapshots and the first component of
+/// its rule subjects; the service materialises one at save time when the
+/// caller does not choose.
+/// </param>
+public sealed record BackupRootDescriptor(string Path, string? Label = null);
+
 /// <summary>One configured backup set, as a client sees it.</summary>
 /// <param name="Id">The set's 32-hex identity.</param>
 /// <param name="Name">The set's name.</param>
-/// <param name="Root">The directory it captures.</param>
+/// <param name="Root">
+/// The first captured directory — the pre-1.10 single root, kept for older
+/// clients. On an upsert it is read only when <paramref name="Roots"/> is
+/// absent.
+/// </param>
 /// <param name="Schedule">Its schedule expression, or null for manual-only.</param>
 /// <param name="IncludeRules">Include rules, in rules-v1 dialect.</param>
 /// <param name="ExcludeRules">Exclude rules, in rules-v1 dialect.</param>
 /// <param name="Destinations">The declared destination names the set replicates to (FR-DEST-001).</param>
+/// <param name="Retention">
+/// The set's retention policy. On an upsert, null preserves whatever the set
+/// already has (what a 1.6 client always sends), and a policy with every
+/// field absent clears it — the difference between not speaking and saying
+/// "none" (ADR-0037).
+/// </param>
+/// <param name="DestinationRetention">
+/// Per-destination overrides by destination name. An entry fully replaces the
+/// set policy for that destination (FR-GC-010) — there is no field merge. On
+/// an upsert, null preserves existing overrides; an empty-policy entry clears
+/// that destination's override.
+/// </param>
+/// <param name="Roots">
+/// The capture roots (ADR-0040). Listings always carry them; on an upsert
+/// they win over <paramref name="Root"/> when present, and at least one of
+/// the two forms must be spoken.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -79,7 +148,171 @@ public sealed record BackupSetDescriptor(
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
     IReadOnlyList<string> ExcludeRules,
-    IReadOnlyList<string> Destinations);
+    IReadOnlyList<string> Destinations,
+    RetentionPolicyDescriptor? Retention = null,
+    IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
+    IReadOnlyList<BackupRootDescriptor>? Roots = null);
+
+/// <summary>
+/// One declared destination, as the configuration surface sees it
+/// (ADR-0037). Which fields apply depends on <paramref name="Kind"/>:
+/// <c>local-path</c> takes a path; <c>peer</c> takes a fingerprint and an
+/// endpoint; the schema-reserved cloud kinds take neither yet.
+/// </summary>
+/// <param name="Id">The destination's 32-hex identity; null on an upsert declares a new one.</param>
+/// <param name="Name">Its unique name — what sets reference.</param>
+/// <param name="Kind">Its kind, in the configuration's spelling.</param>
+/// <param name="Path">The directory, for <c>local-path</c>.</param>
+/// <param name="Fingerprint">The paired peer's fingerprint, for <c>peer</c>.</param>
+/// <param name="Endpoint">The peer's <c>host:port</c>, for <c>peer</c>.</param>
+/// <param name="FailureDomain">The declared failure domain, or null to derive by kind (ADR-0018).</param>
+/// <param name="DeepVerifyIntervalDays">How often the deep sweep re-reads it; null takes the default.</param>
+/// <param name="AddressDefect">
+/// What is syntactically wrong with the declared address, when anything is —
+/// reported, never a refusal to load (ADR-0035 §1). Ignored on an upsert.
+/// </param>
+public sealed record DestinationDescriptor(
+    string? Id,
+    string Name,
+    string Kind,
+    string? Path,
+    string? Fingerprint,
+    string? Endpoint,
+    string? FailureDomain = null,
+    int? DeepVerifyIntervalDays = null,
+    string? AddressDefect = null);
+
+/// <summary>Every declared destination, referenced by a set or not.</summary>
+/// <param name="Destinations">The declarations, in configuration order.</param>
+public sealed record DestinationsResult(IReadOnlyList<DestinationDescriptor> Destinations) : ServiceResult;
+
+/// <summary>A configuration change that succeeded and owes the operator facts.</summary>
+/// <param name="Lines">
+/// What the change did <em>not</em> do, mostly: the copies and archives that
+/// remain after a removal (FR-DEST-007), stated rather than inferred.
+/// </param>
+public sealed record ConfigurationChangeResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>One paired peer, as the grant store records it.</summary>
+/// <param name="Fingerprint">The peer's fingerprint.</param>
+/// <param name="Label">What this device calls it.</param>
+/// <param name="Role">The role recorded for it: <c>stores-here</c>, <c>stores-for-us</c>, or <c>both</c>.</param>
+/// <param name="PairedAt">When it was pinned, Unix milliseconds.</param>
+public sealed record PairingDescriptor(string Fingerprint, string Label, string Role, ulong PairedAt);
+
+/// <summary>This device's paired peers.</summary>
+/// <param name="Pairings">The grants, oldest first.</param>
+public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) : ServiceResult;
+
+/// <summary>One directory on the service's machine, for a folder picker.</summary>
+/// <param name="Name">The directory's name.</param>
+/// <param name="Path">Its full path, as a later command would use it.</param>
+/// <param name="Hidden">Whether the platform marks it hidden.</param>
+/// <param name="Inaccessible">Whether listing inside it failed; shown, never thrown.</param>
+public sealed record FolderDescriptor(string Name, string Path, bool Hidden, bool Inaccessible);
+
+/// <summary>One file on the service's machine, for a selection tree.</summary>
+/// <param name="Name">The file's name.</param>
+/// <param name="Length">Its length in bytes.</param>
+/// <param name="Hidden">Whether the platform marks it hidden.</param>
+public sealed record FileEntryDescriptor(string Name, long Length, bool Hidden);
+
+/// <summary>One directory listing on the service's machine (ADR-0037 §6).</summary>
+/// <param name="Path">The directory listed, or null when the roots were.</param>
+/// <param name="Parent">The directory above it, or null at a root.</param>
+/// <param name="Folders">The child directories, sorted by name.</param>
+/// <param name="Files">The files, when they were asked for; null otherwise.</param>
+public sealed record FolderListingResult(
+    string? Path,
+    string? Parent,
+    IReadOnlyList<FolderDescriptor> Folders,
+    IReadOnlyList<FileEntryDescriptor>? Files = null) : ServiceResult;
+
+/// <summary>What a set draft means, before anything is saved.</summary>
+/// <param name="Defects">Everything wrong, rules and schedule alike, named verbatim; empty when the draft is sound.</param>
+/// <param name="NextRuns">The schedule's next occurrences (ISO-8601, the service's clock frame); empty for manual-only or a defective schedule.</param>
+/// <param name="Warnings">
+/// What is sound but unwise — kept apart from <paramref name="Defects"/>
+/// because a defect refuses the save and a warning does not (FR-SNP-007).
+/// The first of these is a set whose every destination sits inside its
+/// source's own failure domain, which is the difference between
+/// <c>captured</c> and <c>protected</c> and is worth knowing before the
+/// first backup rather than after it.
+/// </param>
+public sealed record SetDraftValidationResult(
+    IReadOnlyList<string> Defects,
+    IReadOnlyList<string> NextRuns,
+    IReadOnlyList<string>? Warnings = null) : ServiceResult;
+
+/// <summary>One bucket of a set-change preview: the exact count, and at most the sample cap of paths.</summary>
+/// <param name="Count">Every file the bucket matched — exact, never truncated.</param>
+/// <param name="Sample">The first paths encountered, capped by <see cref="SetChangePreviewResult.SampleLimit"/>.</param>
+public sealed record ChangeBucketDescriptor(long Count, IReadOnlyList<string> Sample);
+
+/// <summary>
+/// What the source holds now versus the set's latest snapshot (ADR-0038,
+/// FR-SVC-009). Deletion keeps its two honest faces apart: <paramref name="Deleted"/>
+/// is a file the disk lost; <paramref name="NoLongerIncluded"/> is a file the
+/// rules stopped capturing.
+/// </summary>
+/// <param name="SetName">The set compared.</param>
+/// <param name="BaselineSnapshotId">The snapshot compared against, hex; null when the set has never backed up — everything reads as new.</param>
+/// <param name="BaselineCapturedAt">When that snapshot was captured, Unix milliseconds; null with no baseline.</param>
+/// <param name="Unchanged">Files identical in content and metadata.</param>
+/// <param name="New">Files the last snapshot does not hold.</param>
+/// <param name="Updated">Files whose content changed.</param>
+/// <param name="MetadataOnly">Files whose bytes are unchanged but whose metadata moved — a chmod, an owner change.</param>
+/// <param name="Moved">Files found at a different path by stable identity.</param>
+/// <param name="Deleted">Files the last snapshot holds that are gone from disk and still captured by the rules.</param>
+/// <param name="NoLongerIncluded">Files the last snapshot holds that the rules no longer capture — they leave future snapshots because of the rules, not the disk.</param>
+/// <param name="Failures">Paths the walk could not read.</param>
+/// <param name="SampleLimit">The per-bucket sample cap that was applied.</param>
+public sealed record SetChangePreviewResult(
+    string SetName,
+    string? BaselineSnapshotId,
+    ulong? BaselineCapturedAt,
+    long Unchanged,
+    ChangeBucketDescriptor New,
+    ChangeBucketDescriptor Updated,
+    ChangeBucketDescriptor MetadataOnly,
+    ChangeBucketDescriptor Moved,
+    ChangeBucketDescriptor Deleted,
+    ChangeBucketDescriptor NoLongerIncluded,
+    long Failures,
+    int SampleLimit) : ServiceResult;
+
+/// <summary>A freshly issued pairing invite — the one time the code exists in the clear.</summary>
+/// <param name="Code">The code to speak to the other operator. Never persisted, never shown again.</param>
+/// <param name="InviteId">The invite's identifier, for the listing and revocation.</param>
+/// <param name="ExpiresAt">When it stops being redeemable, Unix milliseconds.</param>
+/// <param name="ListeningEndpoint">
+/// Where the peer should dial — the remote binding's endpoint, or null when
+/// the binding is off, in which case <paramref name="Warning"/> says what to do.
+/// </param>
+/// <param name="Warning">What stands between this invite and a successful dial, when anything does.</param>
+public sealed record PairingInviteResult(
+    string Code, string InviteId, ulong ExpiresAt, string? ListeningEndpoint, string? Warning) : ServiceResult;
+
+/// <summary>One pairing invite, as the listing shows it — never its code.</summary>
+/// <param name="InviteId">The invite's identifier.</param>
+/// <param name="Label">The label the redeemer will be recorded under.</param>
+/// <param name="Role">The role committed at issue time.</param>
+/// <param name="ExpiresAt">When it stops being redeemable, Unix milliseconds.</param>
+/// <param name="ConsumedBy">The fingerprint that redeemed it, when one has.</param>
+public sealed record PairingInviteDescriptor(
+    string InviteId, string Label, string Role, ulong ExpiresAt, string? ConsumedBy);
+
+/// <summary>The pending and consumed pairing invites.</summary>
+/// <param name="Invites">The invites, oldest first.</param>
+public sealed record PairingInvitesResult(IReadOnlyList<PairingInviteDescriptor> Invites) : ServiceResult;
+
+/// <summary>A pairing that completed over an invite (ADR-0030 Amendment 3).</summary>
+/// <param name="Fingerprint">The paired service's fingerprint, now pinned.</param>
+/// <param name="Label">What this device calls it.</param>
+/// <param name="TheirRole">The role the far side recorded for this device.</param>
+/// <param name="QuotaBytes">The storage ceiling the far side granted, when it stores for us; null or 0 is no ceiling.</param>
+public sealed record PairingCompletedResult(
+    string Fingerprint, string Label, string TheirRole, ulong? QuotaBytes) : ServiceResult;
 
 /// <summary>The configured backup sets.</summary>
 /// <param name="Sets">The sets.</param>
@@ -134,22 +367,68 @@ public sealed record SnapshotDescriptor(
 /// <param name="Snapshots">The snapshots, oldest first.</param>
 public sealed record SnapshotsResult(IReadOnlyList<SnapshotDescriptor> Snapshots) : ServiceResult;
 
+/// <summary>One durable notice, as the ledger holds it (FR-DEST-008).</summary>
+/// <param name="Id">The identifier acknowledgement acts on.</param>
+/// <param name="Key">The stable machine key — one notice per (kind, subject); a re-raise refreshes the message under the same key.</param>
+/// <param name="Message">The prose a person reads.</param>
+/// <param name="RaisedAt">When the condition was first seen, Unix milliseconds.</param>
+/// <param name="AcknowledgedAt">When a person acknowledged it, Unix milliseconds; null while it still awaits one.</param>
+public sealed record NoticeDescriptor(
+    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt);
+
+/// <summary>The notices, oldest first.</summary>
+/// <param name="Notices">The listed notices.</param>
+public sealed record NoticesResult(IReadOnlyList<NoticeDescriptor> Notices) : ServiceResult;
+
 /// <summary>One entry inside a snapshot directory.</summary>
 /// <param name="Name">The entry's name.</param>
 /// <param name="Kind">One of <c>file</c>, <c>directory</c>, <c>symlink</c>, <c>special</c>.</param>
 /// <param name="Length">The logical length, for files.</param>
-public sealed record DirectoryEntryDescriptor(string Name, string Kind, long Length);
+/// <param name="ModifiedAt">The recorded modification time, Unix milliseconds; null for directories and rebuilt catalogues.</param>
+/// <param name="Change">
+/// How this entry compares with the set's previous snapshot: <c>new</c>,
+/// <c>changed</c> (its recorded object differs — content, metadata, or a
+/// restated manifest), or <c>same</c>. Null when the snapshot has no
+/// predecessor — and always null for directories, whose recorded head mixes
+/// in access times the scan itself perturbs: a folder makes no claim, and
+/// its own listing answers instead.
+/// </param>
+public sealed record DirectoryEntryDescriptor(
+    string Name, string Kind, long Length, ulong? ModifiedAt = null, string? Change = null);
 
 /// <summary>One directory's contents.</summary>
 /// <param name="Path">The directory listed.</param>
 /// <param name="Entries">Its entries.</param>
-public sealed record DirectoryResult(string Path, IReadOnlyList<DirectoryEntryDescriptor> Entries) : ServiceResult;
+/// <param name="Deleted">
+/// Names present in the previous snapshot's same directory and absent here —
+/// deletion is absence between snapshots (FR-SNP-002), and this is where the
+/// absence is computed. Null when the snapshot has no predecessor.
+/// </param>
+/// <param name="PreviousSnapshotId">The snapshot the markers compare against, hex; null when there is none.</param>
+public sealed record DirectoryResult(
+    string Path,
+    IReadOnlyList<DirectoryEntryDescriptor> Entries,
+    IReadOnlyList<string>? Deleted = null,
+    string? PreviousSnapshotId = null) : ServiceResult;
 
 /// <summary>What a restore would do.</summary>
 /// <param name="Files">How many files the plan covers.</param>
 /// <param name="Bytes">How many logical bytes it would write.</param>
 /// <param name="MissingObjects">Objects the plan needs and cannot find.</param>
-public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<string> MissingObjects) : ServiceResult;
+/// <param name="Conflicts">
+/// How many plan-time conflicts need an operator decision — case collisions
+/// on a case-folding target, path-length overruns, prefixes the snapshot
+/// does not hold (FR-RST-003; ADR-0041).
+/// </param>
+/// <param name="ConflictSample">At most twenty conflicts, as <c>path — reason</c> lines.</param>
+/// <param name="Degradations">Declared metadata shortfalls on this target, one line each.</param>
+public sealed record RestorePlanResult(
+    long Files,
+    long Bytes,
+    IReadOnlyList<string> MissingObjects,
+    long Conflicts = 0,
+    IReadOnlyList<string>? ConflictSample = null,
+    IReadOnlyList<string>? Degradations = null) : ServiceResult;
 
 /// <summary>What a restore did.</summary>
 /// <param name="Restored">Files written.</param>
@@ -162,13 +441,59 @@ public sealed record RestorePlanResult(long Files, long Bytes, IReadOnlyList<str
 /// required item failed nothing yet is not complete, and a remote client told
 /// only <c>Failed = 0</c> would report success for it.
 /// </param>
-public sealed record RestoreResult(long Restored, long Failed, string OutputDirectory, string Outcome) : ServiceResult;
+/// <param name="Skipped">Items recorded but not materialised on this target (declared in the plan).</param>
+/// <param name="Degraded">Files restored short of what was captured — main stream only.</param>
+/// <param name="Displaced">Existing files moved into the displaced store to make room.</param>
+/// <param name="WrittenBeside">Restored copies written beside a kept existing file under the rename policy (ADR-0041).</param>
+/// <param name="ReceiptPath">The persisted machine-readable receipt (FR-RST-004), on the service's machine.</param>
+/// <param name="FailedSample">At most twenty failures, as <c>path — detail</c> lines.</param>
+public sealed record RestoreResult(
+    long Restored,
+    long Failed,
+    string OutputDirectory,
+    string Outcome,
+    long Skipped = 0,
+    long Degraded = 0,
+    long Displaced = 0,
+    long WrittenBeside = 0,
+    string? ReceiptPath = null,
+    IReadOnlyList<string>? FailedSample = null) : ServiceResult;
+
+/// <summary>
+/// An opened restore source (ADR-0041): the handle the source-aware verbs
+/// take, and the snapshots the source holds — which is everything the guided
+/// flow's effective-date step needs, resolved client-side against
+/// <see cref="SnapshotDescriptor.CapturedAt"/>.
+/// </summary>
+/// <param name="SourceId">The handle; expires after idle disuse, closed by <c>close_restore_source</c>.</param>
+/// <param name="SetName">The set whose repository this is.</param>
+/// <param name="Location"><c>staging</c>, or the destination's declared name.</param>
+/// <param name="Snapshots">The snapshots this source holds, oldest first.</param>
+/// <param name="Warnings">
+/// What opening had to note — catalogue-rebuild findings, blobs that would
+/// not open. A warned source still answers; the operator decides with the
+/// facts in view.
+/// </param>
+public sealed record RestoreSourceOpenedResult(
+    string SourceId,
+    string SetName,
+    string Location,
+    IReadOnlyList<SnapshotDescriptor> Snapshots,
+    IReadOnlyList<string> Warnings) : ServiceResult;
 
 /// <summary>What a verification run found.</summary>
 /// <param name="ObjectsChecked">How many objects were examined.</param>
 /// <param name="Failures">How many failed.</param>
 /// <param name="Level">The level that was run.</param>
-public sealed record VerificationResult(long ObjectsChecked, long Failures, string Level) : ServiceResult;
+/// <param name="SealedRecords">
+/// How many records could not be content-verified because they are sealed
+/// to a write-only repository's public key (ADR-0042). Not failures and not
+/// passes: structure verified, content needs a restore grant — reported
+/// separately so a records-level sweep of a write-only set never reads as
+/// either damage or a clean content check.
+/// </param>
+public sealed record VerificationResult(
+    long ObjectsChecked, long Failures, string Level, long SealedRecords = 0) : ServiceResult;
 
 /// <summary>What a health check found.</summary>
 /// <param name="Findings">The findings, in the order they matter.</param>
@@ -251,10 +576,196 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// <param name="StateDirectory">The state directory whose writer role it holds.</param>
 /// <param name="RemoteBindingEnabled">Whether the remote binding is on.</param>
 /// <param name="ActiveJobs">How many jobs are running now.</param>
+/// <param name="ArchivesRoot">
+/// The root holding the per-set staging archives (ADR-0034), on the
+/// service's machine. A path, not a secret — a console on the same machine
+/// uses it to verify a restore passphrase locally, without the passphrase
+/// ever crossing this contract (ADR-0041, NFR-SEC-009).
+/// </param>
+/// <param name="RestoreGrantRecipient">
+/// The public half of this service's envelope recipient keypair (ADR-0042
+/// §4), lowercase hex. What a client seals write-only provisioning and
+/// restore-grant envelopes to — public by construction, never sensitive.
+/// </param>
+/// <param name="SetupState">
+/// How far first-run setup has got — <c>"setup_required"</c>,
+/// <c>"kit_required"</c> or <c>"ready"</c> (ADR-0044 §7 as amended,
+/// FR-SVC-011, FR-KIT-004). A client meeting either unfinished state shows
+/// the ceremony in place of its normal views and resumes at the step named,
+/// so a closed tab between provisioning and confirming does not strand the
+/// installation. Null from a service older than contract 1.13, which a
+/// client reads as "cannot tell" and so as no reason to interrupt anybody.
+/// </param>
+/// <param name="DeviceId">
+/// This device's public identity, lowercase hex — what a kit records as its
+/// issuer (FR-KIT-001). Public by construction; the device's private key
+/// never leaves the service (ADR-0010).
+/// </param>
+/// <param name="LogLevel">
+/// The default level in force, by name (ADR-0043 §6). Carried here so a
+/// console can show what the service is logging without a second round trip,
+/// the same way the Maintenance card already reads this result. Null from a
+/// service older than contract 1.15.
+/// </param>
+/// <param name="KitStatus">
+/// Whether the installation's recovery kit has been saved —
+/// <c>"never_saved"</c> or <c>"saved"</c> (FR-KIT-005). Two values, not
+/// three: an installation kit carries no destinations, so the requirement's
+/// staleness trigger cannot fire, and its salt, Argon2id parameters and
+/// sealing public key are fixed for the life of the installation, so nothing
+/// else can make it stale either (ADR-0013 as amended). Carried on the result
+/// every client already polls, because "surfaced continuously" means visible
+/// outside the ceremony, not only during it. Null from a service older than
+/// contract 1.15.
+/// </param>
+/// <param name="KitConfirmedAt">
+/// When the kit was confirmed saved, Unix milliseconds, or null when none has
+/// been. What lets a console say how long ago rather than merely whether.
+/// </param>
+/// <param name="SignedInUser">
+/// Whose session this connection has presented, or null when it has presented
+/// none — which is how a client learns it must show a login screen rather than
+/// its normal views (FR-USR-001). Null also from a service older than contract
+/// 1.16, where nobody was ever signed in and everyone was "the operator".
+/// </param>
+/// <param name="SignedInRole">
+/// That account's role, by name, so a console can hide the account-management
+/// controls it would only be refused for. The refusal is still enforced at the
+/// service — this saves a round trip, it does not decide anything.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
     string MachineName,
     string StateDirectory,
     bool RemoteBindingEnabled,
-    int ActiveJobs) : ServiceResult;
+    int ActiveJobs,
+    string? ArchivesRoot = null,
+    string? RestoreGrantRecipient = null,
+    string? SetupState = null,
+    string? DeviceId = null,
+    string? LogLevel = null,
+    string? KitStatus = null,
+    ulong? KitConfirmedAt = null,
+    string? SignedInUser = null,
+    string? SignedInRole = null) : ServiceResult;
+
+/// <summary>
+/// What this service is logging and where it is putting it (ADR-0043 §6,
+/// FR-SVC-010) — the answer to <see cref="GetDiagnosticsCommand"/>.
+/// </summary>
+/// <remarks>
+/// There is no path anywhere in this result, and that is the point. A service
+/// that exposes no raw filesystem access to clients (threat T-16) does not
+/// start by handing one out to say where it writes; whoever may read the file
+/// already knows the state directory, and a remote console could not open it
+/// anyway.
+/// </remarks>
+/// <param name="DefaultLevel">The level in force where no category rule matches, by name.</param>
+/// <param name="CategoryLevels">
+/// The category prefixes with their own level, longest-prefix wins. Empty when
+/// one level covers everything.
+/// </param>
+/// <param name="DurableSink">
+/// Whether records are being written to a file that survives a restart. False
+/// means the ring is all there is, which is what a client needs to know before
+/// telling somebody to "send us the log".
+/// </param>
+/// <param name="RetainFiles">How many rolled files are kept, newest first.</param>
+/// <param name="MaximumFileBytes">How large one file may grow before it rolls.</param>
+/// <param name="RingCapacity">How many records the readable ring holds.</param>
+/// <param name="OldestSequence">
+/// The oldest sequence still in the ring — a cursor older than this has missed
+/// records.
+/// </param>
+/// <param name="NextSequence">The sequence the next record will take.</param>
+public sealed record DiagnosticsResult(
+    string DefaultLevel,
+    IReadOnlyDictionary<string, string> CategoryLevels,
+    bool DurableSink,
+    int RetainFiles,
+    long MaximumFileBytes,
+    int RingCapacity,
+    long OldestSequence,
+    long NextSequence) : ServiceResult;
+
+/// <summary>
+/// One log record as it crosses the command surface (ADR-0043 §4).
+/// </summary>
+/// <remarks>
+/// Rendered, not structured. The service holds each record as its name/value
+/// state so it can be rendered twice — in full for the local file, redacted for
+/// anything crossing the boundary — and handing the raw values to a client
+/// would hand across exactly what redaction exists to withhold. What a client
+/// receives is the rendering it is entitled to (NFR-SEC-006, NFR-PRIV-003).
+/// </remarks>
+/// <param name="Sequence">The record's monotonic sequence — the cursor, and what correlates it with the on-disk line.</param>
+/// <param name="TimestampUnixMilliseconds">When it was captured, UTC.</param>
+/// <param name="Level">The level, by name.</param>
+/// <param name="EventId">The stable event id (ADR-0043 §3) — what a bug report quotes.</param>
+/// <param name="Category">The logger category, which is the declaring type's full name.</param>
+/// <param name="Message">The rendered message, redacted or not according to who asked.</param>
+/// <param name="ExceptionType">The exception's type name, when one was logged.</param>
+/// <param name="ExceptionMessage">The exception's message, when one was logged.</param>
+public sealed record LogRecordDescriptor(
+    long Sequence,
+    long TimestampUnixMilliseconds,
+    string Level,
+    int EventId,
+    string Category,
+    string Message,
+    string? ExceptionType = null,
+    string? ExceptionMessage = null);
+
+/// <summary>
+/// A page of the log ring — the answer to <see cref="ReadLogCommand"/>.
+/// </summary>
+/// <param name="Records">The page, oldest first.</param>
+/// <param name="NextSequence">The cursor to pass next. Unchanged when nothing new arrived.</param>
+/// <param name="Dropped">
+/// Whether the reader's cursor was older than anything still held, so records
+/// were missed. A different fact from an empty page, and worth showing: a
+/// client that silently treats the two alike will one day report a quiet
+/// service that was in fact logging faster than anyone was reading.
+/// </param>
+public sealed record LogRecordsResult(
+    IReadOnlyList<LogRecordDescriptor> Records,
+    long NextSequence,
+    bool Dropped) : ServiceResult;
+
+/// <summary>
+/// A minted or resumed session (FR-USR-003; ADR-0045 §5).
+/// </summary>
+/// <param name="Token">
+/// The opaque session token. Held in the service's memory only — a restart
+/// ends every session — and presented on each new connection through
+/// <see cref="ResumeSessionCommand"/>.
+/// </param>
+/// <param name="User">Whose session it is.</param>
+/// <param name="Role">That account's role, by name.</param>
+/// <param name="IdleExpiresAtUnixMilliseconds">When the session lapses if nothing uses it.</param>
+/// <param name="AbsoluteExpiresAtUnixMilliseconds">When it ends regardless of use.</param>
+/// <remarks>
+/// The token is a credential and is treated as one: it crosses on the verb
+/// that mints it and on the verb that presents it, and nowhere else. It is not
+/// carried on <see cref="ServiceDescriptionResult"/> and never reaches a log —
+/// the session records name the account, never the token.
+/// </remarks>
+public sealed record SessionResult(
+    string Token,
+    string User,
+    string Role,
+    long IdleExpiresAtUnixMilliseconds,
+    long AbsoluteExpiresAtUnixMilliseconds) : ServiceResult;
+
+/// <summary>One account as a client may see it — never a credential.</summary>
+/// <param name="Name">The account name.</param>
+/// <param name="Role">Its role, by name.</param>
+/// <param name="CreatedAtUnixMilliseconds">When it was created.</param>
+/// <param name="IsOwner">Whether this is the account that cannot be deleted.</param>
+public sealed record UserDescriptor(
+    string Name, string Role, long CreatedAtUnixMilliseconds, bool IsOwner);
+
+/// <summary>The installation's accounts.</summary>
+/// <param name="Users">Every account, oldest first.</param>
+public sealed record UserListResult(IReadOnlyList<UserDescriptor> Users) : ServiceResult;

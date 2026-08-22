@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository.Crypto;
@@ -9,6 +10,8 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -121,6 +124,7 @@ public sealed partial class PublicationOrchestrator
     private readonly IPublicationObserver? _observer;
     private readonly Catalogue.Catalogue? _catalogue;
     private readonly IJobProgressReporter? _progress;
+    private readonly ILogger _logger;
 
     /// <summary>
     /// Creates an orchestrator for one writer. When
@@ -142,7 +146,8 @@ public sealed partial class PublicationOrchestrator
         string spoolDirectory,
         IPublicationObserver? observer = null,
         Catalogue.Catalogue? catalogue = null,
-        IJobProgressReporter? progress = null)
+        IJobProgressReporter? progress = null,
+        ILogger? logger = null)
     {
         _catalogue = catalogue;
         ThrowHelper.ThrowIfNull(policy);
@@ -165,6 +170,21 @@ public sealed partial class PublicationOrchestrator
                 nameof(policy));
         }
 
+        // ADR-0042 §7's gate, in the same place: the repository domain
+        // verifies other writers' segments by READING their content, and a
+        // write-only holder cannot — every verification would answer
+        // unavailable and quietly turn the hardened domain into re-archiving.
+        // Refused with the remedy named rather than left to degrade; the
+        // hosts choose the device domain for write-only sets.
+        if (keys.WriteOnly && policy.DedupTrustDomain == DedupTrustDomain.Repository)
+        {
+            throw new ArgumentException(
+                "The repository trust domain verifies other writers' segments by reading their content, "
+                + "which a write-only repository cannot do (ADR-0042). Use the device domain — the "
+                + "write-only default — or repository-unverified with its acknowledgement.",
+                nameof(policy));
+        }
+
         _policy = policy;
         _repositoryId = repositoryId;
         _writerId = writerId;
@@ -176,6 +196,7 @@ public sealed partial class PublicationOrchestrator
         _spoolDirectory = spoolDirectory;
         _observer = observer;
         _progress = progress;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>Runs one publication end to end.</summary>
@@ -183,13 +204,42 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
+        _lastStep = PublicationStep.PublishIntent;
+
+        try
+        {
+            return await PublishCoreAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (Failed(failure, job))
+        {
+            // Unreachable: the filter records and declines, leaving the
+            // exception and its stack for the caller.
+            throw;
+        }
+    }
+
+    private bool Failed(Exception failure, BackupJob job)
+    {
+        Log.PublicationFailed(_logger, LogId.Snapshot(job.SnapshotId), _lastStep, failure);
+        return false;
+    }
+
+    private async ValueTask<PublishedSnapshot> PublishCoreAsync(BackupJob job, CancellationToken cancellationToken)
+    {
+
+        // Wrapped once for the whole publication rather than at each call:
+        // CA1873 objects to work inside a logging argument, and it is right to
+        // — an argument is evaluated whether or not the level is on.
+        var snapshotForLog = LogId.Snapshot(job.SnapshotId);
+        Log.PublicationStarting(_logger, snapshotForLog, _repositoryId, _writerId);
+
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
-        BlobWriter.SweepUnresumable(_spoolDirectory);
+        BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
 
         // Leftovers first: numbers a previous run allocated and never
         // accounted for get their void deltas (07 §4) before new work — a
@@ -214,22 +264,26 @@ public sealed partial class PublicationOrchestrator
         using var scope = new ExtensionIntentScope(
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
+        RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
         // Step 2: scan. Phase 0's job is one stream; the scan is its metadata.
         _observer?.AfterStep(PublicationStep.ScanSource);
+        RecordStep(PublicationStep.ScanSource, snapshotForLog);
 
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
         // upload — each blob's covering extension durable before its put.
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
+            _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
+        RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
 
         // The manifest graph rides in metadata blobs uploaded in the same
         // step-4 window; the snapshot's discoverable copy waits for step 7.
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope);
+            _policy.BlobWriteProfile, scope, logger: _logger);
 
         ObjectId fileVersionId, rootTreeId, policyId, snapshotObjectId;
         SnapshotManifest snapshot;
@@ -301,10 +355,12 @@ public sealed partial class PublicationOrchestrator
 
             await builder.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.UploadBlobs);
+            RecordStep(PublicationStep.UploadBlobs, snapshotForLog);
 
             // Step 5: every put's acknowledgement was awaited and checked as
             // it happened; this step is where a batching store would drain.
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
+            RecordStep(PublicationStep.VerifyAcknowledgements, snapshotForLog);
 
             // Step 6: index deltas referencing the now-durable blobs —
             // entries projected from the sealed record tables (07 §10).
@@ -331,6 +387,7 @@ public sealed partial class PublicationOrchestrator
             var (deltaId, _) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
+            RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — same
             // bytes, same object identifier as the in-blob record. It rides
@@ -341,6 +398,7 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
+            RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).
             await journal.PublishAsync(
@@ -350,9 +408,18 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
+            RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
             // Step 9: the local job is complete.
             _observer?.AfterStep(PublicationStep.Complete);
+            RecordStep(PublicationStep.Complete, snapshotForLog);
+
+            Log.PublicationComplete(
+                _logger,
+                snapshotForLog,
+                archive.LogicalLength,
+                archive.RecordsWritten,
+                archive.Blobs.Count);
 
             return new PublishedSnapshot(
                 snapshotObjectId, fileVersionId, rootTreeId, policyId, deltaId, intentSequence, archive, builder.Blobs);

@@ -74,7 +74,7 @@ public sealed class PartialCaptureRetentionTests : IDisposable
                 {
                     Id = SetId,
                     Name = "docs",
-                    Root = SourceRoot,
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h",
                     Retention = new RetentionConfiguration { MinGenerations = 1 },
                     Destinations = [new SetDestinationReference { Ref = "vault" }],
