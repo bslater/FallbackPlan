@@ -67,8 +67,9 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
-| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | **Partly built** | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests` · [notes](#0043--the-engine-logs-and-a-level-can-be-set-the-client-cannot-read-it-yet) |
+| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
+| [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | **Specified only** | — · [notes](#0045--the-product-cannot-yet-say-who-is-acting) |
 
 ---
 
@@ -190,7 +191,7 @@ Nothing is still ahead in this arc: FR-DEST-007's destination-removal warnings, 
 
 ---
 
-### 0043 — the engine logs, and a level can be set; the client cannot read it yet
+### 0043 — the engine logs, a client reads it, and every declared message is emitted
 
 Built: the abstraction in all twenty-four projects, a `Log.cs` of `[LoggerMessage]` partials per project with allocated event-id ranges, and `FallbackPlan.Diagnostics` holding the ring (Bodu's `ConcurrentCircularBuffer`), the async rolling file and the redacting renderer. Every host now composes a real `ILoggerFactory`: the agent and the console through `FallbackPlan.Diagnostics`, the web console and the recovery tool through a forty-line console sink each, because `DependencyRuleTests` pins their closures and a project reference would break both. The two untyped `Action` delegates are **deleted**, not deprecated, and their fifteen call sites are typed and levelled.
 
@@ -218,6 +219,14 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
 
+
+### 0045 — the product cannot yet say who is acting
+
+Specified, nothing built. The console's authority is a bearer token minted per run, so everyone holding the URL is indistinguishably "the operator" — no action is attributable and no single person is revocable — and the local socket authenticates a *uid*, which is a fact about a process rather than about a person.
+
+The ADR settles what the build has to honour: person-identity sits **inside** an already-authenticated channel, so [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §5's "no password, no token file, no port" is amended rather than reversed — no new listener, no credential needed to reach the socket, and a session that lives only in memory precisely because a token file is the failure mode §5 named. `PasswordHash` goes in `Repository.Crypto`, where Argon2id already lives and is cross-verified each CI run, rather than widening the two-assembly third-party-cryptography allowlist. Repeated failures throttle and never lock, because for a backup product being denied your own backups by someone else's deliberate failures is the worse outcome.
+
+Six requirement rows (FR-USR-001..006) and NFR-SEC-012 are defined and carry unmet markers naming the phase that owes each.
 
 ### 0044 — the ceremony that two requirements have been waiting for
 

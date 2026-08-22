@@ -447,6 +447,38 @@ The CLI's direct mode and the recovery tool carry over unchanged: a repository
 path is a repository path, whether it is a staging archive, a destination copy,
 or the pre-0034 single archive.
 
+## Amendment (2026-08): "no password" is about the connection, not about the person
+
+§5 says of the local binding: *"No password, no token file, no port."*
+[ADR-0045](0045-client-authentication.md) introduces user accounts with
+passwords, and the two only look like a contradiction.
+
+§5 answers **which process may connect**, and its answer is unchanged: the
+operating system, through filesystem permissions on the socket. No port is
+opened, no token file is written, and nothing about reaching the service
+requires a person to hold a credential — which was the whole complaint against
+the prior art §5 cites, where a user must manage a secret to talk to their own
+machine and a stale token file is a familiar failure mode.
+
+ADR-0045 answers **which person is acting** once connected. §5 never addressed
+that, because at the time nothing in the product could tell two people apart;
+the console's authority was a per-run bearer token and the socket's was a uid.
+Both identify a process, neither identifies a person, and an action performed
+through either is attributable to nobody.
+
+The two objections §5 raised are honoured rather than argued around:
+
+- **No new port and no second listener.** The bindings are still exactly the
+  two defined here.
+- **No token file.** A session is minted by the service, held in its memory,
+  and never written to disk — so the stale-credential-on-disk failure this
+  section rejected is not reintroduced. Its cost, that a restart logs everyone
+  out, is accepted and stated in ADR-0045 §5.
+
+A password is therefore never a way *in*. It is a way to be *named* once
+inside a door the operating system or a pinned pairing already opened.
+
+
 ## Implementation status (2026-08)
 
 Built: the writer-role exclusion (§4), the local binding (§5), the command
@@ -493,3 +525,4 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Accepted | The remote binding (§5) built on ADR-0030's now-carried transport: a paired console reaches the service, an unpaired one is refused, and a remotely commanded restore writes on the service's machine — closing topologies 3 and 4 |
 | 2026-08 | Accepted | How the OS hosts the process decided in [ADR-0033](0033-hosting-under-an-os-service-manager.md): clean shutdown on a manager's stop, the Windows SCM bridge, and generated systemd/launchd/`sc.exe` registration |
 | 2026-08 | Accepted (amended) | One process, N staging archives: the writer rule is per archive, all roles held by the one locked service process ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
+| 2026-08 | Amended | §5's "no password, no token file, no port" is scoped explicitly to the connection: [ADR-0045](0045-client-authentication.md) adds person-identity inside the already-authenticated channel, with no new listener and a session that is never written to disk |
