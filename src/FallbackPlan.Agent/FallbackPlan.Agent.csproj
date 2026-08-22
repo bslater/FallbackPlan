@@ -39,26 +39,42 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
-  <!-- The runtime guard for a defect that has bitten this repository once and
-       cost a day to diagnose (ADR-0043, and the .slnx exclusions removed in
-       a577c24).
+  <!-- The runtime guard for a defect that has bitten this repository twice
+       and cost a day to diagnose the first time (ADR-0043, and the .slnx
+       exclusions removed in a577c24).
 
        The concrete Microsoft.Extensions.Logging reaches this executable ONLY
        through its ProjectReference to FallbackPlan.Diagnostics — ADR-0043 §1
        pins the package there and nowhere else, and a canary in
-       DependencyRuleTests keeps it that way. Anything that stops that project
-       contributing its assets (a solution build configuration that excludes
-       it, a hand-edited reference) leaves this project compiling perfectly and
-       throwing FileNotFoundException on the first line it tries to log.
+       DependencyRuleTests keeps it that way. The compiler cannot see when that
+       flow breaks, because the abstraction it compiles against is a different
+       package: this project builds perfectly and throws FileNotFoundException
+       on the first line it tries to log.
 
-       The compiler cannot see that, because the abstraction it compiles
-       against is a different package. So the output is checked instead, after
-       the copy step that would have brought it. Failing here names the cause;
-       failing at run time names only the symptom. -->
+       Two different faults produce that one symptom, and they have opposite
+       remedies, so the guard tells them apart rather than guessing.
+       @(ReferenceCopyLocalPaths) is what ResolveReferences decided should be
+       copied; comparing it against what is actually in $(TargetDir) separates
+       "the graph never offered it" from "the copy did not happen". Naming the
+       wrong cause would be worse than naming none — it sends the next person
+       hunting somewhere already clean. -->
   <Target Name="AssertLoggingProviderWasCopied" AfterTargets="Build"
           Condition="'$(OutputType)' == 'Exe'">
-    <Error Condition="!Exists('$(TargetDir)Microsoft.Extensions.Logging.dll')"
-           Text="Microsoft.Extensions.Logging.dll is not in $(TargetDir), so this executable would throw FileNotFoundException the first time it logs. It reaches this project only through the ProjectReference to FallbackPlan.Diagnostics (ADR-0043 §1), so something is stopping that project contributing its assets — most often a solution build configuration that excludes it from this configuration. Check FallbackPlan.slnx for a &lt;Build&gt; element with Project=&quot;false&quot;, and delete the .vs folder if an IDE is caching an older solution model." />
+
+    <ItemGroup>
+      <_LoggingProviderResolved Include="@(ReferenceCopyLocalPaths)"
+                                Condition="'%(Filename)%(Extension)' == 'Microsoft.Extensions.Logging.dll'" />
+    </ItemGroup>
+
+    <!-- Never resolved: the dependency graph this build used does not contain
+         the package at all. -->
+    <Error Condition="'@(_LoggingProviderResolved)' == ''"
+           Text="Microsoft.Extensions.Logging was not resolved for this project, so the built executable would throw FileNotFoundException the first time it logs. It arrives only through the ProjectReference to FallbackPlan.Diagnostics (ADR-0043 §1), and the dependency graph this build used does not contain it. Most often the restore inputs are stale: delete bin and obj under this project and under src/FallbackPlan.Diagnostics, run `dotnet restore`, and build again. If that does not fix it, check FallbackPlan.slnx for a &lt;Build&gt; element with Project=&quot;false&quot; excluding FallbackPlan.Diagnostics from this configuration (`python3 eng/check-solution.py` reports these), and delete the .vs folder if an IDE is caching an older solution model." />
+
+    <!-- Resolved and still absent: resolution was right and the file did not
+         arrive, which is a filesystem problem rather than a build one. -->
+    <Error Condition="'@(_LoggingProviderResolved)' != '' And !Exists('$(TargetDir)Microsoft.Extensions.Logging.dll')"
+           Text="Microsoft.Extensions.Logging.dll was resolved for this project but is not in $(TargetDir), so the built executable would throw FileNotFoundException the first time it logs. The dependency graph is correct and the copy is what failed, so this is not a project or solution problem. Something is holding or hiding the destination: a folder-sync client (OneDrive, Dropbox) syncing bin and obj — exclude them, because a dehydrated placeholder lists like a file and cannot be read — an antivirus scanner holding the write, or a fallbackplan-agent process still running from the last build." />
   </Target>
 
 </Project>
