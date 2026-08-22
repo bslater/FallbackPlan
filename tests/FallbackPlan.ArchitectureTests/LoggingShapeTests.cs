@@ -149,57 +149,28 @@ public sealed class LoggingShapeTests
     /// theatre.
     /// </para>
     /// <para>
-    /// The unwired ones are frozen below rather than left to accumulate. The
-    /// list may shrink and must never grow: a new declaration has to come with
-    /// its call site, and wiring an old one means deleting a line here. It is a
-    /// debt register, not an exemption.
+    /// This began as a register of 61 unwired declarations, frozen so it could
+    /// only shrink. It is now empty, so the register and the "or is a known
+    /// debt" half of this test's name are gone with it: the rule is simply that
+    /// every declaration is called. Emptying it settled several messages by
+    /// deletion and several more by reshaping — a declaration promising a count
+    /// nothing computes, or a name for something the code does not do, is the
+    /// same hazard as one nobody calls, just harder to see.
     /// </para>
     /// </remarks>
     [TestMethod]
-    public void LogMessages_EveryDeclaration_IsCalledSomewhereOrIsAKnownDebt()
+    public void LogMessages_EveryDeclaration_IsCalledSomewhere()
     {
-        var undeclaredDebt = new List<string>();
-        var settled = new List<string>();
-
-        foreach (var (project, member, called) in DeclaredCallSites())
-        {
-            var key = $"{project}.{member}";
-            if (called && KnownUnwired.Contains(key))
-            {
-                settled.Add(key);
-            }
-            else if (!called && !KnownUnwired.Contains(key))
-            {
-                undeclaredDebt.Add(key);
-            }
-        }
+        var unwired = DeclaredCallSites()
+            .Where(declaration => !declaration.Called)
+            .Select(declaration => $"{declaration.Project}.{declaration.Member}")
+            .ToArray();
 
         Assert.IsEmpty(
-            undeclaredDebt,
+            unwired,
             "These messages are declared but never called, so they describe logging that does not happen. "
-            + $"Wire the call site, or delete the declaration: {string.Join(", ", undeclaredDebt)}");
-
-        Assert.IsEmpty(
-            settled,
-            "These are now wired — delete them from KnownUnwired so the register keeps shrinking: "
-            + $"{string.Join(", ", settled)}");
+            + $"Wire the call site, or delete the declaration: {string.Join(", ", unwired)}");
     }
-
-    /// <summary>
-    /// Declarations with no call site yet (ADR-0043 phase 2's remainder). This
-    /// list may shrink and must never grow.
-    /// </summary>
-    private static readonly HashSet<string> KnownUnwired = new(StringComparer.Ordinal)
-    {
-        "FallbackPlan.Api.CommandHandled",
-        "FallbackPlan.Api.WatchOpened",
-        "FallbackPlan.Api.Listening",
-        "FallbackPlan.Repository.PublicationFailed",
-        "FallbackPlan.Repository.RepositoryCreated",
-        "FallbackPlan.Repository.RepositoryOpened",
-        "FallbackPlan.Repository.RepositoryOpenRefused",
-        "FallbackPlan.Restore.Quarantined",
-    };
 
     /// <summary>Every declaration, with whether its own project calls it.</summary>
     private static IEnumerable<(string Project, string Member, bool Called)> DeclaredCallSites()

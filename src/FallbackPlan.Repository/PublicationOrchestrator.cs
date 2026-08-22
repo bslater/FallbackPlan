@@ -204,6 +204,29 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
+        _lastStep = PublicationStep.PublishIntent;
+
+        try
+        {
+            return await PublishCoreAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (Failed(failure, job))
+        {
+            // Unreachable: the filter records and declines, leaving the
+            // exception and its stack for the caller.
+            throw;
+        }
+    }
+
+    private bool Failed(Exception failure, BackupJob job)
+    {
+        Log.PublicationFailed(_logger, LogId.Snapshot(job.SnapshotId), _lastStep, failure);
+        return false;
+    }
+
+    private async ValueTask<PublishedSnapshot> PublishCoreAsync(BackupJob job, CancellationToken cancellationToken)
+    {
+
         // Wrapped once for the whole publication rather than at each call:
         // CA1873 objects to work inside a logging argument, and it is right to
         // — an argument is evaluated whether or not the level is on.
@@ -241,9 +264,11 @@ public sealed partial class PublicationOrchestrator
         using var scope = new ExtensionIntentScope(
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
+        RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
         // Step 2: scan. Phase 0's job is one stream; the scan is its metadata.
         _observer?.AfterStep(PublicationStep.ScanSource);
+        RecordStep(PublicationStep.ScanSource, snapshotForLog);
 
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
         // upload — each blob's covering extension durable before its put.
@@ -252,6 +277,7 @@ public sealed partial class PublicationOrchestrator
             _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
+        RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
 
         // The manifest graph rides in metadata blobs uploaded in the same
         // step-4 window; the snapshot's discoverable copy waits for step 7.
@@ -329,10 +355,12 @@ public sealed partial class PublicationOrchestrator
 
             await builder.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.UploadBlobs);
+            RecordStep(PublicationStep.UploadBlobs, snapshotForLog);
 
             // Step 5: every put's acknowledgement was awaited and checked as
             // it happened; this step is where a batching store would drain.
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
+            RecordStep(PublicationStep.VerifyAcknowledgements, snapshotForLog);
 
             // Step 6: index deltas referencing the now-durable blobs —
             // entries projected from the sealed record tables (07 §10).
@@ -359,6 +387,7 @@ public sealed partial class PublicationOrchestrator
             var (deltaId, _) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
+            RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — same
             // bytes, same object identifier as the in-blob record. It rides
@@ -369,6 +398,7 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
+            RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).
             await journal.PublishAsync(
@@ -378,9 +408,11 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
+            RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
             // Step 9: the local job is complete.
             _observer?.AfterStep(PublicationStep.Complete);
+            RecordStep(PublicationStep.Complete, snapshotForLog);
 
             Log.PublicationComplete(
                 _logger,

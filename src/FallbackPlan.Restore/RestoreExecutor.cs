@@ -447,6 +447,7 @@ public sealed class RestoreExecutor(
                             Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
                             File.Move(destination, refuge);
                             displaced.Add(item.Path);
+                            Log.DisplacedExisting(_logger, new LogPath(destination), new LogPath(refuge));
                         }
 
                         if (options.ExistingDestination == ExistingDestinationPolicy.WriteBeside)
@@ -467,6 +468,7 @@ public sealed class RestoreExecutor(
                             }
 
                             writtenAs = BesidePath(item.Path, landing);
+                            Log.WroteBeside(_logger, new LogPath(destination), new LogPath(landing));
                         }
                     }
 

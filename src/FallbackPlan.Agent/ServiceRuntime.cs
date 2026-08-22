@@ -430,7 +430,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
             return await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
                     store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
                     createdBy: Environment.MachineName,
-                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
+                    LoggerFor(typeof(RepositoryLifecycle)))
                 .ConfigureAwait(false);
         }
 
@@ -454,7 +455,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 + "this installation's — adopt the set with that passphrase (ADR-0042 §10).");
         }
 
-        return await RepositoryLifecycle.OpenWriteOnlyAsync(store, provisioning.Credential, cancellationToken)
+        return await RepositoryLifecycle.OpenWriteOnlyAsync(
+                store, provisioning.Credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
             .ConfigureAwait(false);
     }
 
@@ -483,7 +485,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 using (credential)
                 {
                     repository = ArchiveExists(setId)
-                        ? await RepositoryLifecycle.OpenWriteOnlyAsync(store, credential, cancellationToken)
+                        ? await RepositoryLifecycle.OpenWriteOnlyAsync(
+                                store, credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                             .ConfigureAwait(false)
                         : throw new RepositoryOpenException(
                             $"Set '{setId}' is provisioned write-only but its staging archive is missing — "
@@ -504,14 +507,16 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
             else if (ArchiveExists(setId))
             {
-                repository = await RepositoryLifecycle.OpenAsync(store, _passphrase, cancellationToken)
+                repository = await RepositoryLifecycle.OpenAsync(
+                        store, _passphrase, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
             }
             else if (createIfMissing)
             {
                 repository = await RepositoryLifecycle.CreateAsync(
                         store, _passphrase, RepositoryCreationSettings.Default,
-                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
+                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
+                        LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
             }
             else

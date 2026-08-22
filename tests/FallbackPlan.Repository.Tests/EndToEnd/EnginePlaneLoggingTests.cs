@@ -1,4 +1,5 @@
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -32,6 +33,8 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
     private const int BlobSealed = 1610;
     private const int BlobOpened = 1611;
     private const int CatalogueOpened = 1800;
+    private const int PublicationFailed = 2003;
+    private const int RepositoryOpened = 2031;
 
     private async Task<RecordingLogger> PublishAndRestoreAsync()
     {
@@ -117,6 +120,92 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
             log.Records.Where(record => record.EventId == BlobOpened),
             "No blob-opened record arrived: RepositoryReader is not handing its logger to "
             + "BlobReader.OpenAsync, so the read side of a restore is silent.");
+    }
+
+    [TestMethod]
+    public async Task Publishing_WhenTheSourceThrows_NamesTheStepItDiedAfter()
+    {
+        // "The backup failed" is already visible from the job's outcome. Which
+        // step it died in is recorded nowhere else, and it is the difference
+        // between a source that could not be read, a destination that would not
+        // take bytes, and an index that would not publish.
+        var log = new RecordingLogger();
+
+        var source = new FakeFileSystemSource();
+        source.AddFile("documents/alpha.bin", [.. Enumerable.Range(0, 4096).Select(i => (byte)i)]);
+
+        // The blob upload is armed to fail, not the scan: it puts the throw
+        // after two steps have completed, so the record has a step to name and
+        // the assertion can tell a real answer from the initial value.
+        var store = new PutFaultingObjectStore(CreateStore());
+        store.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
+
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+
+        var orchestrator = new PublicationOrchestrator(
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
+            SpoolDirectory, observer: null, catalogue: null, progress: null, logger: log);
+
+        await Assert.ThrowsExactlyAsync<IOException>(async () =>
+            await orchestrator.PublishAsync(
+                new SnapshotJob
+                {
+                    Source = source,
+                    Roots = [new ScanRoot("/")],
+                    DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                    BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+                    SnapshotId = Enumerable.Repeat((byte)0xC3, 16).ToArray(),
+                    NowUnixMilliseconds = 1_722_600_000_000,
+                    DeclaredMaxDurationMs = 3_600_000,
+                    ExpiryGeneration = 5,
+                    ClientVersion = "engine-plane-logging-tests/1.0",
+                },
+                CancellationToken.None));
+
+        var failure = log.Records.Single(record => record.EventId == PublicationFailed);
+        Assert.AreEqual(
+            PublicationStep.ScanSource, failure.Values.First(value => value.Key == "Step").Value,
+            "the scan completed and the seal-and-upload step did not, which is exactly the "
+            + "distinction this record exists to draw");
+        Assert.IsInstanceOfType<IOException>(failure.Exception);
+    }
+
+    [TestMethod]
+    public async Task Opening_ARepositoryWithALogger_SaysWhatItOpened()
+    {
+        var log = new RecordingLogger();
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
+
+        using var created = await RepositoryLifecycle.CreateAsync(
+            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None, log);
+        using var opened = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None, log);
+
+        Assert.ContainsSingle(log.Records.Where(record => record.EventId == RepositoryOpened));
+    }
+
+    [TestMethod]
+    public async Task Opening_WithTheWrongPassphrase_RecordsTheRefusalRatherThanOnlyThrowing()
+    {
+        var log = new RecordingLogger();
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
+        using (await RepositoryLifecycle.CreateAsync(
+            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None))
+        {
+            // Created without a logger on purpose: the refusal below must be
+            // recorded by the open, not carried over from the create.
+        }
+
+        using var wrong = Passphrase.Create("not the passphrase at all!!!!");
+        await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
+            await RepositoryLifecycle.OpenAsync(store, wrong, CancellationToken.None, log));
+
+        Assert.ContainsSingle(
+            log.Records.Where(record => record.EventId == 2032),
+            "a refused open is the event an operator is looking for, and it used to leave no trace");
     }
 
     [TestMethod]

@@ -1,4 +1,5 @@
 using Bodu;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -72,7 +73,7 @@ public static class ServiceConnectionPump
                 cancellationToken).ConfigureAwait(false);
 
             Log.ClientConnected(logger, hello.ContractVersion, serviceVersion, accepted: true);
-            await PumpAsync(stream, service, cancellationToken).ConfigureAwait(false);
+            await PumpAsync(stream, service, logger, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException)
         {
@@ -83,7 +84,8 @@ public static class ServiceConnectionPump
         }
     }
 
-    private static async Task PumpAsync(Stream stream, IFallbackPlanService service, CancellationToken cancellationToken)
+    private static async Task PumpAsync(
+        Stream stream, IFallbackPlanService service, ILogger logger, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -94,12 +96,36 @@ public static class ServiceConnectionPump
                     return;
 
                 case RequestFrame request:
-                    var result = await service.ExecuteAsync(request.Command, cancellationToken).ConfigureAwait(false);
+                {
+                    // Timed and named only when somebody is listening: reading
+                    // the type names is work, and CA1873 is an error, so both
+                    // land in locals behind the level check rather than in a
+                    // log argument.
+                    var timing = logger.IsEnabled(LogLevel.Debug);
+                    var startedAt = timing ? Stopwatch.GetTimestamp() : 0L;
+
+                    var result = await service.ExecuteAsync(request.Command, cancellationToken)
+                        .ConfigureAwait(false);
                     await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), cancellationToken)
                         .ConfigureAwait(false);
+
+                    if (timing)
+                    {
+                        // The verb and the result kind, never the command
+                        // itself: arguments carry set names, paths and sealed
+                        // envelopes, and none of those belong in a connection
+                        // log.
+                        var verb = request.Command.GetType().Name;
+                        var answered = result.GetType().Name;
+                        var elapsedMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                        Log.CommandHandled(logger, verb, answered, elapsedMs);
+                    }
+
                     break;
+                }
 
                 case WatchFrame:
+                    Log.WatchOpened(logger);
                     await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
                     return;
 

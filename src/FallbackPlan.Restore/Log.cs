@@ -40,8 +40,21 @@ internal static partial class Log
     internal static partial void RestoreComplete(
         ILogger logger, RestoreOutcome outcome, int restored, int failed, int skipped);
 
+    // Not "Quarantined". The quarantine directory is where a restore lands by
+    // default, for every item, and saying so per item would be noise. What is
+    // worth a Warning is the item whose destination was already occupied, and
+    // that has two distinct outcomes with two different answers to "where is my
+    // file now" — the restored copy moved, or the live file did. One message
+    // for both would have to be vague about which.
     [LoggerMessage(
         EventId = 2805, Level = LogLevel.Warning,
-        Message = "Quarantined {Path}: {Reason} — written beside rather than over")]
-    internal static partial void Quarantined(ILogger logger, LogPath path, string reason);
+        Message = "Something was already at {Path}; the restored copy went beside it as {Landing}, "
+            + "and the existing file was left untouched")]
+    internal static partial void WroteBeside(ILogger logger, LogPath path, LogPath landing);
+
+    [LoggerMessage(
+        EventId = 2806, Level = LogLevel.Warning,
+        Message = "Something was already at {Path}; it was moved to {Refuge} before the restore "
+            + "wrote over it")]
+    internal static partial void DisplacedExisting(ILogger logger, LogPath path, LogPath refuge);
 }

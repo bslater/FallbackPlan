@@ -167,11 +167,12 @@ public sealed class CliSession : IDisposable
             if (RepositoryLifecycle.IsWriteOnly(descriptor))
             {
                 (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
-                    store, passphrase, cancellationToken).ConfigureAwait(false);
+                    store, passphrase, cancellationToken, log).ConfigureAwait(false);
             }
             else
             {
-                repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+                repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken, log)
+                    .ConfigureAwait(false);
             }
         }
         catch (RepositoryOpenException exception)

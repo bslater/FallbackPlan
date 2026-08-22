@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using FallbackPlan.Domain.Diagnostics;
 
 namespace FallbackPlan.Api.Transport;
 
@@ -64,6 +65,8 @@ public sealed class LocalServiceListener : IAsyncDisposable
             listener.BindSocket(address);
             listener._acceptLoop = listener.AcceptSocketsAsync();
         }
+
+        Log.Listening(listener._log, new LogPath(address));
 
         return listener;
     }

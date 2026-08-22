@@ -149,6 +149,44 @@ public sealed partial class PublicationOrchestrator
     public async ValueTask<PublishedTreeSnapshot> PublishAsync(SnapshotJob job, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(job);
+
+        // The last step to complete, so a throw can name where the publication
+        // got to. Held on the instance rather than threaded through: the writer
+        // lane serialises publications (ADR-0029 §1), so there is only ever one
+        // in flight against one of these.
+        _lastStep = PublicationStep.PublishIntent;
+
+        try
+        {
+            return await PublishCoreAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (Failed(failure, job))
+        {
+            // Unreachable: the filter records and then declines, so the
+            // exception continues to the caller with its stack intact. A catch
+            // that rethrew would work too, and would lose nothing but honesty
+            // about what this is for.
+            throw;
+        }
+    }
+
+    private PublicationStep _lastStep;
+
+    private void RecordStep(PublicationStep step, LogId snapshot)
+    {
+        _lastStep = step;
+        Log.PublicationStep(_logger, step, snapshot);
+    }
+
+    private bool Failed(Exception failure, SnapshotJob job)
+    {
+        Log.PublicationFailed(_logger, LogId.Snapshot(job.SnapshotId), _lastStep, failure);
+        return false;
+    }
+
+    private async ValueTask<PublishedTreeSnapshot> PublishCoreAsync(
+        SnapshotJob job, CancellationToken cancellationToken)
+    {
         var snapshotForLog = LogId.Snapshot(job.SnapshotId);
 
         using var activity = EngineDiagnostics.Activities.StartActivity("publish");
@@ -278,12 +316,12 @@ public sealed partial class PublicationOrchestrator
             var rootTreeId = walker.RootTreeId
                 ?? throw new InvalidOperationException(Strings.PublicationOrchestrator_ScanProducedNoRootDirectory);
             _observer?.AfterStep(PublicationStep.ScanSource);
-            Log.PublicationStep(_logger, nameof(PublicationStep.ScanSource), snapshotForLog);
+            RecordStep(PublicationStep.ScanSource, snapshotForLog);
 
             reporter.Observe(JobState.Uploading, walker.Files, walker.Failures.Count);
             await session.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.SegmentAndSeal);
-            Log.PublicationStep(_logger, nameof(PublicationStep.SegmentAndSeal), snapshotForLog);
+            RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
             reporter.Observe(JobState.Publishing, walker.Files, walker.Failures.Count);
 
             // The error manifest exists exactly when something failed —
@@ -355,11 +393,11 @@ public sealed partial class PublicationOrchestrator
 
             await builder.FlushAsync(cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.UploadBlobs);
-            Log.PublicationStep(_logger, nameof(PublicationStep.UploadBlobs), snapshotForLog);
+            RecordStep(PublicationStep.UploadBlobs, snapshotForLog);
 
             // Step 5: every put's acknowledgement was awaited as it happened.
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
-            Log.PublicationStep(_logger, nameof(PublicationStep.VerifyAcknowledgements), snapshotForLog);
+            RecordStep(PublicationStep.VerifyAcknowledgements, snapshotForLog);
 
             // Step 6: index deltas referencing the now-durable blobs.
             var entries = new List<IndexEntry>();
@@ -391,7 +429,7 @@ public sealed partial class PublicationOrchestrator
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
-            Log.PublicationStep(_logger, nameof(PublicationStep.PublishIndexDeltas), snapshotForLog);
+            RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded
             // by the advisory source-identity hints, so a hint the next
@@ -406,7 +444,7 @@ public sealed partial class PublicationOrchestrator
             await builder.WriteStandaloneSnapshotAsync(
                 snapshot, encodedSnapshot, intentSequence, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
-            Log.PublicationStep(_logger, nameof(PublicationStep.PublishSnapshot), snapshotForLog);
+            RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
             // Step 8: retirement — an event, not a heartbeat (08 §5).
             await journal.PublishAsync(
@@ -416,7 +454,7 @@ public sealed partial class PublicationOrchestrator
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.RetireIntent);
-            Log.PublicationStep(_logger, nameof(PublicationStep.RetireIntent), snapshotForLog);
+            RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
             // Step 9: the local job is complete — and the live catalogue
             // learns what was published without re-reading the store
@@ -429,7 +467,7 @@ public sealed partial class PublicationOrchestrator
             EngineDiagnostics.PublicationDuration.Record(
                 Stopwatch.GetElapsedTime(publicationStarted).TotalSeconds);
             _observer?.AfterStep(PublicationStep.Complete);
-            Log.PublicationStep(_logger, nameof(PublicationStep.Complete), snapshotForLog);
+            RecordStep(PublicationStep.Complete, snapshotForLog);
 
             // Two records mark this moment and they answer different
             // questions. PublicationComplete, from the single-stream path

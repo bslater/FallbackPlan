@@ -362,7 +362,7 @@ structure.
 | 2026-08 | Accepted | The shape decided: abstractions in the libraries, sinks in the hosts, redaction by declared type, event-id ranges |
 | 2026-08 | Accepted | Built: abstractions in twenty-four projects, per-project `Log.cs`, and the ring, rolling file and renderer in `FallbackPlan.Diagnostics` |
 | 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
-| 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is 46 of 107 declarations, with the remainder frozen as a shrinking register |
+| 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is complete: the 61-declaration register is empty, twelve by deletion and the rest wired, with drills asserting records arrive rather than only that call sites exist |
 
 The diagnostics verbs moved from the contract 1.13 this document originally
 named to **1.15**: 1.13 was taken by first-run setup
@@ -407,4 +407,37 @@ through.
 Two security-relevant events from that file are not lost either: a failed
 unwrap and a refused sealed envelope already surface as typed exceptions, which
 the hosts log by name at the boundary where the operation was asked for.
+### Amendment: reshaped, not just wired or deleted
+
+Emptying the register surfaced a third category the plan had not anticipated.
+Twelve declarations were deleted and the rest wired, but seven could not be
+wired as written, because the message described work the code does not do:
+
+| Declaration | What it promised | What is there |
+|---|---|---|
+| `Packing.SpoolCheckpointed` | a record count, as though the sidecar were refreshed as records landed | it is written once, at create; every field is fixed for the blob's life (05 §6.2), so the hole was always zero |
+| `Packing.BlobSealed` | one seal record | two callers seal — `ArchiveSession` for data, `ManifestBuilder` for metadata — so it now names the class, which is what let its drill fail when the data plane's logger was removed |
+| `Catalogue.CatalogueOpened` | a generation | the catalogue opens before anything reads a descriptor; it reports instead whether the cache on disk was reused, created, or discarded |
+| `Catalogue.RebuildStarting` | a repository id and a reason | a rebuilder holds a loader, not a repository, and the reason belongs to whoever decided to rebuild |
+| `Replication.ReplicationStarting` | objects and bytes to copy | the copier streams from a listing and never totals the work; it knows the destination's opening inventory, which is what decides the cost |
+| `Replication.CopyFailed` | a per-object copy failure | a failed put throws and stops the pass by design; the silent failure is a *delete* the destination declined during convergence, which 3002 now reports |
+| `Retention.CollectionComplete` | bytes reclaimed, as one number | the sweep counts objects and only the trim knows bytes; both halves report as each measures itself |
+| `Restore.Quarantined` | a per-item quarantine | the quarantine directory is where every item lands by default; the notable event is a destination that was already occupied, which has two outcomes — the restored copy moved, or the live file did — and now has two messages |
+
+A declaration that promises a count nothing computes is the same hazard the
+register exists to expose, and harder to see: it survives a "is it called?"
+check the moment somebody wires it with a plausible-looking zero.
+
+### Amendment: a call site is not a logger
+
+The register proved every declaration is *called*. Nothing in the type system
+proves a real logger reaches the call — a host that forgets `LoggerFor<T>()`
+still builds, still backs up, and still writes a log file missing the layer you
+wanted, which is exactly how the first privacy drill produced a one-line file.
+Three suites close that gap by asserting records arrive, by event id, through
+real work: `Repository.Tests/EnginePlaneLoggingTests` over a publish and
+restore, `Replication.Tests/CopierLoggingTests` over a copy and a convergence,
+and a retention drill over an applied pass.
+
+
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |

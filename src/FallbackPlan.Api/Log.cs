@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Api;
@@ -37,13 +38,20 @@ internal static partial class Log
         Message = "Connection failed: {Reason}")]
     internal static partial void ConnectionFailed(ILogger logger, string reason);
 
+    // No subscriber count. The pump sees one connection; how many watchers
+    // exist in total is the service's business and is not knowable from here,
+    // and a count taken from the wrong side is worse than no count.
     [LoggerMessage(
         EventId = 3604, Level = LogLevel.Debug,
-        Message = "Progress watch opened; {Subscribers} now watching")]
-    internal static partial void WatchOpened(ILogger logger, int subscribers);
+        Message = "This connection opened a progress watch; it now streams until the client leaves")]
+    internal static partial void WatchOpened(ILogger logger);
 
+    // A LogPath, not a string: a local endpoint IS a filesystem path, and the
+    // service exposes no raw filesystem paths to a client (T-16). Declared as
+    // a path, it renders in full in the machine's own log and as a digest in
+    // anything a client reads.
     [LoggerMessage(
         EventId = 3605, Level = LogLevel.Debug,
         Message = "Listening on {Endpoint}")]
-    internal static partial void Listening(ILogger logger, string endpoint);
+    internal static partial void Listening(ILogger logger, LogPath endpoint);
 }

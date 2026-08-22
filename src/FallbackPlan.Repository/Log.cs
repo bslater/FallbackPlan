@@ -47,7 +47,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 2001, Level = LogLevel.Debug,
         Message = "Publication step {Step} complete for snapshot {SnapshotId}")]
-    internal static partial void PublicationStep(ILogger logger, string step, LogId snapshotId);
+    internal static partial void PublicationStep(ILogger logger, PublicationStep step, LogId snapshotId);
 
     [LoggerMessage(
         EventId = 2002, Level = LogLevel.Information,
@@ -63,11 +63,16 @@ internal static partial class Log
     internal static partial void SnapshotPublished(
         ILogger logger, LogId snapshotId, int files, int failures, long logicalBytes);
 
+    // The step is the whole value of this record. "The backup failed" is
+    // already visible from the job's outcome; which step it died in is not
+    // recorded anywhere else, and it is the difference between a source that
+    // could not be read, a destination that would not take bytes, and an index
+    // that would not publish.
     [LoggerMessage(
         EventId = 2003, Level = LogLevel.Error,
-        Message = "Publication failed for snapshot {SnapshotId} at step {Step}")]
+        Message = "Publication failed for snapshot {SnapshotId} after step {Step}")]
     internal static partial void PublicationFailed(
-        ILogger logger, LogId snapshotId, string step, Exception exception);
+        ILogger logger, LogId snapshotId, PublicationStep step, Exception exception);
 
     // ---------------------------------------------------------------- files
 
@@ -114,10 +119,15 @@ internal static partial class Log
     internal static partial void RepositoryOpened(
         ILogger logger, RepositoryId repository, int formatVersion, bool writeOnly);
 
+    // No repository id: a refusal usually happens before there is one. The
+    // descriptor is step one of an open, and "not a FallbackPlan repository",
+    // "the digest does not match" and "requires unimplemented features" are all
+    // decided while the store's identity is still unknown. A hole that is
+    // empty in the common case is worse than no hole.
     [LoggerMessage(
         EventId = 2032, Level = LogLevel.Warning,
-        Message = "Repository {Repository} refused to open: {Reason}")]
-    internal static partial void RepositoryOpenRefused(ILogger logger, RepositoryId repository, string reason);
+        Message = "The repository refused to open: {Reason}")]
+    internal static partial void RepositoryOpenRefused(ILogger logger, string reason);
 
     // ----------------------------------------------------------------- read
 }

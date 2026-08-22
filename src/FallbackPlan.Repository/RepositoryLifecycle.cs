@@ -8,6 +8,8 @@ using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Repository.Resources;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository;
 
@@ -97,6 +99,26 @@ public static class RepositoryLifecycle
     /// <exception cref="ArgumentException">The settings are invalid, or KDF parameters fall below the creation minimums (specification 03 §2).</exception>
     /// <exception cref="IOException">The store refused an object — including an already-present descriptor, which means the location already holds a repository.</exception>
     public static async ValueTask<OpenedRepository> CreateAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        RepositoryCreationSettings settings,
+        ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateCoreAsync(
+            store, passphrase, settings, createdAtUnixMilliseconds, cancellationToken).ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.RepositoryId, created.Descriptor.FormatVersion,
+            writeOnly: false);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> CreateCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         RepositoryCreationSettings settings,
@@ -229,6 +251,26 @@ public static class RepositoryLifecycle
         Passphrase passphrase,
         RepositoryCreationSettings settings,
         ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateWriteOnlyCoreAsync(
+            store, passphrase, settings, createdAtUnixMilliseconds, cancellationToken).ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.Repository.RepositoryId,
+            created.Repository.Descriptor.FormatVersion, writeOnly: true);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateWriteOnlyCoreAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        RepositoryCreationSettings settings,
+        ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
@@ -303,6 +345,29 @@ public static class RepositoryLifecycle
         Argon2Parameters kdfParameters,
         string createdBy,
         ulong createdAtUnixMilliseconds,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var created = await CreateWriteOnlyFromCredentialCoreAsync(
+            store, credential, kdfSalt, kdfParameters, createdBy, createdAtUnixMilliseconds, cancellationToken)
+            .ConfigureAwait(false);
+        Log.RepositoryCreated(
+            logger ?? NullLogger.Instance, created.RepositoryId, created.Descriptor.FormatVersion,
+            writeOnly: true);
+        return created;
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialCoreAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
+        ReadOnlyMemory<byte> kdfSalt,
+        Argon2Parameters kdfParameters,
+        string createdBy,
+        ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
@@ -355,6 +420,30 @@ public static class RepositoryLifecycle
     public static async ValueTask<OpenedRepository> OpenWriteOnlyAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenWriteOnlyCoreAsync(store, credential, cancellationToken).ConfigureAwait(false);
+            Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion, writeOnly: true);
+            return opened;
+        }
+        catch (RepositoryOpenException refusal)
+        {
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> OpenWriteOnlyCoreAsync(
+        IObjectStore store,
+        RepositoryWriteCredential credential,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
@@ -386,6 +475,35 @@ public static class RepositoryLifecycle
     /// <exception cref="RepositoryOpenException">The store holds no verifiable write-only repository.</exception>
     /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this repository's keys.</exception>
     public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenWriteOnlyForReadCoreAsync(store, passphrase, cancellationToken)
+                .ConfigureAwait(false);
+            Log.RepositoryOpened(
+                log, opened.Repository.RepositoryId, opened.Repository.Descriptor.FormatVersion, writeOnly: true);
+            return opened;
+        }
+        catch (Exception refusal) when (refusal is RepositoryOpenException or KeyUnwrapFailedException)
+        {
+            // The wrong passphrase reaches here as a KeyUnwrapFailedException,
+            // and from an operator's side it is the same event as any other
+            // refusal to open: they pointed at an archive and did not get in.
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         CancellationToken cancellationToken)
@@ -481,6 +599,30 @@ public static class RepositoryLifecycle
     /// <exception cref="RepositoryOpenException">Any step refused — the message carries the distinct finding.</exception>
     /// <exception cref="KeyUnwrapFailedException">The passphrase is wrong or the key object tampered — deliberately indistinguishable (specification 03 §3).</exception>
     public static async ValueTask<OpenedRepository> OpenAsync(
+        IObjectStore store,
+        Passphrase passphrase,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        try
+        {
+            var opened = await OpenCoreAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+            Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion, writeOnly: false);
+            return opened;
+        }
+        catch (Exception refusal) when (refusal is RepositoryOpenException or KeyUnwrapFailedException)
+        {
+            Log.RepositoryOpenRefused(log, refusal.Message);
+            throw;
+        }
+    }
+
+    // The public entry point above is the whole of this method's diagnostics:
+    // one place that reports what opened or was refused, rather than a log call
+    // beside every throw. Every refusal here is a RepositoryOpenException or a
+    // KeyUnwrapFailedException by design, which is what makes that possible.
+    private static async ValueTask<OpenedRepository> OpenCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         CancellationToken cancellationToken)

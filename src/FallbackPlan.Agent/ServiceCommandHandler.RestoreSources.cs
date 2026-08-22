@@ -423,7 +423,8 @@ public sealed partial class ServiceCommandHandler
         {
             using (credential)
             {
-                return await RepositoryLifecycle.OpenWriteOnlyAsync(store, credential, cancellationToken)
+                return await RepositoryLifecycle.OpenWriteOnlyAsync(
+                        store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
             }
         }
@@ -432,7 +433,9 @@ public sealed partial class ServiceCommandHandler
             ?? throw new RepositoryOpenException(
                 "This service started without a passphrase and the set is not provisioned write-only (ADR-0042).");
 
-        return await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken).ConfigureAwait(false);
+        return await RepositoryLifecycle.OpenAsync(
+                store, passphrase, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
+            .ConfigureAwait(false);
     }
 
     /// <summary>
