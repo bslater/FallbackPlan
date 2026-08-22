@@ -33,5 +33,26 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
+  <!-- The runtime guard for a defect that has bitten this repository once and
+       cost a day to diagnose (ADR-0043, and the .slnx exclusions removed in
+       a577c24).
+
+       The concrete Microsoft.Extensions.Logging reaches this executable ONLY
+       through its ProjectReference to FallbackPlan.Diagnostics — ADR-0043 §1
+       pins the package there and nowhere else, and a canary in
+       DependencyRuleTests keeps it that way. Anything that stops that project
+       contributing its assets (a solution build configuration that excludes
+       it, a hand-edited reference) leaves this project compiling perfectly and
+       throwing FileNotFoundException on the first line it tries to log.
+
+       The compiler cannot see that, because the abstraction it compiles
+       against is a different package. So the output is checked instead, after
+       the copy step that would have brought it. Failing here names the cause;
+       failing at run time names only the symptom. -->
+  <Target Name="AssertLoggingProviderWasCopied" AfterTargets="Build"
+          Condition="'$(OutputType)' == 'Exe'">
+    <Error Condition="!Exists('$(TargetDir)Microsoft.Extensions.Logging.dll')"
+           Text="Microsoft.Extensions.Logging.dll is not in $(TargetDir), so this executable would throw FileNotFoundException the first time it logs. It reaches this project only through the ProjectReference to FallbackPlan.Diagnostics (ADR-0043 §1), so something is stopping that project contributing its assets — most often a solution build configuration that excludes it from this configuration. Check FallbackPlan.slnx for a &lt;Build&gt; element with Project=&quot;false&quot;, and delete the .vs folder if an IDE is caching an older solution model." />
+  </Target>
 
 </Project>
