@@ -49,7 +49,70 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
+[JsonDerivedType(typeof(LoginCommand), "login")]
+[JsonDerivedType(typeof(ResumeSessionCommand), "resume_session")]
+[JsonDerivedType(typeof(LogoutCommand), "logout")]
+[JsonDerivedType(typeof(ListUsersCommand), "list_users")]
+[JsonDerivedType(typeof(CreateUserCommand), "create_user")]
+[JsonDerivedType(typeof(DeleteUserCommand), "delete_user")]
+[JsonDerivedType(typeof(ChangePasswordCommand), "change_password")]
 public abstract record ServiceCommand;
+
+/// <summary>
+/// Authenticates a person and mints a session (FR-USR-001, FR-USR-003;
+/// ADR-0045 §5).
+/// </summary>
+/// <param name="User">The account name.</param>
+/// <param name="Password">The password, as typed.</param>
+/// <remarks>
+/// One of the three verbs an unauthenticated connection may speak, alongside
+/// <see cref="DescribeServiceCommand"/> — a login screen has to know whether
+/// the installation is even set up — and <see cref="ResumeSessionCommand"/>.
+/// </remarks>
+public sealed record LoginCommand(string User, string Password) : ServiceCommand;
+
+/// <summary>
+/// Presents an existing session token on a new connection.
+/// </summary>
+/// <param name="Token">The token a previous <see cref="LoginCommand"/> returned.</param>
+/// <remarks>
+/// The session is minted once and lives in the service's memory; a connection
+/// is what presents it. That separation is what lets the web console work at
+/// all, because it opens a fresh connection for every request it relays — a
+/// session welded to one transport connection would log the operator out
+/// between clicking two buttons.
+/// </remarks>
+public sealed record ResumeSessionCommand(string Token) : ServiceCommand;
+
+/// <summary>Ends the session this connection presented, everywhere (FR-USR-003).</summary>
+/// <remarks>
+/// Revokes the session itself, not just this connection's use of it, because
+/// the operator pressing "sign out" means the person, not the socket.
+/// </remarks>
+public sealed record LogoutCommand : ServiceCommand;
+
+/// <summary>Enumerates the installation's accounts, without any credential.</summary>
+public sealed record ListUsersCommand : ServiceCommand;
+
+/// <summary>Creates an account (FR-USR-004 — owner only, for now).</summary>
+/// <param name="Name">The account name.</param>
+/// <param name="Password">Its password.</param>
+/// <param name="Role">The role, by name. Ignored for the first account, which is always the owner.</param>
+public sealed record CreateUserCommand(string Name, string Password, string? Role = null) : ServiceCommand;
+
+/// <summary>Removes an account (FR-USR-004 — owner only, and never the owner).</summary>
+/// <param name="Name">The account to remove.</param>
+public sealed record DeleteUserCommand(string Name) : ServiceCommand;
+
+/// <summary>Changes the signed-in account's own password.</summary>
+/// <param name="CurrentPassword">The password in force, proved before anything changes.</param>
+/// <param name="NewPassword">Its replacement.</param>
+/// <remarks>
+/// Always the caller's own account, never a named one: an owner who could set
+/// somebody else's password could become them, which would make every
+/// attributable action attributable to the wrong person.
+/// </remarks>
+public sealed record ChangePasswordCommand(string CurrentPassword, string NewPassword) : ServiceCommand;
 
 /// <summary>Enumerates the configured backup sets.</summary>
 public sealed record ListBackupSetsCommand : ServiceCommand;

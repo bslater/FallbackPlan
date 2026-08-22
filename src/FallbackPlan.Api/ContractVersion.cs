@@ -86,8 +86,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// fixed for the installation's life, so nothing else can make it
     /// stale either (ADR-0013 as amended). Surfaced continuously rather
     /// than only during the ceremony, which is what "continuously" means.
+    /// 1.16 gave the product a way to say who is acting (ADR-0045,
+    /// FR-USR-001..006): login mints a session, resume_session presents an
+    /// existing one on a new connection — which the web console needs,
+    /// because it opens a fresh connection for every request it relays —
+    /// logout revokes it, and list_users / create_user / delete_user /
+    /// change_password manage the accounts. describe_service carries who is
+    /// signed in and their role, and reports users_required when an
+    /// installation has finished setup but has no accounts yet. Sessions are
+    /// held in the service's memory alone, so a restart signs everyone out;
+    /// there is no session file, which is the stale-credential failure
+    /// ADR-0028 §5 rejected. A session token crosses on the two verbs that
+    /// mint and present it and nowhere else, and no password or hash reaches
+    /// any result or any log record.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 15);
+    public static ContractVersion Current { get; } = new(1, 16);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

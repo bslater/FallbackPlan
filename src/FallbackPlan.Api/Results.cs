@@ -67,6 +67,8 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
 [JsonDerivedType(typeof(DiagnosticsResult), "diagnostics")]
 [JsonDerivedType(typeof(LogRecordsResult), "log_records")]
+[JsonDerivedType(typeof(SessionResult), "session")]
+[JsonDerivedType(typeof(UserListResult), "users")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -620,6 +622,17 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// When the kit was confirmed saved, Unix milliseconds, or null when none has
 /// been. What lets a console say how long ago rather than merely whether.
 /// </param>
+/// <param name="SignedInUser">
+/// Whose session this connection has presented, or null when it has presented
+/// none — which is how a client learns it must show a login screen rather than
+/// its normal views (FR-USR-001). Null also from a service older than contract
+/// 1.16, where nobody was ever signed in and everyone was "the operator".
+/// </param>
+/// <param name="SignedInRole">
+/// That account's role, by name, so a console can hide the account-management
+/// controls it would only be refused for. The refusal is still enforced at the
+/// service — this saves a round trip, it does not decide anything.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -633,7 +646,9 @@ public sealed record ServiceDescriptionResult(
     string? DeviceId = null,
     string? LogLevel = null,
     string? KitStatus = null,
-    ulong? KitConfirmedAt = null) : ServiceResult;
+    ulong? KitConfirmedAt = null,
+    string? SignedInUser = null,
+    string? SignedInRole = null) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,
@@ -717,3 +732,40 @@ public sealed record LogRecordsResult(
     IReadOnlyList<LogRecordDescriptor> Records,
     long NextSequence,
     bool Dropped) : ServiceResult;
+
+/// <summary>
+/// A minted or resumed session (FR-USR-003; ADR-0045 §5).
+/// </summary>
+/// <param name="Token">
+/// The opaque session token. Held in the service's memory only — a restart
+/// ends every session — and presented on each new connection through
+/// <see cref="ResumeSessionCommand"/>.
+/// </param>
+/// <param name="User">Whose session it is.</param>
+/// <param name="Role">That account's role, by name.</param>
+/// <param name="IdleExpiresAtUnixMilliseconds">When the session lapses if nothing uses it.</param>
+/// <param name="AbsoluteExpiresAtUnixMilliseconds">When it ends regardless of use.</param>
+/// <remarks>
+/// The token is a credential and is treated as one: it crosses on the verb
+/// that mints it and on the verb that presents it, and nowhere else. It is not
+/// carried on <see cref="ServiceDescriptionResult"/> and never reaches a log —
+/// the session records name the account, never the token.
+/// </remarks>
+public sealed record SessionResult(
+    string Token,
+    string User,
+    string Role,
+    long IdleExpiresAtUnixMilliseconds,
+    long AbsoluteExpiresAtUnixMilliseconds) : ServiceResult;
+
+/// <summary>One account as a client may see it — never a credential.</summary>
+/// <param name="Name">The account name.</param>
+/// <param name="Role">Its role, by name.</param>
+/// <param name="CreatedAtUnixMilliseconds">When it was created.</param>
+/// <param name="IsOwner">Whether this is the account that cannot be deleted.</param>
+public sealed record UserDescriptor(
+    string Name, string Role, long CreatedAtUnixMilliseconds, bool IsOwner);
+
+/// <summary>The installation's accounts.</summary>
+/// <param name="Users">Every account, oldest first.</param>
+public sealed record UserListResult(IReadOnlyList<UserDescriptor> Users) : ServiceResult;

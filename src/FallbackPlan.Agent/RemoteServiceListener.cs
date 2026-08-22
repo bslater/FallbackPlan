@@ -41,7 +41,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
 
-    private IFallbackPlanService? _service;
+    private Func<IFallbackPlanService>? _services;
     private Task? _acceptLoop;
 
     private RemoteServiceListener(
@@ -83,7 +83,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// <param name="endpoint">The interface and port to bind, already validated.</param>
     /// <param name="agentVersion">Informational build string for the session hello.</param>
     /// <param name="log">Optional sink for connection-level notes.</param>
-    /// <returns>The bound listener; call <see cref="Bind"/> to begin serving, dispose to stop.</returns>
+    /// <returns>The bound listener; call <see cref="Bind(IFallbackPlanService)"/> to begin serving, dispose to stop.</returns>
     /// <remarks>
     /// Binding and serving are two steps because the endpoint an OS-assigned
     /// port resolves to is what the service must report through
@@ -138,13 +138,26 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     public void Bind(IFallbackPlanService service)
     {
         ThrowHelper.ThrowIfNull(service);
+        Bind(() => service);
+    }
 
-        if (_service is not null)
+    /// <summary>Begins accepting, building a service per authenticated peer connection.</summary>
+    /// <param name="services">
+    /// Called once per connection, so a per-connection decorator can hold that
+    /// connection's signed-in session (ADR-0045 §5). A paired device still has
+    /// to say which person is acting.
+    /// </param>
+    /// <remarks>Called once, after the socket is bound and the service is built.</remarks>
+    public void Bind(Func<IFallbackPlanService> services)
+    {
+        ThrowHelper.ThrowIfNull(services);
+
+        if (_services is not null)
         {
             throw new InvalidOperationException("The remote listener is already serving.");
         }
 
-        _service = service;
+        _services = services;
         _acceptLoop = AcceptAsync();
     }
 
@@ -377,7 +390,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
             // The open TLS stream carries the command contract (ADR-0030;
             // peer-protocol 02 §9 withholds key material and plaintext).
-            await ServiceConnectionPump.RunAsync(session.Stream, _service!, peer, _log, _stopping.Token)
+            await ServiceConnectionPump.RunAsync(session.Stream, _services!(), peer, _log, _stopping.Token)
                 .ConfigureAwait(false);
         }
         catch (PeerProtocolException refusal)

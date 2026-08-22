@@ -110,4 +110,33 @@ internal static partial class Log
         EventId = 3731, Level = LogLevel.Information,
         Message = "Remote binding listening on {Endpoint} as {Fingerprint}")]
     internal static partial void RemoteBindingUp(ILogger logger, string endpoint, string fingerprint);
+    // Authentication (ADR-0045). The account is named and the password never
+    // is — not redacted, not hashed, not truncated: there is no parameter one
+    // could be passed through, which is the surest way to honour "no secrets
+    // in logs". A failure does not say whether the account exists, because a
+    // log that distinguishes the two is the name oracle the verb refuses to be.
+    [LoggerMessage(
+        EventId = 3750, Level = LogLevel.Information,
+        Message = "{User} signed in as {Role}")]
+    internal static partial void SignedIn(ILogger logger, string user, string role);
+
+    [LoggerMessage(
+        EventId = 3751, Level = LogLevel.Information,
+        Message = "A session was signed out")]
+    internal static partial void SignedOut(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 3752, Level = LogLevel.Warning,
+        Message = "Authentication failed for {User}")]
+    internal static partial void AuthenticationFailed(ILogger logger, string user);
+
+    [LoggerMessage(
+        EventId = 3753, Level = LogLevel.Information,
+        Message = "Account {User} created as {Role}")]
+    internal static partial void AccountCreated(ILogger logger, string user, string role);
+
+    [LoggerMessage(
+        EventId = 3754, Level = LogLevel.Information,
+        Message = "Account {User} removed; {Sessions} live session(s) ended with it")]
+    internal static partial void AccountDeleted(ILogger logger, string user, int sessions);
 }

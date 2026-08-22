@@ -750,14 +750,27 @@ public static class AgentHost
                 // refused to a remote console needs to know that THIS caller
                 // is remote (ADR-0044 §5).
                 var localHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Local);
+                var remoteHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote);
+
+                // One account store and one session registry for the whole
+                // installation; one decorator per accepted connection, because
+                // "which person is acting" is the one piece of state that is
+                // genuinely per connection (ADR-0045 §5). Sessions live here
+                // and nowhere else, which is why stopping this process is what
+                // signs everybody out.
+                var users = UserStore.Open(stateDirectory);
+                var sessions = new SessionRegistry();
+                var authLog = logging.Factory.CreateLogger<AuthenticatingService>();
 
                 // The remote socket bound before the handler existed so its
                 // endpoint could seed the binding state; it begins serving now
                 // that the handler exists.
-                remoteListener?.Bind(new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote));
+                remoteListener?.Bind(() => new AuthenticatingService(remoteHandler, users, sessions, authLog));
 
                 await using var localListener = LocalServiceListener.Start(
-                    localHandler, stateDirectory, logging.Factory.CreateLogger<LocalServiceListener>());
+                    () => new AuthenticatingService(localHandler, users, sessions, authLog),
+                    stateDirectory,
+                    logging.Factory.CreateLogger<LocalServiceListener>());
 
                 // Logged as well as printed, and the duplication is deliberate.
                 // Installed as a service there is no console to print to, and

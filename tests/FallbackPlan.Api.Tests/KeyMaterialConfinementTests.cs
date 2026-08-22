@@ -33,6 +33,41 @@ public sealed class KeyMaterialConfinementTests
         "kek", "masterkey", "blobkey", "classkey", "seed", "credential", "token",
     ];
 
+    /// <summary>
+    /// The authentication surface, member by member (ADR-0045).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// NFR-SEC-009 is about <b>key material</b>: things that derive a
+    /// repository key, open an archive, or mint access. A person's password is
+    /// none of those — it opens no archive, derives nothing, and possession of
+    /// it yields no byte of any backup. It has to cross the surface because
+    /// there is no other way to prove who is acting, and it is refused
+    /// entrance anywhere else: it reaches no log, no result, and no durable
+    /// object except as an Argon2id hash (FR-USR-002).
+    /// </para>
+    /// <para>
+    /// A session token is the same: minted by the service, meaningful only to
+    /// the process that minted it, and dead the moment that process restarts.
+    /// </para>
+    /// <para>
+    /// Named exactly, member by member, rather than by relaxing the ban — the
+    /// fragment list still forbids "password" everywhere else, which is what
+    /// keeps a <c>Passphrase</c> field from arriving one day wearing the word
+    /// "password". A seventh member fails this test until somebody argues for
+    /// it here.
+    /// </para>
+    /// </remarks>
+    private static readonly string[] AuthenticationSurface =
+    [
+        "LoginCommand.Password",
+        "CreateUserCommand.Password",
+        "ChangePasswordCommand.CurrentPassword",
+        "ChangePasswordCommand.NewPassword",
+        "ResumeSessionCommand.Token",
+        "SessionResult.Token",
+    ];
+
     [TestMethod]
     public void ContractSurface_MemberNameSuggestsKeyMaterial_ExposesNone()
     {
@@ -42,10 +77,16 @@ public sealed class KeyMaterialConfinementTests
         {
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
+                var member = $"{type.Name}.{property.Name}";
+                if (AuthenticationSurface.Contains(member, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
                 var name = property.Name.ToLowerInvariant();
                 if (Array.Exists(ForbiddenFragments, fragment => name.Contains(fragment, StringComparison.Ordinal)))
                 {
-                    offenders.Add($"{type.Name}.{property.Name}");
+                    offenders.Add(member);
                 }
             }
         }
@@ -176,4 +217,30 @@ public sealed class KeyMaterialConfinementTests
                 && (typeof(ServiceCommand).IsAssignableFrom(type)
                     || typeof(ServiceResult).IsAssignableFrom(type)
                     || type.Namespace == "FallbackPlan.Api"));
+    [TestMethod]
+    public void ContractSurface_TheAuthenticationCarveOut_NamesOnlyMembersThatExist()
+    {
+        // The half that stops the carve-out becoming a place where retired
+        // names accumulate: an entry naming a member nobody has any more is a
+        // hole held open for a future field to fall into. Every line must
+        // still name something real, and each must still be a string — a
+        // password that arrived as bytes would be key material in all but
+        // name.
+        var live = ContractTypes()
+            .SelectMany(type => type
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Select(property => (Member: $"{type.Name}.{property.Name}", property.PropertyType)))
+            .ToDictionary(entry => entry.Member, entry => entry.PropertyType, StringComparer.Ordinal);
+
+        foreach (var member in AuthenticationSurface)
+        {
+            Assert.IsTrue(
+                live.ContainsKey(member),
+                $"'{member}' is carved out of NFR-SEC-009 and no longer exists — delete the line.");
+
+            Assert.AreEqual(
+                typeof(string), live[member],
+                $"'{member}' is carved out on the understanding that it is a string.");
+        }
+    }
 }
