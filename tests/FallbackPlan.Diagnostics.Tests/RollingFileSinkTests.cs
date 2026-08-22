@@ -28,23 +28,35 @@ public sealed class RollingFileSinkTests : IDisposable
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
-    private string CurrentText() =>
-        File.ReadAllText(Path.Combine(_directory, "fallbackplan-current.log"));
+    /// <summary>Reads the live log, which the sink still holds open.</summary>
+    /// <remarks>
+    /// The sharing flags are the whole of this helper. The sink keeps the
+    /// current file open for the process's lifetime, so a reader has to
+    /// announce that it tolerates the writer. <c>File.ReadAllText</c> asks for
+    /// the opposite — it opens <c>FileShare.Read</c>, which on Windows means
+    /// "and no other handle may write" — and the sink's live write handle
+    /// refuses it. POSIX holds no such opinion, so the wrong flags read
+    /// perfectly on Linux and macOS and fail on the one platform that enforces
+    /// them.
+    /// </remarks>
+    private string CurrentText()
+    {
+        using var stream = new FileStream(
+            Path.Combine(_directory, "fallbackplan-current.log"),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     private static async Task SettleAsync(RollingFileSink sink)
     {
         await sink.FlushAsync();
 
-        // The drain flushes after each batch; give the last batch a moment to
-        // land before reading the file back.
-        for (var attempt = 0; attempt < 100; attempt++)
-        {
-            await Task.Delay(10);
-            if (sink is not null)
-            {
-                break;
-            }
-        }
+        // FlushAsync returns once the queue is empty, and the drain flushes the
+        // writer just after taking the last batch off it. This covers that gap.
+        await Task.Delay(10);
     }
 
     [TestMethod]
