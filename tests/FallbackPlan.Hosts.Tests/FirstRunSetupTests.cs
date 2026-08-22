@@ -23,11 +23,21 @@ public sealed class FirstRunSetupTests : IDisposable
 {
     private const string PassphraseText = "the one long passphrase of this installation";
 
+    /// <summary>The variable the first account's password is named by (FR-USR-006).</summary>
+    private static readonly string PasswordVariable =
+        "FBP_FIRST_ACCOUNT_" + Guid.NewGuid().ToString("N");
+
+    private const string FirstPassword = "the-owner-password";
+
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(5));
 
+    public FirstRunSetupTests() =>
+        Environment.SetEnvironmentVariable(PasswordVariable, FirstPassword);
+
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable(PasswordVariable, null);
         _timeout.Dispose();
         _harness.Dispose();
     }
@@ -316,7 +326,7 @@ public sealed class FirstRunSetupTests : IDisposable
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
                 "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-                "--kit-output", KitPath());
+                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("too weak", result.All, StringComparison.Ordinal);
@@ -337,7 +347,7 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath());
+            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(0, first.ExitCode, first.All);
         Assert.Contains("never be changed", first.All, StringComparison.Ordinal);
@@ -349,7 +359,7 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath());
+            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(2, second.ExitCode);
         Assert.Contains("already set up", second.All, StringComparison.Ordinal);
@@ -496,7 +506,8 @@ public sealed class FirstRunSetupTests : IDisposable
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss", "--kit-output", kit);
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss", "--kit-output", kit,
+            "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.IsTrue(File.Exists(kit), "the machine form");
@@ -559,4 +570,61 @@ public sealed class FirstRunSetupTests : IDisposable
             new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
             passphrase: null,
             _timeout.Token);
+    [TestMethod]
+    public async Task SetupVerb_WithoutAFirstAccount_RefusesRatherThanFinishingWithoutAnOwner()
+    {
+        // An installation finished without an owner is one whose next caller
+        // becomes its owner (FR-USR-001, ADR-0045 §6).
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", KitPath());
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("--user", result.All, StringComparison.Ordinal);
+        Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_WithAPasswordVariableThatIsNotSet_RefusesByName()
+    {
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", KitPath(), "--user", "ben", "--password-env", "FBP_NOT_SET_ANYWHERE");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("FBP_NOT_SET_ANYWHERE", result.All, StringComparison.Ordinal);
+        Assert.Contains("never on the command line", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_Completed_LeavesAnOwnerWhoCanSignIn()
+    {
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("owner", result.All, StringComparison.OrdinalIgnoreCase);
+
+        var users = UserStore.Open(_harness.StateDirectory);
+        Assert.AreEqual(UserRole.Owner, users.List().Single().Role);
+        Assert.IsTrue(
+            (await users.VerifyAsync("ben", FirstPassword, _timeout.Token)).IsOk,
+            "the account setup captured is the one the operator can sign in with");
+
+        // And the password is nowhere in what setup printed.
+        Assert.DoesNotContain(FirstPassword, result.All, StringComparison.Ordinal);
+    }
 }

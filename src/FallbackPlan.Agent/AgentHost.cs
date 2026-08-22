@@ -55,6 +55,7 @@ public static class AgentHost
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
                                             --acknowledge-loss --kit-output <path>
+                                            --user <name> --password-env <VAR>
                   fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
                   fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
@@ -425,7 +426,35 @@ public static class AgentHost
         // the recipient key has to be read before there is anything to seal
         // to. That is exactly what the console does over HTTP, and doing it
         // the same way here keeps one ceremony rather than two.
-        async Task<int> SetupVerbAsync(string kitOutput)
+        // Written directly to the store rather than through a command: this
+        // process IS the service for the duration of the ceremony, so there is
+        // no connection to gate and no session to hold. The gate exists to ask
+        // "which person is acting" of a client, and setup has no client.
+        int CreateFirstAccount(string name, string password)
+        {
+            var store = UserStore.Open(stateDirectory);
+            if (store.HasAccounts)
+            {
+                error.WriteLine(
+                    "error: this installation already has accounts, so setup will not add another owner. "
+                    + "Use the console or the CLI to add an account (FR-USR-004).");
+                return 2;
+            }
+
+            var created = store.Create(name, password, UserRole.Owner);
+            if (!created.IsOk)
+            {
+                error.WriteLine(
+                    $"error: the first account was refused ({created.Outcome}). The installation is set up "
+                    + "and its kit is saved; add the account from the console or the CLI.");
+                return 2;
+            }
+
+            output.WriteLine($"owner          {created.User!.Name}");
+            return 0;
+        }
+
+        async Task<int> SetupVerbAsync(string kitOutput, string firstUser, string firstPassword)
         {
             byte[] kitFramed = [];
 
@@ -485,8 +514,12 @@ public static class AgentHost
                             output.WriteLine(line);
                         }
 
-                        return await WriteKitAndConfirmAsync(handler, kitOutput, kitFramed)
+                        var written = await WriteKitAndConfirmAsync(handler, kitOutput, kitFramed)
                             .ConfigureAwait(false);
+
+                        return written == 0
+                            ? CreateFirstAccount(firstUser, firstPassword)
+                            : written;
 
                     case Api.ServiceError refusal:
                         error.WriteLine($"error: {refusal.Message}");
@@ -605,7 +638,39 @@ public static class AgentHost
                 return 1;
             }
 
-            return await SetupVerbAsync(kitOutput).ConfigureAwait(false);
+            var firstUser = Get("--user");
+            var passwordVariable = Get("--password-env");
+
+            if (firstUser is null || passwordVariable is null)
+            {
+                // Setup captures the first account (FR-USR-001). A headless
+                // operator has nowhere to type one later, and an installation
+                // finished without an owner is one whose next caller becomes
+                // its owner.
+                error.WriteLine(
+                    "error: `setup` needs --user <name> and --password-env <VAR>. The installation's first "
+                    + "account is its owner, and it is captured here rather than left for whoever connects "
+                    + "next (ADR-0045 §6, FR-USR-001).");
+                return 1;
+            }
+
+            var firstPassword = Environment.GetEnvironmentVariable(passwordVariable);
+            if (string.IsNullOrEmpty(firstPassword))
+            {
+                error.WriteLine(
+                    $"error: the environment variable '{passwordVariable}' is not set. The password is "
+                    + "passed by name, never on the command line (FR-USR-006).");
+                return 1;
+            }
+
+            if (firstPassword.Length < UserStore.MinimumPasswordLength)
+            {
+                error.WriteLine(
+                    $"error: that password is shorter than {UserStore.MinimumPasswordLength} characters.");
+                return 1;
+            }
+
+            return await SetupVerbAsync(kitOutput, firstUser, firstPassword).ConfigureAwait(false);
         }
 
         // `retention [--apply]` runs one pass per configured set
