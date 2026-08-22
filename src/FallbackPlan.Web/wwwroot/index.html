@@ -27,6 +27,8 @@
     </nav>
     <div class="top-actions">
       <span class="conn" id="conn" role="status"><span class="dot"></span><span id="conn-text">connecting…</span></span>
+      <span class="who" id="signed-in" hidden></span>
+      <button type="button" class="icon-btn" id="sign-out" title="Sign out" aria-label="Sign out" hidden>⎋</button>
       <button type="button" class="icon-btn" id="theme-toggle" title="Switch theme" aria-label="Switch theme">◐</button>
     </div>
   </header>
@@ -54,6 +56,10 @@
      answers setup_required: the operator cannot navigate past it, because
      nothing behind it works until the installation has a passphrase. -->
 <div class="gate" id="setup" hidden></div>
+<!-- Signing in (ADR-0045). Different from the gate below: that one asks
+     whether this browser may talk to the console at all, this one asks which
+     person is acting on the service behind it. -->
+<div class="gate" id="signin" hidden></div>
 
 <div class="gate" id="gate" hidden>
   <div class="gate-card">

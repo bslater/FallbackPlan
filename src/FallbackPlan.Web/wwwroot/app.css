@@ -139,6 +139,10 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 
 .top-actions { display: flex; align-items: center; gap: 10px; }
 
+/* Who is acting, in the top bar. An action nobody can attribute is what
+   ADR-0045 exists to end, so the name is on screen rather than a click away. */
+.who { font-size: 13px; color: var(--muted); white-space: nowrap; }
+
 .conn { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .conn.ok .dot { background: var(--ok); }

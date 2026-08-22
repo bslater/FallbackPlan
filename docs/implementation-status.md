@@ -69,7 +69,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
-| [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | **Specified only** | — · [notes](#0045--the-product-cannot-yet-say-who-is-acting) |
+| [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
 
 ---
 
@@ -220,13 +220,15 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
 
 
-### 0045 — the product cannot yet say who is acting
+### 0045 — the product can say who is acting
 
-Specified, nothing built. The console's authority is a bearer token minted per run, so everyone holding the URL is indistinguishably "the operator" — no action is attributable and no single person is revocable — and the local socket authenticates a *uid*, which is a fact about a process rather than about a person.
+Built. The console's authority used to be a bearer token minted per run, so everyone holding the URL was indistinguishably "the operator" — no action attributable, no single person revocable — and the local socket authenticates a *uid*, which is a fact about a process rather than about a person. Contract **1.16** adds login, resume_session, logout and the four account verbs behind a decorator built per accepted connection.
 
 The ADR settles what the build has to honour: person-identity sits **inside** an already-authenticated channel, so [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md) §5's "no password, no token file, no port" is amended rather than reversed — no new listener, no credential needed to reach the socket, and a session that lives only in memory precisely because a token file is the failure mode §5 named. `PasswordHash` goes in `Repository.Crypto`, where Argon2id already lives and is cross-verified each CI run, rather than widening the two-assembly third-party-cryptography allowlist. Repeated failures throttle and never lock, because for a backup product being denied your own backups by someone else's deliberate failures is the worse outcome.
 
-Six requirement rows (FR-USR-001..006) and NFR-SEC-012 are defined and carry unmet markers naming the phase that owes each.
+Three things the build corrected in the decision, each recorded as an ADR amendment. A session cannot ride a connection — the web console opens a fresh one per relayed request — so it is minted once and *presented* by a connection through `resume_session`. Enforcement engages only once an installation has accounts, because refusing everything without a session bricks an existing installation on upgrade and leaves no door for the first account; `describe_service` reports `users_required` instead. And the browser holds a viewer's session rather than the console process, or one console would make every action attributable to whoever signed in first.
+
+The key-material canary caught six new contract members and was right to; they are carved out by exact name in the shape ADR-0042 established, with a second test that each carved-out name still exists and is still a string.
 
 ### 0044 — the ceremony that two requirements have been waiting for
 

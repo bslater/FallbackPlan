@@ -31,6 +31,17 @@ namespace FallbackPlan.Web;
 public static class WebConsoleHost
 {
     /// <summary>
+    /// The header a browser presents its service session on (ADR-0045 §5).
+    /// </summary>
+    /// <remarks>
+    /// Separate from the console's own bearer token, and deliberately so: the
+    /// bearer token says this browser may talk to this console, and the session
+    /// says which person is acting on the service behind it. Conflating them
+    /// would mean one console had one identity.
+    /// </remarks>
+    public const string SessionHeader = "X-FallbackPlan-Session";
+
+    /// <summary>
     /// The wire shape for the browser: camel-cased, enums as their names, and
     /// the contract's own polymorphism discriminators accepted anywhere in the
     /// object rather than first-property-only, because the page's JSON is
@@ -226,6 +237,18 @@ public static class WebConsoleHost
         try
         {
             await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            // The browser holds the service session, not this process. Each
+            // viewer therefore acts as themselves even though one console
+            // relays for all of them — a console that cached one token would
+            // make every action attributable to whoever signed in first, which
+            // is the problem ADR-0045 exists to fix, moved one hop.
+            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session)
+            {
+                await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false);
+            }
+
             result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)

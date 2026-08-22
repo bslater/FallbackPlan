@@ -1,6 +1,6 @@
 # ADR-0045 — Client authentication: the channel says which process, a session says which person
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08
 **Requirements:** FR-USR-001, FR-USR-002, FR-USR-003, FR-USR-004, FR-USR-005, FR-USR-006, NFR-SEC-012
 **Related:** [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0036](0036-local-web-console.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0044](0044-first-run-setup.md), [threat model](../threat-model.md), [architecture 00 §6.1](../architecture/00-overview.md#61-process-model)
@@ -216,8 +216,70 @@ token is not.
 a memory-hard derivation per command would make a directory listing take as long
 as a login by design.
 
+## Amendment (2026-08): what the build changed about §5
+
+Two things in §5 were wrong in a way only implementing them showed.
+
+**"The session rides the connection" cannot be taken literally.** The web
+console opens a fresh transport connection for every request it relays, so a
+session welded to one connection would sign an operator out between clicking
+two buttons. The decision's own mechanism is what survives: the service mints a
+token, holds it in memory, and a connection *presents* it. A third verb,
+`resume_session`, does the presenting, and it joins `describe_service` and
+`login` on the unauthenticated surface. Nothing else about §5 changes — no
+field on `ServiceCommand`, no existing verb touched, and still nothing written
+to disk by the service.
+
+**Enforcement engages only once an installation has accounts.** Refusing every
+verb without a session, applied literally, bricks every existing installation
+on upgrade: there is no `users.json`, so there is no way in and no way to create
+the first account. So an installation with no accounts behaves exactly as it did
+before, and the gap is *surfaced* rather than left silent —
+`describe_service` reports `users_required` once setup is otherwise finished.
+New installations never see that state, because setup now captures the first
+account (§6, phase E).
+
+**The browser holds the console's session, not the console.** A console process
+that cached one token would make every action attributable to whoever signed in
+first, which is this ADR's problem moved one hop rather than solved. The token
+travels on an `X-FallbackPlan-Session` header per request, separate from the
+console's own bearer token, which answers the different question of whether that
+browser may talk to that console at all.
+
+## Amendment (2026-08): the CLI caches a token, and why that is not §5's token file
+
+The service writes no session down. A *client* has to, or every command would be
+a login, and a command line is not a place to type a password once per verb. So
+`fallbackplan login` caches the token owner-only at `<state>/session.json`.
+
+That looks exactly like the thing [ADR-0028](0028-service-boundary-and-deployment-topologies.md) §5
+rejected, and the difference is worth being precise about. §5's objection was to
+a credential needed to **reach** the service: a stale one made a running service
+unreachable, with no way for the user to tell what was wrong. This token reaches
+nothing — the socket's permissions are still the whole of the connection check —
+and when it is stale the answer is a sentence naming `fallbackplan login`.
+
+## Amendment (2026-08): six members are carved out of NFR-SEC-009 by name
+
+`Api.Tests/KeyMaterialConfinementTests` bans the fragments "password" and
+"token" from every contract member, because a *passphrase* must never cross the
+surface and those are the words somebody would reach for. Six new members trip
+it, and the ban is not relaxed: `LoginCommand.Password`,
+`CreateUserCommand.Password`, `ChangePasswordCommand.CurrentPassword` and
+`.NewPassword`, `ResumeSessionCommand.Token` and `SessionResult.Token` are named
+one by one, in the same shape ADR-0042 used for sealed envelopes.
+
+The argument for each is the same: NFR-SEC-009 is about **key material** —
+things that derive a repository key, open an archive, or mint access. A person's
+password is none of those, and it must cross because there is no other way to
+prove who is acting. A second test asserts every carved-out name still exists
+and is still a string, so the list cannot silently become a hole a future field
+falls into.
+
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the storage location, client scope, session mechanism, owner rule, failure policy and session lifetime all fixed by the user: service state directory, console and CLI both, a service-minted token, first user is the owner, throttle but never lock, and sessions that live only in the process. Build sequenced as the primitive → the store and its policy → contract 1.16 with the per-connection gate → setup captures the first account → the clients → drills |
+| 2026-08 | Accepted | Built end to end: the password primitive in Repository.Crypto, the account store with the owner rules and a throttle that never locks, contract 1.16's seven verbs behind a per-connection decorator, setup capturing the first account, and the CLI and console signing in. Three amendments above record where implementation corrected the decision — the session is presented by a connection rather than owned by one, enforcement engages only once an installation has accounts, and the browser rather than the console holds a viewer's session |

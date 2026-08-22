@@ -21,6 +21,25 @@ if (params.get("token")) {
 }
 const token = sessionStorage.getItem("fbp-token");
 
+// The SERVICE session, which is a different thing from the console's bearer
+// token above. The bearer token says this browser may talk to this console;
+// this says which person is acting on the service behind it. Held per browser
+// rather than by the console process, so one console relaying for several
+// people does not make every action attributable to whoever signed in first
+// (ADR-0045 §5).
+let session = sessionStorage.getItem("fbp-session");
+
+// The sign-in screen's own state, kept out of S because it holds a password
+// field for as long as somebody is typing in it and nothing else should be
+// able to reach it.
+let SI = null;
+
+function rememberSession(value) {
+  session = value;
+  if (value) sessionStorage.setItem("fbp-session", value);
+  else sessionStorage.removeItem("fbp-session");
+}
+
 const appEl = document.getElementById("app");
 const gateEl = document.getElementById("gate");
 
@@ -28,6 +47,9 @@ const gateEl = document.getElementById("gate");
 
 const S = {
   connected: null,          // null until first answer; then true/false
+  signedInUser: null,       // whose session this browser is presenting, per describe_service
+  signInRequired: false,    // whether the sign-in screen stands in place of the views
+  everRefused: false,       // whether a command has been refused for want of a session
   diagnostics: null,        // DiagnosticsResult, or null before the first read
   logRecords: [],           // LogRecordDescriptor[] newest last, capped for the DOM's sake
   logCursor: 0,             // the sequence to ask from next
@@ -152,7 +174,13 @@ async function api(command) {
   try {
     response = await fetch("/api/command", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      headers: session
+        ? {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token,
+            "X-FallbackPlan-Session": session,
+          }
+        : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
       body: JSON.stringify(command),
     });
   } catch {
@@ -172,7 +200,19 @@ async function api(command) {
   }
 
   setConnected(true);
-  return response.json();
+  const body = await response.json();
+
+  // A refusal naming the sign-in is what tells this browser it is anonymous.
+  // Read from the answer rather than guessed from the command, because the
+  // service is the one that decides whether an installation has accounts.
+  if (body?.result === "error" && typeof body.message === "string"
+      && body.message.includes("has not signed in")) {
+    S.everRefused = true;
+    S.signInRequired = true;
+    renderSignIn();
+  }
+
+  return body;
 }
 
 async function safeJson(response) { try { return await response.json(); } catch { return null; } }
@@ -274,7 +314,18 @@ async function refreshDesc() {
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
     S.setupState = result.setupState ?? null;
+    S.signedInUser = result.signedInUser ?? null;
+
+    // Signing in is asked for when the installation has accounts and this
+    // browser is not acting as one of them. users_required is the other side
+    // of the same question — the installation finished setup and nobody has an
+    // account yet — and both are answered by the same screen.
+    S.signInRequired = !wants
+      && (result.setupState === "users_required"
+        || (result.signedInUser === null && result.contractVersion >= "1.16" && S.everRefused));
+
     if (changed) { S.setupRequired = wants; renderSetupGate(); }
+    renderSignIn();
     if (S.view === "maintenance") renderMaintenance();
     if (S.view === "diagnostics") renderDiagnostics();
   }
@@ -914,6 +965,111 @@ async function withBusy(button, work) {
 let U = null;
 
 const SETUP_STEPS = ["What this is", "Passphrase", "Confirm", "Recovery kit"];
+
+/* ------------------------------------------------------------- sign-in */
+
+function renderSignIn() {
+  const host = document.getElementById("signin");
+  if (!host) return;
+
+  // The top bar says who is acting, always, not only after signing in. An
+  // action nobody can attribute is the thing this arc exists to end, so the
+  // name is on screen rather than a click away.
+  const who = document.getElementById("signed-in");
+  const out = document.getElementById("sign-out");
+  if (who) {
+    who.hidden = !S.signedInUser;
+    who.textContent = S.signedInUser ?? "";
+  }
+
+  if (out) {
+    out.hidden = !S.signedInUser;
+    out.onclick = signOut;
+  }
+
+  if (!S.signInRequired) {
+    host.hidden = true;
+    if (!S.setupRequired) appEl.hidden = false;
+    SI = null;
+    return;
+  }
+
+  if (!SI) SI = { user: "", busy: false, message: null, first: S.setupState === "users_required" };
+  appEl.hidden = true;
+  host.hidden = false;
+
+  const heading = SI.first ? "Create the first account" : "Sign in";
+  const blurb = SI.first
+    ? `This installation is set up and has no accounts yet. The first account is
+       its <b>owner</b>: it cannot be deleted, and for now only it may add or
+       remove other accounts. Until one exists, anyone who can reach this
+       service is indistinguishable from anyone else.`
+    : `This service knows who is acting. Signing in is what makes a restore
+       attributable to a person and lets one person be revoked without
+       affecting anybody else.`;
+
+  host.innerHTML = `<div class="gate-card">
+    <h2>${esc(heading)}</h2>
+    <p class="muted">${blurb}</p>
+    <label>Account name<input id="signin-user" autocomplete="username" value="${esc(SI.user)}"></label>
+    <label>Password<input id="signin-pass" type="password"
+      autocomplete="${SI.first ? "new-password" : "current-password"}"></label>
+    ${SI.message ? `<p class="warn">${esc(SI.message)}</p>` : ""}
+    <button id="signin-go" ${SI.busy ? "disabled" : ""}>${SI.busy ? "Working…" : esc(heading)}</button>
+  </div>`;
+
+  document.getElementById("signin-user")?.focus();
+  document.getElementById("signin-go")?.addEventListener("click", signInSubmit);
+}
+
+async function signInSubmit() {
+  const user = document.getElementById("signin-user")?.value ?? "";
+  const password = document.getElementById("signin-pass")?.value ?? "";
+
+  SI.user = user;
+  SI.busy = true;
+  SI.message = null;
+  renderSignIn();
+
+  try {
+    if (SI.first) {
+      const created = await api({ command: "create_user", name: user, password });
+      if (created.result === "error") { SI.message = created.message; return; }
+    }
+
+    const answered = await api({ command: "login", user, password });
+    if (answered.result !== "session") {
+      SI.message = answered.message ?? "That did not work.";
+      return;
+    }
+
+    rememberSession(answered.token);
+    S.signInRequired = false;
+    S.everRefused = false;
+    S.signedInUser = answered.user;
+    SI = null;
+    renderSignIn();
+    await refreshDesc();
+  } catch (failure) {
+    SI.message = failure?.message ?? "The console could not reach the service.";
+  } finally {
+    if (SI) { SI.busy = false; renderSignIn(); }
+  }
+}
+
+async function signOut() {
+  try {
+    await api({ command: "logout" });
+  } catch {
+    // A service that cannot be reached cannot revoke, and the session dies
+    // with its process anyway. Forgetting it here is the half that matters.
+  }
+
+  rememberSession(null);
+  S.signedInUser = null;
+  S.signInRequired = true;
+  renderSignIn();
+}
 
 function renderSetupGate() {
   const host = document.getElementById("setup");
