@@ -185,6 +185,8 @@ The features defined so far:
 | `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)). A source **requires** this of a destination it replicates to, so declining it refuses the session rather than silently forgoing the check |
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
+| `retrieval` | The peer serves an owner's replica back to it ([07](07-retrieval.md)) |
+| `replica-claim` | The peer accepts a passphrase-proved claim that re-points a replica's attribution ([07 §5](07-retrieval.md#5-claiming-a-replica)) |
 
 The mechanism predates its first feature deliberately — retrofitting negotiation onto a deployed protocol means a flag day — and `termination-notice` is the proof it was worth specifying early: the message it gates is announced only to peers that offered it, and an older build is never sent a type it would refuse as `message_unknown`.
 
@@ -216,7 +218,10 @@ frame = u32(payload_length) ‖ payload
 | 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
 | 264–265 | Verification | [04](04-verification.md#4-messages) |
-| 264+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
+| 278–281 | Replica claim | [07 §5](07-retrieval.md#5-claiming-a-replica) |
+| 282 | `ClaimRegister` | [03 §3.2.1](03-replication.md#321-registering-the-claim-credential) |
+| 283+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 

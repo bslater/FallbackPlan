@@ -95,6 +95,20 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-KIT-005 **[new]** | Kit status — never generated, saved, stale — shall be surfaced continuously. | Changing destinations marks the kit stale. |
 | FR-KIT-006 **[new]** | A recovery drill restoring a file using only the kit shall be a supported, prompted workflow. | The drill runs without the catalogue or durable local state. |
 
+## Disaster recovery
+
+The recovery kit above answers the case where the *store* survives and the machine's local state does not. This section answers the harder one: the machine itself is gone — ransomware, theft, fire, or a rebuild from bare metal after malware — and the only surviving copy is a replica at a destination. Durable local state is not a cache and does not come back with it ([architecture 00](../architecture/00-overview.md)), so the recovering device is a **new** device identity as far as every destination is concerned ([ADR-0010](../adr/0010-local-store-separation.md), [ADR-0046](../adr/0046-replica-claim-after-total-loss.md)).
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-DR-001 **[new]** | A device that has lost both its archives and its durable local state shall be able to recover its data from a destination holding a replica, using only the recovery kit and the passphrase, without operator action at the destination. | A drill that destroys the state directory *and* the archives restores the source byte-identically over the wire, with the destination's operator absent throughout. |
+| FR-DR-002 **[new]** | Claiming a replica at a destination shall be authorised by the repository passphrase and by nothing else — not the recovery kit alone, not a prior pairing, not an assertion at either end. The claim shall be proved by a keypair derived from the passphrase and validated by comparing the generated public key, and neither the passphrase nor the root derived from it shall cross the wire or the command contract. | A claimant holding the kit but not the passphrase is refused and the attribution stands; no passphrase-shaped value appears in any frame or command payload. |
+| FR-DR-003 **[new]** | A destination shall hold, for each replica it stores, a token unique to that destination, registered when the replica is first accepted, and shall validate claims against it. A claim that does not verify and a replica that is not held shall be refused identically. | A proof produced for one destination is refused at another holding the same repository; a failed claim and a claim for an absent replica are indistinguishable in the response. |
+| FR-DR-004 **[new]** | A successful claim shall report the backup set identifiers carried by the claimed replica's snapshots. | A machine holding no configuration reconstructs the set from the claim's answer and opens the replica as a restore source. |
+| FR-DR-005 **[new]** | A claimed replica shall be readable without further human action at the destination, and retention instructions from the claiming identity shall be refused, deleting nothing, until the destination's operator acknowledges the claim. | A restore from a freshly claimed replica completes unattended; a retention instruction against it removes no object and names the unacknowledged claim as the reason. |
+
+**Format-v2 scope.** FR-DR-001 is stated for repositories generally, and can be met today only for format v1. Arming the claim needs the Argon2id root, which a provisioned write-only service deliberately does not hold — see [Q23](../open-questions.md#q23--arming-disaster-recovery-on-a-write-only-repository), which must be settled before these requirements may be claimed for a v2 set. Recorded here rather than left to be discovered, because a disaster-recovery requirement read as universal when it is not is the worst kind of gap.
+
 ## Write-only repositories
 
 A format-v2 repository ([ADR-0042](../adr/0042-write-only-repositories.md)) severs writing from reading: the service seals file contents to an asymmetric public key and holds nothing that opens them.

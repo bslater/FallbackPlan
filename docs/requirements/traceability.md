@@ -104,6 +104,18 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-KIT-004 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-kit) | [0044](../adr/0044-first-run-setup.md) | `Hosts.Tests/FirstRunSetupTests` (setup reaches kit_required rather than ready, the confirmation survives a restart and records only a checksum, confirming before setup or from a remote caller is refused, and the headless verb writes both kit forms and reaches ready), `Repository.Tests/InstallationKitDrillTests` (a kit minted before any archive existed restores from two archives it never saw), `Web.Tests/FirstRunSetupTests` (the ceremony hands back both forms with identical content and neither carries the passphrase or the sealing private key), `Repository.Tests/InstallationKitCodecTests` | 1 |
 | FR-KIT-005 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-kit) | [0013](../adr/0013-recovery-kit.md) | `Hosts.Tests/FirstRunSetupTests` (never_saved before the ceremony and after the passphrase alone, saved once confirmed, still saved with its original time after a restart, and no third value reachable) — met for v2 installations with **two** states, not three: an installation kit carries no destinations, so the requirement's staleness trigger cannot fire, and its salt, parameters and sealing key are fixed for the installation's life, so nothing else can stale it either ([ADR-0013 amendment](../adr/0013-recovery-kit.md#an-installation-kit-cannot-go-stale)). Surfaced continuously on the describe-service result and the console's Maintenance card | 1 |
 
+### Disaster recovery
+
+Every cell here is an honest untested marker rather than a class name. The ceremony these requirements describe is specified and not yet built, and the drill that proves them — destroying the state directory *and* the archives, then recovering over the wire — is the phase-2 work [ADR-0046](../adr/0046-replica-claim-after-total-loss.md) sequences. Naming a test now would be the exact fiction this column was rebuilt to stop.
+
+| ID | Arch | ADR | Test | Phase |
+|----|------|-----|------|-------|
+| FR-DR-001 | [08 §7](../architecture/08-restore-and-recovery.md#7-disaster-recovery-when-the-machine-itself-is-gone) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2 — the existing peer drills destroy the staging archive but keep the state directory, so the identity-loss case has never been exercised)* | 2 |
+| FR-DR-002 | [08 §7.2](../architecture/08-restore-and-recovery.md#72-the-claim) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-003 | [08 §7.2](../architecture/08-restore-and-recovery.md#72-the-claim) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-004 | [08 §7.2](../architecture/08-restore-and-recovery.md#72-the-claim) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+| FR-DR-005 | [08 §7.3](../architecture/08-restore-and-recovery.md#73-reading-is-unattended-deleting-is-not) | [0046](../adr/0046-replica-claim-after-total-loss.md) | — *(untested; phase 2)* | 2 |
+
 ### Write-only repositories
 
 | ID | Arch | ADR | Test | Phase |

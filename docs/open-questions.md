@@ -153,6 +153,24 @@ FR-ARCH-013 requires a sparse file to restore "without materialising zero payloa
 
 Two honest resolutions, one to pick: **(a)** implement sparse-aware write-out — platform-specific work on both POSIX and Windows, with a test that asserts allocated size < logical size where the platform can report it; or **(b)** amend FR-ARCH-013's acceptance to say v1 restores holes as written zeroes, and keep sparse write-out as a later enhancement. What is not acceptable is the current state, where the requirement says one thing, the code does another, and the previously cited test could not tell the difference — the August 2026 restore pipeline review records it so it cannot persist silently.
 
+## Q23 — Arming disaster recovery on a write-only repository
+
+**Owner:** maintainer · **Blocks:** FR-DR-001 for format-v2 sets only; v1 is unaffected
+
+[ADR-0046](adr/0046-replica-claim-after-total-loss.md) arms disaster recovery by having a source register a passphrase-derived public key with each destination, during replication ([peer-protocol 03 §3.2.1](../specifications/peer-protocol/03-replication.md#321-registering-the-claim-credential)). That works for a v1 set, whose service holds the passphrase and can derive the credential whenever a backup runs.
+
+**It does not work unattended for a write-only (v2) set, and the reason is ADR-0042 working correctly.** A provisioned v2 service holds only the write bundle — metadata, content-id, key-id and signing sub-roots — each an independently one-way HKDF domain of the Argon2id root. It cannot reach back to that root, so it cannot derive `claim_public`, so an ordinary v2 backup cannot arm the recovery it will one day need. The ordering is the difficulty: the token is minted by the destination and the credential is derived from the passphrase, and a v2 service never holds both at once.
+
+Three resolutions, one to pick:
+
+**(a) Arm it at a passphrase-bearing moment.** Registration becomes an explicit act during provisioning, adoption, or a deliberate "arm this destination" verb — the occasions ADR-0042 §2 already admits the passphrase. Honest and safe, but it is a step a user can skip, and a disaster-recovery path that depends on remembering to arm it is one that will be found unarmed.
+
+**(b) Derive the claim key from the write bundle instead of the root.** The service holds it, and a claimant re-derives it from the passphrase, so both ends work with no new ceremony. The cost is domain separation: a stolen write credential would then also claim. That is a smaller escalation than it first appears — claiming grants no ability to read v2 file contents, which stay sealed — but it does hand a compromised v2 hub the power to re-point attribution, and it should be weighed rather than assumed acceptable.
+
+**(c) Make the token the destination's own identity fingerprint** rather than a fresh random value. The source then knows it from the grant at pairing time and can derive the credential at any passphrase-bearing moment without a round trip, which collapses the ordering problem. It keeps per-destination uniqueness — the property that stops a proof captured at one destination working at another — but it makes the token predictable, so it must not be relied on for anything but separation.
+
+Until this is settled, a v2 set's replica is registered only if the passphrase happens to be present when a session runs, and [peer-protocol 07 §5.3](../specifications/peer-protocol/07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret) makes an unregistered replica say so plainly rather than fail as a wrong passphrase.
+
 ---
 
 ## Closed

@@ -57,6 +57,7 @@ Destination → source, one or more pages.
 | 1 | `array of text` | Object keys the destination already holds in scope, ≤ 4096 per page, each ≤ 1024 bytes |
 | 2 | `bool` | Whether another page follows |
 | 3 | `u64` | *(optional)* Bytes the destination can still accept under the quota in force ([05 §1](05-quotas.md)) |
+| 4 | `bytes[16]` | *(optional)* `claim_token` — present only when the `replica-claim` feature is in effect and this destination holds no claim credential for this repository ([07 §5.3](07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret)) |
 
 The keys are the store's own object keys ([architecture 02](../repository-format/README.md) names them). A destination that holds nothing in scope sends one page with an empty array and `false`. The page cap keeps each frame under the [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own) limit without the source having to trust the destination's framing.
 
@@ -65,6 +66,48 @@ The keys are the store's own object keys ([architecture 02](../repository-format
 The headroom rides here rather than in the hello or the terms, and both alternatives were rejected for reasons worth recording. Terms are persisted in the pairing grant and compared for narrowing ([05 §6](05-quotas.md)), so a per-session number there would announce a reduction on every session. The hello is too early: the destination does not yet know which repository is coming, and computing usage means walking every object it holds — a cost the periodic verification sessions would pay for a number nobody reads. By the inventory the scope is known and the destination has already computed `quota − usage` in order to enforce the boundary stop of [05 §4](05-quotas.md).
 
 A source MUST NOT treat a small headroom as a refusal. The boundary stop already refuses the exact object that would cross the line, with exact numbers, at the exact moment, and preserves everything committed before it; key 3 exists so the operator hears about it a session earlier, not so the source invents an earlier refusal.
+
+#### 3.2.1 Registering the claim credential
+
+**Key 4 is how disaster recovery is armed, one session ahead of the disaster.**
+
+A destination that has accepted a repository can serve it back ([07](07-retrieval.md)),
+but only to the identity its attribution ledger names. That identity dies with
+the source's durable local state, and nothing in the repository can rebuild it
+([architecture 00](../../docs/architecture/00-overview.md)). So the destination
+records, alongside the attribution, a credential the *passphrase* can
+reproduce — and it must do so while the pairing is still alive, because a
+machine that has already been lost cannot register anything.
+
+When key 4 is present, the source MUST answer with a **`ClaimRegister`** (282)
+before its first `ReplicationObject`:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `bytes[16]` | `repository_id` the credential is for |
+| 2 | `bytes[32]` | `claim_public`, derived per [07 §5.2](07-retrieval.md#52-the-credential) from the passphrase and the destination's `claim_token` |
+
+The destination stores `claim_token` and `claim_public` with the attribution
+and MUST NOT send key 4 for that repository again. It never receives the
+private half and learns nothing about the passphrase: `claim_public` is one
+point on a curve, and recovering the root behind it is the discrete-log
+problem, not a KDF the destination could grind.
+
+A source that does not implement the feature simply does not answer, and the
+destination keeps serving that replica exactly as before — unclaimable, and
+[07 §5.3](07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret)
+says so plainly when someone tries.
+
+**A source that cannot derive the credential does not answer either, and this
+is not hypothetical.** A provisioned write-only (v2) service holds the write
+bundle and not the Argon2id root it came from ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)),
+so it cannot compute `claim_public` during an unattended backup at all. Such a
+source MUST omit the answer rather than send anything derived from material
+that is not the root; the destination MAY re-offer key 4 on a later session,
+since nothing was registered. How a v2 set arms its recovery is unsettled and
+tracked as [Q23](../../docs/open-questions.md#q23--arming-disaster-recovery-on-a-write-only-repository);
+until it is settled, a v2 replica is registered only when a session happens to
+run while the passphrase is present.
 
 ### 3.3 ReplicationObject and ReplicationChunk
 

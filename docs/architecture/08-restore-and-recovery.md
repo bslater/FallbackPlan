@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §12 · **Resolves:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified), [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
-**Built:** Yes — see [implementation status](../implementation-status.md).
+**Built:** §§1–6 yes; §7's disaster-recovery claim is specified only — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -137,6 +137,54 @@ The release gate is recovery using **only** repository access and a recovery kit
 Recovery of **data** needs only the repository and the kit. Recovery of **operation** — resuming scheduled backups to the same destinations — additionally needs configuration and re-pairing. The distinction is stated plainly in the UI, because a user who has restored their files and believes they are protected again is in a worse position than one who knows they still have to set up their destinations.
 
 Full model in [`11-solution-structure.md` §3](11-solution-structure.md#3-local-state-separation).
+
+One qualification the table above does not make, and §7 exists to make: *"needs only the repository and the kit"* assumes the repository can be **reached**. When the surviving copy is a replica held by a peer, reaching it is itself gated on a device identity that a clean machine no longer has.
+
+## 7. Disaster recovery: when the machine itself is gone
+
+§§1–6 answer degrees of local loss: a lost file, a lost catalogue, a lost staging archive, a clean machine with the store still in hand. This section answers total loss — ransomware that reached everything writable, theft, fire, or a rebuild from bare metal after malware — where the machine is not being repaired but replaced, and the only surviving copy of the data is at a destination.
+
+### 7.1 What the recovering machine actually has
+
+| Survives | Does not survive |
+|----------|------------------|
+| The recovery kit, wherever the user kept it | The archives |
+| The passphrase, in the user's head or password manager | The catalogue |
+| The replica, at the peer | The device keypair, and with it every pairing |
+| | The configuration: backup sets, their ids, destination addresses |
+
+The kit carries destination descriptors, so the machine knows *where* its friend is. What it cannot do is prove it is the same machine, because [ADR-0010](../adr/0010-local-store-separation.md) deliberately keeps the device private key out of the kit — a kit is a printable page, and a page that could impersonate a device to its destinations would be a worse credential than the one it replaces.
+
+So the recovering machine is, correctly, a stranger. It generates a fresh identity and re-pairs. And then it hits the wall that makes this section necessary: the peer's attribution ledger records the replica against the *old* fingerprint, the owner inventory answers for the dialling identity and so answers with nothing, and the restore path — which keeps a candidate replica only if it holds the named set's `backup_set_id` — has no set id left to match against.
+
+### 7.2 The claim
+
+The passphrase is what closes the gap, and it is the right credential rather than a convenient one: whoever holds it can already decrypt every byte of that replica, so gating *recovery* on a key the recovery model deliberately destroys protects nothing and costs the user their data.
+
+The mechanism is recorded in [ADR-0046](../adr/0046-replica-claim-after-total-loss.md) and specified in [peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md). In outline:
+
+1. When a destination first accepts a repository, it mints a **token unique to itself** for that replica and stores it beside the attribution. The source derives a keypair from its passphrase and that token, and registers the **public half**.
+2. A recovering machine re-pairs, then dials and asks to claim. The destination returns the token and a fresh nonce.
+3. The machine re-derives the keypair — the passphrase and the descriptor's public salt are all it needs — and signs the nonce bound to the session transcript and its own fingerprint.
+4. The destination verifies against the public key it stored. On success the attribution moves to the new identity, and the answer carries back the **set ids** the replica's snapshots hold, which is the one piece of lost configuration nothing else can supply.
+
+From there the machine is an ordinary hub with an unusual history: it recreates its set under the recovered id, and §§1–3's restore path runs unchanged over the peer retrieval session.
+
+The token is per destination on purpose. Two friends holding replicas of the same repository hold different tokens and validate against different public keys, so a proof produced at one is inert at the other.
+
+### 7.3 Reading is unattended; deleting is not
+
+A claim is deliberately asymmetric.
+
+**Reading needs no human at the far end.** A disaster is exactly when the other household is least likely to be reachable, and a recovery that stalls until a friend wakes up is a recovery that fails when it is needed. A claimed replica is readable the moment the signature verifies.
+
+**Deleting waits.** The destination raises a durable notice, and refuses retention instructions from the claiming identity until its own operator acknowledges it ([peer-protocol 06 §3](../../specifications/peer-protocol/06-retention.md)).
+
+The asymmetry follows from what an attacker gains. Someone who has stolen the passphrase can decrypt the data wherever they find it, so gating reads on a human buys nothing and costs real recoveries. Destroying a household's last surviving copy is a different act with a different blast radius, and it waits for the person who owns the disk. This is the case the malware scenario turns on: a compromised machine that claims can read what it could already decrypt, and cannot quietly delete the copy that outlived it.
+
+### 7.4 What this does not restore
+
+The same distinction §6 draws still holds, and is sharper here. A claim recovers **data**. It does not recover **operation**: schedules, retention policies, capture rules and the other destinations are configuration, and configuration is not in the kit. The user is told so plainly rather than left to infer protection from a successful restore.
 
 ---
 

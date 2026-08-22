@@ -70,6 +70,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
+| [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
 
 ---
 
@@ -464,6 +465,41 @@ public-key mismatch), `WriteOnlyCommandTests` (CLI),
 the provisioning dialog to byte-identical restored files. Losing the
 passphrase loses the backup, acknowledged at setup; v2 has no
 passphrase change (03 §7).
+
+### 0046 — the disaster-recovery path is written down and not yet built
+
+Specified only, and deliberately filed as such rather than folded into
+0041's "built": the decision, the peer-protocol exchange and the
+architecture section exist; no code implements the claim, and no test
+exercises it.
+
+The gap it answers was found by a coverage review, and is worth recording
+because it read as covered. Two drills come close and neither reaches it.
+`Hosts.Tests/PeerRetrievalTests` and `Hosts.Tests/AlternateSiteTests`
+destroy the source's **archives** and recover from a peer — but both keep
+the state directory, so the device keypair and the pairing survive with
+them. 0044's installation-kit drill deletes the **entire state
+directory** — but recovers with the standalone tool against an archive
+still present on local disk. Total loss is the intersection neither
+covers: the state directory *and* the archives gone, the only copy at a
+peer, and therefore a device identity the peer has never seen.
+
+Under today's rules that recovery cannot succeed, and every rule
+involved is individually correct — attribution is keyed to the lost
+fingerprint ([peer-protocol 05
+§2](../specifications/peer-protocol/05-quotas.md)), the owner inventory
+answers for the dialling identity ([07
+§3.5](../specifications/peer-protocol/07-retrieval.md)), and the restore
+path matches candidates on a `backup_set_id` the lost configuration
+held. `Agent/RetrievalResponder.cs` and
+`Application/ReplicaOwnerStore.cs` are where the first two live today.
+
+What remains to build: the claim key derivation, the claim frames and
+their negotiated feature, the ledger's token and public-key fields, the
+`claim_replicas` verb, and the drill that destroys both stores and
+recovers over the wire. The requirements it owes — FR-DR-001 through
+FR-DR-005 — carry honest untested markers in the
+[traceability matrix](requirements/traceability.md) until then.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 
