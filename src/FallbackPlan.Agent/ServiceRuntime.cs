@@ -476,6 +476,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
 
             OpenedRepository repository;
+            var openedWithPassphrase = false;
             if (WriteCredentials.TryLoad(setId) is { } credential)
             {
                 // A provisioned write-only set (ADR-0042 §5): the credential
@@ -510,6 +511,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 repository = await RepositoryLifecycle.OpenAsync(
                         store, _passphrase, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
+
+                // The one shape that still has the root behind the archive:
+                // the passphrase in hand is demonstrably this archive's,
+                // because it is what just opened it (03 §3.2.1).
+                openedWithPassphrase = true;
             }
             else if (createIfMissing)
             {
@@ -518,6 +524,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                         (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
                         LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
+                openedWithPassphrase = true;
             }
             else
             {
@@ -544,6 +551,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                         new FileSequenceStateStore(Path.Combine(Options.StateDirectory, $"sequence-{repositoryIdHex}.txt"))),
                     SpoolDirectory = Path.Combine(Options.StateDirectory, "spool", repositoryIdHex),
                     CataloguePath = cataloguePath,
+                    OpenedWithPassphrase = openedWithPassphrase,
                 };
             }
             catch
