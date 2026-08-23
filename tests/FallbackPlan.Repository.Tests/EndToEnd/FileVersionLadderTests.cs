@@ -72,12 +72,20 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
             }
 
             var snapshotId = Enumerable.Repeat((byte)(0xE0 + version), 16).ToArray();
-            await CreateOrchestrator(store, keys, hierarchy, catalogue, version).PublishAsync(
-                Job(source, snapshotId, 1_722_600_000_000 + ((ulong)version * 1000)) with
-                {
-                    PriorSnapshotId = prior,
-                },
-                CancellationToken.None);
+
+            // The prior is applied only when there IS one. Assigning a null
+            // byte[] to this ReadOnlyMemory<byte>? would not leave it null:
+            // the array converts to an EMPTY memory and lifting that gives
+            // HasValue true, so the first snapshot would claim a
+            // zero-length ancestor rather than none.
+            var job = Job(source, snapshotId, 1_722_600_000_000 + ((ulong)version * 1000));
+            if (prior is not null)
+            {
+                job = job with { PriorSnapshotId = prior };
+            }
+
+            await CreateOrchestrator(store, keys, hierarchy, catalogue, version)
+                .PublishAsync(job, CancellationToken.None);
 
             snapshotIds.Add(snapshotId);
             prior = snapshotId;
@@ -144,7 +152,7 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
         var second = await CreateOrchestrator(store, keys, hierarchy, catalogue, 1).PublishAsync(
             Job(source, [.. Enumerable.Repeat((byte)0xF1, 16)], 1_722_600_001_000) with
             {
-                PriorSnapshotId = [.. Enumerable.Repeat((byte)0xF0, 16)],
+                PriorSnapshotId = Enumerable.Repeat((byte)0xF0, 16).ToArray(),
             },
             CancellationToken.None);
 
@@ -215,8 +223,8 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
     {
         Source = source,
         Roots = [new ScanRoot("/")],
-        DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)],
-        BackupSetId = [.. Enumerable.Repeat((byte)0x33, 16)],
+        DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+        BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
         SnapshotId = snapshotId,
         NowUnixMilliseconds = now,
         DeclaredMaxDurationMs = 3_600_000,
