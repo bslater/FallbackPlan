@@ -113,8 +113,14 @@ public sealed record ReplicationOffer(
 /// and <c>quota − usage</c> is already sitting in a local.
 /// </remarks>
 public sealed record ReplicationInventory(
-    IReadOnlyList<string> Keys, bool More, ulong? Headroom = null) : IPeerMessage
+    IReadOnlyList<string> Keys,
+    bool More,
+    ulong? Headroom = null,
+    ReadOnlyMemory<byte>? ClaimToken = null) : IPeerMessage
 {
+    /// <summary>A claim token is 16 bytes (07 §5.3).</summary>
+    public const int ClaimTokenLength = 16;
+
     /// <summary>The most object keys one inventory page may carry (00 §2.3).</summary>
     public const int MaximumKeys = 4096;
 
@@ -125,7 +131,7 @@ public sealed record ReplicationInventory(
     public PeerMessageType Type => PeerMessageType.ReplicationInventory;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => Headroom is null ? 2 : 3;
+    public int BodyEntryCount => 2 + (Headroom is null ? 0 : 1) + (ClaimToken is null ? 0 : 1);
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -158,6 +164,24 @@ public sealed record ReplicationInventory(
             writer.WriteInt32(3);
             writer.WriteUInt64(headroom);
         }
+
+        // Sent once, and only while this destination holds no claim credential
+        // for the repository: it is how disaster recovery is armed a session
+        // ahead of the disaster (03 §3.2.1). A destination that already holds
+        // one never offers again — a second offer would invite a source to
+        // derive a keypair and register nothing.
+        if (ClaimToken is { } token)
+        {
+            if (token.Length != ClaimTokenLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A claim token of {token.Length} bytes is not the {ClaimTokenLength} bytes 07 §5.3 defines.");
+            }
+
+            writer.WriteInt32(4);
+            writer.WriteByteString(token.Span);
+        }
     }
 
     /// <summary>Reads an inventory page.</summary>
@@ -171,6 +195,7 @@ public sealed record ReplicationInventory(
         IReadOnlyList<string>? keys = null;
         var more = false;
         ulong? headroom = null;
+        byte[]? claimToken = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -185,6 +210,9 @@ public sealed record ReplicationInventory(
                 case 3:
                     headroom = reader.ReadUInt64();
                     break;
+                case 4:
+                    claimToken = reader.ReadByteString();
+                    break;
                 default:
                     reader.SkipValue();
                     break;
@@ -197,7 +225,13 @@ public sealed record ReplicationInventory(
                 PeerRefusalReason.Malformed, "An inventory page carried no key array.");
         }
 
-        return new ReplicationInventory(keys, more, headroom);
+        if (claimToken is not null && claimToken.Length != ClaimTokenLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An inventory's claim token is not the shape 07 §5.3 defines.");
+        }
+
+        return new ReplicationInventory(keys, more, headroom, claimToken);
     }
 
     private static List<string> ReadKeys(CborReader reader)
@@ -228,8 +262,16 @@ public sealed record ReplicationInventory(
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The claim token is compared by its bytes, like every other memory this
+    /// record carries: leaving it out would make an inventory that offers a
+    /// credential equal to one that offers none, which is the single most
+    /// consequential difference between two pages.
+    /// </remarks>
     public bool Equals(ReplicationInventory? other) =>
         other is not null && More == other.More && Headroom == other.Headroom
+        && ClaimToken.HasValue == other.ClaimToken.HasValue
+        && (!ClaimToken.HasValue || ClaimToken.Value.Span.SequenceEqual(other.ClaimToken!.Value.Span))
         && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
 
     /// <inheritdoc/>
@@ -238,6 +280,7 @@ public sealed record ReplicationInventory(
         var hash = new HashCode();
         hash.Add(More);
         hash.Add(Headroom);
+        hash.Add(ClaimToken?.Length ?? -1);
         foreach (var objectKey in Keys)
         {
             hash.Add(objectKey, StringComparer.Ordinal);

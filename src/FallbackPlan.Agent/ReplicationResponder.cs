@@ -2,6 +2,7 @@ using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using System.Security.Cryptography;
 
 namespace FallbackPlan.Agent;
 
@@ -30,6 +31,7 @@ internal static class ReplicationResponder
     /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
+    /// <param name="claimNegotiated">Whether the session's features admit arming a claim credential (03 §3.2.1).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <param name="preread">The first payload frame, when the caller already read it to route the session (ADR-0041).</param>
     /// <returns>What was received.</returns>
@@ -38,6 +40,7 @@ internal static class ReplicationResponder
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
         bool retentionNegotiated,
         bool verificationNegotiated,
+        bool claimNegotiated,
         CancellationToken cancellationToken,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
@@ -124,10 +127,23 @@ internal static class ReplicationResponder
             // The same two numbers the boundary stop is enforced from, told
             // to the source up front so it learns the ceiling is close before
             // a push runs into it rather than only when one does (05 §4).
+            // Offered once, and only while nothing is registered: this is how a
+            // recovery is armed a session ahead of the disaster, because a
+            // machine that has already been lost cannot register anything
+            // (03 §3.2.1).
+            var claimToken = claimNegotiated
+                ? owners.OfferClaimToken(
+                    repositoryIdHex, () => RandomNumberGenerator.GetBytes(ReplicationInventory.ClaimTokenLength))
+                : null;
+
             await SendInventoryAsync(
-                replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null, cancellationToken)
+                replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null,
+                claimToken is null ? null : Convert.FromHexString(claimToken), cancellationToken)
                 .ConfigureAwait(false);
-            var committed = await ReceiveAsync(replica, spoolRoot, stream, quota, usage, cancellationToken)
+
+            var committed = await ReceiveAsync(
+                replica, spoolRoot, stream, quota, usage, owners, repositoryIdHex, offer.RepositoryId,
+                tokenOffered: claimToken is not null, cancellationToken)
                 .ConfigureAwait(false);
 
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
@@ -360,8 +376,17 @@ internal static class ReplicationResponder
         return deleted;
     }
 
+    /// <remarks>
+    /// The claim token rides the <b>final</b> page only. A source answers the
+    /// offer once, and a token repeated on every page of a long inventory
+    /// would leave it guessing which one it was answering.
+    /// </remarks>
     private static async Task SendInventoryAsync(
-        LocalFileSystemObjectStore replica, Stream stream, ulong? headroom, CancellationToken cancellationToken)
+        LocalFileSystemObjectStore replica,
+        Stream stream,
+        ulong? headroom,
+        ReadOnlyMemory<byte>? claimToken,
+        CancellationToken cancellationToken)
     {
         var page = new List<string>(ReplicationInventory.MaximumKeys);
         await foreach (var entry in replica.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -379,13 +404,18 @@ internal static class ReplicationResponder
 
         // The final (or only) page carries whatever remains and closes the inventory.
         await PeerFrame.WriteAsync(
-            stream, new ReplicationInventory([.. page], More: false, headroom), cancellationToken)
+            stream, new ReplicationInventory([.. page], More: false, headroom, claimToken), cancellationToken)
             .ConfigureAwait(false);
     }
 
     private static async Task<long> ReceiveAsync(
         LocalFileSystemObjectStore replica, string spoolRoot, Stream stream,
-        ulong quota, ulong usage, CancellationToken cancellationToken)
+        ulong quota, ulong usage,
+        FallbackPlan.Application.ReplicaOwnerStore owners,
+        string repositoryIdHex,
+        ReadOnlyMemory<byte> repositoryId,
+        bool tokenOffered,
+        CancellationToken cancellationToken)
     {
         var committed = 0L;
         Incoming? current = null;
@@ -405,6 +435,33 @@ internal static class ReplicationResponder
                         }
 
                         return committed;
+
+                    case PeerMessageType.ClaimRegister:
+                        // The answer to a token offered with the inventory,
+                        // and it arrives before the first object because that
+                        // is where 03 §3.2.1 puts it. A source that cannot
+                        // derive the credential — every provisioned write-only
+                        // service, which holds the write bundle and not the
+                        // root it came from — simply never sends one, and the
+                        // replica stays unclaimable rather than half-armed.
+                        var register = ClaimRegister.Read(body);
+                        if (!tokenOffered || current is not null)
+                        {
+                            throw new PeerProtocolException(
+                                PeerRefusalReason.Malformed,
+                                "A claim registration arrived outside the window 03 §3.2.1 defines.");
+                        }
+
+                        if (!register.RepositoryId.Span.SequenceEqual(repositoryId.Span))
+                        {
+                            throw new PeerProtocolException(
+                                PeerRefusalReason.Malformed,
+                                "A claim registration named a repository other than this session's.");
+                        }
+
+                        owners.TryRegisterClaimKey(
+                            repositoryIdHex, Convert.ToHexStringLower(register.ClaimPublicKey.Span));
+                        break;
 
                     case PeerMessageType.ReplicationObject:
                         if (current is not null)
