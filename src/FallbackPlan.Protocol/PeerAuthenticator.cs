@@ -239,7 +239,10 @@ public sealed class PeerAuthenticator
             or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
             or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
-            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData =>
+            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData
+            or PeerMessageType.ClaimRequest or PeerMessageType.ClaimChallenge
+            or PeerMessageType.ClaimProof or PeerMessageType.ClaimResult
+            or PeerMessageType.ClaimRegister =>
             state == PeerSessionState.Open,
 
         _ => false,
