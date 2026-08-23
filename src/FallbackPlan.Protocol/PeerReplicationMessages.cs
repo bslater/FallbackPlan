@@ -102,6 +102,12 @@ public sealed record ReplicationOffer(
 /// Bytes this destination can still accept under the peer's quota, as of the
 /// moment the inventory was taken; null when no quota bounds it (05 §1).
 /// </param>
+/// <param name="ClaimToken">
+/// This destination's own token for the offered repository, carried on the
+/// final page and only while no claim credential is registered for it
+/// (03 §3.2.1). Null the rest of the time, and a source reads that as "not
+/// asked" rather than as an empty token it should answer.
+/// </param>
 /// <remarks>
 /// The headroom rides here rather than in the hello or the terms, and the
 /// choice matters. Terms are persisted in the grant and compared for
