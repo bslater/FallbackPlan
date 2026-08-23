@@ -168,4 +168,35 @@ public sealed class CommandRelayTests
         Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         StringAssert.Contains(await response.Content.ReadAsStringAsync(), "service_unreachable");
     }
+
+    [TestMethod]
+    public async Task AStateDirectoryThatDoesNotExistYet_StillBinds_AndSaysTheServiceIsUnreachable()
+    {
+        // The console and the service are routinely started together, and the
+        // service is what creates the directory. A console that refused to
+        // bind until it existed lost that race every time, and it is the same
+        // fact as a service that has not opened its endpoint yet — one that
+        // the page is already built to display (ADR-0036).
+        var absent = Path.Combine(
+            Path.GetTempPath(), "fbp-web-absent", Guid.NewGuid().ToString("n")[..12]);
+        Assert.IsFalse(Directory.Exists(absent), "the point of the test is that nothing created it");
+
+        var auth = ConsoleAuth.CreateWithRandomToken();
+        var clients = new FakeClientFactory { Unreachable = true };
+        await using var console = await WebConsoleHost.StartAsync(
+            new WebConsoleOptions { StateDirectory = absent, Port = 0 }, clients, auth);
+
+        using var http = new HttpClient { BaseAddress = console.BaseAddress };
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/api/command", UriKind.Relative))
+        {
+            Content = new StringContent(
+                """{"command":"get_status"}""", System.Text.Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", auth.Token);
+        using var response = await http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        StringAssert.Contains(await response.Content.ReadAsStringAsync(), "service_unreachable");
+        Assert.IsFalse(Directory.Exists(absent), "the console must not create the service's directory either");
+    }
 }

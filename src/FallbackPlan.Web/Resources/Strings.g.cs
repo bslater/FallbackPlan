@@ -109,17 +109,6 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, WebConsoleOptions_PortInvalid, arg0);
 
     /// <summary>
-    /// The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.
-    /// </summary>
-    private static string WebConsoleOptions_StateDirectoryMissing => Get(nameof(WebConsoleOptions_StateDirectoryMissing));
-
-    /// <summary>
-    /// The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.
-    /// </summary>
-    internal static string FormatWebConsoleOptions_StateDirectoryMissing(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, WebConsoleOptions_StateDirectoryMissing, arg0);
-
-    /// <summary>
     /// Pass --state &lt;dir&gt; — the state directory whose service this console talks to.
     /// </summary>
     internal static string WebConsoleOptions_StateDirectoryRequired => Get(nameof(WebConsoleOptions_StateDirectoryRequired));

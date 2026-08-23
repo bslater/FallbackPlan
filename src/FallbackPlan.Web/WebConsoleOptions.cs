@@ -4,10 +4,17 @@ namespace FallbackPlan.Web;
 
 /// <summary>What the console was asked to serve, parsed from its command line.</summary>
 /// <remarks>
+/// <para>
 /// Deliberately small: a state directory, and optionally a port. There is no
 /// flag for the interface, because there is no choice — the console binds
 /// loopback and nothing else (ADR-0036 §2). Offering the weaker path would make
 /// it the used path.
+/// </para>
+/// <para>
+/// <c>--log-level</c> is accepted and discarded here. It belongs to the host
+/// rather than to what is served, but a parser that refused it would refuse the
+/// documented command line, which is worse than carrying one idle case.
+/// </para>
 /// </remarks>
 public sealed record WebConsoleOptions
 {
@@ -62,6 +69,19 @@ public sealed record WebConsoleOptions
 
                     break;
 
+                case "--log-level":
+                    // Consumed here so it is not an unknown argument, and
+                    // resolved nowhere but WebConsoleHost, through
+                    // ConsoleLogging.TryResolveLevel. Two places deciding what
+                    // a level means would be two places to disagree; this one
+                    // only has to know the flag takes a value.
+                    if (!TryTakeValue(args, ref i, out _, ref failure))
+                    {
+                        return false;
+                    }
+
+                    break;
+
                 default:
                     failure = Strings.FormatWebConsoleOptions_UnknownArgument(args[i]);
                     return false;
@@ -74,12 +94,15 @@ public sealed record WebConsoleOptions
             return false;
         }
 
-        if (!Directory.Exists(state))
-        {
-            failure = Strings.FormatWebConsoleOptions_StateDirectoryMissing(state);
-            return false;
-        }
-
+        // A state directory that is not there yet is NOT a parse failure. The
+        // service creates it, the console only reads through it, and the two
+        // are routinely started together — so refusing here lost a race the
+        // console is otherwise built to win. It is the same fact as a service
+        // that is not listening, and it is reported the same way: bind, print
+        // the URL, say nothing is listening yet, keep trying (ADR-0036). A
+        // mistyped path then shows as a service that never answers, which is
+        // what it is. Path.GetFullPath is textual, so the absolute path below
+        // holds either way.
         options = new WebConsoleOptions { StateDirectory = Path.GetFullPath(state), Port = port };
         return true;
     }

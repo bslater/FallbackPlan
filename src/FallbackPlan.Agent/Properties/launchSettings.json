@@ -1,12 +1,12 @@
 {
   "profiles": {
-    "run (first install — nothing set up yet)": {
-      "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state-fresh --poll-seconds 10 --log-level debug"
-    },
     "run (foreground)": {
       "commandName": "Project",
       "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --log-level debug"
+    },
+    "run (first install — nothing set up yet)": {
+      "commandName": "Project",
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state-fresh --poll-seconds 10 --log-level debug"
     },
     "run --once": {
       "commandName": "Project",
