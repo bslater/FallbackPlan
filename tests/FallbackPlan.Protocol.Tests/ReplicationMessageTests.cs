@@ -96,6 +96,30 @@ public sealed class ReplicationMessageTests
         Assert.ThrowsExactly<PeerProtocolException>(() => ReplicationInventory.Read(body));
     }
 
+    [TestMethod]
+    public void Inventory_AnAbsentTokenLiftedFromANullArray_IsRefusedRatherThanSentEmpty()
+    {
+        // The trap that broke every peer sync the day key 4 arrived, and it is
+        // worth a test because two round-trip tests passed straight over it.
+        // A null byte[] converted to ReadOnlyMemory<byte>? is NOT null: it
+        // lifts to HasValue true wrapping an EMPTY memory. A destination with
+        // nothing to offer therefore declares a zero-byte token unless the
+        // absent case is written as a statement rather than a conditional.
+        byte[]? nothingToOffer = null;
+        ReadOnlyMemory<byte>? lifted = nothingToOffer;
+        Assert.IsTrue(lifted.HasValue, "a lifted null array is a value, not an absence");
+        Assert.AreEqual(0, lifted.Value.Length);
+
+        // Which is what the writer's length check is for: the malformed page
+        // is refused here rather than sent, leaving a source to hunt for a
+        // token the destination never meant to offer.
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => PeerFrame.Encode(new ReplicationInventory([], More: false, Headroom: null, lifted)));
+
+        // Absence is the parameter not being there at all.
+        Assert.IsNull(new ReplicationInventory([], More: false).ClaimToken);
+    }
+
     /// <summary>
     /// An inventory page encoded past the writer's own guard, so the reader's
     /// refusal is tested rather than the writer's a second time.

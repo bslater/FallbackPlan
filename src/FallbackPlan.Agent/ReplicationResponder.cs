@@ -136,9 +136,22 @@ internal static class ReplicationResponder
                     repositoryIdHex, () => RandomNumberGenerator.GetBytes(ReplicationInventory.ClaimTokenLength))
                 : null;
 
+            // Spelled as a statement, and that is not a matter of style. A
+            // conditional whose branches are `null` and `byte[]` has natural
+            // type `byte[]`, so the null branch converts to a
+            // ReadOnlyMemory<byte> — an EMPTY one — and lifting that to
+            // Nullable gives HasValue TRUE. Written as an expression, every
+            // session that offered nothing declared a zero-byte token instead
+            // of no token, and the destination refused its own inventory.
+            ReadOnlyMemory<byte>? offeredToken = null;
+            if (claimToken is { } tokenHex)
+            {
+                offeredToken = Convert.FromHexString(tokenHex);
+            }
+
             await SendInventoryAsync(
                 replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null,
-                claimToken is null ? null : Convert.FromHexString(claimToken), cancellationToken)
+                offeredToken, cancellationToken)
                 .ConfigureAwait(false);
 
             var committed = await ReceiveAsync(
