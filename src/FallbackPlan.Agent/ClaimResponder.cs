@@ -31,6 +31,9 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 internal static class ClaimResponder
 {
+    /// <summary>A backup-set identifier is 16 bytes.</summary>
+    private const int SetIdLength = 16;
+
     /// <summary>Serves one claim exchange over an open peer stream.</summary>
     /// <param name="replicasRoot">Where replicas live, one directory per repository id.</param>
     /// <param name="stream">The open session stream, positioned after the claim request.</param>
@@ -180,10 +183,10 @@ internal static class ClaimResponder
                 continue;
             }
 
-            Span<byte> setId = stackalloc byte[16];
-            if (Base32.TryDecode(parts[2], setId, out var written) && written == setId.Length)
+            var setId = new byte[SetIdLength];
+            if (Base32.TryDecode(parts[2], setId, out var written) && written == SetIdLength)
             {
-                setIds.Add(setId.ToArray());
+                setIds.Add(setId);
             }
 
             if (setIds.Count == ClaimResult.MaximumSetIds)
