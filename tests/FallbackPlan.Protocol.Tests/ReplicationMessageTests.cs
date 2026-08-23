@@ -57,6 +57,68 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
+    public void Inventory_ClaimToken_RoundTripsAndStaysAbsentWhenNothingIsOffered()
+    {
+        // Key 4 is how the claim is armed (03 §3.2.1), and it is additive in
+        // exactly the way key 3 is: a destination that already holds a
+        // credential — and every build that predates the feature — omits it,
+        // and a source must read that as "not asked" rather than as an empty
+        // token it should answer.
+        var token = new byte[ReplicationInventory.ClaimTokenLength];
+        token.AsSpan().Fill(0x5A);
+
+        var offering = new ReplicationInventory(["blobs/data/aaaa/one"], More: false, Headroom: null, token);
+        var read = RoundTrip(offering, ReplicationInventory.Read);
+        Assert.IsNotNull(read.ClaimToken);
+        CollectionAssert.AreEqual(token, read.ClaimToken!.Value.ToArray());
+
+        Assert.IsNull(RoundTrip(
+            new ReplicationInventory(["blobs/data/aaaa/one"], More: false), ReplicationInventory.Read).ClaimToken);
+
+        // And it travels beside the headroom rather than instead of it: both
+        // ride the final page, and a destination under a quota still says so.
+        var both = new ReplicationInventory([], More: false, Headroom: 4_096, token);
+        var readBoth = RoundTrip(both, ReplicationInventory.Read);
+        Assert.AreEqual(4_096UL, readBoth.Headroom);
+        Assert.IsNotNull(readBoth.ClaimToken);
+    }
+
+    [TestMethod]
+    public void Inventory_AClaimTokenOfTheWrongLength_IsRefusedOnBothSides()
+    {
+        // Writing is refused so this side cannot emit a token no source can
+        // use; reading is refused so a source never derives a keypair from
+        // whatever a peer felt like sending.
+        var tooShort = new ReplicationInventory([], More: false, Headroom: null, new byte[15]);
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(tooShort));
+
+        var body = HandRolledInventoryWithToken(new byte[17]);
+        Assert.ThrowsExactly<PeerProtocolException>(() => ReplicationInventory.Read(body));
+    }
+
+    /// <summary>
+    /// An inventory page encoded past the writer's own guard, so the reader's
+    /// refusal is tested rather than the writer's a second time.
+    /// </summary>
+    private static System.Formats.Cbor.CborReader HandRolledInventoryWithToken(byte[] token)
+    {
+        var writer = new System.Formats.Cbor.CborWriter(
+            System.Formats.Cbor.CborConformanceMode.Ctap2Canonical);
+        writer.WriteStartMap(3);
+        writer.WriteInt32(1);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+        writer.WriteInt32(2);
+        writer.WriteBoolean(false);
+        writer.WriteInt32(4);
+        writer.WriteByteString(token);
+        writer.WriteEndMap();
+
+        return new System.Formats.Cbor.CborReader(
+            writer.Encode(), System.Formats.Cbor.CborConformanceMode.Ctap2Canonical);
+    }
+
+    [TestMethod]
     public void RetentionOfferAndAck_RoundTrip()
     {
         // The commander's drop-list and the spoke's answer (peer-protocol 06

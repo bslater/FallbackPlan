@@ -281,8 +281,17 @@ public static class FanOut
                 : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
 
             var priorSuccess = previous?.LastSuccessAt is not null;
+
+            // Arming the claim (03 §3.2.1): only if the destination asks, which
+            // it does exactly once per replica and only while it holds no
+            // credential — so the Argon2id pass this may cost is paid once per
+            // destination, never once per sync. A set this service opened from
+            // a stored write credential declines, and the delegate is what says
+            // so rather than a flag read at the far end of the push.
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
-                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
+                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps,
+                token => ClaimArming.PublicKeyFor(archive, runtime.ArchivePassphrase, token),
+                cancellationToken)
                 .ConfigureAwait(false);
 
             ReportShortfall(
