@@ -39,10 +39,10 @@
       "repository_id": "11121314151617181920212223242526",
       "nonce": "7777777777777777777777777777777777777777777777777777777777777777",
       "transcript_hash": "8ea5186c74f05060fea77a3316c498273a988e6aec181cf7c7c18553a40b654e",
-      "claimant_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+      "claimant_identity": "3333333333333333333333333333333333333333333333333333333333333333",
       "message": "6662702d706565722d76313a7265706c6963612d636c61696d11121314151617181920212223242526d0d1d2d3d4d5d6d7d8d9dadbdcdddedf77777777777777777777777777777777777777777777777777777777777777778ea5186c74f05060fea77a3316c498273a988e6aec181cf7c7c18553a40b654e3333333333333333333333333333333333333333333333333333333333333333",
       "signature": "7c8ea7a18aea99a9ca1e0ca8e6b9b51d175909dc1340bf77a3b2ccf9e251013a58a8efe012d5bec0c03a8ce29fff82a8320b684c75c557d72d5e23e5b9666403",
-      "comment": "message = 'fbp-peer-v1:replica-claim' || repository_id || claim_token || nonce || sha256(session context) || claimant_fingerprint."
+      "comment": "message = 'fbp-peer-v1:replica-claim' || repository_id || claim_token || nonce || sha256(session context) || claimant_identity."
     },
     "separation_checks": {
       "comment": "A second destination mints a second token, so the same passphrase produces a different keypair there. This is what makes a proof captured at one destination inert at another.",

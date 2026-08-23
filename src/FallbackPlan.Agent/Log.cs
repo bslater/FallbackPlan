@@ -69,6 +69,12 @@ internal static partial class Log
     internal static partial void RetrievalServed(ILogger logger, string fingerprint);
 
     [LoggerMessage(
+        EventId = 3755, Level = LogLevel.Warning,
+        Message = "Peer {Fingerprint} claimed {Count} replica(s) by proving the passphrase; "
+            + "ageing them is refused until an operator acknowledges it")]
+    internal static partial void ReplicasClaimed(ILogger logger, string fingerprint, int count);
+
+    [LoggerMessage(
         EventId = 3722, Level = LogLevel.Information,
         Message = "Peering terminated by {Fingerprint}")]
     internal static partial void PeeringTerminated(ILogger logger, string fingerprint);

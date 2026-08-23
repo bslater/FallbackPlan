@@ -19,8 +19,8 @@ namespace FallbackPlan.Protocol;
 /// <para>
 /// Every field in the message binds the proof to one moment. The nonce makes
 /// it fresh, the session transcript hash makes it inseparable from this
-/// connection and these two identities, the claimant's fingerprint names the
-/// identity the attribution would move <em>to</em>, and the destination's own
+/// connection and these two identities, the claimant's identity key names
+/// the identity the attribution would move <em>to</em>, and the destination's own
 /// token makes it worthless at any other destination.
 /// </para>
 /// </remarks>
@@ -54,13 +54,13 @@ public static class ReplicaClaimProof
         ReadOnlySpan<byte> claimToken,
         ReadOnlySpan<byte> nonce,
         ReadOnlySpan<byte> transcriptHash,
-        ReadOnlySpan<byte> claimantFingerprint)
+        ReadOnlySpan<byte> claimantIdentity)
     {
         Require(repositoryId, RepositoryIdLength, nameof(repositoryId));
         Require(claimToken, TokenLength, nameof(claimToken));
         Require(nonce, NonceLength, nameof(nonce));
         Require(transcriptHash, 32, nameof(transcriptHash));
-        Require(claimantFingerprint, 32, nameof(claimantFingerprint));
+        Require(claimantIdentity, 32, nameof(claimantIdentity));
 
         var message = new byte[
             Context.Length + RepositoryIdLength + TokenLength + NonceLength + 32 + 32];
@@ -70,7 +70,7 @@ public static class ReplicaClaimProof
         Append(message, ref offset, claimToken);
         Append(message, ref offset, nonce);
         Append(message, ref offset, transcriptHash);
-        Append(message, ref offset, claimantFingerprint);
+        Append(message, ref offset, claimantIdentity);
         return message;
     }
 

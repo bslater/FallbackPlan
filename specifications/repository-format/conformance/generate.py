@@ -621,7 +621,7 @@ def disaster_recovery_vectors() -> dict:
     repository_id = bytes.fromhex("11121314151617181920212223242526")
     nonce = bytes([0x77]) * 32
     transcript_hash = hashlib.sha256(b"peer-protocol 02 section 3.2 context").digest()
-    claimant_fingerprint = bytes([0x33]) * 32
+    claimant_identity = bytes([0x33]) * 32
 
     proof_message = (
         b"fbp-peer-v1:replica-claim"
@@ -629,7 +629,7 @@ def disaster_recovery_vectors() -> dict:
         + claim_token
         + nonce
         + transcript_hash
-        + claimant_fingerprint
+        + claimant_identity
     )
     claim_signature = ed25519_sign(claim_seed, proof_message)
 
@@ -698,13 +698,13 @@ def disaster_recovery_vectors() -> dict:
                 "repository_id": repository_id.hex(),
                 "nonce": nonce.hex(),
                 "transcript_hash": transcript_hash.hex(),
-                "claimant_fingerprint": claimant_fingerprint.hex(),
+                "claimant_identity": claimant_identity.hex(),
                 "message": proof_message.hex(),
                 "signature": claim_signature.hex(),
                 "comment": (
                     "message = 'fbp-peer-v1:replica-claim' || repository_id || "
                     "claim_token || nonce || sha256(session context) || "
-                    "claimant_fingerprint."
+                    "claimant_identity."
                 ),
             },
             "separation_checks": {

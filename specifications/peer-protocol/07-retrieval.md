@@ -220,14 +220,19 @@ signature = Ed25519-Sign(claim_seed,
               ‖ claim_token[16]
               ‖ nonce[32]
               ‖ SHA-256(context)[32]
-              ‖ claimant_fingerprint[32])
+              ‖ claimant_identity[32])
 ```
 
 `context` is the bound transcript of [02 §3.2](02-session.md#32-the-bound-transcript),
 so a proof is inseparable from the connection and the two identities that
-authenticated on it. `claimant_fingerprint` is the dialling peer's pinned
-identity — the fingerprint the claim would move the attribution **to** — so a
-proof cannot be replayed by a third party who observed it.
+authenticated on it. `claimant_identity` is the dialling peer's pinned **32-byte Ed25519 public
+key** — the identity the claim would move the attribution **to** — so a proof
+cannot be replayed by a third party who observed it. It is the key itself and
+not the displayed fingerprint: that is a truncated hash
+([01 §1](01-identity-and-pairing.md#1-peer-identity)), and a shorter value is
+exactly what an attacker searching for a collision wants.
+[02 §3.2](02-session.md#32-the-bound-transcript) binds identities the same way,
+for the same reason.
 
 ### 5.7 Validation
 

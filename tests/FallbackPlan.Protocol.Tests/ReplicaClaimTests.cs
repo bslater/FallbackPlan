@@ -35,7 +35,7 @@ public sealed class ReplicaClaimTests
 
     private static byte[] Transcript => Bytes(0x5C, 32);
 
-    private static byte[] Fingerprint => Bytes(0x33, 32);
+    private static byte[] Identity => Bytes(0x33, 32);
 
     private static byte[] Seed => Bytes(0x42, 32);
 
@@ -169,7 +169,7 @@ public sealed class ReplicaClaimTests
     [TestMethod]
     public void Proof_SignedAndVerified_RoundTripsUnderItsOwnPublicKey()
     {
-        var message = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Fingerprint);
+        var message = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Identity);
         var signature = ReplicaClaimProof.Sign(Seed, message);
 
         Assert.IsTrue(ReplicaClaimProof.Verify(ReplicaClaimProof.PublicKeyOf(Seed), message, signature));
@@ -181,9 +181,9 @@ public sealed class ReplicaClaimTests
         // Another destination minted another token, so the message it rebuilds
         // differs — and it rebuilds from its OWN copy, never from anything the
         // claimant sent. This is what the per-destination token buys.
-        var here = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Fingerprint);
+        var here = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Identity);
         var elsewhere = ReplicaClaimProof.Message(
-            RepositoryId, Bytes(0xE0, 16), Nonce, Transcript, Fingerprint);
+            RepositoryId, Bytes(0xE0, 16), Nonce, Transcript, Identity);
 
         var signature = ReplicaClaimProof.Sign(Seed, here);
         var publicKey = ReplicaClaimProof.PublicKeyOf(Seed);
@@ -198,19 +198,19 @@ public sealed class ReplicaClaimTests
         // A fresh nonce and a different transcript both break it: an
         // eavesdropper cannot lift a proof out of the connection that carried
         // it.
-        var original = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Fingerprint);
+        var original = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Identity);
         var signature = ReplicaClaimProof.Sign(Seed, original);
         var publicKey = ReplicaClaimProof.PublicKeyOf(Seed);
 
         Assert.IsFalse(ReplicaClaimProof.Verify(
             publicKey,
-            ReplicaClaimProof.Message(RepositoryId, Token, Bytes(0x99, 32), Transcript, Fingerprint),
+            ReplicaClaimProof.Message(RepositoryId, Token, Bytes(0x99, 32), Transcript, Identity),
             signature),
             "a fresh nonce must break a replayed proof");
 
         Assert.IsFalse(ReplicaClaimProof.Verify(
             publicKey,
-            ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Bytes(0x6D, 32), Fingerprint),
+            ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Bytes(0x6D, 32), Identity),
             signature),
             "a different session transcript must break a replayed proof");
     }
@@ -218,9 +218,9 @@ public sealed class ReplicaClaimTests
     [TestMethod]
     public void Proof_RedirectedToAnotherClaimingIdentity_DoesNotVerify()
     {
-        // The fingerprint names the identity the attribution would move TO, so
+        // The identity key names the identity the attribution would move TO, so
         // a third party cannot present someone else's proof as its own.
-        var original = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Fingerprint);
+        var original = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Identity);
         var signature = ReplicaClaimProof.Sign(Seed, original);
 
         Assert.IsFalse(ReplicaClaimProof.Verify(
@@ -234,7 +234,7 @@ public sealed class ReplicaClaimTests
     {
         // Which check caught it is not a claimant's business (07 §5.7), so the
         // verifier answers rather than raising.
-        var message = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Fingerprint);
+        var message = ReplicaClaimProof.Message(RepositoryId, Token, Nonce, Transcript, Identity);
 
         Assert.IsFalse(ReplicaClaimProof.Verify(Bytes(0x9A, 31), message, Bytes(0x7C, 64)));
         Assert.IsFalse(ReplicaClaimProof.Verify(Bytes(0x9A, 32), message, Bytes(0x7C, 63)));
@@ -260,7 +260,7 @@ public sealed class ReplicaClaimTests
             Hex(claim.GetProperty("inputs"), "claim_token"),
             Hex(proof, "nonce"),
             Hex(proof, "transcript_hash"),
-            Hex(proof, "claimant_fingerprint"));
+            Hex(proof, "claimant_identity"));
 
         Assert.AreEqual(proof.GetProperty("message").GetString(), Convert.ToHexStringLower(message));
 
@@ -277,10 +277,10 @@ public sealed class ReplicaClaimTests
     public void Message_AComponentOfTheWrongWidth_IsRefusedByName()
     {
         Assert.ThrowsExactly<ArgumentException>(
-            () => ReplicaClaimProof.Message(Bytes(0x11, 15), Token, Nonce, Transcript, Fingerprint));
+            () => ReplicaClaimProof.Message(Bytes(0x11, 15), Token, Nonce, Transcript, Identity));
         Assert.ThrowsExactly<ArgumentException>(
-            () => ReplicaClaimProof.Message(RepositoryId, Bytes(0xD0, 15), Nonce, Transcript, Fingerprint));
+            () => ReplicaClaimProof.Message(RepositoryId, Bytes(0xD0, 15), Nonce, Transcript, Identity));
         Assert.ThrowsExactly<ArgumentException>(
-            () => ReplicaClaimProof.Message(RepositoryId, Token, Bytes(0x77, 31), Transcript, Fingerprint));
+            () => ReplicaClaimProof.Message(RepositoryId, Token, Bytes(0x77, 31), Transcript, Identity));
     }
 }
