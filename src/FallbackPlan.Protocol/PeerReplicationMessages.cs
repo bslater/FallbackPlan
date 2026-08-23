@@ -201,7 +201,14 @@ public sealed record ReplicationInventory(
         IReadOnlyList<string>? keys = null;
         var more = false;
         ulong? headroom = null;
-        byte[]? claimToken = null;
+
+        // Held as the nullable memory it is returned as, not as a byte[] that
+        // is converted at the end. A null array assigned to
+        // ReadOnlyMemory<byte>? lifts to HasValue TRUE wrapping an empty
+        // memory, so every page that carried no key 4 would read back as an
+        // offer of nothing — and a source would answer a token no destination
+        // ever minted.
+        ReadOnlyMemory<byte>? claimToken = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -231,7 +238,7 @@ public sealed record ReplicationInventory(
                 PeerRefusalReason.Malformed, "An inventory page carried no key array.");
         }
 
-        if (claimToken is not null && claimToken.Length != ClaimTokenLength)
+        if (claimToken is { } token && token.Length != ClaimTokenLength)
         {
             throw new PeerProtocolException(
                 PeerRefusalReason.Malformed, "An inventory's claim token is not the shape 07 §5.3 defines.");
