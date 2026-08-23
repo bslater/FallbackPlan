@@ -42,6 +42,20 @@ public sealed class ArchiveHandle : IDisposable
     /// <summary>The catalogue's logger, so a read connection is as diagnosable as the writer's.</summary>
     public ILogger? CatalogueLogger { get; init; }
 
+    /// <summary>
+    /// Whether this archive was opened with the installation <em>passphrase</em>
+    /// rather than a stored write credential — that is, whether this process
+    /// can still reach the Argon2id root behind it (peer-protocol 03 §3.2.1).
+    /// </summary>
+    /// <remarks>
+    /// A provisioned write-only set opens from the bundle its root produced and
+    /// not from the root, so it answers false here even when the runtime holds
+    /// some passphrase: the one it holds need not be this archive's. Arming a
+    /// replica claim is the only thing that asks, and declining is the correct
+    /// answer for it (ADR-0042 §1, Q23).
+    /// </remarks>
+    public bool OpenedWithPassphrase { get; init; }
+
     /// <summary>Opens a second catalogue connection for a read path (ADR-0029 §4).</summary>
     /// <returns>A catalogue the caller owns and must dispose.</returns>
     public CatalogueDb OpenReadCatalogue() =>
