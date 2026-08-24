@@ -496,7 +496,7 @@ public static class ConsoleRestoreGate
     /// class is the single console type the architecture rules permit below
     /// the client contract (ADR-0041), and composition must stay inside it.
     /// </summary>
-    private static Storage.Abstractions.IObjectStore OpenStore(string archivePath) =>
-        new LocalFileSystemObjectStore(archivePath);
+    private static LocalFileSystemObjectStore OpenStore(string archivePath) =>
+        new(archivePath);
 
 }

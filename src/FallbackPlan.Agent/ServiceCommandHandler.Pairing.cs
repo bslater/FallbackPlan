@@ -75,7 +75,7 @@ public sealed partial class ServiceCommandHandler
                     : "The remote binding is off, so nobody can dial this invite yet — restart the "
                       + "service with --remote-interface and --remote-port, then give the peer that address.");
         }
-        catch (Application.ClientStateException exception)
+        catch (ClientStateException exception)
         {
             return new ServiceError(ServiceErrorReason.Refused, exception.Message);
         }

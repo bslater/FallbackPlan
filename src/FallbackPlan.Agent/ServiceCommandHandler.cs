@@ -1981,12 +1981,13 @@ public sealed partial class ServiceCommandHandler(
     private static ulong? DeviceIdOf(string path) => DeviceProbe.DeviceOf(path);
 
     /// <summary>
-    /// Interface-typed on purpose: device probing goes through the seam like
-    /// every other filesystem question, so a test can substitute it. The
-    /// concrete construction here is composition, which is a host's job.
+    /// The seam is <see cref="Filesystem.IFileSystemSource.DeviceOf"/> being
+    /// an interface member — a test double answers it like any other
+    /// filesystem question. The field's own type is concrete because a
+    /// private field assigned exactly one implementation gains nothing from
+    /// interface typing, and the analyzer (CA1859) is right to say so.
     /// </summary>
-    private static readonly Filesystem.IFileSystemSource DeviceProbe =
-        new Filesystem.Local.LocalFileSystemSource();
+    private static readonly Filesystem.Local.LocalFileSystemSource DeviceProbe = new();
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —

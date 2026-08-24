@@ -40,12 +40,13 @@ namespace FallbackPlan.Cli;
 public static class CliApplication
 {
     /// <summary>
-    /// Interface-typed on purpose: device probing goes through the seam like
-    /// every other filesystem question, so a test can substitute it. The
-    /// concrete construction here is composition, which is a host's job.
+    /// The seam is <see cref="FallbackPlan.Filesystem.IFileSystemSource.DeviceOf"/>
+    /// being an interface member — a test double answers it like any other
+    /// filesystem question. The field's own type is concrete because a
+    /// private field assigned exactly one implementation gains nothing from
+    /// interface typing (CA1859).
     /// </summary>
-    private static readonly FallbackPlan.Filesystem.IFileSystemSource DeviceProbe =
-        new FallbackPlan.Filesystem.Local.LocalFileSystemSource();
+    private static readonly FallbackPlan.Filesystem.Local.LocalFileSystemSource DeviceProbe = new();
 
     /// <summary>Parses <paramref name="args"/> and runs the matching command.</summary>
     /// <param name="args">The command line, as the process received it.</param>
