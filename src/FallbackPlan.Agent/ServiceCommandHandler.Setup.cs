@@ -1,5 +1,6 @@
 using FallbackPlan.Api;
 using FallbackPlan.Repository.Crypto;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -28,12 +29,16 @@ public sealed partial class ServiceCommandHandler
 
         // The discriminator, never the envelope: which refusal the ceremony
         // met is the diagnosis, and the envelope is sealed key material.
-        Log.ProvisionOutcome(runtime.LoggerFor<ServiceCommandHandler>(), answer switch
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Debug))
         {
-            ConfigurationChangeResult => "provisioned",
-            ServiceError error => error.Reason.ToString(),
-            _ => answer.GetType().Name,
-        });
+            Log.ProvisionOutcome(log, answer switch
+            {
+                ConfigurationChangeResult => "provisioned",
+                ServiceError error => error.Reason.ToString(),
+                _ => answer.GetType().Name,
+            });
+        }
         return answer;
     }
 
@@ -127,12 +132,16 @@ public sealed partial class ServiceCommandHandler
     private ServiceResult ConfirmRecoveryKit(ConfirmRecoveryKitCommand command)
     {
         var answer = ConfirmRecoveryKitCore(command);
-        Log.RecoveryKitConfirmation(runtime.LoggerFor<ServiceCommandHandler>(), answer switch
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Debug))
         {
-            ConfigurationChangeResult => "confirmed",
-            ServiceError error => error.Reason.ToString(),
-            _ => answer.GetType().Name,
-        });
+            Log.RecoveryKitConfirmation(log, answer switch
+            {
+                ConfigurationChangeResult => "confirmed",
+                ServiceError error => error.Reason.ToString(),
+                _ => answer.GetType().Name,
+            });
+        }
         return answer;
     }
 

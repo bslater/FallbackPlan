@@ -10,6 +10,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Agent;
@@ -58,9 +59,12 @@ public sealed partial class ServiceCommandHandler(
         // One trace line per command at the seam every verb crosses, so the
         // service's log reads as a conversation. Type names only: several
         // commands carry paths, and the names are enough to follow the flow.
-        Log.CommandExecuted(
-            runtime.LoggerFor<ServiceCommandHandler>(), command.GetType().Name, answer.GetType().Name,
-            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Trace))
+        {
+            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name,
+                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
         return answer;
     }
 

@@ -219,8 +219,11 @@ public static class WebConsoleHost
     {
         var started = Stopwatch.GetTimestamp();
         await handler().ConfigureAwait(false);
-        Log.RequestHandled(log, endpoint, context.Response.StatusCode,
-            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        if (log.IsEnabled(LogLevel.Trace))
+        {
+            Log.RequestHandled(log, endpoint, context.Response.StatusCode,
+                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
     }
 
     /// <summary>One command in, one result out — the whole data surface.</summary>
@@ -272,8 +275,11 @@ public static class WebConsoleHost
 
             var relayed = Stopwatch.GetTimestamp();
             result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
-            Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name,
-                (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds);
+            if (log.IsEnabled(LogLevel.Trace))
+            {
+                Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name,
+                    (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds);
+            }
         }
         catch (ServiceConnectionException exception)
         {
