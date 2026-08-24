@@ -1,8 +1,8 @@
+using FallbackPlan.Domain;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using Bodu;
-using FallbackPlan.Application;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 

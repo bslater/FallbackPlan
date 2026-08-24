@@ -1,6 +1,6 @@
 using Bodu;
 
-namespace FallbackPlan.Application;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// Whole-file replacement that a crash cannot half-apply.

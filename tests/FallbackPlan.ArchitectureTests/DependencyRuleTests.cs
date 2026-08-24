@@ -607,6 +607,33 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// The peer protocol speaks wire frames over Domain vocabulary and its
+    /// own stores (ADR-0030): it must not reach the use-case layer, the
+    /// engine, a provider, or a host. It referenced Application for years —
+    /// for two utility types, AtomicFile and ClientStateException, which now
+    /// live in Domain where a primitive with two consumers belongs — and no
+    /// rule existed to say otherwise.
+    /// </summary>
+    [TestMethod]
+    public void Protocol_DependencyClosure_KnowsNoUseCaseLayerAndNoEngine()
+    {
+        AssertPasses(
+            Types.InAssembly(Protocol)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Protocol must speak the wire over Domain alone (ADR-0030; 11 §2).");
+    }
+
+    /// <summary>
     /// The engine composes format, crypto, segmentation, packing, index,
     /// catalogue, the scanner contract and the storage <em>abstraction</em> —
     /// and no concrete provider (11 §2: providers depend on the abstraction,

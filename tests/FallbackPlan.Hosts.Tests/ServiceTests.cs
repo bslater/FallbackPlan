@@ -3,6 +3,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Hosts.Tests;

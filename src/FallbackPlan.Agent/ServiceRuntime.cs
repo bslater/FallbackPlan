@@ -2,6 +2,7 @@ using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;

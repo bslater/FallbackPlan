@@ -1,8 +1,8 @@
 using Bodu;
+using FallbackPlan.Domain;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Api;
-using FallbackPlan.Application;
 
 namespace FallbackPlan.Cli;
 
