@@ -1194,7 +1194,13 @@ function setupStep4() {
   // one this ceremony can hand over. It holds no passphrase and no keys, so
   // it is safe to print — and useless to anyone who does not also have the
   // passphrase, which is exactly why it must not live beside it.
-  if (U.resumed && !U.kit) {
+  // Keyed on the kit's absence, not on how we got here: a resumed ceremony
+  // and a fresh one whose response lost the kit (a stale cached page against
+  // a newer host, a console restarted mid-ceremony) are the same situation —
+  // no kit in hand, and the only way to one is the passphrase. Rendering the
+  // buttons without a kit made both of them silently do nothing, which is
+  // how a person gets stranded on a page that looks finished.
+  if (!U.kit) {
     return `
       <h1>Your recovery kit is still unsaved</h1>
       <p>This installation has its passphrase, but setup is not finished: the
@@ -1242,7 +1248,14 @@ function setupStep4() {
 // host returned it inline and keeps no copy, so there is nothing to fetch
 // back and nothing left behind if this tab closes.
 function setupTakeKit(kind) {
-  if (!U.kit) return;
+  if (!U.kit) {
+    // Unreachable now that the kit page requires a kit to render — but if a
+    // path back here ever appears, it must say so rather than eat the click.
+    toast("warn", "This page no longer holds the kit. Re-enter the passphrase to build it again.");
+    U.resumed = true;
+    setupRender();
+    return;
+  }
   const [data, name, type] = kind === "file"
     ? [Uint8Array.from(atob(U.kit.machine), c => c.charCodeAt(0)),
        "fallbackplan-recovery-kit.fbpkrkit", "application/octet-stream"]
