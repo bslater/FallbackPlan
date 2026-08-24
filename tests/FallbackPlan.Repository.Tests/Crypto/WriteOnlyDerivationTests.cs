@@ -224,4 +224,50 @@ public sealed class WriteOnlyDerivationTests
         Assert.ThrowsExactly<SealedContentException>(
             () => WriteOnlyProvisioning.OpenProvision(recipientPrivate, sealedBytes));
     }
+
+    [TestMethod]
+    public void ClaimRoot_SealedToTheRecipient_OpensBackToTheSameBytes()
+    {
+        var recipientPrivate = Enumerable.Repeat((byte)0x61, 32).ToArray();
+        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
+        var root = Enumerable.Repeat((byte)0x7C, KekDerivation.KekLength).ToArray();
+
+        var opened = WriteOnlyProvisioning.OpenClaimRoot(
+            recipientPrivate, WriteOnlyProvisioning.SealClaimRoot(recipientPublic, root));
+
+        SequenceAssert.AreEqual(root, opened);
+    }
+
+    [TestMethod]
+    public void ClaimRoot_OfTheWrongLength_IsRefusedBeforeItIsSealed()
+    {
+        var recipientPublic = ContentSealing.PublicKeyOf(Enumerable.Repeat((byte)0x62, 32).ToArray());
+
+        Assert.ThrowsExactly<ArgumentException>(
+            () => WriteOnlyProvisioning.SealClaimRoot(recipientPublic, new byte[31]));
+    }
+
+    [TestMethod]
+    public void ClaimRootAndRestoreGrant_AreNotInterchangeable_EvenForTheSameRecipient()
+    {
+        // The two envelopes carry the same 32 bytes to the same recipient and
+        // authorise entirely different things: a grant reads one repository's
+        // content, while a claim root can re-point that repository's
+        // attribution at a new device on somebody else's disk. Only the
+        // associated data separates them, so this is the test that the
+        // separation is real rather than intended (ADR-0046).
+        var recipientPrivate = Enumerable.Repeat((byte)0x63, 32).ToArray();
+        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
+        var material = Enumerable.Repeat((byte)0x7D, KekDerivation.KekLength).ToArray();
+
+        var asClaimRoot = WriteOnlyProvisioning.SealClaimRoot(recipientPublic, material);
+        var asGrant = WriteOnlyProvisioning.SealGrant(recipientPublic, material);
+
+        Assert.ThrowsExactly<SealedContentException>(
+            () => WriteOnlyProvisioning.OpenGrant(recipientPrivate, asClaimRoot),
+            "a claim root must not open as a restore grant");
+        Assert.ThrowsExactly<SealedContentException>(
+            () => WriteOnlyProvisioning.OpenClaimRoot(recipientPrivate, asGrant),
+            "a restore grant must not open as a claim root");
+    }
 }

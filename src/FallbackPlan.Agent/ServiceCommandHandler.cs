@@ -348,6 +348,7 @@ public sealed partial class ServiceCommandHandler(
         ListNoticesCommand listNotices => ListNotices(listNotices),
         AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
+        ClaimReplicasCommand claim => await ClaimReplicasAsync(claim, cancellationToken).ConfigureAwait(false),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),

@@ -75,6 +75,16 @@ internal static partial class Log
     internal static partial void ReplicasClaimed(ILogger logger, string fingerprint, int count);
 
     [LoggerMessage(
+        EventId = 3756, Level = LogLevel.Information,
+        Message = "Claimed {Count} replica(s) from peer {Fingerprint} by proving the passphrase")]
+    internal static partial void ReplicasClaimedFrom(ILogger logger, string fingerprint, int count);
+
+    [LoggerMessage(
+        EventId = 3757, Level = LogLevel.Warning,
+        Message = "Peer {Fingerprint} could not be asked to serve a claim: {Reason}")]
+    internal static partial void ClaimPeerUnreachable(ILogger logger, string fingerprint, string reason);
+
+    [LoggerMessage(
         EventId = 3722, Level = LogLevel.Information,
         Message = "Peering terminated by {Fingerprint}")]
     internal static partial void PeeringTerminated(ILogger logger, string fingerprint);
