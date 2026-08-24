@@ -1,7 +1,6 @@
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
-using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -156,7 +155,7 @@ internal static class ReplicaSweepJob
             var result = await ReplicaSweep.RunAsync(
                 archive.Repository.RepositoryId,
                 archive.Repository.Keys,
-                new LocalFileSystemObjectStore(replicaRoot),
+                StoreComposition.OpenLocal(replicaRoot),
                 archive.Store,
                 previous?.SweepCursor,
                 ReplicaSweep.DefaultBudget,

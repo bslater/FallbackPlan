@@ -6,6 +6,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using Microsoft.Extensions.Logging;
@@ -409,7 +410,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// </para>
     /// </remarks>
     private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
-        string setId, LocalFileSystemObjectStore store, bool createIfMissing, CancellationToken cancellationToken)
+        string setId, IObjectStore store, bool createIfMissing, CancellationToken cancellationToken)
     {
         using var provisioning = InstallationCredential.TryLoad();
         if (provisioning is null)
@@ -474,7 +475,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
             var path = ArchivePath(setId);
             Directory.CreateDirectory(path);
-            var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
+            var store = StoreComposition.OpenLocal(path, LoggerFor<LocalFileSystemObjectStore>());
 
             OpenedRepository repository;
             var openedWithPassphrase = false;

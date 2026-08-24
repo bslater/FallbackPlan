@@ -1,7 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Replication;
-using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -488,7 +487,7 @@ public static class FanOut
             // crossed, so the claim stops at the pre-copy sequence.
             var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
-            var replica = new LocalFileSystemObjectStore(replicaRoot);
+            var replica = StoreComposition.OpenLocal(replicaRoot);
 
             // Filling a destination volume to zero is a harm to the machine,
             // not just to this backup: logs stop, temp files fail, and on the

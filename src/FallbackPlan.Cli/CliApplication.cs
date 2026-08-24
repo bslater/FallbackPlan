@@ -18,7 +18,6 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
 using RestoreResult = FallbackPlan.Repository.RestoreResult;
 using FallbackPlan.Diagnostics;
@@ -395,7 +394,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                var store = new LocalFileSystemObjectStore(Repo(parse));
+                var store = StoreComposition.OpenLocal(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
 

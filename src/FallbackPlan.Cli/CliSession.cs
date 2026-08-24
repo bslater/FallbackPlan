@@ -4,7 +4,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
-using FallbackPlan.Storage.Local;
+using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Cli.Resources;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -45,7 +45,7 @@ public sealed class CliSession : IDisposable
     private StateDirectoryLock? _writerRole;
 
     private CliSession(
-        LocalFileSystemObjectStore store,
+        IObjectStore store,
         OpenedRepository repository,
         string stateDirectory,
         StateDirectoryLock? writerRole,
@@ -61,7 +61,7 @@ public sealed class CliSession : IDisposable
     /// <summary>Whether this command took the writer role — i.e. is in direct mode.</summary>
     public bool HoldsWriterRole => _writerRole is not null;
 
-    public LocalFileSystemObjectStore Store { get; }
+    public IObjectStore Store { get; }
 
     public OpenedRepository Repository { get; }
 
@@ -152,7 +152,7 @@ public sealed class CliSession : IDisposable
     {
         var log = logger ?? NullLogger.Instance;
 
-        var store = new LocalFileSystemObjectStore(repoPath, log);
+        var store = StoreComposition.OpenLocal(repoPath, log);
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
         OpenedRepository repository;

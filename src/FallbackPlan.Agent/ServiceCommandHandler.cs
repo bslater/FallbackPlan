@@ -312,7 +312,7 @@ public sealed partial class ServiceCommandHandler(
                     destination.Path!, archive.Repository.RepositoryId.ToString());
                 return Directory.Exists(replicaRoot)
                     ? Retention.TrimVerification.AgainstStore(
-                        new Storage.Local.LocalFileSystemObjectStore(replicaRoot))
+                        StoreComposition.OpenLocal(replicaRoot))
                     : Retention.TrimVerification.None;
 
             case DestinationKind.Peer:

@@ -1,6 +1,6 @@
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index;
-using FallbackPlan.Storage.Local;
+using FallbackPlan.Storage.Abstractions;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using Microsoft.Extensions.Logging;
 
@@ -22,7 +22,7 @@ namespace FallbackPlan.Agent;
 public sealed class ArchiveHandle : IDisposable
 {
     /// <summary>The archive's object store.</summary>
-    public required LocalFileSystemObjectStore Store { get; init; }
+    public required IObjectStore Store { get; init; }
 
     /// <summary>The unlocked repository.</summary>
     public required OpenedRepository Repository { get; init; }

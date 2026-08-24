@@ -13,7 +13,6 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;

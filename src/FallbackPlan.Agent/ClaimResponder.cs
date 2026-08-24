@@ -2,7 +2,6 @@ using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 using System.Security.Cryptography;
 
 namespace FallbackPlan.Agent;
@@ -169,7 +168,7 @@ internal static class ClaimResponder
             return [];
         }
 
-        var store = new LocalFileSystemObjectStore(path);
+        var store = StoreComposition.OpenLocal(path);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var setIds = new List<ReadOnlyMemory<byte>>();
 

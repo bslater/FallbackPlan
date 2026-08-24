@@ -113,7 +113,11 @@ public static class RecoveryHost
             // installation kit reads the archive's own identity from its
             // descriptor first (recovery-kit §6).
             using var session = await RecoverySession.OpenAsync(
-                kit, passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
+                kit, passphrase,
+                // The tool's one composition point (ADR-0012): a standalone
+                // binary over a local path is the whole product here, so the
+                // provider choice is made once, inline, where it is visible.
+                new LocalFileSystemObjectStore(repoPath), cancellationToken)
                 .ConfigureAwait(false);
             Log.KeysDerived(log);
 

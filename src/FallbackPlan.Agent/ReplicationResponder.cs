@@ -1,7 +1,6 @@
 using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 using System.Security.Cryptography;
 
 namespace FallbackPlan.Agent;
@@ -113,7 +112,7 @@ internal static class ReplicationResponder
                 throw CannotStore(storage);
             }
 
-            var replica = new LocalFileSystemObjectStore(replicaPath);
+            var replica = StoreComposition.OpenLocal(replicaPath);
 
             // Quota 0 declares no ceiling (05 §1); anything above it bounds
             // the peer's committed bytes across every repository it owns
@@ -188,7 +187,7 @@ internal static class ReplicationResponder
     /// when the peer closes.
     /// </summary>
     private static async Task<long> ServeAfterAckAsync(
-        LocalFileSystemObjectStore replica,
+        IObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
         bool retentionNegotiated,
@@ -258,7 +257,7 @@ internal static class ReplicationResponder
     /// over ciphertext this side already holds.
     /// </summary>
     private static async Task ServeChallengeAsync(
-        LocalFileSystemObjectStore replica,
+        IObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         System.Formats.Cbor.CborReader body,
         Stream stream,
@@ -310,7 +309,7 @@ internal static class ReplicationResponder
     /// single manifest can still refuse to breach it.
     /// </summary>
     private static async Task<long> ServeRetentionAsync(
-        LocalFileSystemObjectStore replica,
+        IObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
         System.Formats.Cbor.CborReader firstBody,
@@ -395,7 +394,7 @@ internal static class ReplicationResponder
     /// would leave it guessing which one it was answering.
     /// </remarks>
     private static async Task SendInventoryAsync(
-        LocalFileSystemObjectStore replica,
+        IObjectStore replica,
         Stream stream,
         ulong? headroom,
         ReadOnlyMemory<byte>? claimToken,
@@ -422,7 +421,7 @@ internal static class ReplicationResponder
     }
 
     private static async Task<long> ReceiveAsync(
-        LocalFileSystemObjectStore replica, string spoolRoot, Stream stream,
+        IObjectStore replica, string spoolRoot, Stream stream,
         ulong quota, ulong usage,
         FallbackPlan.Application.ReplicaOwnerStore owners,
         string repositoryIdHex,
@@ -571,7 +570,7 @@ internal static class ReplicationResponder
                 continue;
             }
 
-            var store = new LocalFileSystemObjectStore(path);
+            var store = StoreComposition.OpenLocal(path);
             await foreach (var entry in store.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -630,7 +629,7 @@ internal static class ReplicationResponder
             _received = next;
         }
 
-        public async ValueTask CommitAsync(LocalFileSystemObjectStore replica, CancellationToken cancellationToken)
+        public async ValueTask CommitAsync(IObjectStore replica, CancellationToken cancellationToken)
         {
             if (!ObjectKey.TryParse(_key, out var objectKey))
             {
