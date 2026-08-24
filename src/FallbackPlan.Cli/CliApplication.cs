@@ -318,6 +318,21 @@ public static class CliApplication
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
 
+        // The specification's own vocabulary (06 §6), not a friendlier
+        // paraphrase: "best-effort live capture" and "application-consistent"
+        // are materially different promises, and softening either is how a
+        // person ends up trusting a database restore they should not.
+        // An unassigned value is printed rather than guessed at — a future
+        // writer may use one this build has never heard of.
+        static string ConsistencyName(byte method) => method switch
+        {
+            1 => "live",
+            2 => "vss",
+            3 => "filesystem-snapshot",
+            4 => "application-quiesced",
+            _ => string.Create(CultureInfo.InvariantCulture, $"unknown({method})"),
+        };
+
         static bool TryParseEndpoint(string target, out string host, out int port)
         {
             host = string.Empty;
@@ -593,6 +608,7 @@ public static class CliApplication
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                             $"generation     {snapshot.Manifest.PublicationGeneration}"));
                         output.WriteLine($"client         {snapshot.Manifest.ClientVersion}");
+                        output.WriteLine($"consistency    {ConsistencyName(snapshot.Manifest.ConsistencyMethod)}");
                         break;
 
                     case ObjectType.PolicyManifest:
@@ -959,8 +975,15 @@ public static class CliApplication
                         var destinations = snapshot.Destinations is { Count: > 0 }
                             ? "  " + string.Join(", ", snapshot.Destinations)
                             : string.Empty;
+
+                        // A service too old to report the method says nothing
+                        // rather than claiming "live" on its behalf: those are
+                        // different answers (specification 06 §6).
+                        var consistency = snapshot.ConsistencyMethod is { } method
+                            ? $"  {ConsistencyName(method)}"
+                            : string.Empty;
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){destinations}"));
+                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{destinations}"));
                     }
 
                     return 0;
@@ -982,7 +1005,9 @@ public static class CliApplication
                         .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     var status = snapshot.CaptureStatus == 1 ? "complete" : "partial";
                     var signature = snapshot.SignatureState == 1 ? "verified" : snapshot.SignatureState == 2 ? "BAD-SIG" : "unverified";
-                    output.WriteLine($"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature}");
+                    output.WriteLine(
+                        $"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature,-10}  " +
+                        ConsistencyName(snapshot.ConsistencyMethod));
                 }
 
                 return 0;

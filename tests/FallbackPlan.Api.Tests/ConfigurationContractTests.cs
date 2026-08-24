@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheReplicaClaimVerb_IsRecordedAtOneSeventeen()
+    public void ContractVersion_TheSnapshotConsistencyMethod_IsRecordedAtOneEighteen()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.17", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.18", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -74,7 +74,12 @@ public sealed class ConfigurationContractTests : IDisposable
                     PreviousSnapshotId: "ff00"),
                 OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
                     "ab12cd34ef56ab78", "docs", "vault",
-                    [new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3)],
+                    [
+                        new SnapshotDescriptor(
+                            new string('e', 32), new string('a', 32), 42UL, 1, 3,
+                            ConsistencyMethod: 2),
+                        new SnapshotDescriptor(new string('d', 32), new string('a', 32), 41UL, 1, 3),
+                    ],
                     ["one blob would not open"]),
                 CloseRestoreSourceCommand => new AcknowledgedResult(),
                 RunRestoreCommand => new RestoreResult(
@@ -180,8 +185,18 @@ public sealed class ConfigurationContractTests : IDisposable
             await client.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
             out var opened);
         Assert.AreEqual("vault", opened.Location);
-        Assert.AreEqual(42UL, Assert.ContainsSingle(opened.Snapshots).CapturedAt);
+        Assert.HasCount(2, opened.Snapshots);
+        Assert.AreEqual(42UL, opened.Snapshots[0].CapturedAt);
         Assert.ContainsSingle(opened.Warnings);
+
+        // Both shapes of the consistency method cross the boundary: a service
+        // that knows how the capture was taken, and one too old to say. Null
+        // is not 1 — "captured live" and "would not say" are different answers
+        // to someone deciding whether to trust a restored database
+        // (specification 06 §6), and a codec that defaulted the absent one to
+        // live would be inventing a promise.
+        Assert.AreEqual((byte)2, opened.Snapshots[0].ConsistencyMethod);
+        Assert.IsNull(opened.Snapshots[1].ConsistencyMethod);
 
         Assert.IsInstanceOfType<RestoreResult>(
             await client.ExecuteAsync(

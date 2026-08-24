@@ -169,7 +169,9 @@ public sealed partial class ServiceCommandHandler
                     Convert.ToHexStringLower(row.BackupSetId.Span),
                     row.CapturedAt,
                     row.CaptureStatus,
-                    catalogue.CountFiles(row.SnapshotId.Span)));
+                    catalogue.CountFiles(row.SnapshotId.Span),
+                    Destinations: null,
+                    ConsistencyMethod: row.ConsistencyMethod));
             }
         }
 

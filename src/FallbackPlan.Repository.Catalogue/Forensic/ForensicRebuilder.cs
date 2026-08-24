@@ -290,7 +290,8 @@ public sealed class ForensicRebuilder : IDisposable
                 decoded.Manifest.PublicationGeneration,
                 decoded.Manifest.CaptureStatus,
                 signatureState,
-                decoded.Manifest.CaptureCompletedAt);
+                decoded.Manifest.CaptureCompletedAt,
+                decoded.Manifest.ConsistencyMethod);
 
             // Walk root tree → subdirectories → file versions → segments
             // through the indexed metadata records, projecting the paths.

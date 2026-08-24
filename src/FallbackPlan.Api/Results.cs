@@ -393,13 +393,21 @@ public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResu
 /// (<c>pending</c>, <c>replicating</c>, <c>durable</c>, <c>verified</c>,
 /// <c>degraded</c>); null from a service that could not derive it.
 /// </param>
+/// <param name="ConsistencyMethod">
+/// How the capture was taken: 1 live, 2 VSS, 3 filesystem snapshot,
+/// 4 application-quiesced (specification 06 §6). Null from a service too old
+/// to report it, which is not the same fact as 1 — "captured live" and "would
+/// not say" send a person restoring a database to different places, and this
+/// value exists precisely because those are different promises.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
     ulong CapturedAt,
     byte CaptureStatus,
     long Files,
-    IReadOnlyList<string>? Destinations = null);
+    IReadOnlyList<string>? Destinations = null,
+    byte? ConsistencyMethod = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">The snapshots, oldest first.</param>

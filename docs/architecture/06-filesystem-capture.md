@@ -108,14 +108,16 @@ That read is best-effort by construction. If the prior manifest cannot be fetche
 
 ## 5. Consistency
 
-| Method | Platform | Guarantee |
-|--------|----------|-----------|
-| VSS | Windows | Application-consistent where writers cooperate; crash-consistent otherwise |
-| Live capture + pre/post stat validation | All | Best-effort; per-file consistency detected, not guaranteed |
-| Filesystem snapshots (APFS, Btrfs, ZFS, LVM) | Later phase | Crash-consistent |
-| Application hooks | Later phase | Application-defined |
+| Method | Platform | Guarantee | Built |
+|--------|----------|-----------|-------|
+| Live capture + pre/post stat validation | All | Best-effort; per-file consistency detected, not guaranteed | **Yes** — the only method this build uses |
+| VSS | Windows | Application-consistent where writers cooperate; crash-consistent otherwise | Later phase |
+| Filesystem snapshots (APFS, Btrfs, ZFS, LVM) | Where the volume supports it | Crash-consistent | Later phase |
+| Application hooks | All | Application-defined | Later phase |
 
 The snapshot manifest records **which method was used**, and the status display reports it. "Best-effort" and "application-consistent" are materially different promises and a user restoring a database needs to know which one they have.
+
+The **Built** column was added after a review found this table read as though VSS already existed — it alone carried a platform where the other unbuilt rows carried "Later phase", which contradicted [00 §4.2](00-overview.md#42-later-releases) listing all of it as later work. Every snapshot this build takes records method 1, and now says so: the catalogue carries it, the contract carries it, and both `snapshot list` and the console's snapshot table show it. Until that plumbing landed the two sentences above were simply false — the value was recorded and read by nothing.
 
 ## 6. Backup set selection
 

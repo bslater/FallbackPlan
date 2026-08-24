@@ -20,7 +20,8 @@ public sealed record CatalogueSnapshot(
     ulong PublicationGeneration,
     byte CaptureStatus,
     int SignatureState,
-    ulong CapturedAt);
+    ulong CapturedAt,
+    byte ConsistencyMethod = 1);
 
 /// <summary>
 /// One path within a snapshot (schema v2 <c>tree_entries</c>), joined with
@@ -361,7 +362,8 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT snapshot_id, device_id, backup_set_id, object_id, root_tree,
-                   publication_generation, capture_status, signature_state, captured_at
+                   publication_generation, capture_status, signature_state, captured_at,
+                   consistency_method
             FROM snapshots
             ORDER BY captured_at DESC, snapshot_id;
             """;
@@ -379,7 +381,8 @@ public sealed class Catalogue : IDisposable
                 (ulong)reader.GetInt64(5),
                 (byte)reader.GetInt64(6),
                 (int)reader.GetInt64(7),
-                (ulong)reader.GetInt64(8)));
+                (ulong)reader.GetInt64(8),
+                (byte)reader.GetInt64(9)));
         }
 
         return snapshots;
@@ -616,13 +619,14 @@ public sealed class Catalogue : IDisposable
         ulong publicationGeneration,
         byte captureStatus,
         int signatureState,
-        ulong capturedAt = 0)
+        ulong capturedAt = 0,
+        byte consistencyMethod = 1)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO snapshots
-                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state, captured_at)
-            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature, $captured);
+                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state, captured_at, consistency_method)
+            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature, $captured, $consistency);
             """;
         command.Parameters.AddWithValue("$id", snapshotId.ToArray());
         command.Parameters.AddWithValue("$device", deviceId.ToArray());
@@ -633,6 +637,7 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$status", captureStatus);
         command.Parameters.AddWithValue("$signature", signatureState);
         command.Parameters.AddWithValue("$captured", (long)capturedAt);
+        command.Parameters.AddWithValue("$consistency", consistencyMethod);
         command.ExecuteNonQuery();
     }
 

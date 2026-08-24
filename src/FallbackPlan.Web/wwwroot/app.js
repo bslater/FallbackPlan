@@ -448,6 +448,22 @@ function renderSetCard(set) {
 
 /* ----- snapshots ----- */
 
+// How the capture was taken (specification 06 §6). The specification's own
+// words, not a friendlier paraphrase: "best-effort live capture" and
+// "application-consistent" are materially different promises, and a person
+// deciding whether to trust a restored database is exactly who this is for.
+// A service too old to report it shows nothing rather than claiming "live" on
+// its behalf — those are different answers.
+function consistencyName(method) {
+  switch (method) {
+    case 1: return "live capture";
+    case 2: return "VSS";
+    case 3: return "filesystem snapshot";
+    case 4: return "application-quiesced";
+    default: return `unknown (${method})`;
+  }
+}
+
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
   const snapshots = [...S.snapshots].reverse()
@@ -473,7 +489,8 @@ function renderSnapshots() {
               <td><b>${esc(fmtWhen(s.capturedAt))}</b><div class="detail mono">${esc(s.snapshotId.slice(0, 16))}…</div></td>
               <td>${esc(setName(s.backupSetId))}</td>
               <td class="num">${fmtCount(s.files)}</td>
-              <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}</td>
+              <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}
+                  ${s.consistencyMethod == null ? "" : `<div class="detail">${esc(consistencyName(s.consistencyMethod))}</div>`}</td>
               <td>${(s.destinations ?? []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ") || "<span class='detail'>—</span>"}</td>
               <td>
                 <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}">Browse</button>
