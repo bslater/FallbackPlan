@@ -585,6 +585,20 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.Contains("captured-inconsistent: 2", diagnosed.CaptureDiagnostics);
         Assert.DoesNotContain(diagnostic =>
             diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal), settled.CaptureDiagnostics);
+
+        // And the backup is CLEAN. This is the load-bearing half, because
+        // ADR-0026 §Decision 2's "a file with no complete read is instead an
+        // error-manifest entry, reason 4" invites a reading in which
+        // exhausting the attempt bound is itself reason 4. It is not: a log
+        // being appended to never revalidates, so under that reading every
+        // backup of every machine with an active log would reference an error
+        // manifest, capture_status would be 2 for ever, RetentionPlanner would
+        // find no complete snapshot to fill a daily bucket or the
+        // min-generations floor, and NFR-OPS-002's degraded state would mean
+        // nothing because it would always be on. A complete read is one that
+        // ran to the source's end, not one revalidation liked.
+        Assert.IsEmpty(published.Failures);
+        Assert.IsNull(published.ErrorManifestObjectId);
     }
 
     [TestMethod]

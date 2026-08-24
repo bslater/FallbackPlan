@@ -820,9 +820,7 @@ public sealed partial class PublicationOrchestrator
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
-                Log.FileFailed(logger, new LogPath(entry.RelativePath), exception.Message);
-                _failures.Add(ToCaptureFailure(entry.RelativePath, exception));
+                RecordFailure(entry, ClassifyFailure(exception), exception.Message);
             }
         }
 
@@ -993,6 +991,7 @@ public sealed partial class PublicationOrchestrator
             var attempts = 0;
             var consistent = false;
             var substituted = false;
+            Exception? readFault = null;
 
             // Read, then revalidate: a file that changed mid-read is read
             // again, up to the option's bound; content is always a complete
@@ -1001,13 +1000,46 @@ public sealed partial class PublicationOrchestrator
             {
                 attempts++;
 
-                var stream = job.Source.OpenRead(entry);
-                await using (stream.ConfigureAwait(false))
+                try
                 {
-                    archive = entry.SparseExtents.Count > 0 && stream.CanSeek
-                        ? await session.ArchiveSparseFileAsync(
-                            stream, entry.SparseExtents, stream.Length, cancellationToken).ConfigureAwait(false)
-                        : await session.ArchiveFileAsync(stream, priorVersion: null, cancellationToken).ConfigureAwait(false);
+                    var stream = job.Source.OpenRead(entry);
+                    await using (stream.ConfigureAwait(false))
+                    {
+                        archive = entry.SparseExtents.Count > 0 && stream.CanSeek
+                            ? await session.ArchiveSparseFileAsync(
+                                stream, entry.SparseExtents, stream.Length, cancellationToken).ConfigureAwait(false)
+                            : await session.ArchiveFileAsync(stream, priorVersion: null, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (IOException exception)
+                    when (exception is not FileNotFoundException and not DirectoryNotFoundException)
+                {
+                    // A failing medium and a file being rewritten under the
+                    // reader raise the same exception type, and only
+                    // revalidation tells them apart. An unchanged object that
+                    // would not read is an I/O error exactly as it has always
+                    // been, so it leaves by the same door.
+                    //
+                    // The rethrow is a statement rather than a call in the
+                    // filter above, and that is not style: an exception raised
+                    // inside an exception filter is silently read as "the
+                    // filter did not match", so a fault in Revalidate would
+                    // lose the classification rather than report it.
+                    if (!ChangedSinceScan(entry, job.Source.Revalidate(entry)))
+                    {
+                        throw;
+                    }
+
+                    // Not retried, deliberately. A failed attempt has already
+                    // claimed segment object ids in the session — the
+                    // reservation ArchiveSession makes before the barrier
+                    // appends the record — and a second attempt would see them
+                    // as written and emit references to records that never
+                    // arrived, which is a dangling reference discovered at
+                    // restore. ReadAttempts is a budget for a file that
+                    // CHANGED, not for one that will not read.
+                    readFault = exception;
+                    break;
                 }
 
                 var probe = job.Source.Revalidate(entry);
@@ -1025,14 +1057,41 @@ public sealed partial class PublicationOrchestrator
                     break;
                 }
 
-                if (probe is null ||
-                    (probe.Length == archive.LogicalLength &&
-                     (probe.ModifiedAtMs is null || entry.Metadata.ModifiedAt is null ||
-                      probe.ModifiedAtMs == entry.Metadata.ModifiedAt)))
+                // Gone, or otherwise unobservable. The bytes are in hand and
+                // they are a complete read, but nothing can confirm what they
+                // are the content OF — and re-reading cannot help, because the
+                // name no longer resolves and the attempt would be spent on a
+                // lookup that has already failed. Recorded as inconsistent
+                // rather than accepted as clean, which is what a null probe
+                // used to mean.
+                if (probe is null)
+                {
+                    break;
+                }
+
+                if (probe.Length == archive.LogicalLength &&
+                    (probe.ModifiedAtMs is null || entry.Metadata.ModifiedAt is null ||
+                     probe.ModifiedAtMs == entry.Metadata.ModifiedAt))
                 {
                     consistent = true;
                     break;
                 }
+            }
+
+            if (readFault is not null && archive is null)
+            {
+                // No complete read at all, of a file revalidation says was
+                // changing while it was read (ADR-0026 §Decision 2). Not a
+                // version: there are no bytes to publish, so this is the one
+                // place reason 4 belongs. A file that DID yield a complete
+                // read falls through instead and keeps it — the ADR's "content
+                // is the last complete read" clause — because a log being
+                // appended to must not report a backup as partial.
+                RecordFailure(
+                    entry,
+                    CaptureFailureReason.ChangedDuringRead,
+                    $"The file changed while it was being read and no read completed: {readFault.Message}");
+                return null;
             }
 
             if (substituted)
@@ -1133,11 +1192,30 @@ public sealed partial class PublicationOrchestrator
             return entry.Metadata with { AlternateStreams = streams };
         }
 
+        /// <summary>
+        /// Whether revalidation says the object is no longer the one the scan
+        /// classified. Compared against the <em>scan's</em> values rather than
+        /// against an archive result, because this is the question asked when
+        /// there is no archive result — the read never finished.
+        /// </summary>
+        private static bool ChangedSinceScan(ScanEntry entry, RevalidationProbe? probe) =>
+            probe is null
+            || (probe.Identity is { } observed && entry.Identity is { } expected &&
+                (observed.Device != expected.Device || observed.FileId != expected.FileId))
+            || probe.Length != entry.Length
+            || (probe.ModifiedAtMs is not null && entry.Metadata.ModifiedAt is not null &&
+                probe.ModifiedAtMs != entry.Metadata.ModifiedAt);
+
+        /// <summary>Counts, logs and records one file's failure — the walker's single door out.</summary>
+        private void RecordFailure(ScanEntry entry, CaptureFailureReason reason, string detail)
+        {
+            EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
+            Log.FileFailed(logger, new LogPath(entry.RelativePath), detail);
+            _failures.Add(new CaptureFailure(SplitPath(entry.RelativePath), reason, detail));
+        }
+
         private static CaptureFailure ToCaptureFailure(ScanFailure failure) =>
             new(SplitPath(failure.RelativePath), failure.Reason, failure.Detail);
-
-        private static CaptureFailure ToCaptureFailure(string relativePath, Exception exception) =>
-            new(SplitPath(relativePath), ClassifyFailure(exception), exception.Message);
 
         private static CaptureFailureReason ClassifyFailure(Exception exception) => exception switch
         {
