@@ -1167,6 +1167,11 @@ function setupRender() {
       `<span class="${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
     ${body}
   </div>`;
+  // The strength bar's width cannot be an inline style attribute — the CSP
+  // (default-src 'self', no unsafe-inline) blocks those, which is how the
+  // meter came to render with no bar at all. A CSSOM assignment is permitted.
+  const bar = host.querySelector("[data-meter-width]");
+  if (bar) bar.style.width = `${bar.dataset.meterWidth}%`;
   if (U.step === 2) {
     const field = document.getElementById("setup-pass");
     field?.focus();
@@ -1212,7 +1217,7 @@ function setupStep2() {
       spellcheck="false" placeholder="the passphrase for this installation"
       value="${esc(U.passphrase)}" data-action-input="setup-pass">
     ${meter ? `
-      <div class="meter meter-${esc(meter.band)}"><i style="width:${Math.max(4, meter.score)}%"></i></div>
+      <div class="meter meter-${esc(meter.band)}"><i data-meter-width="${Math.max(4, meter.score)}"></i></div>
       <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="setup-back">‹ Back</button>
@@ -1346,7 +1351,7 @@ function setupScheduleStrength() {
         return;
       }
       U.strength = await response.json();
-      setupRender();
+      if (U.step === 2) setupRender();
     } catch {
       // The meter is a courtesy; the submit is where the policy is enforced.
       // But a meter that never answers leaves step 2's Continue disabled with
@@ -1370,9 +1375,18 @@ const setupActions = {
   "setup-pass"(el) {
     U.passphrase = el.value;
     // No re-render here: it would replace the field the person is typing in.
-    setupScheduleStrength();
+    // The meter only means something on step 2 — on the rebuild page the
+    // passphrase must match the existing one, and strength is not the gate.
+    if (U.step === 2) setupScheduleStrength();
     const go = document.querySelector('[data-action="setup-to-confirm"]');
     if (go) go.disabled = !U.strength?.acceptable;
+    // The rebuild page reuses this field and gates its button on the text
+    // being non-empty. Enable it directly, for the same no-re-render reason —
+    // it used to depend on the strength response happening to re-render the
+    // page, which also replaced this field mid-typing and stole its focus:
+    // the page read as one where every control is dead.
+    const rebuild = document.querySelector('[data-action="setup-rebuild-kit"]');
+    if (rebuild) rebuild.disabled = U.busy || U.passphrase.length === 0;
   },
 
   "setup-to-confirm"() { if (U.strength?.acceptable) { U.step = 3; setupRender(); } },
