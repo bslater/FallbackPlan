@@ -196,6 +196,7 @@
           "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Diagnostics": "[1.0.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Keystore": "[1.0.0, )",
           "FallbackPlan.Protocol": "[1.0.0, )",
