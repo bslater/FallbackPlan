@@ -1160,6 +1160,13 @@ function renderSetupGate() {
 
 function setupRender() {
   trace("setupRender", setupView());
+  // While the ceremony owns the screen, no modal may sit over it — an open
+  // dialog makes the whole page inert. Nothing opens one on purpose any
+  // more; if a path ever does, heal and say so rather than freeze.
+  if (dialog.open) {
+    trace("setupRender", "a modal was open over the ceremony — closing it");
+    closeDialog();
+  }
   const host = document.getElementById("setup");
   const body = [setupStep1, setupStep2, setupStep3, setupStep4][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
@@ -1273,6 +1280,9 @@ function setupStep4() {
   }
 
   return `
+    ${U.provisioned?.length ? `
+      <p class="gate-hint">Passphrase accepted.</p>
+      <pre class="report">${esc(U.provisioned.join("\n"))}</pre>` : ""}
     <h1>Save your recovery kit</h1>
     <p>This is the <b>second</b> of the two things a recovery needs. Your
     passphrase is the first, and it is <b>not</b> in this file.</p>
@@ -1323,6 +1333,7 @@ function setupTakeKit(kind) {
   link.href = url;
   link.download = name;
   link.click();
+  trace("setupTakeKit", { kind, delivered: true });
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 
   U.taken = true;
@@ -1438,7 +1449,11 @@ const setupActions = {
     U.strength = null;
     U.kit = body.kit ?? null;
     U.step = 4;
-    reportDialog("Passphrase accepted", body.lines ?? []);
+    // Inline, never a modal: a native dialog makes everything behind it
+    // inert, and a ceremony that owns the whole screen must not hand the
+    // page to a second state machine mid-flight — a modal that fails to be
+    // seen or closed freezes every button on this page.
+    U.provisioned = body.lines ?? [];
     setupRender();
   },
 
