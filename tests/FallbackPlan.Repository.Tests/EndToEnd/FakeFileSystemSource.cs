@@ -47,6 +47,47 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         /// substitution rather than an edit.
         /// </summary>
         public ScanIdentity? SubstitutedIdentity { get; set; }
+
+        /// <summary>
+        /// When set, reading this node's content throws once an attempt has
+        /// produced this many bytes — the fault a failing medium raises
+        /// part-way through a file, which a frozen buffer cannot express.
+        /// Zero faults before the first byte.
+        /// </summary>
+        public int? FailReadAfterBytes { get; set; }
+
+        /// <summary>The exception a mid-read fault raises; an <see cref="IOException"/> by default.</summary>
+        public Exception? ReadFailure { get; set; }
+
+        /// <summary>The first open (1-based) a mid-read fault applies to.</summary>
+        public int FailFromOpen { get; set; } = 1;
+
+        /// <summary>
+        /// The content this node switches to once <see cref="MutateAfterBytes"/>
+        /// bytes of an attempt have been read — the file rewritten in place
+        /// under a reader already part-way through it. Applied once; the
+        /// attempt in flight then reads the <em>new</em> bytes from that offset
+        /// on, which is what an in-place rewrite does to an open descriptor and
+        /// is precisely the torn read the publisher has to refuse.
+        /// </summary>
+        public byte[]? MutatedContent { get; set; }
+
+        /// <summary>How far into an attempt <see cref="MutatedContent"/> lands.</summary>
+        public int MutateAfterBytes { get; set; }
+
+        /// <summary>The modification time the mutation stamps, so revalidation can see it.</summary>
+        public ulong? MutatedModifiedAt { get; set; }
+
+        /// <summary>
+        /// Runs immediately after this node's content stream is handed out —
+        /// the window in which a file is deleted or replaced while a reader
+        /// holds it. Removing the node here is what makes
+        /// <see cref="Revalidate"/> answer null.
+        /// </summary>
+        public Action<Node>? OnOpened { get; set; }
+
+        /// <summary>How many times this node's content has been opened.</summary>
+        public int Opens { get; set; }
     }
 
     private readonly Dictionary<string, Node> _nodes = [];
@@ -229,14 +270,129 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         // Keyed by FullPath — the node's own key — because a multi-root
         // adapter rewrites RelativePath with the label, exactly as the real
         // source opens by path or handle rather than by the rules subject.
-        var node = _nodes[entry.FullPath];
+        if (!_nodes.TryGetValue(entry.FullPath, out var node))
+        {
+            // A missing node is a missing file, not a broken test harness.
+            // The bare KeyNotFoundException this used to raise is neither an
+            // IOException nor an UnauthorizedAccessException, so the walker's
+            // per-file catch would not have absorbed it and one vanished file
+            // would have aborted the whole publication.
+            throw new FileNotFoundException("The node is no longer present.", entry.FullPath);
+        }
+
         if (node.OpenFailure is not null)
         {
             throw node.OpenFailure;
         }
 
         OpenedPaths.Add(entry.FullPath);
-        return new MemoryStream(node.Content, writable: false);
+        node.Opens++;
+
+        // A plain buffer for an unarmed node, deliberately: most of this
+        // suite reads through here, and giving all of it a new stream type to
+        // serve a handful of tests would be a change with no reader.
+        var content = node.FailReadAfterBytes is null && node.MutatedContent is null
+            ? new MemoryStream(node.Content, writable: false)
+            : (Stream)new NodeContentStream(node);
+
+        node.OnOpened?.Invoke(node);
+        return content;
+    }
+
+    /// <summary>
+    /// A node's content served <em>live</em> rather than frozen, so a fault or
+    /// an in-place rewrite can land part-way through a read. The seam
+    /// <see cref="MemoryStream"/> cannot reach.
+    /// </summary>
+    /// <remarks>
+    /// Seekable on purpose: the publisher picks its sparse path on
+    /// <c>stream.CanSeek</c>, so an unseekable stream here would quietly
+    /// reroute every sparse test rather than failing one.
+    /// See also <c>InterruptionHarness.FaultingStream</c>, which faults a fixed
+    /// buffer and has no node to mutate.
+    /// </remarks>
+    private sealed class NodeContentStream(Node node) : Stream
+    {
+        private readonly int _length = node.Content.Length;
+        private long _position;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => true;
+
+        public override bool CanWrite => false;
+
+        public override long Length => _length;
+
+        public override long Position
+        {
+            get => _position;
+            set => _position = value;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (node.FailReadAfterBytes is { } limit && node.Opens >= node.FailFromOpen && _position >= limit)
+            {
+                throw node.ReadFailure ?? new IOException("Injected fault: the source failed mid-file.");
+            }
+
+            if (node.MutatedContent is { } next && _position >= node.MutateAfterBytes)
+            {
+                // Once, and from this offset on. What the reader has already
+                // consumed came from the old bytes and stays consumed — which
+                // is the tear.
+                node.Content = next;
+                node.Metadata = node.Metadata with { ModifiedAt = node.MutatedModifiedAt ?? node.Metadata.ModifiedAt };
+                node.MutatedContent = null;
+            }
+
+            var available = node.Content.Length - (int)_position;
+            if (available <= 0)
+            {
+                // The file was truncated under the reader: a short read, which
+                // is what the platform would give.
+                return 0;
+            }
+
+            var taken = Math.Min(buffer.Length, available);
+            node.Content.AsSpan((int)_position, taken).CopyTo(buffer);
+            _position += taken;
+            return taken;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            _position = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                _ => _length + offset,
+            };
+
+            return _position;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     public Stream OpenAlternateStream(ScanEntry entry, string streamName) =>
