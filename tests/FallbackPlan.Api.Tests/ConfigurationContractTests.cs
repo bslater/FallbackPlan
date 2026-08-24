@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheAuthenticationSurface_IsRecordedAtOneSixteen()
+    public void ContractVersion_TheReplicaClaimVerb_IsRecordedAtOneSeventeen()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.16", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.17", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -60,6 +60,13 @@ public sealed class ConfigurationContractTests : IDisposable
                     [new NoticeDescriptor("ab12cd34", "set-changed:x", "the message", 9UL, 11UL)]),
                 AcknowledgeNoticeCommand => new AcknowledgedResult(),
                 UnpairCommand => new ConfigurationChangeResult(["revoked"]),
+                ClaimReplicasCommand => new ClaimedReplicasResult(
+                    [
+                        new ClaimedFromPeer(
+                            "fp99",
+                            [new ClaimedReplicaDescriptor(new string('b', 32), [new string('c', 32)])]),
+                        new ClaimedFromPeer("fp77", [], "the peer did not answer"),
+                    ]),
                 ListDirectoryCommand => new DirectoryResult(
                     "docs",
                     [new DirectoryEntryDescriptor("a.txt", "file", 12, ModifiedAt: 5UL, Change: "changed")],
@@ -136,6 +143,21 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.IsInstanceOfType<ConfigurationChangeResult>(
             await client.ExecuteAsync(
                 new UnpairCommand("fp99", Notify: false, Endpoint: "10.0.0.9:7777"), _timeout.Token));
+
+        // A claim's answer has to survive the boundary with both of its
+        // shapes intact: a peer that yielded something, and a peer that could
+        // not be asked at all. Collapsing those two into one is precisely
+        // what this result exists to prevent, so both are round-tripped.
+        Assert.IsInstanceOfType<ClaimedReplicasResult>(
+            await client.ExecuteAsync(
+                new ClaimReplicasCommand(new string('f', 64), Fingerprint: "fp"), _timeout.Token),
+            out var claimed);
+        Assert.HasCount(2, claimed.Peers);
+        Assert.AreEqual(
+            new string('c', 32),
+            Assert.ContainsSingle(Assert.ContainsSingle(claimed.Peers[0].Claimed).SetIds));
+        Assert.AreEqual("the peer did not answer", claimed.Peers[1].Unreachable);
+        Assert.IsEmpty(claimed.Peers[1].Claimed);
 
         Assert.IsInstanceOfType<DirectoryResult>(
             await client.ExecuteAsync(new ListDirectoryCommand("ab", "docs"), _timeout.Token), out var directory);
