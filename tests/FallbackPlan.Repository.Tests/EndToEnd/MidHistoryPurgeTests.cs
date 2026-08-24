@@ -111,13 +111,17 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
         // 2. Condemn it. A pass that found nothing to delete would make every
         // assertion below vacuous, so the plan is checked before it is acted on.
-        var before = StoreBytes();
         var tombstoned = await CondemnAsync(store, passphrase);
         Assert.IsGreaterThan(0, tombstoned, "nothing was tombstoned, so nothing could be reclaimed");
 
         // 3. The writer publishes again — the only thing that moves the grace
-        // clock — and only then does the sweep delete.
+        // clock — and only then does the sweep delete. The store is measured
+        // after that publication rather than before it: V4 writes records of
+        // its own, and a reading taken earlier would be comparing the sweep's
+        // deletions against a fourth backup's arrivals.
         await PublishLadderAsync(store, repository, catalogue, versions, upTo: 4, from: 3);
+
+        var before = StoreBytes();
         var swept = await SweepAsync(store, passphrase);
 
         Assert.IsGreaterThan(0, swept.Deleted, string.Join("; ", swept.Findings));
