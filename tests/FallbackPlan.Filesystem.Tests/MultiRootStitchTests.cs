@@ -34,6 +34,8 @@ public sealed class MultiRootStitchTests
     {
         public SourceFilesystemInfo Probe(string rootPath) => throw new NotSupportedException();
 
+        public ulong? DeviceOf(string path) => null;
+
         public RevalidationProbe? Revalidate(ScanEntry entry) => throw new NotSupportedException();
 
         public Stream OpenRead(ScanEntry entry) => throw new NotSupportedException();

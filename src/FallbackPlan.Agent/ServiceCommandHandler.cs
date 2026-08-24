@@ -1978,8 +1978,15 @@ public sealed partial class ServiceCommandHandler(
     /// the one piece of <see cref="DestinationStatus.Describe"/> that has to
     /// be supplied from outside the use-case layer (architecture 11 §2).
     /// </summary>
-    private static ulong? DeviceIdOf(string path) =>
-        Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat) ? stat.Device : null;
+    private static ulong? DeviceIdOf(string path) => DeviceProbe.DeviceOf(path);
+
+    /// <summary>
+    /// Interface-typed on purpose: device probing goes through the seam like
+    /// every other filesystem question, so a test can substitute it. The
+    /// concrete construction here is composition, which is a host's job.
+    /// </summary>
+    private static readonly Filesystem.IFileSystemSource DeviceProbe =
+        new Filesystem.Local.LocalFileSystemSource();
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —

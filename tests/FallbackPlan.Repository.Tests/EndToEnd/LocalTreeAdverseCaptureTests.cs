@@ -291,6 +291,8 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 
         public RevalidationProbe? Revalidate(ScanEntry entry) => inner.Revalidate(entry);
 
+        public ulong? DeviceOf(string path) => inner.DeviceOf(path);
+
         public IAsyncEnumerable<ScanEvent> ScanAsync(
             string rootPath, ScanOptions options, CancellationToken cancellationToken) =>
             inner.ScanAsync(rootPath, options, cancellationToken);

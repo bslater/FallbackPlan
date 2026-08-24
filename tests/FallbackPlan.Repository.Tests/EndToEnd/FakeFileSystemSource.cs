@@ -133,6 +133,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     public SourceFilesystemInfo Probe(string rootPath) => Info;
 
+    /// <summary>One fake volume: every node reports the device its identities carry.</summary>
+    public ulong? DeviceOf(string path) => 7;
+
     public RevalidationProbe? Revalidate(ScanEntry entry)
     {
         if (!_nodes.TryGetValue(entry.FullPath, out var node))

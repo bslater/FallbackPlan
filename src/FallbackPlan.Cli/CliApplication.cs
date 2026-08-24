@@ -40,6 +40,14 @@ namespace FallbackPlan.Cli;
 /// </remarks>
 public static class CliApplication
 {
+    /// <summary>
+    /// Interface-typed on purpose: device probing goes through the seam like
+    /// every other filesystem question, so a test can substitute it. The
+    /// concrete construction here is composition, which is a host's job.
+    /// </summary>
+    private static readonly FallbackPlan.Filesystem.IFileSystemSource DeviceProbe =
+        new FallbackPlan.Filesystem.Local.LocalFileSystemSource();
+
     /// <summary>Parses <paramref name="args"/> and runs the matching command.</summary>
     /// <param name="args">The command line, as the process received it.</param>
     /// <param name="configuration">Where output and errors are written; defaults to the console.</param>
@@ -1729,9 +1737,7 @@ public static class CliApplication
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
                             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                            path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
-                                ? stat.Device
-                                : null));
+                            DeviceProbe.DeviceOf));
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs
