@@ -24,6 +24,21 @@ public sealed partial class ServiceCommandHandler
 
     private ServiceResult ProvisionInstallation(ProvisionInstallationCommand command)
     {
+        var answer = ProvisionInstallationCore(command);
+
+        // The discriminator, never the envelope: which refusal the ceremony
+        // met is the diagnosis, and the envelope is sealed key material.
+        Log.ProvisionOutcome(runtime.LoggerFor<ServiceCommandHandler>(), answer switch
+        {
+            ConfigurationChangeResult => "provisioned",
+            ServiceError error => error.Reason.ToString(),
+            _ => answer.GetType().Name,
+        });
+        return answer;
+    }
+
+    private ServiceResult ProvisionInstallationCore(ProvisionInstallationCommand command)
+    {
         if (Scope == CallerScope.Remote)
         {
             // ADR-0044 §5. Choosing the one secret that can never be changed
@@ -110,6 +125,18 @@ public sealed partial class ServiceCommandHandler
     }
 
     private ServiceResult ConfirmRecoveryKit(ConfirmRecoveryKitCommand command)
+    {
+        var answer = ConfirmRecoveryKitCore(command);
+        Log.RecoveryKitConfirmation(runtime.LoggerFor<ServiceCommandHandler>(), answer switch
+        {
+            ConfigurationChangeResult => "confirmed",
+            ServiceError error => error.Reason.ToString(),
+            _ => answer.GetType().Name,
+        });
+        return answer;
+    }
+
+    private ServiceResult ConfirmRecoveryKitCore(ConfirmRecoveryKitCommand command)
     {
         if (Scope == CallerScope.Remote)
         {

@@ -162,6 +162,8 @@ The effective level comes from a flag, the environment, `config.json`, then `Inf
 
 What crosses to a client is **rendered**, never the record's raw name/value state: rendering is where redaction happens, so handing over the values would hand over exactly what redaction withholds. A local caller is served in full and a paired console redacted, and a paired console may read the log but not decide what goes into it.
 
+The web console's page keeps its own trace, and it is deliberately not a third sink. Lines go to the browser's `console.debug` and to a bounded in-page ring that `fbpTraceDump()` renders for a bug report; nothing is relayed to the console process or the service, because a browser-originated log line would widen a relay surface that is deliberately narrow. State reaches a trace line only through a redacting projector — the setup ceremony's state holds the passphrase while it is being typed, and the projector hands a trace lengths and booleans, never values.
+
 ---
 
 **Previous:** [09 — Replication and peers](09-replication-and-peers.md) · **Next:** [11 — Solution structure](11-solution-structure.md)

@@ -2,15 +2,15 @@
   "profiles": {
     "run (foreground)": {
       "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --log-level debug"
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --log-level trace"
     },
     "run (first install — nothing set up yet)": {
       "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state-fresh --poll-seconds 10 --log-level debug"
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state-fresh --poll-seconds 10 --log-level trace"
     },
     "run --once": {
       "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --once --log-level debug"
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --once --log-level trace"
     },
     "run (with a passphrase, no keystore)": {
       "commandName": "Project",
@@ -19,7 +19,7 @@
     },
     "run (remote binding on)": {
       "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --remote-interface 127.0.0.1 --remote-port 5199 --log-level debug"
+      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --remote-interface 127.0.0.1 --remote-port 5199 --log-level trace"
     },
     "setup (headless, complete)": {
       "commandName": "Project",

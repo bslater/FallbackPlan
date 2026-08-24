@@ -1,4 +1,5 @@
 using Bodu;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
@@ -51,6 +52,22 @@ public sealed partial class ServiceCommandHandler(
         ThrowHelper.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var started = Stopwatch.GetTimestamp();
+        var answer = await ExecuteGuardedAsync(command, cancellationToken).ConfigureAwait(false);
+
+        // One trace line per command at the seam every verb crosses, so the
+        // service's log reads as a conversation. Type names only: several
+        // commands carry paths, and the names are enough to follow the flow.
+        Log.CommandExecuted(
+            runtime.LoggerFor<ServiceCommandHandler>(), command.GetType().Name, answer.GetType().Name,
+            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return answer;
+    }
+
+    /// <summary>Dispatch with the expected-failure guards; the timing above wraps it.</summary>
+    private async ValueTask<ServiceResult> ExecuteGuardedAsync(
+        ServiceCommand command, CancellationToken cancellationToken)
+    {
         try
         {
             // The read paths are the only commands that do open-ended work, so

@@ -21,6 +21,30 @@ if (params.get("token")) {
 }
 const token = sessionStorage.getItem("fbp-token");
 
+/* ---------------------------------------------------------------- trace */
+
+// Which build of this page is running. app.js is embedded in the console
+// binary and served with no version marker, so a misbehaving page used to
+// be unable to say where it came from — and a stale binary serving an old
+// page is exactly the failure this line exists to catch. Bump it when a
+// diagnosis needs to tell two builds apart.
+const CONSOLE_ASSET_VERSION = "2026-08-24.1";
+
+// Browser-local tracing. Lines go to console.debug — visible once devtools
+// shows Verbose — and to a bounded ring that fbpTraceDump() renders for a
+// bug report. Nothing is relayed anywhere: the console's relay surface is
+// deliberately narrow, and a trace that left the browser would be a log
+// channel this product does not have. Call sites must never pass secrets:
+// state objects go through a redacting projector (setupView), never raw.
+const TRACE_RING = [];
+function trace(where, detail) {
+  const line = `${new Date().toISOString()} ${where} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+  TRACE_RING.push(line);
+  if (TRACE_RING.length > 200) TRACE_RING.shift();
+  console.debug("[fbp]", line);
+}
+globalThis.fbpTraceDump = () => TRACE_RING.join("\n");
+
 // The SERVICE session, which is a different thing from the console's bearer
 // token above. The bearer token says this browser may talk to this console;
 // this says which person is acting on the service behind it. Held per browser
@@ -184,17 +208,20 @@ async function api(command) {
       body: JSON.stringify(command),
     });
   } catch {
+    trace("api", `${command?.command ?? "?"} — fetch failed, console unreachable`);
     setConnected(false);
     throw new ConsoleError("unreachable", "The console process stopped answering.");
   }
 
-  if (response.status === 401) { gateEl.hidden = false; appEl.hidden = true; throw new ConsoleError("token", "Token refused."); }
+  if (response.status === 401) { trace("api", `${command?.command ?? "?"} — 401, token refused`); gateEl.hidden = false; appEl.hidden = true; throw new ConsoleError("token", "Token refused."); }
   if (response.status === 503) {
+    trace("api", `${command?.command ?? "?"} — 503, service not listening`);
     setConnected(false);
     const body = await safeJson(response);
     throw new ConsoleError("unreachable", body?.message ?? "The service is not listening.");
   }
   if (!response.ok) {
+    trace("api", `${command?.command ?? "?"} — HTTP ${response.status}`);
     const body = await safeJson(response);
     throw new ConsoleError("transport", body?.message ?? `The console answered ${response.status}.`);
   }
@@ -313,6 +340,9 @@ async function refreshDesc() {
     // "cannot tell" and so as no reason to interrupt anybody.
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
+    if ((result.setupState ?? null) !== S.setupState) {
+      trace("refreshDesc", { setupState: result.setupState ?? null, was: S.setupState, rerenderGate: changed });
+    }
     S.setupState = result.setupState ?? null;
     S.signedInUser = result.signedInUser ?? null;
 
@@ -981,6 +1011,23 @@ async function withBusy(button, work) {
 // passphrase.
 let U = null;
 
+// The ONLY shape of U that may reach a trace line. U holds the passphrase
+// and its confirmation for the length of steps 2–3, so tracing U itself —
+// or anything JSON.stringify would walk into — would put the master key in
+// the browser console. This projector derives what a diagnosis needs and
+// nothing a screenshot could leak.
+function setupView() {
+  if (!U) return { u: null };
+  return {
+    step: U.step, acknowledged: U.acknowledged, busy: U.busy, taken: U.taken,
+    saved: !!U.saved, resumed: U.resumed,
+    passphraseLength: U.passphrase?.length ?? 0,
+    confirmationMatches: U.confirmation === U.passphrase,
+    strengthAcceptable: U.strength?.acceptable ?? null,
+    hasKit: !!U.kit, kitChecksum8: U.kit?.checksum?.slice(0, 8) ?? null,
+  };
+}
+
 const SETUP_STEPS = ["What this is", "Passphrase", "Confirm", "Recovery kit"];
 
 /* ------------------------------------------------------------- sign-in */
@@ -1091,6 +1138,7 @@ async function signOut() {
 function renderSetupGate() {
   const host = document.getElementById("setup");
   if (!S.setupRequired) {
+    if (U) trace("renderSetupGate", "setup no longer required — ceremony state released");
     host.hidden = true;
     appEl.hidden = false;
     U = null;
@@ -1106,10 +1154,12 @@ function renderSetupGate() {
         kit: null, taken: false, resumed: false };
   appEl.hidden = true;
   host.hidden = false;
+  trace("renderSetupGate", setupView());
   setupRender();
 }
 
 function setupRender() {
+  trace("setupRender", setupView());
   const host = document.getElementById("setup");
   const body = [setupStep1, setupStep2, setupStep3, setupStep4][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
@@ -1248,9 +1298,11 @@ function setupStep4() {
 // host returned it inline and keeps no copy, so there is nothing to fetch
 // back and nothing left behind if this tab closes.
 function setupTakeKit(kind) {
+  trace("setupTakeKit", { kind, ...setupView() });
   if (!U.kit) {
     // Unreachable now that the kit page requires a kit to render — but if a
     // path back here ever appears, it must say so rather than eat the click.
+    trace("setupTakeKit", "no kit in hand — flipping to the rebuild page");
     toast("warn", "This page no longer holds the kit. Re-enter the passphrase to build it again.");
     U.resumed = true;
     setupRender();
@@ -1277,6 +1329,7 @@ function setupTakeKit(kind) {
 // policy — see WebConsoleHost.AssessPassphraseAsync for why that is worth a
 // round trip.
 let setupStrengthTimer = null;
+let setupStrengthWarned = false;
 function setupScheduleStrength() {
   clearTimeout(setupStrengthTimer);
   setupStrengthTimer = setTimeout(async () => {
@@ -1288,11 +1341,21 @@ function setupScheduleStrength() {
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
         body: JSON.stringify({ candidate }),
       });
-      if (!response.ok || !U) return;
+      if (!response.ok || !U) {
+        trace("setupScheduleStrength", `no meter update — status ${response.status}, ceremony ${U ? "live" : "gone"}`);
+        return;
+      }
       U.strength = await response.json();
       setupRender();
     } catch {
       // The meter is a courtesy; the submit is where the policy is enforced.
+      // But a meter that never answers leaves step 2's Continue disabled with
+      // nothing on screen saying why — so this failure gets a voice, once.
+      trace("setupScheduleStrength", "strength probe failed — Continue stays disabled until it answers");
+      if (!setupStrengthWarned) {
+        setupStrengthWarned = true;
+        toast("warn", "The passphrase meter could not be reached; the Continue button stays off until it answers.");
+      }
     }
   }, 250);
 }
@@ -1321,6 +1384,7 @@ const setupActions = {
   },
 
   async "setup-finish"() {
+    trace("setup-finish", "posting /api/setup");
     U.busy = true;
     setupRender();
     let body;
@@ -1334,12 +1398,17 @@ const setupActions = {
       });
       body = await response.json();
     } catch {
+      trace("setup-finish", "fetch failed — console unreachable");
       U.busy = false;
       toast("bad", "The console process stopped answering.");
       setupRender();
       return;
     }
 
+    trace("setup-finish", {
+      outcome: body?.outcome ?? null, hasKit: !!body?.kit,
+      kitMachineLength: body?.kit?.machine?.length ?? 0, kitTextLength: body?.kit?.text?.length ?? 0,
+    });
     U.busy = false;
     if (body?.outcome !== "provisioned") {
       toast("warn", body?.detail ?? "Setup did not complete.");
@@ -1370,6 +1439,7 @@ const setupActions = {
     // only come from the passphrase, so it has to be entered again — the
     // one place this ceremony asks twice, and only because the first
     // attempt did not finish.
+    trace("setup-rebuild-kit", "posting /api/recovery-kit");
     U.busy = true;
     setupRender();
     let body;
@@ -1381,12 +1451,14 @@ const setupActions = {
       });
       body = await response.json();
     } catch {
+      trace("setup-rebuild-kit", "fetch failed — console unreachable");
       U.busy = false;
       toast("bad", "The console process stopped answering.");
       setupRender();
       return;
     }
 
+    trace("setup-rebuild-kit", { outcome: body?.outcome ?? null, hasKit: !!body?.kit });
     U.busy = false;
     if (body?.outcome !== "built") {
       toast("warn", body?.detail ?? "The kit could not be built.");
@@ -1401,6 +1473,7 @@ const setupActions = {
   },
 
   async "setup-kit-done"() {
+    trace("setup-kit-done", { checksum8: U.kit?.checksum?.slice(0, 8) ?? null });
     U.busy = true;
     setupRender();
     let result;
@@ -1413,6 +1486,7 @@ const setupActions = {
       return;
     }
 
+    trace("setup-kit-done", { result: result?.result ?? null });
     U.busy = false;
     if (result?.result === "error") {
       toast("warn", result.message ?? "Could not record the confirmation.");
@@ -3503,6 +3577,7 @@ function toast(kind, text) {
 /* ---------------------------------------------------------------- wiring */
 
 function boot() {
+  trace("boot", { assetVersion: CONSOLE_ASSET_VERSION, hash: location.hash, hasToken: !!token });
   // Theme: system by default; the toggle pins an explicit choice.
   const savedTheme = localStorage.getItem("fbp-theme");
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
@@ -3522,7 +3597,13 @@ function boot() {
     }
     const el = event.target.closest("[data-action]");
     if (!el) return;
-    if (U && el.dataset.action.startsWith("setup-")) { setupActions[el.dataset.action]?.(el); return; }
+    if (el.dataset.action.startsWith("setup-")) {
+      // A setup control with no ceremony state behind it is the silent-inert
+      // failure this page has been stranded on before — it gets a trace line.
+      if (U) setupActions[el.dataset.action]?.(el);
+      else trace("click", `setup action ${el.dataset.action} ignored — no ceremony state`);
+      return;
+    }
     actions[el.dataset.action]?.(el);
   });
 
@@ -3530,8 +3611,9 @@ function boot() {
     // First-run setup owns the page when it is showing, so its fields are
     // matched before anything else looks at the event.
     const setupField = event.target.closest("[data-action-input^='setup-']");
-    if (setupField && U) {
-      setupActions[setupField.dataset.actionInput]?.(setupField);
+    if (setupField) {
+      if (U) setupActions[setupField.dataset.actionInput]?.(setupField);
+      else trace("input", `setup input ${setupField.dataset.actionInput} ignored — no ceremony state`);
       return;
     }
 
@@ -3542,8 +3624,9 @@ function boot() {
   });
 
   document.addEventListener("change", event => {
-    if (U && event.target.matches("[data-action-change^='setup-']")) {
-      setupActions[event.target.dataset.actionChange]?.(event.target);
+    if (event.target.matches("[data-action-change^='setup-']")) {
+      if (U) setupActions[event.target.dataset.actionChange]?.(event.target);
+      else trace("change", `setup control ${event.target.dataset.actionChange} ignored — no ceremony state`);
       return;
     }
 
