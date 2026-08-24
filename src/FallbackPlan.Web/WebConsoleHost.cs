@@ -221,8 +221,8 @@ public static class WebConsoleHost
         await handler().ConfigureAwait(false);
         if (log.IsEnabled(LogLevel.Trace))
         {
-            Log.RequestHandled(log, endpoint, context.Response.StatusCode,
-                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Log.RequestHandled(log, endpoint, context.Response.StatusCode, elapsed);
         }
     }
 
@@ -277,8 +277,8 @@ public static class WebConsoleHost
             result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
             if (log.IsEnabled(LogLevel.Trace))
             {
-                Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name,
-                    (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds);
+                var elapsed = (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds;
+                Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name, elapsed);
             }
         }
         catch (ServiceConnectionException exception)

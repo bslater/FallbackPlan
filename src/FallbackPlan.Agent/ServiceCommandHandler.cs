@@ -62,8 +62,8 @@ public sealed partial class ServiceCommandHandler(
         var log = runtime.LoggerFor<ServiceCommandHandler>();
         if (log.IsEnabled(LogLevel.Trace))
         {
-            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name,
-                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name, elapsed);
         }
         return answer;
     }
