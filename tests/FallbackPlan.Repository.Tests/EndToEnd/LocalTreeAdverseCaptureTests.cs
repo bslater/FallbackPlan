@@ -229,7 +229,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 
         var published = await PublishAsync(source, 0x51);
 
-        Assert.IsTrue(source.Interfered);
+        Assert.IsTrue(source.Interfered, "the deletion never reached the reader, so nothing was proved");
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(1, await CaptureStatusAsync(published));
 
@@ -259,7 +259,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 
         var published = await PublishAsync(source, 0x52);
 
-        Assert.IsTrue(source.Interfered);
+        Assert.IsTrue(source.Interfered, "the deletion never reached the reader, so nothing was proved");
 
         // Published whole and diagnosed, not failed: the bytes are complete,
         // but nothing can confirm what they are the content of.
@@ -381,18 +381,43 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+            public override async ValueTask DisposeAsync()
+            {
+                // Overridden rather than left to the base, which routes through
+                // the synchronous Dispose: the publisher closes the read with
+                // `await using`, so this is the path that actually runs and the
+                // interference has to be reachable from it.
+                await inner.DisposeAsync().ConfigureAwait(false);
+                FireOnClose();
+                await base.DisposeAsync().ConfigureAwait(false);
+            }
+
             protected override void Dispose(bool disposing)
             {
                 if (disposing)
                 {
                     inner.Dispose();
-                    if (afterBytes is null)
-                    {
-                        Fire();
-                    }
+                    FireOnClose();
                 }
 
                 base.Dispose(disposing);
+            }
+
+            /// <summary>The close-time trigger, for an interference with no byte offset.</summary>
+            /// <remarks>
+            /// Distinct from <see cref="Fire"/> rather than folded into it: that
+            /// one refuses when no threshold is set, which is right for a read
+            /// and made this case unreachable when Dispose called it.
+            /// </remarks>
+            private void FireOnClose()
+            {
+                if (_fired || afterBytes is not null)
+                {
+                    return;
+                }
+
+                _fired = true;
+                interference();
             }
 
             private void Fire()
