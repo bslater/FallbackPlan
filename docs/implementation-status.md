@@ -72,6 +72,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
 | [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
 | [0047](adr/0047-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Specified only** | [notes](#0047--recovering-the-data-was-only-half-of-it) |
+| [0048](adr/0048-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0048--the-two-things-live-capture-cannot-do) |
 
 ---
 
@@ -503,6 +504,30 @@ their negotiated feature, the ledger's token and public-key fields, the
 recovers over the wire. The requirements it owes — FR-DR-001 through
 FR-DR-005 — carry honest untested markers in the
 [traceability matrix](requirements/traceability.md) until then.
+
+### 0048 — the two things live capture cannot do
+
+Specified only. Written after the adverse-I/O coverage pass put numbers on
+live capture's limits, and it has two of them. A file that is written
+continuously exhausts the read budget, so the last read is published torn with
+a diagnostic and a clean `capture_status`. And on Windows a file held with
+`FILE_SHARE_NONE` is not captured at all — the POSIX walk reads a descriptor it
+already holds, so a lock on the name cannot reach it, but Windows takes no such
+handle and the open simply fails. That is Outlook PSTs and live database files
+absent from Windows backups, which is not a degradation but a hole.
+
+A snapshot fixes both, and the obstacle is privilege rather than API. The agent
+runs as a named ordinary account because the keystore is scoped to that account
+([0033](#0033--the-os-can-own-the-process)); elevating it to reach VSS or
+`lvcreate` costs unattended unlock. The decision is a separate privileged
+helper that creates and releases a snapshot and knows nothing else — no
+repository, no keystore, no key material.
+
+The VSS interop path is deliberately left open and gates the Windows half:
+there is no COM anywhere in this solution, every P/Invoke is source-generated,
+and the usual managed wrapper is unmaintained on an end-of-life target
+framework. Nothing here is testable on this project's CI and the ADR says so
+plainly rather than implying otherwise.
 
 ### 0047 — recovering the data was only half of it
 
