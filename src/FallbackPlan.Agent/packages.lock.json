@@ -155,7 +155,6 @@
           "FallbackPlan.Repository.Packing": "[1.0.0, )",
           "FallbackPlan.Repository.Segmentation": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
-          "FallbackPlan.Storage.Local": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
