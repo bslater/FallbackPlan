@@ -229,8 +229,10 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
             {
                 Source = source,
                 Roots = [new ScanRoot("/")],
-                DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)],
-                BackupSetId = [.. Enumerable.Repeat((byte)0x33, 16)],
+                // .ToArray(), not a collection expression: ReadOnlyMemory<byte>
+                // is not constructible from one (CS9174).
+                DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
                 SnapshotId = ids[version],
                 NowUnixMilliseconds = (ulong)Taken[version].ToUnixTimeMilliseconds(),
                 DeclaredMaxDurationMs = 3_600_000,
@@ -338,7 +340,8 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
         }
     }
 
-    private static ulong SealingGeneration(OpenedRepository repository) => Math.Max(
+    /// <summary>The generation the journal is sealed under — uint, as the reader takes it.</summary>
+    private static uint SealingGeneration(OpenedRepository repository) => Math.Max(
         repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
     private static async Task<IReadOnlyList<JournalRecord>> JournalRecordsAsync(
