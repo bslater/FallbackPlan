@@ -111,7 +111,7 @@ public static class Scheduler
                 Log.SetDue(pass, set.Name, lastCompleted, nextRun);
             }
 
-            running.Add(Enqueue(runtime, set, now, userInitiated: false));
+            running.Add(Enqueue(runtime, set, now, userInitiated: false).Outcome);
         }
 
         foreach (var outcome in await Task.WhenAll(running).ConfigureAwait(false))
@@ -280,22 +280,37 @@ public static class Scheduler
         Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
 
     /// <summary>
-    /// Queues one set's backup and hands back a task that completes when it
-    /// does — so a caller that must wait can, and the service, which must not,
-    /// need not.
+    /// Queues one set's backup and hands back the job's identity with a task
+    /// that completes when it does — so a caller that must wait can, and the
+    /// service, which must not, need not.
     /// </summary>
+    /// <remarks>
+    /// One live job per set: when the journal holds an unsettled job for this
+    /// set AND the queue still knows it, the request joins that job instead
+    /// of minting a second. Backup ids are journal GUIDs, so the queue's own
+    /// id-keyed coalescing (ADR-0029 §4 amendment) can never fire for them —
+    /// this is where their coalescing lives. The queue check is what keeps a
+    /// crash-orphaned journal row (unsettled, but no queue remembers it) from
+    /// blocking a set for ever.
+    /// </remarks>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set to back up.</param>
     /// <param name="now">The clock.</param>
     /// <param name="userInitiated">Whether a person is waiting for it.</param>
     /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
-    /// <returns>The job's outcome, when it finishes.</returns>
-    public static Task<BackupOutcome> Enqueue(
+    /// <returns>The job's identity, and its outcome when it finishes.</returns>
+    public static (string JobId, Task<BackupOutcome> Outcome) Enqueue(
         ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated,
         bool full = false)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
+
+        if (runtime.Jobs.LiveJobFor(set.Id) is { } live && runtime.Queue.IsActive(live.Id))
+        {
+            return (live.Id, Task.FromResult(new BackupOutcome(
+                set.Name, "already-running", $"job {live.Id} is already backing this set up")));
+        }
 
         var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var completion = new TaskCompletionSource<BackupOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -318,18 +333,19 @@ public static class Scheduler
                     completion.SetException(exception);
                     throw;
                 }
+            },
+            OnCancelledBeforeStart: () =>
+            {
+                // Commanded away while still queued: the journal records it at
+                // the moment of the command, not when the lane drains — behind
+                // a long backup that used to be hours of a card saying Pending
+                // after the person had already cancelled it.
+                runtime.Jobs.Transition(
+                    job.Id, JobState.Cancelled,
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "cancelled before it started");
+                completion.SetResult(new BackupOutcome(set.Name, "cancelled", "cancelled before it started"));
             }));
 
-        return completion.Task;
-    }
-
-    /// <summary>The identity of the job most recently begun for a set, if any.</summary>
-    /// <param name="runtime">The service.</param>
-    /// <param name="backupSetId">The set's identity.</param>
-    /// <returns>The job identity, or null.</returns>
-    public static string? LatestJobFor(ServiceRuntime runtime, string backupSetId)
-    {
-        ThrowHelper.ThrowIfNull(runtime);
-        return runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == backupSetId)?.Id;
+        return (job.Id, completion.Task);
     }
 }

@@ -117,7 +117,7 @@ public sealed class HostHarness : IDisposable
     }
 
     /// <summary>Writes a configuration with one backup set on the given schedule.</summary>
-    public void WriteConfiguration(string schedule) => new ClientConfiguration
+    public void WriteConfiguration(string schedule, bool withSecondSet = false) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -140,6 +140,22 @@ public sealed class HostHarness : IDisposable
                 Schedule = schedule,
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
             },
+            // A second set over the same root, for suites that need two jobs
+            // contending for the writer lane — per-set coalescing means one
+            // set alone can never produce a queued-behind-running pair.
+            .. withSecondSet
+                ? new[]
+                {
+                    new BackupSetConfiguration
+                    {
+                        Id = new string('b', 32),
+                        Name = "extra",
+                        Roots = [new BackupRootConfiguration { Path = SourceRoot }],
+                        Schedule = schedule,
+                        Destinations = [new SetDestinationReference { Ref = "vault" }],
+                    },
+                }
+                : Array.Empty<BackupSetConfiguration>(),
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
 

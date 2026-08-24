@@ -532,9 +532,17 @@ function renderSnapshots() {
 
 /* ----- jobs ----- */
 
+// Jobs the user has commanded away, by id — the card shows "Cancelling…"
+// and disarms its button until the journal settles the job. Client-side
+// courtesy state only; the journal stays the authority.
+const CANCELLING = new Set();
+
 function renderJobs() {
   const el = document.getElementById("view-jobs");
   const live = S.jobs.filter(j => !SETTLED.has(j.state));
+  for (const id of CANCELLING) {
+    if (!live.some(j => j.id === id)) CANCELLING.delete(id);
+  }
   const settled = [...S.jobs.filter(j => SETTLED.has(j.state))].reverse().slice(0, 50);
 
   el.innerHTML = `
@@ -565,7 +573,10 @@ function renderJobs() {
 
 function renderLiveJob(job) {
   const progress = S.progress.get(job.id);
-  const meta = JOBSTATE[progress?.state ?? job.state] ?? { cls: "accent", label: job.state };
+  const cancelling = CANCELLING.has(job.id);
+  const meta = cancelling
+    ? { cls: "warn", label: "Cancelling…" }
+    : JOBSTATE[progress?.state ?? job.state] ?? { cls: "accent", label: job.state };
   const seen = progress?.filesSeen ?? 0;
   const handled = (progress?.filesDone ?? 0) + (progress?.filesReused ?? 0) + (progress?.filesFailed ?? 0);
   const ratio = seen > 0 ? Math.min(100, Math.round(handled / seen * 100)) : 0;
@@ -582,7 +593,8 @@ function renderLiveJob(job) {
         <span><b>${fmtBytes(progress.bytesStored)}</b> written of <b>${fmtBytes(progress.bytesSeen)}</b> read</span>
       </div>` : `<div class="job-stats"><span>Waiting for the first progress event…</span></div>`}
     <div class="actions-row">
-      <button type="button" class="btn small" data-action="cancel-job" data-job="${esc(job.id)}">✕ Cancel</button>
+      <button type="button" class="btn small" data-action="cancel-job" data-job="${esc(job.id)}"
+        ${cancelling ? "disabled" : ""}>${cancelling ? "Cancelling…" : "✕ Cancel"}</button>
     </div>
   </div>`;
 }
@@ -1589,9 +1601,18 @@ const actions = {
 
   async "cancel-job"(el) {
     await withBusy(el, async () => {
+      trace("cancel-job", { jobId: el.dataset.job });
       const result = await run({ command: "cancel_job", jobId: el.dataset.job }, { errToast: "Cancel refused" });
-      if (result) toast("ok", "Cancellation commanded — the job will record Cancelled.");
-      refreshJobs();
+      trace("cancel-job", { jobId: el.dataset.job, acknowledged: !!result });
+      if (result) {
+        // The card carries the state from here: the button disarms and the
+        // badge says Cancelling… until the journal settles the job — a
+        // toast alone was missable, and a still-identical card after a
+        // successful command read as a click that did nothing.
+        CANCELLING.add(el.dataset.job);
+        toast("ok", "Cancellation commanded — the job will record Cancelled.");
+      }
+      await refreshJobs();
     });
   },
 

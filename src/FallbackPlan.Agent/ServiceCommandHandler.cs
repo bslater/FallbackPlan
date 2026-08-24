@@ -1444,12 +1444,12 @@ public sealed partial class ServiceCommandHandler(
         // durable stamp goes through ToUnixTimeMilliseconds, which is
         // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
-        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
+        var (jobId, outcome) = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
 
         // A committed snapshot starts its fan-out promptly rather than waiting
         // for the next pass (ADR-0034 §3); the pass still catches up anything
         // this misses, so this is responsiveness, never correctness.
-        _ = job.ContinueWith(
+        _ = outcome.ContinueWith(
             completed =>
             {
                 if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
@@ -1459,7 +1459,10 @@ public sealed partial class ServiceCommandHandler(
             },
             TaskScheduler.Default);
 
-        return new JobAcceptedResult(Scheduler.LatestJobFor(runtime, set.Id) ?? string.Empty);
+        // The id Enqueue itself produced — a live job for the set joins that
+        // job rather than starting a second, and the caller tracks whichever
+        // one is actually doing the work.
+        return new JobAcceptedResult(jobId);
     }
 
     /// <summary>

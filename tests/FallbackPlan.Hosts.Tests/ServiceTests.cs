@@ -235,6 +235,154 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task CancelJob_QueuedBehindAnotherSet_RecordsCancelledImmediately()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token), out var first);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // The second set queues behind the writer lane's single worker.
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("extra", Full: false), _timeout.Token), out var second);
+        Assert.AreNotEqual(first.JobId, second.JobId);
+
+        // Cancelling a job that has not started takes effect at the command,
+        // not when the lane drains: the journal reads Cancelled while the
+        // first job is still doing its work. Before this, the acknowledgement
+        // was truthful about the token and silent about the state — the card
+        // sat at Pending until the running job finished, possibly hours.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token));
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        var queued = jobs.Jobs.Single(descriptor => descriptor.Id == second.JobId);
+        Assert.AreEqual(JobState.Cancelled, queued.State);
+        Assert.AreEqual("cancelled before it started", queued.Detail);
+
+        // And a second cancel is the honest not-found, not another cheerful
+        // acknowledgement of nothing.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token), out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+
+        // The running job was never disturbed: it still completes.
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Complete);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
+    }
+
+    [TestMethod]
+    public async Task RunBackup_WhileAJobForTheSetIsLive_JoinsItRatherThanQueuingASecond()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var first);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // One live job per set: the second request joins the job already
+        // doing the work instead of minting a duplicate behind it. Backup ids
+        // are journal GUIDs, so the queue's id-keyed coalescing can never
+        // fire for them — this seam is where theirs lives, and before it a
+        // set whose backup outlived its schedule interval accumulated a
+        // Pending duplicate on every scheduler pass.
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var again);
+        Assert.AreEqual(first.JobId, again.JobId);
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        Assert.ContainsSingle(jobs.Jobs.Where(descriptor =>
+            descriptor.State is not (JobState.Complete or JobState.CompletedWithFailures
+                or JobState.Cancelled or JobState.Paused or JobState.FailedRecoverable
+                or JobState.FailedPermanent)));
+
+        // End it promptly rather than packing 24 MB for nothing.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(first.JobId), _timeout.Token));
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Cancelled);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
+    }
+
+    [TestMethod]
     public async Task Verify_CommandedThroughTheContract_ChecksTheBlobsTheServiceHolds()
     {
         await _harness.CreateRepositoryAsync();

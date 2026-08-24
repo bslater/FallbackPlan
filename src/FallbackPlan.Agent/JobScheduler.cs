@@ -30,12 +30,21 @@ public enum JobLane
 /// <param name="UserInitiated">Whether a person is waiting for it.</param>
 /// <param name="Description">What to call it in a status line.</param>
 /// <param name="Run">The work.</param>
+/// <param name="OnCancelledBeforeStart">
+/// Invoked when the job is cancelled while still queued, INSTEAD of running
+/// it — so a job that journals its own states can record the cancellation at
+/// the moment it was commanded rather than when the lane finally drains,
+/// which behind a long-running job could be hours after the person clicked.
+/// A job that leaves this null keeps the older semantics: it runs with an
+/// already-cancelled token and handles the cancellation itself.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
     bool UserInitiated,
     string Description,
-    Func<CancellationToken, ValueTask> Run);
+    Func<CancellationToken, ValueTask> Run,
+    Action? OnCancelledBeforeStart = null);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -66,7 +75,12 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _writerLane = new();
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _readerLane = new();
     private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _transferLane = new();
-    private readonly Dictionary<string, CancellationTokenSource> _running = [];
+    private readonly Dictionary<string, (QueuedJob Job, CancellationTokenSource Cancellation)> _running = [];
+
+    // Which of _running's entries have actually been handed to a worker.
+    // Cancel needs the distinction: a started job is stopped through its
+    // token, a merely-queued one can be taken out of play entirely.
+    private readonly HashSet<string> _started = [];
 
     // One signal per lane, not one shared: with a shared semaphore, a token
     // released for a busy lane could only be consumed by the OTHER lanes'
@@ -155,7 +169,7 @@ public sealed class JobScheduler : IAsyncDisposable
                 _ => _transferLane,
             };
             lane.Enqueue(job, (priority, Interlocked.Increment(ref _arrival)));
-            _running[job.JobId] = new CancellationTokenSource();
+            _running[job.JobId] = (job, new CancellationTokenSource());
         }
 
         Pending(job.Lane).Release();
@@ -164,22 +178,48 @@ public sealed class JobScheduler : IAsyncDisposable
 
     /// <summary>
     /// Cancels a queued or running job. Cancellation is a command, not a signal
-    /// (ADR-0029 §4) — the runner records <see cref="JobState.Cancelled"/>.
+    /// (ADR-0029 §4, Amendment 4): a running job's runner records
+    /// <see cref="JobState.Cancelled"/> cooperatively through its token, and a
+    /// job still queued whose <see cref="QueuedJob.OnCancelledBeforeStart"/> is
+    /// set records it there and then instead of waiting for the lane to drain.
     /// </summary>
     /// <param name="jobId">The job to stop.</param>
     /// <returns><see langword="true"/> when a job by that identity was found.</returns>
     public bool Cancel(string jobId)
     {
+        Action? cancelledBeforeStart = null;
         lock (_gate)
         {
-            if (!_running.TryGetValue(jobId, out var cancellation))
+            if (!_running.TryGetValue(jobId, out var entry))
             {
                 return false;
             }
 
-            cancellation.Cancel();
-            return true;
+            if (!_started.Contains(jobId) && entry.Job.OnCancelledBeforeStart is { } record)
+            {
+                // Still queued, and the job knows how to record its own
+                // cancellation: take it out of play now. Removing the entry
+                // makes the pump skip the stale queue slot (TryDequeue
+                // already treats an unknown id as drained, and the slot's
+                // semaphore token was released at enqueue, so the counts
+                // stay right), makes IsActive answer honestly, and makes a
+                // second cancel the honest not-found rather than another
+                // cheerful acknowledgement of nothing.
+                entry.Cancellation.Cancel();
+                entry.Cancellation.Dispose();
+                _running.Remove(jobId);
+                cancelledBeforeStart = record;
+            }
+            else
+            {
+                entry.Cancellation.Cancel();
+            }
         }
+
+        // Outside the gate: the callback writes a journal, and a journal
+        // write has no business inside the queue's lock.
+        cancelledBeforeStart?.Invoke();
+        return true;
     }
 
     /// <summary>Stops the queue, cancelling everything in flight.</summary>
@@ -190,9 +230,9 @@ public sealed class JobScheduler : IAsyncDisposable
 
         lock (_gate)
         {
-            foreach (var cancellation in _running.Values)
+            foreach (var entry in _running.Values)
             {
-                cancellation.Cancel();
+                entry.Cancellation.Cancel();
             }
         }
 
@@ -212,12 +252,13 @@ public sealed class JobScheduler : IAsyncDisposable
 
         lock (_gate)
         {
-            foreach (var cancellation in _running.Values)
+            foreach (var entry in _running.Values)
             {
-                cancellation.Dispose();
+                entry.Cancellation.Dispose();
             }
 
             _running.Clear();
+            _started.Clear();
         }
 
         _writerPending.Dispose();
@@ -281,10 +322,11 @@ public sealed class JobScheduler : IAsyncDisposable
                 JobLane.Reader => _readerLane,
                 _ => _transferLane,
             };
-            if (queue.TryDequeue(out var dequeued, out _) && _running.TryGetValue(dequeued.JobId, out var source))
+            if (queue.TryDequeue(out var dequeued, out _) && _running.TryGetValue(dequeued.JobId, out var entry))
             {
+                _started.Add(dequeued.JobId);
                 job = dequeued;
-                cancellation = source;
+                cancellation = entry.Cancellation;
                 return true;
             }
 
@@ -298,10 +340,12 @@ public sealed class JobScheduler : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_running.Remove(jobId, out var cancellation))
+            if (_running.Remove(jobId, out var entry))
             {
-                cancellation.Dispose();
+                entry.Cancellation.Dispose();
             }
+
+            _started.Remove(jobId);
         }
     }
 }
