@@ -5,6 +5,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 using static Microsoft.Playwright.Assertions;
+using ApiRestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Web.DomTests;
 
@@ -75,7 +76,7 @@ public sealed class RestoreWizardDomTests
                     new DirectoryEntryDescriptor("photos", "directory", 0),
                 ]),
             PlanRestoreCommand => new RestorePlanResult(1, 42, []),
-            RunRestoreCommand => new RestoreResult(
+            RunRestoreCommand => new ApiRestoreResult(
                 1, 0, "/restore/out", "complete", ReceiptPath: "/restore/out/receipt.json"),
             _ => new AcknowledgedResult(),
         };
