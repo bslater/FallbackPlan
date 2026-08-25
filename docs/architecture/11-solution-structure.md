@@ -63,6 +63,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.PerformanceTests/        ✓
 │   ├── FallbackPlan.TestSupport/             ✓ platform gating, shared by test projects
 │   ├── FallbackPlan.Cli.Tests/               ✓ drives real commands in process
+│   ├── FallbackPlan.Web.DomTests/            ✓ the console page in a real browser (ADR-0049)
 │   ├── FallbackPlan.Web.Tests/               ✓ the web console over real loopback HTTP
 │   └── FallbackPlan.Hosts.Tests/             ✓ drives the Agent and Recovery hosts
 ├── external/
