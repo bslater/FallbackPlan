@@ -101,6 +101,16 @@ internal static partial class Log
         Message = "Set {SetName} is not due yet; next run {NextRun}")]
     internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
 
+    // The Information-tier half of configuration loading: the load itself is
+    // Debug (Application's 3400, once per scheduler pass); this fires on the
+    // first load and then only when the content differs from the last one, so
+    // the operator's tier records edits rather than re-reads.
+    [LoggerMessage(
+        EventId = 3742, Level = LogLevel.Information,
+        Message = "Configuration in force: schema {Schema}, {Sets} sets, {Destinations} destinations")]
+    internal static partial void ConfigurationChanged(
+        ILogger logger, int schema, int sets, int destinations);
+
     [LoggerMessage(
         EventId = 3730, Level = LogLevel.Information,
         Message = "Service listening on the local binding")]
@@ -139,4 +149,25 @@ internal static partial class Log
         EventId = 3754, Level = LogLevel.Information,
         Message = "Account {User} removed; {Sessions} live session(s) ended with it")]
     internal static partial void AccountDeleted(ILogger logger, string user, int sessions);
+
+    // The refusals the gate answers were, for a long stretch of one real
+    // incident, invisible: a client with a lapsed session failed every
+    // command for sixteen minutes and a trace-level log never said why —
+    // the listener's generic "answered ServiceError" was all there was.
+    // These name the why. The token is a credential whether or not it has
+    // lapsed, so like the password above it has no parameter to ride in.
+    [LoggerMessage(
+        EventId = 3755, Level = LogLevel.Debug,
+        Message = "A session resume was refused: the presented token is expired, revoked, or unknown")]
+    internal static partial void SessionResumeRefused(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 3756, Level = LogLevel.Trace,
+        Message = "Session resumed for {User}")]
+    internal static partial void SessionResumed(ILogger logger, string user);
+
+    [LoggerMessage(
+        EventId = 3757, Level = LogLevel.Trace,
+        Message = "{Command} refused: this connection has not signed in")]
+    internal static partial void CommandRefusedUnauthenticated(ILogger logger, string command);
 }

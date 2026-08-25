@@ -2,6 +2,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -470,5 +471,64 @@ public sealed class AuthenticationGateTests : IDisposable
             _log.Records.Where(record => record.Values.Any(value =>
                 value.Value is string text && text.Contains("ben", StringComparison.Ordinal))),
             "no record named the account, so the assertions above prove only that nothing was logged");
+    }
+
+    [TestMethod]
+    public async Task ARefusedResume_LeavesARecordButNeverTheToken()
+    {
+        // Twenty-one hours of trace-level service log showed a client failing
+        // every command for sixteen minutes without one line saying why: the
+        // gate refused resumes silently, and the listener's generic "answered
+        // ServiceError" was all there was. A refusal that common must name
+        // itself — and still must not name the token, which is a credential
+        // whether or not it has lapsed (NFR-SEC-006).
+        GiveTheInstallationAnOwner();
+        var connection = Connect();
+
+        var stale = new string('b', 64);
+        var answered = await connection.ExecuteAsync(
+            new ResumeSessionCommand(stale), CancellationToken.None);
+
+        Assert.IsInstanceOfType<ServiceError>(answered);
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3755));
+        Assert.AreEqual(LogLevel.Debug, record.Level);
+        foreach (var logged in _log.Records)
+        {
+            var rendered = string.Join(" ", logged.Values.Select(value => $"{value.Key}={value.Value}"));
+            Assert.DoesNotContain(stale, rendered, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task ASuccessfulResume_LeavesATraceNamingTheUser()
+    {
+        GiveTheInstallationAnOwner();
+        var first = Connect();
+        var minted = (SessionResult)await first.ExecuteAsync(
+            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+
+        var second = Connect();
+        await second.ExecuteAsync(new ResumeSessionCommand(minted.Token), CancellationToken.None);
+
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3756));
+        Assert.AreEqual(LogLevel.Trace, record.Level);
+        Assert.AreEqual("ben", record.Value("User"));
+    }
+
+    [TestMethod]
+    public async Task AGatedRefusal_LeavesATraceNamingTheCommand()
+    {
+        // The other half of the silent sixteen minutes: each relayed command
+        // was refused for want of a session, and the log never said which
+        // verb or why. At trace, the wedge describes itself.
+        GiveTheInstallationAnOwner();
+        var connection = Connect();
+
+        var answered = await connection.ExecuteAsync(new GetStatusCommand(), CancellationToken.None);
+
+        Assert.IsInstanceOfType<ServiceError>(answered);
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3757));
+        Assert.AreEqual(LogLevel.Trace, record.Level);
+        Assert.AreEqual(nameof(GetStatusCommand), record.Value("Command"));
     }
 }

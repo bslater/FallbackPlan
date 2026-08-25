@@ -191,8 +191,8 @@ public static class WebConsoleHost
         MapStaticAsset(app, "/app.css", "wwwroot/app.css", "text/css; charset=utf-8");
         MapStaticAsset(app, "/app.js", "wwwroot/app.js", "text/javascript; charset=utf-8");
 
-        app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth));
-        app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
+        app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth, log));
+        app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth, log));
         app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
         app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
         app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
@@ -204,7 +204,8 @@ public static class WebConsoleHost
     }
 
     /// <summary>One command in, one result out — the whole data surface.</summary>
-    private static async Task ExchangeAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    private static async Task ExchangeAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -243,13 +244,30 @@ public static class WebConsoleHost
             // relays for all of them — a console that cached one token would
             // make every action attributable to whoever signed in first, which
             // is the problem ADR-0045 exists to fix, moved one hop.
-            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session)
-            {
-                await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
-                    .ConfigureAwait(false);
-            }
+            //
+            // A refused resume ends the exchange: the refusal names the fix
+            // ("log in again") where the command's own refusal, sent blind
+            // afterwards, would not — and a browser that slept through its
+            // session's idle timeout retries every few seconds, so the doomed
+            // command would double the traffic of an already-failing loop.
+            // Refused specifically: a service that predates contract 1.16
+            // answers resume_session itself with InvalidArgument, and that
+            // must stay the shrug it always was, not become a blockade.
+            var presented = context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                ? await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false)
+                : null;
+            var refused = presented is ServiceError { Reason: ServiceErrorReason.Refused } dead ? dead : null;
 
-            result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
+            if (refused is not null)
+            {
+                Log.RelayedSessionRefused(log, command.GetType().Name);
+                result = refused;
+            }
+            else
+            {
+                result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
+            }
         }
         catch (ServiceConnectionException exception)
         {
@@ -844,7 +862,20 @@ public static class WebConsoleHost
     /// service watch per subscribed page; the browser's <c>EventSource</c>
     /// reconnects on its own when either end goes away.
     /// </summary>
-    private static async Task StreamEventsAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    /// <remarks>
+    /// The session rides the query the way the console's own token does,
+    /// because <c>EventSource</c> cannot set a header (ADR-0036 §4) — and it
+    /// must ride somewhere: once an installation has accounts the gate
+    /// answers an anonymous watch with an empty stream, which ends at once,
+    /// which the browser answers by redialling on the streaming retry hint.
+    /// That loop ran for sixteen minutes at a watch every two seconds in the
+    /// 2026-08-25 service log without a single progress event arriving. A
+    /// refused session therefore ends the stream honestly: the page is told
+    /// on a named event so it can show sign-in, and the retry hint is raised
+    /// to thirty seconds so even a page that ignores it polls politely.
+    /// </remarks>
+    private static async Task StreamEventsAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -871,8 +902,25 @@ public static class WebConsoleHost
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-store";
 
+            string? session = context.Request.Query["session"];
+            var sessionPresented = !string.IsNullOrEmpty(session);
+            Log.EventStreamOpened(log, sessionPresented);
+
+            var events = 0L;
             try
             {
+                if (!string.IsNullOrEmpty(session)
+                    && await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                        .ConfigureAwait(false) is ServiceError { Reason: ServiceErrorReason.Refused } refused)
+                {
+                    var refusal = JsonSerializer.Serialize<ServiceResult>(refused, SerializerOptions);
+                    await context.Response.WriteAsync(
+                        $"retry: 30000\nevent: session\ndata: {refusal}\n\n", context.RequestAborted)
+                        .ConfigureAwait(false);
+                    await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
+                    return;
+                }
+
                 // Ask EventSource to wait a beat before redialling, so a
                 // stopped service is polite retries rather than a busy loop.
                 await context.Response.WriteAsync("retry: 2000\n\n", context.RequestAborted).ConfigureAwait(false);
@@ -880,6 +928,7 @@ public static class WebConsoleHost
 
                 await foreach (var progress in client.WatchAsync(context.RequestAborted).ConfigureAwait(false))
                 {
+                    events++;
                     var json = JsonSerializer.Serialize(progress, SerializerOptions);
                     await context.Response.WriteAsync($"data: {json}\n\n", context.RequestAborted).ConfigureAwait(false);
                     await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
@@ -888,6 +937,10 @@ public static class WebConsoleHost
             catch (OperationCanceledException)
             {
                 // The browser went away; nothing to tell anyone.
+            }
+            finally
+            {
+                Log.EventStreamEnded(log, events);
             }
         }
     }

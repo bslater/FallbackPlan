@@ -37,4 +37,24 @@ internal static partial class Log
         EventId = 4102, Level = LogLevel.Warning,
         Message = "The service holding the writer role did not answer the start-up probe")]
     internal static partial void ServiceUnreachable(ILogger logger);
+
+    // What only this process knows about a session it relays: that it chose
+    // not to forward a command because the service had already refused the
+    // session it rode in on. The service logs its own refusal (3755); this is
+    // the console's half — the command that was consequently never sent. The
+    // token itself has no parameter to ride in, deliberately.
+    [LoggerMessage(
+        EventId = 4103, Level = LogLevel.Debug,
+        Message = "A relayed session was refused by the service; {Command} was not sent")]
+    internal static partial void RelayedSessionRefused(ILogger logger, string command);
+
+    [LoggerMessage(
+        EventId = 4104, Level = LogLevel.Trace,
+        Message = "Event stream opened (session presented: {SessionPresented})")]
+    internal static partial void EventStreamOpened(ILogger logger, bool sessionPresented);
+
+    [LoggerMessage(
+        EventId = 4105, Level = LogLevel.Trace,
+        Message = "Event stream ended after {Events} event(s)")]
+    internal static partial void EventStreamEnded(ILogger logger, long events);
 }

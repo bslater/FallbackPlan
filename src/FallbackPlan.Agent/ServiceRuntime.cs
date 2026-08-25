@@ -67,6 +67,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
     private bool _disposed;
+
+    /// <summary>Guards <see cref="_configurationFingerprint"/>.</summary>
+    private readonly Lock _configurationAnnounced = new();
+
+    /// <summary>The canonical-content hash of the last configuration announced (event 3742).</summary>
+    private byte[]? _configurationFingerprint;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _setGates =
         new(StringComparer.Ordinal);
 
@@ -250,12 +256,45 @@ public sealed class ServiceRuntime : IAsyncDisposable
     public ClientConfiguration Configuration => ClientConfiguration.Load(ConfigurationPath);
 
     /// <summary>
-    /// Reads the configuration as an event worth recording — the service
-    /// starting, or an edit taking effect.
+    /// Reads the configuration through the logged path: every read leaves its
+    /// Debug record, and the first read — or one whose content differs from
+    /// the last — is announced at Information (event 3742).
     /// </summary>
+    /// <remarks>
+    /// The scheduler reads through here every pass, so the announcement has
+    /// to be change-detected rather than unconditional: unconditional, the
+    /// one message was 98% of a real installation's Information tier, saying
+    /// each time that nothing had happened. The runtime is the right holder
+    /// of the memory because <see cref="ClientConfiguration.Load"/> is a pure
+    /// function of the file and must stay one. The fingerprint is of the
+    /// canonical export rather than the raw bytes, so reformatting the file
+    /// is not an event but changing what it says is.
+    /// </remarks>
     /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
-    public ClientConfiguration LoadConfiguration() =>
-        ClientConfiguration.Load(ConfigurationPath, LoggerFor<ClientConfiguration>());
+    public ClientConfiguration LoadConfiguration()
+    {
+        var configuration = ClientConfiguration.Load(ConfigurationPath, LoggerFor<ClientConfiguration>());
+
+        var fingerprint = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(configuration.ExportJson()));
+        lock (_configurationAnnounced)
+        {
+            if (_configurationFingerprint is { } seen && fingerprint.AsSpan().SequenceEqual(seen))
+            {
+                return configuration;
+            }
+
+            _configurationFingerprint = fingerprint;
+        }
+
+        var announce = LoggerFor<ServiceRuntime>();
+        Log.ConfigurationChanged(
+            announce,
+            configuration.SchemaVersion,
+            configuration.BackupSets.Count,
+            configuration.Destinations.Count);
+        return configuration;
+    }
 
     /// <summary>
     /// The per-set exclusion between a destructive retention apply and a

@@ -355,11 +355,33 @@ The rotating file sink remains ours: file rotation, retention and owner-only
 permissions are policy about this product's state directory, not a general data
 structure.
 
+## Amendment (2026-08): the Information tier records change, not routine
+
+A day of real service log made the rule concrete. The scheduler re-reads the
+configuration every pass through the logged path — deliberately, so "what was
+in force when this ran" is answerable — and the load message (3400) sat at
+Information. The result: 347 of the log's 353 Information records were one
+sentence repeating that nothing had happened, and the six records that meant
+something drowned in it.
+
+The correction keeps both halves. The load record survives at **Debug**, one
+per read, so the pass stays reconstructable at the level of routine mechanics.
+The **Information** record is now the one only a rememberer can write:
+`ServiceRuntime` fingerprints the canonical export of what it loaded and
+announces (3742) on the first read and on change — an edit taking effect, in
+one line, in the tier an operator actually reads. Reformatting the file is not
+an event; changing what it says is.
+
+The general rule this instance pins: a message emitted on a timer belongs at
+Debug however interesting its subject, because at Information a timer does not
+report events, it manufactures them.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | The shape decided: abstractions in the libraries, sinks in the hosts, redaction by declared type, event-id ranges |
+| 2026-08 | Amended | The Information tier records change, not routine: the per-pass configuration load demoted to Debug (3400), change announced from the runtime that can see it (3742) |
 | 2026-08 | Accepted | Built: abstractions in twenty-four projects, per-project `Log.cs`, and the ring, rolling file and renderer in `FallbackPlan.Diagnostics` |
 | 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
 | 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is complete: the 61-declaration register is empty, twelve by deletion and the rest wired, with drills asserting records arrive rather than only that call sites exist |

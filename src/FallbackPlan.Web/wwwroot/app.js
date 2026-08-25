@@ -205,14 +205,34 @@ async function api(command) {
   // A refusal naming the sign-in is what tells this browser it is anonymous.
   // Read from the answer rather than guessed from the command, because the
   // service is the one that decides whether an installation has accounts.
-  if (body?.result === "error" && typeof body.message === "string"
-      && body.message.includes("has not signed in")) {
-    S.everRefused = true;
-    S.signInRequired = true;
-    renderSignIn();
+  if (body?.result === "error" && typeof body.message === "string") {
+    // The session this browser held has lapsed — it idled out, was revoked,
+    // or did not survive a service restart. Forget it: a dead token
+    // re-presented on every request is a doomed resume per poll, for ever.
+    // (The 2026-08-25 service log: 581 of them in sixteen minutes.)
+    if (session && body.message.includes("not current")) {
+      sessionExpired();
+    } else if (body.message.includes("has not signed in")) {
+      S.everRefused = true;
+      S.signInRequired = true;
+      renderSignIn();
+    }
   }
 
   return body;
+}
+
+// The one transition out of "acting as somebody": forget the dead token so
+// requests stop presenting it, stop the event stream so it stops redialling
+// with it, and stand the sign-in screen up. The pollers check
+// S.signInRequired themselves, so this also quiets them until sign-in.
+function sessionExpired() {
+  rememberSession(null);
+  S.signedInUser = null;
+  S.everRefused = true;
+  S.signInRequired = true;
+  disconnectEvents();
+  renderSignIn();
 }
 
 async function safeJson(response) { try { return await response.json(); } catch { return null; } }
@@ -339,16 +359,35 @@ function refreshAll() {
 
 /* ---------------------------------------------------------------- SSE */
 
+let eventSource = null;
+
 function connectEvents() {
-  const source = new EventSource("/api/events?token=" + encodeURIComponent(token));
-  source.onmessage = event => {
+  disconnectEvents();
+
+  // The session rides the query the same way the console token does, because
+  // EventSource cannot set a header. Without it, an installation with
+  // accounts answers every watch with an empty stream that ends at once, and
+  // EventSource redials every two seconds for ever — progress never arrives.
+  let url = "/api/events?token=" + encodeURIComponent(token);
+  if (session) url += "&session=" + encodeURIComponent(session);
+
+  eventSource = new EventSource(url);
+  eventSource.onmessage = event => {
     const { progress } = JSON.parse(event.data);
     if (!progress) return;
     S.progress.set(progress.jobId, progress);
     if (S.view === "jobs") scheduleJobsRender();
   };
+  // The console's answer when the session it was handed is dead: stop
+  // streaming, show sign-in, and do not redial with the same dead token.
+  eventSource.addEventListener("session", () => sessionExpired());
   // EventSource redials on its own; nothing to do on error — the poller is
   // what decides reachability, from actual answers.
+}
+
+function disconnectEvents() {
+  eventSource?.close();
+  eventSource = null;
 }
 
 let jobsRenderQueued = false;
@@ -1049,6 +1088,8 @@ async function signInSubmit() {
     S.signedInUser = answered.user;
     SI = null;
     renderSignIn();
+    connectEvents(); // redial the progress stream with the new session
+    refreshAll();
     await refreshDesc();
   } catch (failure) {
     SI.message = failure?.message ?? "The console could not reach the service.";
@@ -1068,6 +1109,7 @@ async function signOut() {
   rememberSession(null);
   S.signedInUser = null;
   S.signInRequired = true;
+  disconnectEvents();
   renderSignIn();
 }
 
@@ -3572,9 +3614,17 @@ function boot() {
   refreshAll();
   connectEvents();
 
-  setInterval(() => { if (!document.hidden) refreshStatus(); }, 5000);
-  setInterval(() => { if (!document.hidden) refreshJobs(); }, 3000);
-  setInterval(() => { if (!document.hidden) { refreshSets(); refreshSnapshots(); } }, 30000);
+  // The data pollers pause while sign-in (or setup) stands in place of the
+  // views: every one of these commands would be refused for want of a
+  // session, and a poll that can only be refused is traffic without
+  // information. The describe poll below is the signed-out heartbeat — it is
+  // answered without a session, and it is how the page notices the service
+  // going away or its setup state changing while somebody is not signed in.
+  const signedOut = () => S.signInRequired || S.setupRequired;
+  setInterval(() => { if (!document.hidden && !signedOut()) refreshStatus(); }, 5000);
+  setInterval(() => { if (!document.hidden && !signedOut()) refreshJobs(); }, 3000);
+  setInterval(() => { if (!document.hidden && !signedOut()) { refreshSets(); refreshSnapshots(); } }, 30000);
+  setInterval(() => { if (!document.hidden && signedOut()) refreshDesc(); }, 30000);
   setInterval(() => { if (!S.connected) renderConn(); }, 10000); // keep the age fresh
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
 }

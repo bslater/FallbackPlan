@@ -57,6 +57,29 @@ public sealed class ClientConfigurationTests
         new() { Ref = name, Retention = retention };
 
     [TestMethod]
+    public void Load_RecordsTheLoadAtDebug()
+    {
+        // The scheduler reads through this path every pass — every ten to
+        // sixty seconds for the life of the service. At Information that one
+        // message was 98% of the tier an operator reads (the 2026-08-24/25
+        // service log: 347 of 353 Information records). The record stays, at
+        // the level of routine mechanics; "the configuration changed" is the
+        // operator-facing event, and the host that can see change logs it.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb-vault")],
+            BackupSets = [Set("docs", Ref("usb-vault"))],
+        }.Save(ConfigPath);
+
+        var log = new FallbackPlan.TestSupport.RecordingLogger();
+        ClientConfiguration.Load(ConfigPath, log);
+
+        var record = Assert.ContainsSingle(log.Records.Where(record => record.EventId == 3400));
+        Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Debug, record.Level);
+    }
+
+    [TestMethod]
     public void SaveThenLoad_DestinationsAndRetention_RoundTrip()
     {
         new ClientConfiguration

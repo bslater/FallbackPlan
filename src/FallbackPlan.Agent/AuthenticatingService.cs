@@ -108,6 +108,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
         {
             if (Current is not { } session)
             {
+                Log.CommandRefusedUnauthenticated(_log, command.GetType().Name);
                 return new ServiceError(
                     ServiceErrorReason.Refused,
                     "This connection has not signed in. Log in first — `fallbackplan login`, or the "
@@ -184,6 +185,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
     {
         if (_sessions.Resolve(resume.Token) is not { } session)
         {
+            Log.SessionResumeRefused(_log);
             return new ServiceError(
                 ServiceErrorReason.Refused,
                 "That session is not current — it expired, was signed out, or did not survive a "
@@ -195,6 +197,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
             _token = session.Token;
         }
 
+        Log.SessionResumed(_log, session.User);
         return Describe(session);
     }
 
