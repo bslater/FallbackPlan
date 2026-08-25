@@ -87,53 +87,166 @@ public static class ServiceConnectionPump
     private static async Task PumpAsync(
         Stream stream, IFallbackPlanService service, ILogger logger, CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        // The token a command runs under is the CONNECTION's life, not the
+        // listener's. The distinction stayed invisible until a preview scan
+        // outlived the browser that asked for it by seven hours and answered
+        // into a broken pipe (2026-08-25): the service side of cancellation —
+        // OnReaderLaneAsync releasing the lane when the caller's token fires —
+        // existed and was dead, because the token handed in here never fired
+        // before shutdown.
+        using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<WireFrame?>? readAhead = null;
+
+        try
         {
-            var frame = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
-            switch (frame)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                case null:
-                    return;
-
-                case RequestFrame request:
+                WireFrame? frame;
+                if (readAhead is null)
                 {
-                    // Timed and named only when somebody is listening: reading
-                    // the type names is work, and CA1873 is an error, so both
-                    // land in locals behind the level check rather than in a
-                    // log argument.
-                    var timing = logger.IsEnabled(LogLevel.Debug);
-                    var startedAt = timing ? Stopwatch.GetTimestamp() : 0L;
-
-                    var result = await service.ExecuteAsync(request.Command, cancellationToken)
-                        .ConfigureAwait(false);
-                    await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (timing)
-                    {
-                        // The verb and the result kind, never the command
-                        // itself: arguments carry set names, paths and sealed
-                        // envelopes, and none of those belong in a connection
-                        // log.
-                        var verb = request.Command.GetType().Name;
-                        var answered = result.GetType().Name;
-                        var elapsedMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
-                        Log.CommandHandled(logger, verb, answered, elapsedMs);
-                    }
-
-                    break;
+                    frame = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    frame = await readAhead.ConfigureAwait(false);
+                    readAhead = null;
                 }
 
-                case WatchFrame:
-                    Log.WatchOpened(logger);
-                    await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
-                    return;
+                switch (frame)
+                {
+                    case null:
+                        return;
 
-                default:
-                    return;
+                    case RequestFrame request:
+                    {
+                        var startedAt = Stopwatch.GetTimestamp();
+
+                        // Read the next frame NOW, while the command runs. The
+                        // contract is strictly request/response, so a client
+                        // sends nothing until it has its answer — the only way
+                        // this read resolves mid-command is the client going
+                        // away, and that is exactly when the command should
+                        // stop. A frame it does return early (a client
+                        // free-running ahead) is simply held for the next turn
+                        // of the loop.
+                        readAhead = ReadBehindAsync(stream, connection, cancellationToken);
+
+                        ServiceResult? result;
+                        try
+                        {
+                            result = await service.ExecuteAsync(request.Command, connection.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (
+                            connection.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                        {
+                            result = null;
+                        }
+
+                        if (result is null
+                            || (connection.IsCancellationRequested && !cancellationToken.IsCancellationRequested))
+                        {
+                            // Nobody is owed the answer, and writing it would
+                            // only manufacture a broken-pipe warning out of a
+                            // hang-up.
+                            var abandonedVerb = request.Command.GetType().Name;
+                            var abandonedAfterMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                            Log.CommandAbandoned(logger, abandonedVerb, abandonedAfterMs);
+                            return;
+                        }
+
+                        await FrameCodec.WriteAsync(stream, new ResponseFrame(request.Id, result), cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (logger.IsEnabled(LogLevel.Debug))
+                        {
+                            // The verb and the result kind, never the command
+                            // itself: arguments carry set names, paths and
+                            // sealed envelopes, and none of those belong in a
+                            // connection log.
+                            var verb = request.Command.GetType().Name;
+                            var answered = result.GetType().Name;
+                            var elapsedMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                            Log.CommandHandled(logger, verb, answered, elapsedMs);
+                        }
+
+                        break;
+                    }
+
+                    case WatchFrame:
+                        Log.WatchOpened(logger);
+                        await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
+                        return;
+
+                    default:
+                        return;
+                }
+            }
+        }
+        finally
+        {
+            if (readAhead is not null)
+            {
+                // However the pump leaves — hang-up, shutdown, a write into a
+                // pipe that just broke — a read it started must not surface as
+                // an unobserved task exception: the connection is over either
+                // way.
+                Observe(readAhead);
             }
         }
     }
+
+    /// <summary>
+    /// The between-commands read, started while a command is still running so
+    /// that end-of-stream — the client hanging up — cancels the connection's
+    /// work instead of waiting politely behind it.
+    /// </summary>
+    private static async Task<WireFrame?> ReadBehindAsync(
+        Stream stream, CancellationTokenSource connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var frame = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (frame is null)
+            {
+                TryCancel(connection);
+            }
+
+            return frame;
+        }
+        catch (Exception)
+        {
+            // A broken pipe and a garbage frame both end the connection, so
+            // both abandon its work; the pump's own await of this task is what
+            // surfaces the exception when nothing was running.
+            TryCancel(connection);
+            throw;
+        }
+    }
+
+    /// <summary>Cancels unless the pump already left and took the source with it.</summary>
+    private static void TryCancel(CancellationTokenSource connection)
+    {
+        try
+        {
+            connection.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The connection ended first; there is nothing left to stop.
+        }
+    }
+
+    /// <summary>
+    /// Keeps a read the pump is abandoning from surfacing as an unobserved
+    /// task exception: the connection is over either way.
+    /// </summary>
+    private static void Observe(Task readAhead) =>
+        _ = readAhead.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     private static async Task StreamProgressAsync(
         Stream stream, IFallbackPlanService service, CancellationToken cancellationToken)

@@ -21,6 +21,13 @@ internal sealed class FakeService : IFallbackPlanService
 
     public Func<ServiceCommand, ServiceResult> Respond { get; set; } = _ => new AcknowledgedResult();
 
+    /// <summary>
+    /// When set, answers instead of <see cref="Respond"/> — for the tests that
+    /// need to see the token the transport hands a command, or to hold an
+    /// answer back while something happens to the connection.
+    /// </summary>
+    public Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>>? RespondAsync { get; set; }
+
     public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
         lock (Received)
@@ -28,7 +35,7 @@ internal sealed class FakeService : IFallbackPlanService
             Received.Add(command);
         }
 
-        return ValueTask.FromResult(Respond(command));
+        return RespondAsync?.Invoke(command, cancellationToken) ?? ValueTask.FromResult(Respond(command));
     }
 
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(

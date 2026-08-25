@@ -169,7 +169,7 @@ function badge(meta, label) {
 
 /* ---------------------------------------------------------------- api */
 
-async function api(command) {
+async function api(command, { signal } = {}) {
   let response;
   try {
     response = await fetch("/api/command", {
@@ -182,8 +182,14 @@ async function api(command) {
           }
         : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
       body: JSON.stringify(command),
+      signal,
     });
-  } catch {
+  } catch (error) {
+    // An abort is this page changing its mind, not the console failing —
+    // and it does real work: the console drops its service connection for
+    // the aborted request, which the service takes as a hang-up and cancels
+    // the command's work.
+    if (error.name === "AbortError") throw new ConsoleError("aborted", "This request was superseded.");
     setConnected(false);
     throw new ConsoleError("unreachable", "The console process stopped answering.");
   }
@@ -242,9 +248,9 @@ class ConsoleError extends Error {
 }
 
 // A command whose ServiceError should surface as a toast rather than a throw.
-async function run(command, { okToast, errToast } = {}) {
+async function run(command, { okToast, errToast, signal } = {}) {
   try {
-    const result = await api(command);
+    const result = await api(command, { signal });
     if (result.result === "error") {
       toast("bad", `${errToast ?? "The service refused"}: ${result.message}`);
       return null;
@@ -252,6 +258,7 @@ async function run(command, { okToast, errToast } = {}) {
     if (okToast) toast("ok", okToast);
     return result;
   } catch (error) {
+    if (error.kind === "aborted") return null; // superseded on purpose; nothing to tell anyone
     if (error.kind === "unreachable") toast("warn", `Service unreachable — ${error.message}`);
     else if (error.kind !== "token") toast("bad", error.message);
     return null;
@@ -854,6 +861,7 @@ function closeDialog() {
   dialog.innerHTML = "";
   dialog.classList.remove("wide");
   E = null;
+  endSourceScans(); // a walk for an editor that no longer exists stops now, not in ten minutes
   if (W) {
     // The wizard's server-side source handle is released best-effort; the
     // idle sweep reclaims it anyway if this never lands. The passphrase
@@ -904,8 +912,11 @@ function comparisonReport(result) {
 // dialog, hidden, so Back loses nothing; only the Apply here performs the
 // upsert. Rendered even when the comparison failed — the operator may be
 // pointing at a drive that is not mounted yet — but then it says so
-// instead of pretending to know the consequences.
-function renderSetSaveConfirm(saved, preview, previewError) {
+// instead of pretending to know the consequences. And rendered before the
+// comparison arrives ({ comparing: true }): the walk fills the panel in
+// from the background, because Apply must never wait on it — the service
+// runs its own rescan job after a material save regardless.
+function renderSetSaveConfirm(saved, preview, previewError, { comparing = false } = {}) {
   document.getElementById("set-confirm")?.remove();
   const editor = document.getElementById("set-editor");
   if (editor) editor.hidden = true;
@@ -958,7 +969,9 @@ function renderSetSaveConfirm(saved, preview, previewError) {
     ${warnings.length ? `<ul class="warnings">${warnings.map(text => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
     ${report ? `
       <p class="subtle">${esc(report.summary)}</p>
-      ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}` : ""}
+      ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}` : comparing ? `
+      <p class="subtle">Comparing with the last backup in the background — there is no need to wait.
+      Applying runs the same comparison as a service job, and its findings land under Notices.</p>` : ""}
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="set-save-back">Back to editing</button>
       <button type="button" class="btn ${dropping ? "danger" : "primary"}" data-action="set-save-apply">Apply these changes</button>
@@ -2281,6 +2294,25 @@ function renderSelectionSummary() {
 // brand-new set, against nothing (contract 1.10's draft mode). Skipped when
 // the compiled output has not changed since the last walk.
 let livePreviewTimer = null;
+
+// One in-flight source walk at a time. A preview superseded by a newer edit,
+// a save, or the dialog closing is aborted — and because the console opens a
+// service connection per relayed request, the abort reaches the service as a
+// hang-up that cancels the walk itself, not just this page's fetch. Without
+// it, every settled edit of a large set stacked another multi-minute scan
+// behind the reader lane (583916 ms and friends in the 2026-08-25 log).
+let sourceScan = null;
+function beginSourceScan() {
+  sourceScan?.abort();
+  sourceScan = new AbortController();
+  return sourceScan.signal;
+}
+
+function endSourceScans() {
+  sourceScan?.abort();
+  sourceScan = null;
+}
+
 function scheduleLivePreview() {
   clearTimeout(livePreviewTimer);
   livePreviewTimer = setTimeout(async () => {
@@ -2300,7 +2332,7 @@ function scheduleLivePreview() {
       roots: roots.map(root => ({ path: root.path, label: root.label })),
       includeRules,
       excludeRules: allExcludes,
-    });
+    }, { signal: beginSourceScan() });
     if (!E || !document.getElementById("change-preview")) return;
     if (result?.result !== "set_change_preview") return;
     E.lastPreviewKey = key;
@@ -2458,7 +2490,7 @@ Object.assign(actions, {
         roots: roots.map(root => ({ path: root.path, label: root.label })),
         includeRules: [...E.handIncludes],
         excludeRules: [...excludeRules, ...E.handExcludes],
-      }, { errToast: "The service could not compare" });
+      }, { errToast: "The service could not compare", signal: beginSourceScan() });
       if (!result || result.result !== "set_change_preview") { host.innerHTML = ""; return; }
 
       E.lastPreviewKey = JSON.stringify([roots, [...E.handIncludes], [...excludeRules, ...E.handExcludes]]);
@@ -2515,8 +2547,7 @@ Object.assign(actions, {
 
     // A material edit — the roots or the rules — changes what future backups
     // hold: files can silently leave the backup. So it is never applied on
-    // one click: step one compares the draft against the last backup and
-    // shows the consequences; only the explicit Apply in that step saves
+    // one click: step two states the edit and only its explicit Apply saves
     // (ADR-0038). Compared as sorted sets, so mere reordering is not
     // material. Everything else (name, schedule, retention) saves directly.
     const saved = E.isNew ? null : S.sets.find(set => set.id === E.id);
@@ -2532,28 +2563,44 @@ Object.assign(actions, {
       return;
     }
 
-    await withBusy(el, async () => {
-      let preview = null;
-      let previewError = null;
-      try {
-        const result = await api({
-          command: "preview_set_changes",
-          setName: saved.name,
-          roots: payload.roots,
-          includeRules, excludeRules,
-        });
-        if (result.result === "set_change_preview") preview = result;
-        else previewError = result.message ?? "the service answered unexpectedly";
-      } catch (error) {
-        previewError = error.message;
-      }
+    // The confirm panel opens at once. The comparison that informs it is a
+    // full walk of the source — ten minutes for a newly added 10K-file
+    // folder, and it used to run right here, pinning this button to a
+    // spinner for the duration (the 583916 ms preview in the 2026-08-25
+    // log was exactly this await). It now fills the open panel in from the
+    // background, and Apply never waits for it: on a material save the
+    // service queues its own rescan job and the findings land under
+    // Notices either way (ADR-0038).
+    E.pendingSave = payload;
+    renderSetSaveConfirm(saved, null, null, { comparing: true });
 
-      E.pendingSave = payload;
+    const signal = beginSourceScan();
+    let preview = null;
+    let previewError = null;
+    try {
+      const result = await api({
+        command: "preview_set_changes",
+        setName: saved.name,
+        roots: payload.roots,
+        includeRules, excludeRules,
+      }, { signal });
+      if (result.result === "set_change_preview") preview = result;
+      else previewError = result.message ?? "the service answered unexpectedly";
+    } catch (error) {
+      if (error.kind === "aborted") return;
+      previewError = error.message;
+    }
+
+    // Filled in only if the operator is still looking at this very step —
+    // not after Back, not after Apply, not in a dialog reopened for
+    // something else.
+    if (E?.pendingSave === payload && document.getElementById("set-confirm")) {
       renderSetSaveConfirm(saved, preview, previewError);
-    });
+    }
   },
 
   "set-save-back"() {
+    endSourceScans(); // the walk was informing a step that no longer exists
     document.getElementById("set-confirm")?.remove();
     const editor = document.getElementById("set-editor");
     if (editor) editor.hidden = false;
@@ -2563,6 +2610,9 @@ Object.assign(actions, {
   async "set-save-apply"(el) {
     const payload = E.pendingSave;
     if (!payload) return;
+    // The advisory walk yields the reader lane before the save queues the
+    // authoritative rescan job onto it.
+    endSourceScans();
     await withBusy(el, () => applySetUpsert(payload));
   },
 

@@ -117,9 +117,41 @@ them; and a 1.7 client that upserts a material edit receives a
   behaviour hand-editors rely on, and a notice about every hand-edit is
   noise nobody asked for. Recorded as the accepted gap.
 
+## Amendment (2026-08): step two opens before the comparison answers
+
+Decision 7 said the editor "first runs the comparison and shows what the edit
+means", and the build read that as a gate: Save awaited the full source walk
+before step two appeared. For exactly the edit the rescan exists for — a newly
+added folder holding thousands of files — that walk is minutes long, so the
+two-step ceremony degenerated into a spinner on Save (the 583,916 ms and
+725,578 ms `preview_set_changes` calls in the 2026-08-25 service log are that
+await), and an operator who gave up and closed the dialog left the walk
+running for no audience.
+
+Three changes, none to the contract:
+
+- **The confirm panel opens at once**, stating the edit from the draft itself —
+  folders added and removed, rule counts — because everything except the
+  comparison is known locally. The comparison fills the open panel in when it
+  arrives; until then the panel says the walk is running and that applying
+  does not need it: the after-edit rescan (decision 4) is queued by the
+  service on a material save regardless, and its findings land under Notices.
+- **Apply never waits.** The ceremony's gate is the explicit second click, not
+  the walk. A consequences report that has arrived is shown; one that has not
+  is not a reason to hold the save hostage — the same posture decision 7
+  already took for a comparison that fails outright.
+- **Every preview the console starts is abortable, and superseded previews are
+  aborted.** One walk in flight at a time; a newer edit, Back, Apply, or
+  closing the dialog aborts it. The abort is real, not cosmetic: the console
+  relays each request over its own service connection, and a connection's
+  death now cancels its in-flight command (ADR-0028 amendment), so an
+  abandoned preview releases the reader lane instead of leaving minutes of
+  walking queued ahead of the save's own rescan.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the include-rule enforcement fresh (ADR-0037) and the full-flag discrepancy verified against both gateways |
 | 2026-08 | Accepted | Built: contract 1.8, the comparer beside the publisher's own predicates, the after-edit rescan and its notice, the CLI `changes` verb and the web editor's preview |
+| 2026-08 | Amended | The console's step two opens before the comparison answers: the walk fills in from the background, Apply never waits on it, and superseded previews are aborted. The service-side rescan-and-notice (decision 4) is unchanged and remains the authoritative record |

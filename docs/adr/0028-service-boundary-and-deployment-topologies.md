@@ -479,6 +479,35 @@ A password is therefore never a way *in*. It is a way to be *named* once
 inside a door the operating system or a pinned pairing already opened.
 
 
+## Amendment (2026-08): a client that hangs up takes its command with it
+
+§5 and §7 describe the pump as request/response "until the client goes away",
+and the implementation read *goes away* as something that could only happen
+between commands: the token a command executed under was the **listener's**
+stopping token, so a command still running when its connection died ran to
+completion and answered into a closed stream. The 2026-08-25 service log
+recorded the worst case of that reading: a `preview_set_changes` walk that
+outlived its browser by seven hours (26,161,154 ms) and was answered into a
+pipe that had been broken since the machine woke — logged as a very slow
+success followed by an unrelated-looking "Connection failed: Pipe is broken".
+
+The pump now hands every command a token linked to the **connection's** life.
+No new machinery watches the socket: the pump already owes the stream a read
+for the next frame, and that read is simply started while the command runs.
+The contract is strictly request/response, so that read resolving mid-command
+means the client is gone — end of stream and a broken pipe both fire the
+command's token, which is the same token `OnReaderLaneAsync` registers against
+the job queue (ADR-0029), so the reader lane is released and the walk actually
+stops. A frame that does arrive early — a client running ahead of its answers —
+is held for the next turn of the loop, not treated as an error.
+
+The abandonment is one Information line — event 3606, *"Command {Verb}
+abandoned after {ElapsedMs} ms: the client disconnected, so the work was
+cancelled"* — in place of the two misleading lines above. Nothing about the
+contract changes: no new frame, no new verb, and a client that waits for its
+answer sees exactly the behaviour it always did.
+
+
 ## Implementation status (2026-08)
 
 Built: the writer-role exclusion (§4), the local binding (§5), the command
@@ -526,3 +555,4 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Accepted | How the OS hosts the process decided in [ADR-0033](0033-hosting-under-an-os-service-manager.md): clean shutdown on a manager's stop, the Windows SCM bridge, and generated systemd/launchd/`sc.exe` registration |
 | 2026-08 | Accepted (amended) | One process, N staging archives: the writer rule is per archive, all roles held by the one locked service process ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Amended | §5's "no password, no token file, no port" is scoped explicitly to the connection: [ADR-0045](0045-client-authentication.md) adds person-identity inside the already-authenticated channel, with no new listener and a session that is never written to disk |
+| 2026-08 | Amended | A connection's death cancels its in-flight command: the pump reads ahead while a command runs, end of stream fires the command's token — the one the reader lane already registers — and the abandonment is one log line (3606) instead of a seven-hour "success" and an unrelated-looking broken pipe |

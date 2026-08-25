@@ -54,4 +54,14 @@ internal static partial class Log
         EventId = 3605, Level = LogLevel.Debug,
         Message = "Listening on {Endpoint}")]
     internal static partial void Listening(ILogger logger, LogPath endpoint);
+
+    // Information, not Debug: this line is the whole explanation for a command
+    // that has no CommandHandled entry, and it replaces what used to appear
+    // instead — a CommandHandled line hours late and a broken-pipe warning
+    // that read as an unrelated failure (the 26,161,154 ms preview scan in the
+    // 2026-08-25 log).
+    [LoggerMessage(
+        EventId = 3606, Level = LogLevel.Information,
+        Message = "Command {Verb} abandoned after {ElapsedMs} ms: the client disconnected, so the work was cancelled")]
+    internal static partial void CommandAbandoned(ILogger logger, string verb, long elapsedMs);
 }
