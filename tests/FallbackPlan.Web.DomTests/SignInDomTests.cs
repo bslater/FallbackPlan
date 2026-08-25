@@ -44,8 +44,10 @@ public sealed class SignInDomTests
         var page = await context.NewPageAsync();
         await page.GotoAsync(harness.TokenedUrl);
 
-        // users_required shows the first-account variant of the gate.
-        await Expect(page.GetByText("Create the first account")).ToBeVisibleAsync();
+        // users_required shows the first-account variant of the gate. The
+        // heading, specifically — the submit button repeats the same words,
+        // so the bare text would match two elements.
+        await Expect(page.Locator("#signin h2")).ToHaveTextAsync("Create the first account");
 
         await page.FillAsync("#signin-user", "owner");
         await page.FillAsync("#signin-pass", "a local dev password");
