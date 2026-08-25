@@ -73,7 +73,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
 | [0047](adr/0047-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Specified only** | [notes](#0047--recovering-the-data-was-only-half-of-it) |
 | [0048](adr/0048-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0048--the-two-things-live-capture-cannot-do) |
-| [0049](adr/0049-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
+| [0049](adr/0049-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
 
 ---
 

@@ -68,7 +68,9 @@ nowhere, which is a claim the checkers cannot see and a walk nobody can re-run.
   next screen live), the rebuild page enabling by keystroke without losing focus, and the jobs
   view carrying an acknowledged cancel on the card.
 - The "live Playwright walk" evidence in ADR-0041/0042 now has a committed, re-runnable
-  counterpart; extending the suite to the restore wizard's walk is the anticipated next tenant.
+  counterpart: the restore wizard's full walk (unlock against a real archive's key files, plan,
+  run, source release) and the write-only provisioning ceremony live in the suite, alongside
+  the views, sign-in, configuration editing, and the chrome's staleness presentation.
 - CI gains one job and a browser download in it; the other jobs are untouched and the coverage
   gate is unaffected (test-suffixed modules are excluded from the module table by name).
 - The suite's `packages.lock.json` participates in locked restore like every other; the .NET 10

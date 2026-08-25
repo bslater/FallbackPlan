@@ -62,10 +62,15 @@ internal sealed class FakeClientFactory : IServiceClientFactory
 {
     public FakeServiceClient Client { get; } = new();
 
+    /// <summary>When set, every connect fails the way an absent service does.</summary>
+    public bool Unreachable { get; set; }
+
     public string Address => "(fake state directory)";
 
     public ValueTask<IFallbackPlanClient> ConnectAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult<IFallbackPlanClient>(Client);
+        Unreachable
+            ? throw new ServiceConnectionException("No service is listening at '(fake state directory)'.")
+            : ValueTask.FromResult<IFallbackPlanClient>(Client);
 }
 
 /// <summary>
@@ -106,6 +111,35 @@ internal sealed class DomHarness : IAsyncDisposable
         return new DomHarness(state, console, auth, clients);
     }
 
+    /// <summary>
+    /// Waits for a command matching <paramref name="matches"/> to arrive at
+    /// the fake — the page's actions round-trip through real HTTP, so a
+    /// click's command lands a beat after the click returns.
+    /// </summary>
+    public async Task<TCommand> ReceivedAsync<TCommand>(
+        Func<TCommand, bool>? matches = null, int timeoutMilliseconds = 30_000)
+        where TCommand : ServiceCommand
+    {
+        var deadline = Environment.TickCount64 + timeoutMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            lock (Clients.Client.Received)
+            {
+                var found = Clients.Client.Received.OfType<TCommand>()
+                    .FirstOrDefault(command => matches is null || matches(command));
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new AssertFailedException(
+            $"No {typeof(TCommand).Name} arrived at the fake within {timeoutMilliseconds} ms.");
+    }
+
     public async ValueTask DisposeAsync()
     {
         await Console.DisposeAsync();
@@ -118,6 +152,38 @@ internal sealed class DomHarness : IAsyncDisposable
             // A straggling handle on a temp directory is not a test failure.
         }
     }
+}
+
+/// <summary>
+/// The wire shapes the suites keep reaching for — one place to mint a
+/// describe answer and the common descriptors, so a test's fake reads as
+/// its scenario rather than as constructor plumbing.
+/// </summary>
+internal static class Wire
+{
+    /// <summary>The set identity the suites use throughout.</summary>
+    public static readonly string SetId = new('a', 32);
+
+    /// <summary>A device identity for kits and describes.</summary>
+    public const string DeviceIdHex = "00112233445566778899aabbccddeeff";
+
+    public static ServiceDescriptionResult Describe(
+        string setupState, string? signedInUser = null, string? archivesRoot = "/archives") =>
+        new(
+            "1.18", "test", "vm", "/state", false, 0,
+            ArchivesRoot: archivesRoot,
+            RestoreGrantRecipient: System.Convert.ToHexStringLower(
+                FallbackPlan.Repository.Crypto.ContentSealing.PublicKeyOf(
+                    System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))),
+            SetupState: setupState,
+            DeviceId: DeviceIdHex,
+            SignedInUser: signedInUser);
+
+    public static BackupSetDescriptor Set(string name = "docs") =>
+        new(SetId, name, "/src", null, [], [], ["vault"]);
+
+    public static SnapshotDescriptor Snapshot(ulong capturedAt, string id = "snap-1") =>
+        new(id, SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1);
 }
 
 /// <summary>
