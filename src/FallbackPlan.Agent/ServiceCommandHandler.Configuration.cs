@@ -253,6 +253,127 @@ public sealed partial class ServiceCommandHandler
         return new ConfigurationChangeResult(lines);
     }
 
+    /// <summary>
+    /// Retires a migrated direct-ship set's staging archive (ADR-0046,
+    /// FR-DEST-002's spirit): the one deliberately destructive act of the
+    /// migration, refused while it would lose anything. Every object staging
+    /// holds (lifecycle objects aside — they never leave staging) must be
+    /// present in the union of the set's destination replicas.
+    /// </summary>
+    private async ValueTask<ServiceResult> RetireStagingAsync(
+        RetireStagingCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+        var set = configuration.FindSet(command.SetName);
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        if (!set.DirectShip)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' is not direct-ship; its staging archive is where its backups live.");
+        }
+
+        var stagingPath = runtime.ArchivePath(set.Id);
+        if (!File.Exists(Path.Combine(stagingPath, Repository.RepositoryLifecycle.DescriptorKey.Value)))
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused, $"Backup set '{set.Name}' holds no staging archive to retire.");
+        }
+
+        // The union of what the destinations hold. Reachability is required
+        // of every referenced local-path destination: an absent drive might
+        // be the only holder of something staging is about to stop holding.
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in set.Destinations)
+        {
+            if (configuration.FindDestination(reference.Ref) is not
+                { Kind: DestinationKind.LocalPath } destination)
+            {
+                continue;
+            }
+
+            if (destination.AddressDefect is { } defect)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused, $"Destination '{destination.Name}': {defect}");
+            }
+
+            if (!Directory.Exists(destination.Path))
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"Destination '{destination.Name}' at '{destination.Path}' is not reachable; retirement "
+                    + "needs every destination present to prove nothing would be lost.");
+            }
+
+            var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+            if (archive is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused, $"Backup set '{set.Name}' has no archive open to compare against.");
+            }
+
+            var replica = new Storage.Local.LocalFileSystemObjectStore(
+                Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString()));
+            await foreach (var entry in replica.ListAsync(
+                Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                union.Add(entry.Key.Value);
+            }
+        }
+
+        var staging = new Storage.Local.LocalFileSystemObjectStore(stagingPath);
+        var missing = 0L;
+        await foreach (var entry in staging.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var key = entry.Key.Value;
+            if (key.StartsWith("tombstones/", StringComparison.Ordinal)
+                || key.StartsWith("leases/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!union.Contains(key))
+            {
+                missing++;
+            }
+        }
+
+        if (missing > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{missing} object(s) the staging archive holds have not reached any destination; run a "
+                + "scheduler pass (or the sync verb) to finish seeding, then retire again.");
+        }
+
+        try
+        {
+            Directory.Delete(stagingPath, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
+        }
+
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        runtime.Notices.Resolve($"staging-retirable:{set.Id}", nowMs);
+
+        return new ConfigurationChangeResult(
+        [
+            $"Backup set '{set.Name}': the staging archive was retired; every object it held is at a destination.",
+            "The set publishes straight to its destinations; the agent keeps metadata only (ADR-0046).",
+        ]);
+    }
+
     private PairingsResult ListPairings() =>
         new([.. PeerGrantStore.Open(runtime.Options.StateDirectory).Grants
             .OrderBy(grant => grant.PairedAtUnixMilliseconds)

@@ -52,6 +52,7 @@ public sealed class DestinationShipSink : IObjectStore
     private readonly string _setId;
     private readonly string _repositoryIdHex;
     private readonly ILogger _log;
+    private readonly LocalFileSystemObjectStore? _stagingFallback;
     private readonly Lock _gate = new();
     private List<Shipment> _inScope = [];
     private readonly Dictionary<string, string> _droppedThisRun = new(StringComparer.Ordinal);
@@ -63,13 +64,21 @@ public sealed class DestinationShipSink : IObjectStore
         LocalFileSystemObjectStore metadata,
         string setId,
         string repositoryIdHex,
-        ILogger? log = null)
+        ILogger? log = null,
+        LocalFileSystemObjectStore? stagingFallback = null)
     {
         _runtime = runtime;
         _metadata = metadata;
         _setId = setId;
         _repositoryIdHex = repositoryIdHex;
         _log = log ?? NullLogger.Instance;
+
+        // A migrated set's not-yet-retired staging archive (ADR-0046): a
+        // read-only seed source consulted LAST — history a destination does
+        // not hold yet answers from here, and the catch-up copy through this
+        // sink is what carries it outward. Never written; retirement deletes
+        // it, after which its reads simply answer not-found.
+        _stagingFallback = stagingFallback;
     }
 
     /// <inheritdoc />
@@ -285,6 +294,15 @@ public sealed class DestinationShipSink : IObjectStore
             }
         }
 
+        if (_stagingFallback is not null)
+        {
+            var fallback = await _stagingFallback.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+            if (fallback.Found)
+            {
+                return fallback;
+            }
+        }
+
         return GetMetadataResult.NotFound;
     }
 
@@ -303,6 +321,16 @@ public sealed class DestinationShipSink : IObjectStore
             if (result.Outcome != OpenReadOutcome.NotFound)
             {
                 return result;
+            }
+        }
+
+        if (_stagingFallback is not null)
+        {
+            var fallback = await _stagingFallback.OpenReadAsync(key, range, cancellationToken)
+                .ConfigureAwait(false);
+            if (fallback.Outcome != OpenReadOutcome.NotFound)
+            {
+                return fallback;
             }
         }
 
@@ -342,6 +370,20 @@ public sealed class DestinationShipSink : IObjectStore
         foreach (var holder in ReadOrder())
         {
             await foreach (var entry in holder.Store.ListAsync(blobPrefix, options, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (seen.Add(entry.Key.Value))
+                {
+                    yield return entry;
+                }
+            }
+        }
+
+        if (_stagingFallback is not null)
+        {
+            // History awaiting retirement is part of the union — this is
+            // what makes the catch-up copy carry it to the destinations.
+            await foreach (var entry in _stagingFallback.ListAsync(blobPrefix, options, cancellationToken)
                 .ConfigureAwait(false))
             {
                 if (seen.Add(entry.Key.Value))

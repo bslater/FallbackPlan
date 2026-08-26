@@ -106,8 +106,11 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// pre-1.17 client edits nothing it cannot see. Alongside (no wire
     /// change): saving a new set queues its first backup at once, and a set
     /// gaining a destination queues that destination's seed.
+    /// 1.18 carries retire_staging (ADR-0046): a migrated direct-ship set's
+    /// staging archive is deleted only by this explicit verb, refused while
+    /// anything staging holds has not reached a destination.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 17);
+    public static ContractVersion Current { get; } = new(1, 18);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

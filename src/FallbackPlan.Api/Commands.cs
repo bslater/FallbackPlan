@@ -46,6 +46,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
+[JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -598,6 +599,16 @@ public sealed record SyncCommand(string? BackupSetName, string? DestinationName)
 /// </param>
 public sealed record VerifyDestinationCommand(
     string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
+
+/// <summary>
+/// Retires a direct-ship set's staging archive (ADR-0046, contract 1.18):
+/// deletes the local copy a migrated set no longer publishes into. Refused
+/// by name while the set is not direct-ship, or while staging holds any
+/// object that has not reached a destination — retirement must never be the
+/// act that loses the last copy of anything.
+/// </summary>
+/// <param name="SetName">The set whose staging archive to retire.</param>
+public sealed record RetireStagingCommand(string SetName) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

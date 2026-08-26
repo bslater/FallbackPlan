@@ -304,6 +304,21 @@ public static class Scheduler
             return true;
         }
 
+        // A migrating direct-ship set (ADR-0046) keeps syncing while its
+        // staging archive remains: a run's ledger success says the run's own
+        // objects shipped, not that the history only staging still holds has
+        // reached anyone — and the catch-up copy through the sink is what
+        // carries it out. Cheap once converged (an inventory diff), gone
+        // once retire_staging deletes the archive. Failures still back off
+        // through the ordinary arm below.
+        if (set.DirectShip
+            && record.State == DestinationSyncState.InSync
+            && File.Exists(Path.Combine(
+                runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value)))
+        {
+            return true;
+        }
+
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
         var behind = record.LastSuccessAt is null || record.LastSuccessAt < lastCompleted;
 

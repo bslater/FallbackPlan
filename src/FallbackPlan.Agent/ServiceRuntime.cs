@@ -481,6 +481,42 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// (ADR-0042).
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Copies a staging archive's metadata — everything except blob content
+    /// and the lifecycle objects that never leave staging — into a
+    /// direct-ship set's metadata store, once, at the first open after the
+    /// flip (ADR-0046). Idempotent: every put is if-absent.
+    /// </summary>
+    private async ValueTask MigrateStagingMetadataAsync(
+        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken)
+    {
+        var staging = new LocalFileSystemObjectStore(ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>());
+        await foreach (var entry in staging.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var key = entry.Key.Value;
+            if (key.StartsWith("blobs/", StringComparison.Ordinal)
+                || key.StartsWith("tombstones/", StringComparison.Ordinal)
+                || key.StartsWith("leases/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _ = await metadata.PutAsync(
+                entry.Key,
+                async token =>
+                {
+                    var read = await staging.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
+                    return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
+                        ? read.Content
+                        : throw new IOException($"Object {entry.Key.Value} listed but could not be read to migrate.");
+                },
+                Storage.Abstractions.PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>The set as configured, or null when the id names none — or the file will not load.</summary>
     private BackupSetConfiguration? FindConfiguredSet(string setId)
     {
@@ -560,18 +596,33 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 return open;
             }
 
-            // Which mode: a set whose staging archive already exists keeps it
-            // (migration is its own record); otherwise the configuration's
-            // direct_ship flag decides, and a direct-ship set's local store
-            // holds metadata only (ADR-0046).
+            // Which mode: the configuration's direct_ship flag decides, and a
+            // direct-ship set's local store holds metadata only (ADR-0046). A
+            // flagged set that still has a staging archive is mid-migration:
+            // its metadata is copied into the metadata store at this first
+            // open, and the staging archive stays on disk — a read-only seed
+            // source the sink falls back to — until the explicit
+            // retire_staging verb proves nothing would be lost and deletes it.
             var stagingExists = File.Exists(
                 Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value));
-            var directShip = !stagingExists && FindConfiguredSet(setId)?.DirectShip == true;
+            var directShip = FindConfiguredSet(setId)?.DirectShip == true;
 
             var path = directShip ? SetMetadataPath(setId) : ArchivePath(setId);
             Directory.CreateDirectory(path);
             var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
             var descriptorExists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
+
+            if (directShip && stagingExists && !descriptorExists)
+            {
+                await MigrateStagingMetadataAsync(setId, store, cancellationToken).ConfigureAwait(false);
+                descriptorExists = true;
+                Notices.Raise(
+                    $"staging-retirable:{setId}",
+                    $"Set '{setId}' now publishes straight to its destinations; its staging archive remains as "
+                    + "a seed source. Once a scheduler pass has finished seeding, retire it with the "
+                    + "retire_staging verb to reclaim the space (ADR-0046).",
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
 
             OpenedRepository repository;
             if (WriteCredentials.TryLoad(setId) is { } credential)
@@ -640,7 +691,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 // planning copy the sink seeds outward from.
                 var sink = directShip
                     ? new DestinationShipSink(
-                        this, store, setId, repositoryIdHex, LoggerFor<DestinationShipSink>())
+                        this, store, setId, repositoryIdHex, LoggerFor<DestinationShipSink>(),
+                        stagingFallback: stagingExists
+                            ? new LocalFileSystemObjectStore(
+                                ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>())
+                            : null)
                     : null;
 
                 archive = new ArchiveHandle
