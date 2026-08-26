@@ -1129,7 +1129,8 @@ public sealed partial class ServiceCommandHandler(
                 [.. set.Destinations.Select(reference => reference.Ref)],
                 ToPolicyDescriptor(set.Retention),
                 ToOverrideDescriptors(set.Destinations),
-                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))]))]);
+                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
+                set.Priority))]);
 
     private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
     {
@@ -1186,6 +1187,9 @@ public sealed partial class ServiceCommandHandler(
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
             Retention = ToRetention(command.Set.Retention, existing?.Retention),
+            // Null preserves (a pre-1.17 client cannot see the field); zero
+            // is the explicit default a 1.17 client may set back.
+            Priority = command.Set.Priority ?? existing?.Priority,
             Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
             {
                 Ref = name,
@@ -1237,13 +1241,71 @@ public sealed partial class ServiceCommandHandler(
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        var now = DateTimeOffset.Now;
+        var nowMs = (ulong)now.ToUnixTimeMilliseconds();
+
+        if (existing is null)
+        {
+            // Saving a new set IS asking for its first backup (ADR-0047): the
+            // capture queues now and the fan-out follows it, so the
+            // destinations populate without waiting for a schedule or a
+            // person remembering to run one.
+            foreach (var reference in replacement.Destinations)
+            {
+                runtime.DestinationSync.RecordNeedsFull(replacement.Id, reference.Ref, nowMs);
+            }
+
+            var first = Scheduler.Enqueue(runtime, replacement, now, userInitiated: true);
+            _ = first.ContinueWith(
+                completed =>
+                {
+                    if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
+                    {
+                        FanOut.EnqueueAll(runtime, replacement, now, userInitiated: true);
+                    }
+                },
+                TaskScheduler.Default);
+
+            return new ConfigurationChangeResult(
+            [
+                $"Backup set '{replacement.Name}' created.",
+                $"First backup queued as job {Scheduler.LatestJobFor(runtime, replacement.Id) ?? "(pending)"}; "
+                    + "its destinations receive the archive when it completes.",
+            ]);
+        }
+
+        // The destinations this edit newly references owe a full copy
+        // (ADR-0047): flagged in the ledger, and seeded now rather than at
+        // the next pass — referencing a destination IS asking it to hold the
+        // set.
+        var gained = replacement.Destinations
+            .Where(reference => !existing.Destinations.Any(before =>
+                string.Equals(before.Ref, reference.Ref, StringComparison.Ordinal)))
+            .Select(reference => reference.Ref)
+            .ToList();
+
+        var seeded = new List<string>();
+        foreach (var name in gained)
+        {
+            runtime.DestinationSync.RecordNeedsFull(replacement.Id, name, nowMs);
+            if (runtime.ArchiveExists(replacement.Id))
+            {
+                _ = FanOut.Enqueue(runtime, replacement, name, now, userInitiated: true);
+                seeded.Add($"Destination '{name}' is newly referenced; seeding its full copy was queued and runs now.");
+            }
+            else
+            {
+                seeded.Add($"Destination '{name}' is newly referenced; it receives its first copy when this set first backs up.");
+            }
+        }
+
         // A material edit — the root or the rules — changes what the next
         // snapshot will hold, so it is answered with what changed and, when
         // there is a last backup to compare with, a rescan is queued whose
         // finding stands as a notice until that next backup completes
         // (ADR-0038). Schedule and retention edits change when and how long,
         // not what, and stay a plain acknowledgement.
-        if (existing is not null && IsMaterialChange(existing, replacement))
+        if (IsMaterialChange(existing, replacement))
         {
             var lines = new List<string>();
             var oldRoots = existing.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
@@ -1289,10 +1351,11 @@ public sealed partial class ServiceCommandHandler(
                 lines.Add("This set has not backed up yet; its first backup captures under these settings.");
             }
 
+            lines.AddRange(seeded);
             return new ConfigurationChangeResult(lines);
         }
 
-        return new AcknowledgedResult();
+        return seeded.Count > 0 ? new ConfigurationChangeResult(seeded) : new AcknowledgedResult();
     }
 
     /// <summary>

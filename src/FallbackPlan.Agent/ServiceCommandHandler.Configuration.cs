@@ -77,7 +77,8 @@ public sealed partial class ServiceCommandHandler
             destination.Endpoint,
             destination.FailureDomain is { } domain ? DomainName(domain) : null,
             destination.DeepVerifyIntervalDays,
-            destination.AddressDefect))]);
+            destination.AddressDefect,
+            destination.Priority))]);
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
     {
@@ -128,6 +129,8 @@ public sealed partial class ServiceCommandHandler
             FailureDomain = domain,
             Verification = existing?.Verification,
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
+            // Null preserves — a pre-1.17 client cannot see the field.
+            Priority = command.Destination.Priority ?? existing?.Priority,
         };
 
         // The circular-capture guard (FR-DEST-011), entered from this door:

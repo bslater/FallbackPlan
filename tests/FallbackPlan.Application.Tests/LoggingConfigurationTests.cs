@@ -42,7 +42,7 @@ public sealed class LoggingConfigurationTests
 
         var loaded = ClientConfiguration.Load(ConfigPath);
 
-        Assert.AreEqual(4, loaded.SchemaVersion);
+        Assert.AreEqual(ClientConfiguration.CurrentSchemaVersion, loaded.SchemaVersion);
         Assert.IsNull(loaded.Logging);
     }
 

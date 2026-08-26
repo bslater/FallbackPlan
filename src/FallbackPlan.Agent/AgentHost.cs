@@ -886,9 +886,18 @@ public static class AgentHost
                 failed = result.Failed;
                 if (once)
                 {
+                    // --once means once, whole: the transfer phases the
+                    // service would leave running are awaited, because the
+                    // runtime — and every queued job — is torn down on return.
+                    await result.Transfers.WaitAsync(cancellationToken).ConfigureAwait(false);
                     return failed == 0 ? 0 : 2;
                 }
 
+                // Deliberately NOT awaiting result.Transfers (ADR-0047): the
+                // loop ticks on its interval whatever the transfer lane is
+                // doing, so due-ness keeps being evaluated during an
+                // hours-long copy. The stable per-pair job identities keep
+                // un-awaited passes from piling transfers up.
                 await Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken).ConfigureAwait(false);
             }
 

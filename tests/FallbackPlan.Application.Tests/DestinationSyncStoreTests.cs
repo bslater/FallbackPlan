@@ -175,9 +175,70 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 1", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 2", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
+    }
+
+    [TestMethod]
+    public void Open_ASchemaOneLedger_SeedsBaselinesFromSuccesses()
+    {
+        // The migration rule that lets existing installs skip the full
+        // re-seed: on the staging architecture every successful sync copied
+        // the whole archive, so a row with a success IS a full replica — its
+        // baseline is that success. A row that never succeeded seeds nothing.
+        File.WriteAllText(
+            Path.Combine(_state, "destinations.json"),
+            """
+            {
+              "schema_version": 1,
+              "destinations": [
+                {
+                  "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "destination": "vault",
+                  "state": "InSync",
+                  "last_attempt_at": 5000,
+                  "last_success_at": 5000,
+                  "objects": 12,
+                  "synced_sequence": 9
+                },
+                {
+                  "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "destination": "offsite",
+                  "state": "Unavailable",
+                  "last_attempt_at": 4000
+                }
+              ]
+            }
+            """);
+
+        var store = DestinationSyncStore.Open(_state);
+
+        var seeded = store.Find(SetId, "vault")!;
+        Assert.AreEqual(5000UL, seeded.BaselineCompletedAt);
+        Assert.IsFalse(seeded.NeedsFull);
+
+        var never = store.Find(SetId, "offsite")!;
+        Assert.IsNull(never.BaselineCompletedAt);
+    }
+
+    [TestMethod]
+    public void RecordSuccess_TheFirstSuccess_EstablishesTheBaselineAndClearsNeedsFull()
+    {
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordNeedsFull(SetId, "vault", nowUnixMilliseconds: 500);
+        Assert.IsTrue(store.Find(SetId, "vault")!.NeedsFull);
+
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        var first = store.Find(SetId, "vault")!;
+        Assert.AreEqual(1_000UL, first.BaselineCompletedAt);
+        Assert.IsFalse(first.NeedsFull);
+
+        // A later success moves the sync marks, never the baseline: the
+        // baseline records when this destination first held a full copy.
+        store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 2_000, syncedSequence: 2);
+        Assert.AreEqual(1_000UL, store.Find(SetId, "vault")!.BaselineCompletedAt);
     }
 }

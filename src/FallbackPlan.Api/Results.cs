@@ -141,6 +141,12 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// they win over <paramref name="Root"/> when present, and at least one of
 /// the two forms must be spoken.
 /// </param>
+/// <param name="Priority">
+/// The set's priority (ADR-0047, contract 1.17): among waiting backups of
+/// the same initiation, higher runs first; it never outranks a person. On an
+/// upsert, null preserves what the set already has — what a pre-1.17 client
+/// always sends.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -151,7 +157,8 @@ public sealed record BackupSetDescriptor(
     IReadOnlyList<string> Destinations,
     RetentionPolicyDescriptor? Retention = null,
     IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
-    IReadOnlyList<BackupRootDescriptor>? Roots = null);
+    IReadOnlyList<BackupRootDescriptor>? Roots = null,
+    int? Priority = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it
@@ -171,6 +178,12 @@ public sealed record BackupSetDescriptor(
 /// What is syntactically wrong with the declared address, when anything is —
 /// reported, never a refusal to load (ADR-0035 §1). Ignored on an upsert.
 /// </param>
+/// <param name="Priority">
+/// The destination's priority (ADR-0047, contract 1.17): among waiting
+/// transfers of the same initiation, higher ships first, and a prioritised
+/// backup writes to its destinations in this order. On an upsert, null
+/// preserves what the declaration already has.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -180,7 +193,8 @@ public sealed record DestinationDescriptor(
     string? Endpoint,
     string? FailureDomain = null,
     int? DeepVerifyIntervalDays = null,
-    string? AddressDefect = null);
+    string? AddressDefect = null,
+    int? Priority = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>

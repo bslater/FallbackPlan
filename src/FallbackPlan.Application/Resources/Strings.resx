@@ -139,6 +139,9 @@
   <data name="ClientConfiguration_RetentionMustBePositive" xml:space="preserve">
     <value>Backup set '{0}': retention values for '{1}' must be positive.</value>
   </data>
+  <data name="ClientConfiguration_ConcurrencyOutOfRange" xml:space="preserve">
+    <value>'{0}' declares max_concurrent_backups {1}; the backup pool takes 1 to 5 (ADR-0047).</value>
+  </data>
   <data name="ClientConfiguration_SchemaVersion1NeedsDestinations" xml:space="preserve">
     <value>'{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.</value>
   </data>

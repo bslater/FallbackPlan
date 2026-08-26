@@ -80,6 +80,15 @@ public static class FanOut
         ThrowHelper.ThrowIfNull(set);
         ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
 
+        // The destination's declared priority, overridable per set
+        // (ADR-0047): among waiting transfers, the higher-priority
+        // destination ships first.
+        var priority = set.Destinations
+            .FirstOrDefault(reference => string.Equals(reference.Ref, destinationName, StringComparison.Ordinal))
+            ?.Priority
+            ?? runtime.Configuration.FindDestination(destinationName)?.Priority
+            ?? 0;
+
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var accepted = runtime.Queue.Enqueue(new QueuedJob(
             JobIdFor(set.Id, destinationName),
@@ -99,7 +108,8 @@ public static class FanOut
                     completion.SetException(exception);
                     throw;
                 }
-            }));
+            },
+            Priority: priority));
 
         return accepted ? completion.Task : null;
     }

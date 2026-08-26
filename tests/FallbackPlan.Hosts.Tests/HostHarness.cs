@@ -143,6 +143,36 @@ public sealed class HostHarness : IDisposable
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
 
+    /// <summary>
+    /// Adds (or replaces) a configured backup set by editing the file
+    /// directly — fixture setup for tests that need a set to simply exist,
+    /// WITHOUT the upsert verb's queued first backup (ADR-0047). The runtime
+    /// re-reads the file per access, so the set is visible immediately.
+    /// </summary>
+    public void AddConfiguredSet(
+        string id, string name, string destination, string? schedule = null,
+        IReadOnlyList<string>? excludeRules = null)
+    {
+        var path = Path.Combine(StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets =
+            [
+                .. configuration.BackupSets.Where(set => !string.Equals(set.Id, id, StringComparison.Ordinal)),
+                new BackupSetConfiguration
+                {
+                    Id = id,
+                    Name = name,
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
+                    Schedule = schedule,
+                    ExcludeRules = excludeRules ?? [],
+                    Destinations = [new SetDestinationReference { Ref = destination }],
+                },
+            ],
+        }).Save(path);
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

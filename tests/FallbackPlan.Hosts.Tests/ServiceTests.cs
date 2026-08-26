@@ -526,7 +526,11 @@ public sealed class ServiceTests : IDisposable
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "photos", _harness.SourceRoot, "every 6h", [], [], ["vault"])),
             _timeout.Token);
-        Assert.IsInstanceOfType<AcknowledgedResult>(created);
+
+        // Creation answers with its queued first backup (ADR-0047): saving a
+        // set IS asking for it to run.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(created, out var creation);
+        Assert.IsTrue(creation.Lines.Any(line => line.Contains("First backup", StringComparison.Ordinal)));
 
         Assert.IsInstanceOfType<BackupSetsResult>(
             await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var afterCreate);

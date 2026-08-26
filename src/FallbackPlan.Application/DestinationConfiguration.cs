@@ -155,6 +155,16 @@ public sealed record DestinationConfiguration
     [JsonPropertyName("deep_verify_interval_days")]
     public int? DeepVerifyIntervalDays { get; init; }
 
+    /// <summary>
+    /// The destination's priority (ADR-0047): among waiting transfers of the
+    /// same initiation, higher ships first, and a prioritised backup writes
+    /// to its destinations in this order. Absent means 0; a set's reference
+    /// may override it for that set alone.
+    /// </summary>
+    [JsonPropertyName("priority")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Priority { get; init; }
+
     /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
     [JsonIgnore]
     public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;
@@ -281,6 +291,12 @@ public sealed record SetDestinationReference
 
     /// <summary>The per-destination retention override, when one applies (FR-GC-010).</summary>
     public RetentionConfiguration? Retention { get; init; }
+
+    /// <summary>
+    /// This set's override of the destination's own priority (ADR-0047);
+    /// null defers to the destination's declaration.
+    /// </summary>
+    public int? Priority { get; init; }
 }
 
 /// <summary>
@@ -305,6 +321,7 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         string? name = null;
         RetentionConfiguration? retention = null;
+        int? priority = null;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
         {
             var property = reader.GetString();
@@ -317,6 +334,9 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
                 case "retention":
                     retention = JsonSerializer.Deserialize<RetentionConfiguration>(ref reader, options);
                     break;
+                case "priority":
+                    priority = reader.GetInt32();
+                    break;
                 default:
                     throw new JsonException($"A destination reference has no field '{property}'.");
             }
@@ -324,12 +344,12 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         return name is null
             ? throw new JsonException("A destination reference names no 'ref'.")
-            : new SetDestinationReference { Ref = name, Retention = retention };
+            : new SetDestinationReference { Ref = name, Retention = retention, Priority = priority };
     }
 
     public override void Write(Utf8JsonWriter writer, SetDestinationReference value, JsonSerializerOptions options)
     {
-        if (value.Retention is null)
+        if (value is { Retention: null, Priority: null })
         {
             writer.WriteStringValue(value.Ref);
             return;
@@ -337,8 +357,17 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         writer.WriteStartObject();
         writer.WriteString("ref", value.Ref);
-        writer.WritePropertyName("retention");
-        JsonSerializer.Serialize(writer, value.Retention, options);
+        if (value.Retention is not null)
+        {
+            writer.WritePropertyName("retention");
+            JsonSerializer.Serialize(writer, value.Retention, options);
+        }
+
+        if (value.Priority is { } priority)
+        {
+            writer.WriteNumber("priority", priority);
+        }
+
         writer.WriteEndObject();
     }
 }

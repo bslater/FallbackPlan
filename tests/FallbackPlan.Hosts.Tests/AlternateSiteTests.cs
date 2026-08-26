@@ -91,15 +91,18 @@ public sealed class AlternateSiteTests : IDisposable
                 Fingerprint: paired.Fingerprint, Endpoint: $"127.0.0.1:{listener.Endpoint.Port}")),
             _timeout.Token));
 
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, Schedule: null, [], [], ["site-b"])),
             _timeout.Token));
 
-        // ---- Backup №1. No sync command follows, deliberately: a completed
-        // backup fans out to its destinations on its own, and the alternative
-        // site claim includes that nobody has to remember to push.
-        await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+        // ---- Backup №1 is the save itself (ADR-0047): creating the set
+        // queued its first capture, and no sync command follows either — a
+        // completed backup fans out to its destinations on its own. The
+        // alternative-site claim includes that nobody has to remember to do
+        // any of this.
+        await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+            job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
         await WaitForAsync(() =>
             runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b") is
             {
@@ -227,12 +230,15 @@ public sealed class AlternateSiteTests : IDisposable
             new UpsertDestinationCommand(new DestinationDescriptor(
                 null, "site-b", "peer", null, paired.Fingerprint, $"127.0.0.1:{listener.Endpoint.Port}")),
             _timeout.Token));
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, null, [], [], ["site-b"])),
             _timeout.Token));
 
-        await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+        // The save queued the first capture itself (ADR-0047); wait for it
+        // and for its fan-out to land.
+        await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+            job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
         await WaitForAsync(() =>
             runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b")?.State == DestinationSyncState.InSync);
 
@@ -249,6 +255,12 @@ public sealed class AlternateSiteTests : IDisposable
             && row.State != DestinationSyncState.InSync);
         var offline = runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b")!;
         Assert.IsNotNull(offline.LastError, "an outage is a named failure, not a silent gap");
+
+        // The failed sync recorded its outcome a moment before its job left
+        // the queue; the on-demand sync below would be coalesced away
+        // ("already syncing") if it caught that tail. Deterministic, not a
+        // sleep: wait until the pair's job identity is free.
+        await WaitForAsync(() => !runtimeOne.Queue.IsActive(FanOut.JobIdFor(_siteOne.DocsSetId, "site-b")));
 
         // ---- Site B returns on the same address; an on-demand sync converges
         // the backlog — nothing is re-commanded, nothing re-backed-up.

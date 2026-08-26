@@ -220,11 +220,10 @@ public sealed class RestoreSourceTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.NotFound, expired.Reason);
         Assert.Contains("expired", expired.Message, StringComparison.Ordinal);
 
-        // A set that has never backed up has no staging source to open.
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
-            new UpsertBackupSetCommand(new BackupSetDescriptor(
-                new string('b', 32), "fresh", _harness.SourceRoot, null, [], [], ["vault"])),
-            _timeout.Token));
+        // A set that has never backed up has no staging source to open. By
+        // file edit, not the upsert verb: the verb queues the set's first
+        // backup at once (ADR-0047), so "never backed up" would be a race.
+        _harness.AddConfiguredSet(new string('b', 32), "fresh", "vault");
         Assert.IsInstanceOfType<ServiceError>(
             await handler.ExecuteAsync(new OpenRestoreSourceCommand("fresh"), _timeout.Token), out var never);
         Assert.Contains("never backed up", never.Message, StringComparison.Ordinal);

@@ -82,12 +82,14 @@ public sealed class PeerRetrievalTests : IDisposable
                     Id: null, Name: "site-b", Kind: "peer", Path: null,
                     Fingerprint: paired.Fingerprint, Endpoint: $"127.0.0.1:{listener.Endpoint.Port}")),
                 _timeout.Token));
-            Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
                 new UpsertBackupSetCommand(new BackupSetDescriptor(
                     _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, Schedule: null, [], [], ["site-b"])),
                 _timeout.Token));
 
-            await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+            // The save queued the first capture itself (ADR-0047).
+            await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+                job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
             await WaitForAsync(() =>
                 runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b") is
                 { State: DestinationSyncState.InSync, VerifiedAt: not null });

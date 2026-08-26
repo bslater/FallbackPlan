@@ -89,7 +89,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
-        Queue = new JobScheduler(Logger(options, typeof(JobScheduler)));
+        Queue = new JobScheduler(Logger(options, typeof(JobScheduler)), ConfiguredBackupPoolWidth(options));
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
@@ -102,6 +102,29 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>A logger for <paramref name="category"/>, or a silent one.</summary>
     private static ILogger Logger(ServiceOptions options, Type category) =>
         options.Logging?.Factory.CreateLogger(category.FullName!) ?? NullLogger.Instance;
+
+    /// <summary>
+    /// The backup pool's width (ADR-0047), read once when the service starts
+    /// — the workers spawn here, so a configuration change applies at the
+    /// next start. A configuration that will not load answers the default:
+    /// the pool's width must never be the reason a service refuses to start,
+    /// and the load path re-validates loudly everywhere else.
+    /// </summary>
+    private static int ConfiguredBackupPoolWidth(ServiceOptions options)
+    {
+        try
+        {
+            return Math.Clamp(
+                ClientConfiguration.Load(Path.Combine(options.StateDirectory, "config.json"))
+                    .EffectiveMaxConcurrentBackups,
+                1,
+                5);
+        }
+        catch (ClientStateException)
+        {
+            return 2;
+        }
+    }
 
     /// <summary>A logger for <typeparamref name="T"/>, or a silent one.</summary>
     internal ILogger LoggerFor<T>() => LoggerFor(typeof(T));

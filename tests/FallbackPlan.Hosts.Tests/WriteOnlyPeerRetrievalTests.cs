@@ -85,10 +85,12 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
                     Id: null, Name: "site-b", Kind: "peer", Path: null,
                     Fingerprint: paired.Fingerprint, Endpoint: $"127.0.0.1:{listener.Endpoint.Port}")),
                 _timeout.Token));
-            Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
-                new UpsertBackupSetCommand(new BackupSetDescriptor(
-                    _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, Schedule: null, [], [], ["site-b"])),
-                _timeout.Token));
+            // By file edit, not the upsert verb: the verb queues the set's
+            // first backup at once (ADR-0047), which would race — and lose —
+            // the write-only provisioning ceremony below. Write-only is
+            // chosen at creation, so the set must exist un-backed-up until
+            // the envelope lands.
+            _siteOne.AddConfiguredSet(_siteOne.DocsSetId, "docs", "site-b");
 
             // The provisioning ceremony: the client derives, the service gets
             // a sealed envelope, and this service never sees the passphrase.

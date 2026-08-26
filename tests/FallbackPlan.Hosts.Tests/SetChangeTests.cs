@@ -71,11 +71,10 @@ public sealed class SetChangeTests : IDisposable
         Assert.AreEqual(0, draft.Deleted.Count);
 
         // A set that has never backed up still answers — everything is new.
-        // (Creating it is not an edit, so the create bare-acknowledges.)
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
-            new UpsertBackupSetCommand(new BackupSetDescriptor(
-                new string('b', 32), "fresh", _harness.SourceRoot, null, [], ["photos"], ["vault"])),
-            _timeout.Token));
+        // Created by file edit, not the upsert verb: the verb queues the
+        // set's first backup at once (ADR-0047), so "never backed up" would
+        // be a race.
+        _harness.AddConfiguredSet(new string('b', 32), "fresh", "vault", excludeRules: ["photos"]);
         Assert.IsInstanceOfType<SetChangePreviewResult>(
             await handler.ExecuteAsync(new PreviewSetChangesCommand("fresh"), _timeout.Token), out var fresh);
         Assert.IsNull(fresh.BaselineSnapshotId);
@@ -157,10 +156,9 @@ public sealed class SetChangeTests : IDisposable
 
         // A material edit to a set that has never backed up has nothing to
         // compare with — the answer says so instead of pretending to rescan.
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
-            new UpsertBackupSetCommand(new BackupSetDescriptor(
-                new string('c', 32), "fresh", _harness.SourceRoot, null, [], [], ["vault"])),
-            _timeout.Token));
+        // The set is created by file edit, not the upsert verb, so its first
+        // backup (ADR-0047) cannot race the "never backed up" claim.
+        _harness.AddConfiguredSet(new string('c', 32), "fresh", "vault");
         Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('c', 32), "fresh", _harness.SourceRoot, null, [], ["*.tmp"], ["vault"])),

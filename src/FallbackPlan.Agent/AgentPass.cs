@@ -41,6 +41,12 @@ public static class AgentPass
         await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
             .ConfigureAwait(false);
 
-        return await Scheduler.RunPassAsync(runtime, now, cancellationToken).ConfigureAwait(false);
+        var result = await Scheduler.RunPassAsync(runtime, now, cancellationToken).ConfigureAwait(false);
+
+        // --once means once, whole: the transfer phases the service would
+        // leave running (ADR-0029 Amendment 4) are awaited here, because the
+        // runtime — and with it every queued job — is torn down on return.
+        await result.Transfers.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
     }
 }

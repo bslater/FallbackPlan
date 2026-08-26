@@ -126,7 +126,9 @@ public sealed class ConfigurationCommandTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+        // A new set answers with its queued first backup (ADR-0047); the
+        // existing set's schedule edit stays a plain acknowledgement.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "second", _harness.SourceRoot, null, [], [], ["vault"])),
             _timeout.Token));
@@ -413,7 +415,9 @@ public sealed class ConfigurationCommandTests : IDisposable
                 null, "vault2", "local-path", inside, null, null)),
             _timeout.Token));
 
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+        // A new set answers with its queued first backup (ADR-0047), so the
+        // acceptance here is the configuration-change report.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "work", _harness.WorkPath, "every 4h", [], ["vault2"], ["vault"])),
             _timeout.Token));
@@ -439,7 +443,7 @@ public sealed class ConfigurationCommandTests : IDisposable
             new UpsertDestinationCommand(new DestinationDescriptor(
                 null, "vault2", "local-path", inside, null, null)),
             _timeout.Token));
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "work", _harness.WorkPath, "every 4h", [], ["vault2"], ["vault"])),
             _timeout.Token));
@@ -574,6 +578,118 @@ public sealed class ConfigurationCommandTests : IDisposable
                 new ValidateSetDraftCommand("every 4h", [], ["vault2"], [_harness.WorkPath]), _timeout.Token),
             out var clean);
         Assert.IsEmpty(clean.Defects);
+    }
+
+    [TestMethod]
+    public async Task UpsertConfiguration_CarryingPriorities_RoundTripsAndPreservesOnSilence()
+    {
+        // Contract 1.17 (ADR-0047): priorities ride the descriptors; a
+        // pre-1.17 upsert says nothing and must change nothing.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var vault = ClientConfiguration.Load(ConfigurationPath).FindDestination("vault")!;
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, Priority: 7)),
+            _timeout.Token));
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"], Priority: 5)),
+            _timeout.Token));
+
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), _timeout.Token), out var destinations);
+        Assert.AreEqual(7, Assert.ContainsSingle(destinations.Destinations).Priority);
+
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var sets);
+        Assert.AreEqual(5, Assert.ContainsSingle(sets.Sets).Priority);
+
+        // Silence preserves: an upsert that says nothing about priority.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"])),
+            _timeout.Token));
+        Assert.AreEqual(5, ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.Priority);
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ANewSet_QueuesItsFirstCaptureAndFanOut()
+    {
+        // The owner's rule (ADR-0047): saving a new set IS asking for its
+        // first backup — the destination populates without waiting for a
+        // schedule or a person remembering to run one.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        var photos = Path.Combine(_harness.WorkPath, "photos-src");
+        Directory.CreateDirectory(photos);
+        await File.WriteAllTextAsync(Path.Combine(photos, "one.jpg"), "pixels", _timeout.Token);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var photosSetId = new string('c', 32);
+
+        var result = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                photosSetId, "photos", photos, "every 4h", [], [], ["vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var change);
+        Assert.IsTrue(
+            change.Lines.Any(line => line.Contains("First backup", StringComparison.Ordinal)),
+            "the reply must say the first backup was queued");
+
+        while (!runtime.Jobs.Jobs.Any(job =>
+            job.BackupSetId == photosSetId && job.State == FallbackPlan.Domain.Jobs.JobState.Complete))
+        {
+            await Task.Delay(50, _timeout.Token);
+        }
+
+        while (runtime.DestinationSync.Find(photosSetId, "vault")?.LastSuccessAt is null)
+        {
+            await Task.Delay(50, _timeout.Token);
+        }
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_AnExistingSetGainingADestination_QueuesItsSync()
+    {
+        // Same rule from the other side: referencing a destination IS asking
+        // it to hold the set — the seed starts now, flagged needs-full until
+        // the copy lands.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        var second = Path.Combine(_harness.WorkPath, "second-vault");
+        Directory.CreateDirectory(second);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "second-vault", "local-path", second, null, null)),
+            _timeout.Token));
+
+        var result = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault", "second-vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var change);
+        Assert.IsTrue(
+            change.Lines.Any(line => line.Contains("second-vault", StringComparison.Ordinal)),
+            "the reply must name the destination whose seed was queued");
+
+        while (runtime.DestinationSync.Find(_harness.DocsSetId, "second-vault")?.LastSuccessAt is null)
+        {
+            await Task.Delay(50, _timeout.Token);
+        }
     }
 
     private async Task<ServiceRuntime> StartAsync()

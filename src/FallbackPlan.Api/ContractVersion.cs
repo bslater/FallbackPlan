@@ -99,8 +99,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// ADR-0028 §5 rejected. A session token crosses on the two verbs that
     /// mint and present it and nowhere else, and no password or hash reaches
     /// any result or any log record.
+    /// 1.17 carries the backup pool's ordering (ADR-0047): backup sets and
+    /// destinations gain an optional priority on their descriptors — higher
+    /// runs or ships first among waiting work of the same initiation, and a
+    /// person still outranks any priority. Null on an upsert preserves, so a
+    /// pre-1.17 client edits nothing it cannot see. Alongside (no wire
+    /// change): saving a new set queues its first backup at once, and a set
+    /// gaining a destination queues that destination's seed.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 16);
+    public static ContractVersion Current { get; } = new(1, 17);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

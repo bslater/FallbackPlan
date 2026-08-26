@@ -16,6 +16,19 @@ public sealed record AgentSetOutcome(string SetName, string Outcome, string? Det
 /// <param name="Sets">One entry per configured set.</param>
 public sealed record AgentPassResult(IReadOnlyList<AgentSetOutcome> Sets)
 {
+    /// <summary>
+    /// The pass's transfer work — fan-out and sweeps — still running when the
+    /// pass answered (ADR-0029 Amendment 4). The pass no longer waits for
+    /// the transfer lane: a multi-hour copy used to mean no pass ran at all,
+    /// so due-ness was never evaluated and every set's scheduled
+    /// incrementals silently stopped. <c>--once</c> and the tests await
+    /// this before tearing the runtime down; the service deliberately does
+    /// not, and the stable per-pair job identities are what keep un-awaited
+    /// passes from piling work up. Never faults — the phases guard their own
+    /// exceptions, exactly as they did when the pass awaited them inline.
+    /// </summary>
+    public Task Transfers { get; init; } = Task.CompletedTask;
+
     /// <summary>Sets that ran a backup this pass.</summary>
     public int Ran => Sets.Count(set => set.Outcome == "ran");
 
@@ -84,6 +97,19 @@ public static class Scheduler
                 continue;
             }
 
+            // One run per set at a time (ADR-0027 §1). This was structural
+            // while the pass was serial — it never looked again before its
+            // own captures finished. A pass that ticks during long captures
+            // (ADR-0029 Amendment 4) needs the rule stated, or every tick
+            // would queue another run behind a slow one.
+            var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
+            if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
+            {
+                outcomes.Add(new AgentSetOutcome(
+                    set.Name, "already-running", $"job {latest.Id} is still queued or running"));
+                continue;
+            }
+
             var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
 
             if (!schedule!.IsDue(anchor, now))
@@ -119,11 +145,34 @@ public static class Scheduler
             outcomes.Add(new AgentSetOutcome(outcome.SetName, outcome.Outcome, outcome.Detail));
         }
 
-        // Phase 2: fan-out (ADR-0034 §3). After the backups, so a fresh
-        // snapshot reaches its destinations in the same pass; and every pass,
-        // so a destination that was offline catches up under back-off with no
-        // operator action (FR-DEST-003). The pass IS the retry pump — there
-        // is no other timer.
+        // Phases 2 and 3 run WITHOUT holding the pass hostage (ADR-0029
+        // Amendment 4): the returned task is handed to the caller instead of
+        // awaited here, so a multi-hour transfer no longer stops due-ness
+        // being evaluated — which used to silently swallow every set's
+        // scheduled cadence for the copy's whole duration. --once awaits it;
+        // the service does not, and the stable per-pair job identities keep
+        // un-awaited passes from piling work up (the duplicate enqueue is
+        // refused, and the NEXT pass re-evaluates the pair).
+        return new AgentPassResult(outcomes)
+        {
+            Transfers = RunTransferPhasesAsync(runtime, now, cancellationToken),
+        };
+    }
+
+    /// <summary>
+    /// Phase 2, fan-out (ADR-0034 §3): after the backups, so a fresh snapshot
+    /// reaches its destinations promptly; and every pass, so a destination
+    /// that was offline catches up under back-off with no operator action
+    /// (FR-DEST-003) — the pass is the retry pump, there is no other timer.
+    /// Then phase 3, the deep sweep (FR-VER-002), strictly after the fan-out
+    /// completes: a sweep that read a replica while convergence was putting
+    /// and deleting in it would manufacture failures about damage that never
+    /// existed. Never throws — one faulted destination must never take the
+    /// scheduler loop, or an un-awaiting caller, down.
+    /// </summary>
+    private static async Task RunTransferPhasesAsync(
+        ServiceRuntime runtime, DateTimeOffset now, CancellationToken cancellationToken)
+    {
         var syncs = new List<Task>();
         foreach (var set in runtime.Configuration.BackupSets)
         {
@@ -154,26 +203,15 @@ public static class Scheduler
         {
             // The syncs themselves resume on the next pass; each object
             // committed whole or not at all.
+            return;
         }
         catch (Exception)
         {
             // A sync that faulted past its own handlers is the lane worker's
-            // to log and the ledger's to carry — the pass only synchronises,
-            // and the next pass retries the pair under back-off. One faulted
-            // destination must never take the scheduler loop down.
+            // to log and the ledger's to carry; the next pass retries the
+            // pair under back-off.
         }
 
-        // Phase 3: the deep sweep (FR-VER-002, ADR-0034). Fan-out's challenge
-        // proves what a destination holds at the moment it is asked, for the
-        // objects it sampled; this re-reads stored bytes against their seals
-        // so rot between syncs is found by the product rather than by a
-        // restore. Bounded per pass and resumed from a cursor, so a large
-        // archive comes round over many passes instead of monopolising the
-        // one transfer worker.
-        //
-        // After the fan-out wait, deliberately: a sweep that read a replica
-        // while convergence was putting and deleting in it would manufacture
-        // failures about damage that never existed.
         var sweeps = new List<Task>();
         foreach (var set in runtime.Configuration.BackupSets)
         {
@@ -204,11 +242,17 @@ public static class Scheduler
         catch (Exception)
         {
             // As with fan-out: one destination's sweep faulting past its own
-            // handlers must never take the scheduler loop down.
+            // handlers must never take anything down with it.
         }
-
-        return new AgentPassResult(outcomes);
     }
+
+    /// <summary>Whether a journal state is finished — the one-run-per-set rule's input.</summary>
+    private static bool HasSettled(JobState state) => state is
+        JobState.Complete
+        or JobState.CompletedWithFailures
+        or JobState.Cancelled
+        or JobState.FailedRecoverable
+        or JobState.FailedPermanent;
 
     /// <summary>
     /// Whether a (set, destination) pair is due another sweep segment.
@@ -300,7 +344,7 @@ public static class Scheduler
         var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var completion = new TaskCompletionSource<BackupOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        runtime.Queue.Enqueue(new QueuedJob(
+        var accepted = runtime.Queue.Enqueue(new QueuedJob(
             job.Id,
             JobLane.Writer,
             userInitiated,
@@ -318,7 +362,22 @@ public static class Scheduler
                     completion.SetException(exception);
                     throw;
                 }
-            }));
+            },
+            Priority: set.Priority ?? 0));
+
+        if (!accepted)
+        {
+            // Unreachable while job identities are fresh GUIDs — but a refusal
+            // that silently orphaned the completion would hang whoever awaits
+            // it, forever, the day that ever changes. The journal row is
+            // closed for the same reason: a Pending row nothing runs is a
+            // stuck job in every listing.
+            runtime.Jobs.Transition(
+                job.Id, JobState.Cancelled, (ulong)now.ToUnixTimeMilliseconds(),
+                "refused by the queue: a job with this identity is already active");
+            completion.SetResult(new BackupOutcome(
+                set.Name, "already-running", $"job {job.Id} is already queued or running"));
+        }
 
         return completion.Task;
     }

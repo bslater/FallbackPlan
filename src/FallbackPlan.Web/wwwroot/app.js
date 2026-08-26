@@ -1001,6 +1001,15 @@ async function applySetUpsert(payload) {
 
 /* ---------------------------------------------------------------- actions */
 
+// A whole number, or null for blank or garbage — the caller decides whether
+// garbage deserves a toast before the payload goes anywhere.
+function intOrNull(raw) {
+  const text = String(raw ?? "").trim();
+  if (text === "") return null;
+  const value = Number(text);
+  return Number.isInteger(value) ? value : null;
+}
+
 async function withBusy(button, work) {
   if (button) { button.disabled = true; button.classList.add("busy"); }
   try { await work(); }
@@ -1962,6 +1971,13 @@ function openSetEditor(set) {
       <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>
     </div>
 
+    <div class="editor-section">
+      <label class="field">Priority</label>
+      <p class="subtle">Among waiting backups, a higher-priority set runs first. A backup you start by hand
+      always outranks any priority.</p>
+      <label class="mini">priority <input type="text" id="set-priority" class="num" value="${set?.priority ?? ""}"></label>
+    </div>
+
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="set-save">${E.isNew ? "Create set" : "Save changes"}</button>
@@ -2515,6 +2531,13 @@ Object.assign(actions, {
       return;
     }
 
+    const priorityRaw = document.getElementById("set-priority")?.value ?? "";
+    const priority = intOrNull(priorityRaw);
+    if (priorityRaw.trim() !== "" && priority === null) {
+      toast("warn", "Priority is a whole number.");
+      return;
+    }
+
     const destinations = [...document.querySelectorAll("[data-dest-check]")]
       .filter(box => box.checked).map(box => box.dataset.destCheck);
 
@@ -2543,6 +2566,7 @@ Object.assign(actions, {
       destinations,
       retention,           // all-null clears; values set — always explicit from this editor
       destinationRetention: overrides,
+      priority,
     };
 
     // A material edit — the roots or the rules — changes what future backups
@@ -2715,8 +2739,12 @@ Object.assign(actions, {
       endpoint: kind === "peer" ? document.getElementById("dest-endpoint").value.trim() : null,
       failureDomain: document.getElementById("dest-domain").value || null,
       deepVerifyIntervalDays: Number(document.getElementById("dest-sweep").value.trim()) || null,
+      priority: intOrNull(document.getElementById("dest-priority").value),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
+    if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
+      toast("warn", "Priority is a whole number."); return;
+    }
 
     await withBusy(el, async () => {
       const result = await run(
@@ -2920,7 +2948,10 @@ function openDestEditor(kind, destination) {
           `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
         </select></label>
       <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num" value="${destination?.deepVerifyIntervalDays ?? ""}"></label>
+      <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
     </div>
+    <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
+    to its destinations in priority order.</p>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="dest-save" data-kind="${esc(kind)}" data-id="${esc(destination?.id ?? "")}">

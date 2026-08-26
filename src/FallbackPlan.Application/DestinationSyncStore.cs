@@ -143,6 +143,42 @@ public sealed record DestinationSyncRecord
     /// <summary>Blobs the sweep has read since the current circuit began.</summary>
     [JsonPropertyName("swept_this_circuit")]
     public int SweptThisCircuit { get; init; }
+
+    /// <summary>
+    /// The snapshot whose complete closure first made this destination a full
+    /// replica; null while it holds none. Filled by the direct-ship path
+    /// (ADR-0046); the staging path knows only when, not which.
+    /// </summary>
+    [JsonPropertyName("baseline_snapshot_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BaselineSnapshotId { get; init; }
+
+    /// <summary>
+    /// When this destination first held a full copy, Unix milliseconds; null
+    /// while it never has. This is the field rule "a destination without a
+    /// full backup is skipped by incrementals" reads (ADR-0047), and the
+    /// baseline never moves on later syncs — it records the first full.
+    /// </summary>
+    [JsonPropertyName("baseline_completed_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? BaselineCompletedAt { get; init; }
+
+    /// <summary>
+    /// Whether this pair owes the destination a full backup — set when a set
+    /// gains the destination, cleared by the success that establishes the
+    /// baseline.
+    /// </summary>
+    [JsonPropertyName("needs_full")]
+    public bool NeedsFull { get; init; }
+
+    /// <summary>
+    /// When this row was last rebuilt from the destination's own inventory,
+    /// Unix milliseconds; null when never. The ledger is metadata about the
+    /// destination, and the destination stays the ground truth.
+    /// </summary>
+    [JsonPropertyName("last_reconciled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? LastReconciledAt { get; init; }
 }
 
 /// <summary>
@@ -179,7 +215,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -227,7 +263,7 @@ public sealed class DestinationSyncStore
             var file = JsonSerializer.Deserialize<LedgerFile>(text, SerializerOptions);
             if (file is not null && file.SchemaVersion <= CurrentSchemaVersion)
             {
-                return new DestinationSyncStore(path, file.Destinations ?? []);
+                return new DestinationSyncStore(path, Migrate(file));
             }
 
             // A file from a newer build. Setting it aside preserves its bytes
@@ -256,6 +292,26 @@ public sealed class DestinationSyncStore
     {
         File.Move(path, path + ".corrupt", overwrite: true);
         return new DestinationSyncStore(path, []);
+    }
+
+    /// <summary>
+    /// Rows written before schema 2 seed their baselines from their
+    /// successes: on the staging architecture every successful sync copied
+    /// the whole archive, so a pair with a success already IS a full replica
+    /// — this is "replicas seed the ledgers" (ADR-0047), landing at open so
+    /// no install re-ships terabytes to learn what it already holds.
+    /// </summary>
+    private static List<DestinationSyncRecord> Migrate(LedgerFile file)
+    {
+        var rows = file.Destinations ?? [];
+        if (file.SchemaVersion >= 2)
+        {
+            return rows;
+        }
+
+        return [.. rows.Select(row => row is { LastSuccessAt: not null, BaselineCompletedAt: null }
+            ? row with { BaselineCompletedAt = row.LastSuccessAt }
+            : row)];
     }
 
     /// <summary>The pair's state, or null when it has never been attempted.</summary>
@@ -302,6 +358,27 @@ public sealed class DestinationSyncStore
             LastError = null,
             // A later sync never un-holds what an earlier one delivered.
             SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
+            // The first success is the full copy that establishes the
+            // baseline (a staging-model sync converges the whole archive);
+            // later successes never move it — it records the first full.
+            BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
+            NeedsFull = false,
+        });
+    }
+
+    /// <summary>
+    /// Marks a pair as owing the destination a full backup — a set just
+    /// gained this destination (ADR-0047). Cleared by the success that
+    /// establishes the baseline; a no-op on a pair that already holds one.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordNeedsFull(string setId, string destination, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        {
+            NeedsFull = previous?.BaselineCompletedAt is null,
         });
     }
 

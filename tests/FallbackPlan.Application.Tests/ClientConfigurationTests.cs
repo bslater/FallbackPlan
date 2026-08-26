@@ -57,6 +57,49 @@ public sealed class ClientConfigurationTests
         new() { Ref = name, Retention = retention };
 
     [TestMethod]
+    public void SaveThenLoad_PrioritiesAndConcurrency_RoundTrip()
+    {
+        // ADR-0047: a set and a destination each carry a priority, a set's
+        // reference may override the destination's, and the pool width is a
+        // configured number. Absent everywhere means default — a v4 file is a
+        // valid v5 file that simply says nothing.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            MaxConcurrentBackups = 3,
+            Destinations = [LocalPath("vault") with { Priority = 7 }],
+            BackupSets =
+            [
+                Set("docs", Ref("vault") with { Priority = 2 }) with { Priority = 5 },
+            ],
+        }.Save(ConfigPath);
+
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(3, loaded.MaxConcurrentBackups);
+        Assert.AreEqual(7, loaded.Destinations.Single().Priority);
+        var set = loaded.BackupSets.Single();
+        Assert.AreEqual(5, set.Priority);
+        Assert.AreEqual(2, set.Destinations.Single().Priority);
+    }
+
+    [TestMethod]
+    public void Validate_ConcurrencyOutsideOneToFive_IsRefused()
+    {
+        foreach (var invalid in new[] { 0, 6, -1 })
+        {
+            var refused = Assert.ThrowsExactly<ClientStateException>(() => new ClientConfiguration
+            {
+                SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+                MaxConcurrentBackups = invalid,
+                Destinations = [LocalPath("vault")],
+                BackupSets = [Set("docs", Ref("vault"))],
+            }.Save(ConfigPath));
+
+            Assert.Contains("max_concurrent_backups", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
     public void Load_RecordsTheLoadAtDebug()
     {
         // The scheduler reads through this path every pass — every ten to

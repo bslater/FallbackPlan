@@ -30,12 +30,19 @@ public enum JobLane
 /// <param name="UserInitiated">Whether a person is waiting for it.</param>
 /// <param name="Description">What to call it in a status line.</param>
 /// <param name="Run">The work.</param>
+/// <param name="Priority">
+/// The configured priority carried from the set (a backup) or the destination
+/// (a sync) — higher wins among waiting work of the same initiation
+/// (ADR-0047). It never outranks a person: <paramref name="UserInitiated"/>
+/// sorts first, exactly as ADR-0029 §4 always said.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
     bool UserInitiated,
     string Description,
-    Func<CancellationToken, ValueTask> Run);
+    Func<CancellationToken, ValueTask> Run,
+    int Priority = 0);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -63,9 +70,9 @@ public sealed record QueuedJob(
 /// </remarks>
 public sealed class JobScheduler : IAsyncDisposable
 {
-    private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _writerLane = new();
-    private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _readerLane = new();
-    private readonly PriorityQueue<QueuedJob, (int Priority, long Arrival)> _transferLane = new();
+    private readonly PriorityQueue<QueuedJob, (int Initiation, int Priority, long Arrival)> _writerLane = new();
+    private readonly PriorityQueue<QueuedJob, (int Initiation, int Priority, long Arrival)> _readerLane = new();
+    private readonly PriorityQueue<QueuedJob, (int Initiation, int Priority, long Arrival)> _transferLane = new();
     private readonly Dictionary<string, CancellationTokenSource> _running = [];
 
     // One signal per lane, not one shared: with a shared semaphore, a token
@@ -84,19 +91,26 @@ public sealed class JobScheduler : IAsyncDisposable
 
     /// <summary>Starts the queue's workers.</summary>
     /// <param name="log">Where to report a job that failed outside its own handler.</param>
-    public JobScheduler(ILogger? log = null)
+    /// <param name="writerWorkers">
+    /// The backup pool's width (ADR-0047): how many writer-lane jobs may run
+    /// at once, 1..5. Safe by construction at more than one because each
+    /// set's staging archive, writer sequence, spool and catalogue are its
+    /// own; the cap exists because past a handful they contend for the same
+    /// disk and mostly make each other slower.
+    /// </param>
+    public JobScheduler(ILogger? log = null, int writerWorkers = 1)
     {
+        ThrowHelper.ThrowIfOutOfRange(writerWorkers, 1, 5);
         _log = log ?? NullLogger.Instance;
 
-        // One worker per lane. The writer lane is one by decision, not by
-        // accident; the reader lane is one for now because restores are
-        // themselves internally bounded and a second would only compete for
-        // the same disk; the transfer lane is one because destinations mostly
+        // The reader lane stays one worker because restores are themselves
+        // internally bounded and a second would only compete for the same
+        // disk; the transfer lane stays one because destinations mostly
         // contend for the same uplink — widening it per destination is the
         // anticipated axis, taken on measurement, not speculatively.
         _workers =
         [
-            Task.Run(() => PumpAsync(JobLane.Writer)),
+            .. Enumerable.Range(0, writerWorkers).Select(_ => Task.Run(() => PumpAsync(JobLane.Writer))),
             Task.Run(() => PumpAsync(JobLane.Reader)),
             Task.Run(() => PumpAsync(JobLane.Transfer)),
         ];
@@ -146,15 +160,17 @@ public sealed class JobScheduler : IAsyncDisposable
             }
 
             // Lower sorts first: a user-initiated job jumps ahead of scheduled
-            // work already waiting, and ties break by arrival so nothing starves.
-            var priority = job.UserInitiated ? 0 : 1;
+            // work already waiting, then the configured priority (negated, so
+            // a higher number wins), and ties break by arrival so nothing
+            // starves.
+            var initiation = job.UserInitiated ? 0 : 1;
             var lane = job.Lane switch
             {
                 JobLane.Writer => _writerLane,
                 JobLane.Reader => _readerLane,
                 _ => _transferLane,
             };
-            lane.Enqueue(job, (priority, Interlocked.Increment(ref _arrival)));
+            lane.Enqueue(job, (initiation, -job.Priority, Interlocked.Increment(ref _arrival)));
             _running[job.JobId] = new CancellationTokenSource();
         }
 

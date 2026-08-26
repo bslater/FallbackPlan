@@ -73,6 +73,15 @@ public sealed record BackupSetConfiguration
     public RetentionConfiguration? Retention { get; init; }
 
     /// <summary>
+    /// The set's priority (ADR-0047): among waiting backups of the same
+    /// initiation, higher runs first. Absent means 0. It never outranks a
+    /// person — user-initiated work sorts ahead of any priority.
+    /// </summary>
+    [JsonPropertyName("priority")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Priority { get; init; }
+
+    /// <summary>
     /// The destinations this set replicates to, by declared name — at least
     /// one, none of which has to be local (FR-DEST-001, ADR-0034).
     /// </summary>
@@ -221,7 +230,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -249,6 +258,19 @@ public sealed record ClientConfiguration
     [JsonPropertyName("logging")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LoggingConfiguration? Logging { get; init; }
+
+    /// <summary>
+    /// How many backups may run at once (ADR-0047), 1..5; absent means 2.
+    /// Read when the service starts — a change applies at the next start,
+    /// which the pool's construction states rather than hides.
+    /// </summary>
+    [JsonPropertyName("max_concurrent_backups")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxConcurrentBackups { get; init; }
+
+    /// <summary>The pool width this configuration means, defaults applied.</summary>
+    [JsonIgnore]
+    public int EffectiveMaxConcurrentBackups => MaxConcurrentBackups ?? 2;
 
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
@@ -328,7 +350,7 @@ public sealed record ClientConfiguration
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -385,6 +407,15 @@ public sealed record ClientConfiguration
         }
 
         Logging?.Validate();
+
+        // 1..5 (ADR-0047): zero would be a service that never backs up
+        // pretending to be configured, and past a handful the pool's workers
+        // contend for the same disk and mostly make each other slower.
+        if (MaxConcurrentBackups is { } concurrency and (< 1 or > 5))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_ConcurrencyOutOfRange(path, concurrency));
+        }
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var destination in Destinations)
