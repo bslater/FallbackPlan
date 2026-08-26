@@ -1,6 +1,6 @@
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index;
-using FallbackPlan.Storage.Local;
+using FallbackPlan.Storage.Abstractions;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using Microsoft.Extensions.Logging;
 
@@ -21,8 +21,22 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 public sealed class ArchiveHandle : IDisposable
 {
-    /// <summary>The archive's object store.</summary>
-    public required LocalFileSystemObjectStore Store { get; init; }
+    /// <summary>
+    /// The archive's object store: the staging archive's local filesystem
+    /// store, or — for a direct-ship set (ADR-0046) — the
+    /// <see cref="DestinationShipSink"/> that fans writes to the set's
+    /// destinations and keeps only metadata locally.
+    /// </summary>
+    public required IObjectStore Store { get; init; }
+
+    /// <summary>
+    /// The ship sink, when this archive direct-ships; null for a staging
+    /// archive. The same object as <see cref="Store"/>, typed for the run
+    /// hooks (<see cref="DestinationShipSink.BeginRunAsync"/> /
+    /// <see cref="DestinationShipSink.CompleteRun"/>) only the backup runner
+    /// calls.
+    /// </summary>
+    public DestinationShipSink? ShipSink { get; init; }
 
     /// <summary>The unlocked repository.</summary>
     public required OpenedRepository Repository { get; init; }

@@ -75,6 +75,15 @@ public static class BackupRunner
             // is internal, so nobody runs `init` for it (ADR-0034 §1).
             var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
 
+            // A direct-ship run (ADR-0046) resolves its destinations before a
+            // byte moves: with no staging archive, a capture with nowhere to
+            // ship refuses here (an IOException, recoverable — the next pass
+            // retries once a destination returns).
+            if (archive.ShipSink is { } sink)
+            {
+                await sink.BeginRunAsync(set, nowMs, cancellationToken).ConfigureAwait(false);
+            }
+
             // A full run empties both the parent list and the incremental
             // baseline, exactly as direct mode does — the flag was accepted
             // over the service and silently dropped before ADR-0038.
@@ -92,8 +101,12 @@ public static class BackupRunner
             // A write-only archive takes the device trust domain (ADR-0042):
             // the repository domain's verify-on-reuse reads content, which a
             // write-only holder cannot, and the orchestrator refuses the
-            // combination by name rather than degrading silently.
-            var policy = archive.Repository.Keys.WriteOnly
+            // combination by name rather than degrading silently. A
+            // direct-ship set does the same (ADR-0046): the content sits at
+            // destinations, and verify-on-reuse pulling ranges back over the
+            // sink would pay a destination round trip per reuse to re-check
+            // bytes the catalogue already vouches for.
+            var policy = archive.Repository.Keys.WriteOnly || archive.ShipSink is not null
                 ? CapturePolicy.Default with { DedupTrustDomain = DedupTrustDomain.Device }
                 : CapturePolicy.Default;
 
@@ -158,6 +171,11 @@ public static class BackupRunner
                 detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
             progress.Enter(outcome);
+
+            // The run's per-destination outcomes land in the sync ledger:
+            // successes (and first-time baselines) for the destinations that
+            // stayed, named failures for the dropped and the skipped.
+            archive.ShipSink?.CompleteRun(nowMs);
 
             // The set-changed notice's condition is "the last backup predates
             // the settings", and this backup just captured under them

@@ -341,10 +341,22 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <param name="setId">The set's 32-hex identity.</param>
     public string ArchivePath(string setId) => Path.Combine(Options.ArchivesRoot, setId);
 
-    /// <summary>Whether a set's staging archive exists on disk yet.</summary>
+    /// <summary>
+    /// The directory holding a direct-ship set's metadata store (ADR-0046):
+    /// descriptor, keys, journal, index, snapshots — never blob content.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    public string SetMetadataPath(string setId) => Path.Combine(Options.StateDirectory, "sets", setId);
+
+    /// <summary>
+    /// Whether a set's archive exists on disk yet — its staging archive, or
+    /// a direct-ship set's metadata store (ADR-0046); which of the two also
+    /// decides which mode <see cref="ArchiveForAsync(BackupSetConfiguration, CancellationToken)"/> opens.
+    /// </summary>
     /// <param name="setId">The set's 32-hex identity.</param>
     public bool ArchiveExists(string setId) =>
-        File.Exists(Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value));
+        File.Exists(Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value))
+        || File.Exists(Path.Combine(SetMetadataPath(setId), RepositoryLifecycle.DescriptorKey.Value));
 
     /// <summary>
     /// Takes the writer role. No archive opens here: each set's staging
@@ -469,8 +481,23 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// (ADR-0042).
     /// </para>
     /// </remarks>
+    /// <summary>The set as configured, or null when the id names none — or the file will not load.</summary>
+    private BackupSetConfiguration? FindConfiguredSet(string setId)
+    {
+        try
+        {
+            return Configuration.BackupSets.FirstOrDefault(set =>
+                string.Equals(set.Id, setId, StringComparison.Ordinal));
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
+    }
+
     private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
-        string setId, LocalFileSystemObjectStore store, bool createIfMissing, CancellationToken cancellationToken)
+        string setId, LocalFileSystemObjectStore store, bool descriptorExists, bool createIfMissing,
+        CancellationToken cancellationToken)
     {
         using var provisioning = InstallationCredential.TryLoad();
         if (provisioning is null)
@@ -478,7 +505,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             return null;
         }
 
-        if (!ArchiveExists(setId))
+        if (!descriptorExists)
         {
             if (!createIfMissing)
             {
@@ -533,9 +560,18 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 return open;
             }
 
-            var path = ArchivePath(setId);
+            // Which mode: a set whose staging archive already exists keeps it
+            // (migration is its own record); otherwise the configuration's
+            // direct_ship flag decides, and a direct-ship set's local store
+            // holds metadata only (ADR-0046).
+            var stagingExists = File.Exists(
+                Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value));
+            var directShip = !stagingExists && FindConfiguredSet(setId)?.DirectShip == true;
+
+            var path = directShip ? SetMetadataPath(setId) : ArchivePath(setId);
             Directory.CreateDirectory(path);
             var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
+            var descriptorExists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
 
             OpenedRepository repository;
             if (WriteCredentials.TryLoad(setId) is { } credential)
@@ -546,7 +582,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 // damage to name, never something to quietly re-create.
                 using (credential)
                 {
-                    repository = ArchiveExists(setId)
+                    repository = descriptorExists
                         ? await RepositoryLifecycle.OpenWriteOnlyAsync(
                                 store, credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                             .ConfigureAwait(false)
@@ -555,7 +591,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                             + "adopt it again with the passphrase (ADR-0042 §10).");
                 }
             }
-            else if (await OpenFromInstallationAsync(setId, store, createIfMissing, cancellationToken)
+            else if (await OpenFromInstallationAsync(setId, store, descriptorExists, createIfMissing, cancellationToken)
                 .ConfigureAwait(false) is { } fromInstallation)
             {
                 repository = fromInstallation;
@@ -567,7 +603,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     + "passphrase; run first-run setup to give this installation one, start the service "
                     + "with a passphrase, or provision the set (ADR-0044, ADR-0042).");
             }
-            else if (ArchiveExists(setId))
+            else if (descriptorExists)
             {
                 repository = await RepositoryLifecycle.OpenAsync(
                         store, _passphrase, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
@@ -596,9 +632,21 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 var repositoryIdHex = repository.RepositoryId.ToString();
                 var cataloguePath = Path.Combine(Options.StateDirectory, $"catalogue-{repositoryIdHex}.db");
                 var catalogueLogger = LoggerFor<CatalogueDb>();
+
+                // A direct-ship set's working store is the sink: blobs to the
+                // destinations, metadata locally AND to the destinations
+                // (ADR-0046). The repository was opened/created against the
+                // metadata store above, so its descriptor and keys are the
+                // planning copy the sink seeds outward from.
+                var sink = directShip
+                    ? new DestinationShipSink(
+                        this, store, setId, repositoryIdHex, LoggerFor<DestinationShipSink>())
+                    : null;
+
                 archive = new ArchiveHandle
                 {
-                    Store = store,
+                    Store = (Storage.Abstractions.IObjectStore?)sink ?? store,
+                    ShipSink = sink,
                     Repository = repository,
                     Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId, catalogueLogger),
                     CatalogueLogger = catalogueLogger,

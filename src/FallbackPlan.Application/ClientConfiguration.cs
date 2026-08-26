@@ -82,6 +82,17 @@ public sealed record BackupSetConfiguration
     public int? Priority { get; init; }
 
     /// <summary>
+    /// Whether this set publishes straight into its destinations with no
+    /// staging archive (ADR-0046): blobs ship to every in-scope destination,
+    /// the agent keeps metadata only. Default false while the read paths
+    /// (restore, retention, verification) finish moving destination-side —
+    /// the migration record flips it and retires the flag.
+    /// </summary>
+    [JsonPropertyName("direct_ship")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DirectShip { get; init; }
+
+    /// <summary>
     /// The destinations this set replicates to, by declared name — at least
     /// one, none of which has to be local (FR-DEST-001, ADR-0034).
     /// </summary>

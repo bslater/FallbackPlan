@@ -170,4 +170,12 @@ internal static partial class Log
         EventId = 3757, Level = LogLevel.Trace,
         Message = "{Command} refused: this connection has not signed in")]
     internal static partial void CommandRefusedUnauthenticated(ILogger logger, string command);
+
+    // Warning: a destination leaving mid-run means this backup commits with
+    // one copy fewer than the configuration promises, and the catch-up that
+    // heals it is silent when it works.
+    [LoggerMessage(
+        EventId = 3758, Level = LogLevel.Warning,
+        Message = "Destination {Destination} dropped from this backup run: {Reason}. Its replica lags until the next catch-up")]
+    internal static partial void ShipDestinationDropped(ILogger logger, string destination, string reason);
 }
