@@ -127,6 +127,53 @@ public static class SessionBinding
         return transcript;
     }
 
+    /// <summary>
+    /// SHA-256 over the <b>role-independent</b> context — the transcript of
+    /// §3.2 without either side's label — so both ends of one connection
+    /// compute the same value.
+    /// </summary>
+    /// <param name="initiator">The initiator's contribution.</param>
+    /// <param name="responder">The responder's contribution.</param>
+    /// <returns>The 32-byte context hash.</returns>
+    /// <remarks>
+    /// The role labels exist so the two proofs cannot be reflected at one
+    /// another, which is exactly why they must be <em>excluded</em> here: a
+    /// value that differed by role would give the claimant and the destination
+    /// two different bindings and no proof would ever verify. What this is for
+    /// is binding a later payload — a replica claim (07 §5.6) — to the one
+    /// connection and the one pair of identities that authenticated on it.
+    /// </remarks>
+    public static byte[] ContextHash(
+        SessionBindingContribution initiator, SessionBindingContribution responder)
+    {
+        Validate(initiator, nameof(initiator));
+        Validate(responder, nameof(responder));
+
+        var context = new byte[
+            sizeof(ushort) + (PeerIdentity.KeyLength * 2)
+            + (TlsPublicKeyHashLength * 2) + (NonceLength * 2)];
+        var at = 0;
+
+        BinaryPrimitives.WriteUInt16BigEndian(context.AsSpan(at), BindingVersion);
+        at += sizeof(ushort);
+
+        initiator.Identity.PublicKey.CopyTo(context.AsSpan(at));
+        at += PeerIdentity.KeyLength;
+        responder.Identity.PublicKey.CopyTo(context.AsSpan(at));
+        at += PeerIdentity.KeyLength;
+
+        initiator.TlsPublicKeyHash.Span.CopyTo(context.AsSpan(at));
+        at += TlsPublicKeyHashLength;
+        responder.TlsPublicKeyHash.Span.CopyTo(context.AsSpan(at));
+        at += TlsPublicKeyHashLength;
+
+        initiator.Nonce.Span.CopyTo(context.AsSpan(at));
+        at += NonceLength;
+        responder.Nonce.Span.CopyTo(context.AsSpan(at));
+
+        return SHA256.HashData(context);
+    }
+
     /// <summary>Signs the transcript for this side's role.</summary>
     /// <param name="keypair">This device's peer keypair.</param>
     /// <param name="initiator">The initiator's contribution.</param>

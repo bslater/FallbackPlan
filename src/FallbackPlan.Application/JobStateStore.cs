@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Domain;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain.Jobs;
@@ -225,6 +226,35 @@ public sealed class JobStateStore
     /// <summary>Whether a state means "a snapshot was committed by this run".</summary>
     public static bool IsCommitted(JobState state) =>
         state is JobState.Complete or JobState.CompletedWithFailures;
+
+    /// <summary>
+    /// Whether a state is settled — the run is over, and another may begin for
+    /// its set. <see cref="JobState.Paused"/> counts as settled here: a paused
+    /// job holds no lane and stops nothing from running.
+    /// </summary>
+    public static bool IsSettled(JobState state) =>
+        state is JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled
+            or JobState.Paused or JobState.FailedRecoverable or JobState.FailedPermanent;
+
+    /// <summary>
+    /// The set's most recent unsettled job, if any — the one that is queued or
+    /// running right now, as far as the journal knows. A caller deciding
+    /// whether to start another backup must also ask the queue whether it
+    /// still holds this id: after a crash the journal can carry an unsettled
+    /// row for a job no queue remembers, and that ghost must not block a set
+    /// for ever.
+    /// </summary>
+    /// <param name="backupSetId">The set's identity.</param>
+    /// <returns>The live job, or null.</returns>
+    public JobRecord? LiveJobFor(string backupSetId)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(backupSetId);
+
+        lock (_gate)
+        {
+            return _jobs.LastOrDefault(job => job.BackupSetId == backupSetId && !IsSettled(job.State));
+        }
+    }
 
     /// <summary>
     /// The schedule anchor for a set, in the operator's wall-clock frame —

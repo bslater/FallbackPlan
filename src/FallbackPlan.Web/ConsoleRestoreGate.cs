@@ -104,7 +104,7 @@ public static class ConsoleRestoreGate
             sawAnArchive = true;
             try
             {
-                var store = new LocalFileSystemObjectStore(archive);
+                var store = OpenStore(archive);
                 var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
                     .ConfigureAwait(false);
 
@@ -206,7 +206,7 @@ public static class ConsoleRestoreGate
             try
             {
                 var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
-                    new LocalFileSystemObjectStore(archivePath), cancellationToken).ConfigureAwait(false);
+                    OpenStore(archivePath), cancellationToken).ConfigureAwait(false);
                 if (!RepositoryLifecycle.IsWriteOnly(descriptor))
                 {
                     return new ProvisionAnswer(
@@ -434,7 +434,7 @@ public static class ConsoleRestoreGate
             try
             {
                 descriptor = await Repository.RepositoryLifecycle.ReadDescriptorAsync(
-                    new Storage.Local.LocalFileSystemObjectStore(path), cancellationToken).ConfigureAwait(false);
+                    OpenStore(path), cancellationToken).ConfigureAwait(false);
             }
             catch (Repository.RepositoryOpenException)
             {
@@ -490,4 +490,13 @@ public static class ConsoleRestoreGate
             Envelope: Convert.ToHexStringLower(
                 WriteOnlyProvisioning.SealProvision(recipient, authority, salt, parameters)));
     }
+    /// <summary>
+    /// The gate's one decision about which provider serves an archive path
+    /// (ADR-0012) — a private method rather than a shared type, because this
+    /// class is the single console type the architecture rules permit below
+    /// the client contract (ADR-0041), and composition must stay inside it.
+    /// </summary>
+    private static LocalFileSystemObjectStore OpenStore(string archivePath) =>
+        new(archivePath);
+
 }

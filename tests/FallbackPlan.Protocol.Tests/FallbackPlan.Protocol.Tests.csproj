@@ -28,4 +28,14 @@
     <ProjectReference Include="..\FallbackPlan.TestSupport\FallbackPlan.TestSupport.csproj" />
   </ItemGroup>
 
+  <!--
+    The claim proof's byte string is specified in peer-protocol 07 §5.6 and
+    computed independently by the conformance generator. Binding this project
+    to that vector is what stops a field-order slip here from going unseen
+    until two implementations disagree over a real claim.
+  -->
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)../../specifications/repository-format/conformance/vectors/disaster-recovery.json" Link="vectors/disaster-recovery.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

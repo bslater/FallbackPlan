@@ -6,8 +6,8 @@ namespace FallbackPlan.Api.Tests;
 /// <summary>
 /// NFR-SEC-009: key material never crosses the command surface, in either
 /// direction, under any setting. As amended by ADR-0042, exactly one shape
-/// is carved out: hex-rendered sealed envelopes on the two named write-only
-/// ceremonies — asserted here as precisely as the bans.
+/// is carved out: hex-rendered sealed envelopes on the named ceremonies —
+/// asserted here as precisely as the bans.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -155,9 +155,18 @@ public sealed class KeyMaterialConfinementTests
         // NFR-SEC-009 [amended] (ADR-0042 §4): the ONE permitted shape of key
         // material in transit is a sealed envelope — hex-rendered, end-to-end
         // encrypted to the service's recipient key, opaque to every relay —
-        // and only on the two ceremonies that need one. This test is the
+        // and only on the ceremonies that need one. This test is the
         // carve-out's fence: the fields must stay string-typed (never raw
         // bytes), and must not quietly spread to other verbs.
+        //
+        // claim_replicas is the fourth, added by decision (ADR-0046). It is
+        // the same shape and the same reason as the three above: the Argon2id
+        // root is derived where the passphrase was typed, and what crosses is
+        // an envelope only this service can open. It could not be avoided by
+        // deriving service-side, because a machine rebuilt from bare metal has
+        // no repository to read the KDF salt from — the recovery kit carries
+        // it, and the kit is on the client. Sealing it is what keeps the
+        // passphrase itself off the surface.
         var envelopeMembers = ContractTypes()
             .SelectMany(type => type
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -171,12 +180,13 @@ public sealed class KeyMaterialConfinementTests
                 nameof(ProvisionWriteOnlySetCommand),
                 nameof(ProvisionInstallationCommand),
                 nameof(OpenRestoreSourceCommand),
+                nameof(ClaimReplicasCommand),
             },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
-            "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation and "
-            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) — nowhere "
-            + "else. This list grows only by decision, which is what keeps it a fence; widening it to a "
-            + "pattern that admits any verb named plausibly would not be one.");
+            "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation, "
+            + "open_restore_source and claim_replicas (NFR-SEC-009 as amended by ADR-0042, NFR-SEC-011 for "
+            + "setup, ADR-0046 for the claim) — nowhere else. This list grows only by decision, which is what "
+            + "keeps it a fence; widening it to a pattern that admits any verb named plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

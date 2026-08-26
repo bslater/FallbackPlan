@@ -22,6 +22,12 @@ Quota accounting requires knowing which peer a replica belongs to, so the destin
 
 A `ReplicationOffer` naming a repository already attributed to a **different** peer MUST be refused `terms_refused`: the destination's terms extend only to repositories that are the peer's own here, and silently counting one household's archive against another's quota would corrupt both ledgers. Re-pairing does not transfer attributions; they are keyed by repository, not by grant.
 
+**One ceremony moves an attribution, and it is not re-pairing.** A device that loses its durable local state loses its identity and every pairing with it, which would otherwise strand its own replica here permanently — the disaster-recovery case of [07 §5](07-retrieval.md#5-claiming-a-replica). A peer that proves it holds the repository's **passphrase**, against a credential this destination registered for that replica ([03 §3.2.1](03-replication.md#321-registering-the-claim-credential)), may re-point the attribution to its current identity. Nothing weaker suffices: a new grant does not, and an unproved assertion does not.
+
+When an attribution moves, **the usage moves with it**. The bytes counted against the old identity are counted against the new one from that moment, because they are the same bytes on the same disk lent to the same household; the old identity's usage drops by exactly what the new one gains. A destination MUST NOT double-count them during or after the transfer, and MUST NOT treat a claim as an admission of new bytes against the claimant's quota — a claim stores nothing.
+
+The attribution ledger therefore holds, per replica: the owning fingerprint, the destination's own `claim_token`, the registered `claim_public`, and whether a claim is awaiting the operator's acknowledgement ([06 §3](06-retention.md#3-what-the-spoke-validates)).
+
 ## 3 Enforcement at the object boundary
 
 The check runs where [03 §2](03-replication.md#2-the-exchange) announces each object: a `ReplicationObject` declares its length before any chunk crosses. On receiving one, a destination with a quota greater than 0 MUST refuse `terms_refused` when

@@ -405,4 +405,49 @@ public sealed class ManifestCodecTests
         Assert.AreEqual(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
         Assert.AreEqual(2, decoded.Failures[0].PathComponents.Count);
     }
+
+    [TestMethod]
+    public void ErrorManifest_EveryAssignedReason_RoundTrips()
+    {
+        // A loop rather than eight cases, because the defect this pins was a
+        // bound: the decoder read reasons 1–7 while the scanner was already
+        // emitting 8 for a name with no faithful UTF-8 form (06 §4.3), so a
+        // backup that met one wrote an error manifest that would not open
+        // again. A bound is tested across its whole range and at its edge.
+        for (var reason = 1; reason <= 8; reason++)
+        {
+            var manifest = new ErrorManifest(
+            [
+                new CaptureFailure(["srv"u8.ToArray(), "thing"u8.ToArray()], (CaptureFailureReason)reason, "why"),
+            ]);
+
+            var decoded = ErrorManifestCodec.Decode(ErrorManifestCodec.Encode(manifest));
+
+            Assert.AreEqual(
+                (CaptureFailureReason)reason,
+                Assert.ContainsSingle(decoded.Failures).Reason,
+                $"reason {reason} is assigned by 06 §8.1 and must survive the round trip");
+        }
+    }
+
+    [TestMethod]
+    public void ErrorManifest_AnUnassignedReason_IsRefused()
+    {
+        // The other edge of the same bound. Casting an out-of-range value into
+        // the enum reaches the encoder the way a future writer's manifest
+        // would, without hand-patching CBOR bytes to get there.
+        foreach (var unassigned in (int[])[0, 9])
+        {
+            var manifest = new ErrorManifest(
+            [
+                new CaptureFailure(["srv"u8.ToArray()], (CaptureFailureReason)unassigned, "why"),
+            ]);
+
+            var encoded = ErrorManifestCodec.Encode(manifest);
+
+            Assert.ThrowsExactly<ManifestValidationException>(
+                () => ErrorManifestCodec.Decode(encoded),
+                $"reason {unassigned} is unassigned and must not decode");
+        }
+    }
 }

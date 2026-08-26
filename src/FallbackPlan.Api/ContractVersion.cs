@@ -99,8 +99,29 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// ADR-0028 §5 rejected. A session token crosses on the two verbs that
     /// mint and present it and nowhere else, and no password or hash reaches
     /// any result or any log record.
+    /// 1.17 added claim_replicas (ADR-0046, FR-DR-001..005), the verb a
+    /// machine rebuilt from bare metal uses to get its data back. A
+    /// destination serves a replica only to the identity its attribution
+    /// ledger names, and that identity died with the state directory, so the
+    /// passphrase proves the household instead. The command carries the
+    /// Argon2id root sealed to the service's recipient key — derived on the
+    /// client from the passphrase and the recovery kit's salt and parameters,
+    /// because a rebuilt machine has the kit and no repository to read the
+    /// salt from — and names a pairing rather than a destination, since
+    /// configuration is one of the things a claim exists to recover. Null
+    /// claims from every pairing. claimed_replicas answers per peer, an
+    /// unreachable one reported beside the rest rather than aborting them.
+    /// 1.18 added consistency_method to snapshot_descriptor: 1 live, 2 VSS,
+    /// 3 filesystem snapshot, 4 application-quiesced. The snapshot manifest
+    /// has carried it since the format was written and nothing read it, while
+    /// specification 06 §6 and architecture 06 §5 both said it was surfaced.
+    /// Every snapshot this build takes reports 1, honestly; the value exists
+    /// on the contract now so that the day a snapshot provider lands, what it
+    /// records is already visible. Null from an older service, which is not
+    /// the same fact as 1 — "captured live" and "would not say" are different
+    /// answers to a person deciding whether to trust a restored database.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 16);
+    public static ContractVersion Current { get; } = new(1, 18);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -3,6 +3,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -231,6 +232,255 @@ public sealed class ServiceTests : IDisposable
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand("no-such-job"), _timeout.Token), out var error);
 
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+    }
+
+    [TestMethod]
+    public async Task CancelJob_QueuedBehindAnotherSet_RecordsCancelledImmediately()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token), out var first);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // The second set queues behind the writer lane's single worker.
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("extra", Full: false), _timeout.Token), out var second);
+        Assert.AreNotEqual(first.JobId, second.JobId);
+
+        // Cancelling a job that has not started takes effect at the command,
+        // not when the lane drains: the journal reads Cancelled while the
+        // first job is still doing its work. Before this, the acknowledgement
+        // was truthful about the token and silent about the state — the card
+        // sat at Pending until the running job finished, possibly hours.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token));
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        var queued = jobs.Jobs.Single(descriptor => descriptor.Id == second.JobId);
+        Assert.AreEqual(JobState.Cancelled, queued.State);
+        Assert.AreEqual("cancelled before it started", queued.Detail);
+
+        // And a second cancel is the honest not-found, not another cheerful
+        // acknowledgement of nothing.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token), out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+
+        // The running job was never disturbed: it still completes.
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Complete);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
+    }
+
+    [TestMethod]
+    public async Task SchedulerPass_ASetWithALiveJob_ReportsAlreadyRunningAndAddsNothing()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // A never-completed set is due, so before per-set coalescing this
+        // pass queued a duplicate behind the running job — and a set slower
+        // than its schedule interval accumulated one more on every pass. Now
+        // the pass joins the live job, reports so, and returns promptly: the
+        // coalesced outcome task is already completed, so the pass does not
+        // sit behind the running backup either.
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, _timeout.Token);
+        var outcome = pass.Sets.Single(set => set.SetName == "docs");
+        Assert.AreEqual("already-running", outcome.Outcome);
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        Assert.ContainsSingle(jobs.Jobs.Where(descriptor =>
+            !JobStateStore.IsSettled(descriptor.State)));
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token));
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Cancelled);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
+    }
+
+    [TestMethod]
+    public async Task RunBackup_AGhostPendingRowFromACrash_DoesNotBlockTheSet()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "content the fresh job will capture");
+        _harness.WriteConfiguration("every 1h");
+
+        // A service that died mid-backup leaves an unsettled journal row that
+        // no queue remembers. Coalescing keys on the journal, so without the
+        // queue check this ghost would make every future request "join" a job
+        // that will never run — blocking the set for ever.
+        var ghost = JobStateStore.Open(_harness.StateDirectory)
+            .Begin(new string('a', 32), (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
+        Assert.AreNotEqual(ghost.Id, accepted.JobId, "a ghost row must not be mistaken for a live job");
+
+        while (true)
+        {
+            _timeout.Token.ThrowIfCancellationRequested();
+            if (await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token)
+                    is JobsResult jobs
+                && jobs.Jobs.Any(descriptor =>
+                    descriptor.Id == accepted.JobId && descriptor.State == JobState.Complete))
+            {
+                break;
+            }
+
+            await Task.Delay(50, _timeout.Token);
+        }
+    }
+
+    [TestMethod]
+    public async Task RunBackup_WhileAJobForTheSetIsLive_JoinsItRatherThanQueuingASecond()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var first);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // One live job per set: the second request joins the job already
+        // doing the work instead of minting a duplicate behind it. Backup ids
+        // are journal GUIDs, so the queue's id-keyed coalescing can never
+        // fire for them — this seam is where theirs lives, and before it a
+        // set whose backup outlived its schedule interval accumulated a
+        // Pending duplicate on every scheduler pass.
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var again);
+        Assert.AreEqual(first.JobId, again.JobId);
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        Assert.ContainsSingle(jobs.Jobs.Where(descriptor => !JobStateStore.IsSettled(descriptor.State)));
+
+        // End it promptly rather than packing 24 MB for nothing.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(first.JobId), _timeout.Token));
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Cancelled);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
     }
 
     [TestMethod]

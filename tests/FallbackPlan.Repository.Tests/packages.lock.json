@@ -205,6 +205,7 @@
           "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Diagnostics": "[1.0.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Keystore": "[1.0.0, )",
           "FallbackPlan.Protocol": "[1.0.0, )",
@@ -243,6 +244,7 @@
           "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Diagnostics": "[1.0.0, )",
+          "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
           "FallbackPlan.Protocol": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
@@ -307,7 +309,6 @@
         "dependencies": {
           "Bodu.Core": "[0.2.0, )",
           "Bodu.Security.Cryptography": "[0.2.0, )",
-          "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "System.Formats.Cbor": "[10.0.10, )"
@@ -346,7 +347,6 @@
           "FallbackPlan.Repository.Packing": "[1.0.0, )",
           "FallbackPlan.Repository.Segmentation": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
-          "FallbackPlan.Storage.Local": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },

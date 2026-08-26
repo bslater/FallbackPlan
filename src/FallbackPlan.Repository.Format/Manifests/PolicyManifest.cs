@@ -379,7 +379,14 @@ public static class ErrorManifestCodec
                         break;
                     case 2:
                         var value = reader.ReadUInt16();
-                        if (value is < 1 or > 7)
+
+                        // The bound is the specification's assigned range (06
+                        // §8.1), which runs to 8 — not to whatever this build's
+                        // enum happens to carry. It read only to 7 while the
+                        // scanner was already emitting 8 for a name with no
+                        // faithful UTF-8 form, so any backup that met one wrote
+                        // an error manifest that would not open again.
+                        if (value is < 1 or > 8)
                         {
                             throw new ManifestValidationException(Strings.FormatErrorManifestCodec_FailureReasonUnassigned(value));
                         }

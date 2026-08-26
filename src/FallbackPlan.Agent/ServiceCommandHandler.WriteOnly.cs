@@ -2,7 +2,6 @@ using FallbackPlan.Api;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
-using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -56,7 +55,7 @@ public sealed partial class ServiceCommandHandler
         {
             var path = runtime.ArchivePath(set.Id);
             Directory.CreateDirectory(path);
-            var store = new LocalFileSystemObjectStore(path);
+            var store = StoreComposition.OpenLocal(path);
             var lines = new List<string>();
 
             if (runtime.ArchiveExists(set.Id))

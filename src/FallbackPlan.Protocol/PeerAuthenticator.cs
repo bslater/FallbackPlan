@@ -32,6 +32,7 @@ public sealed class PeerAuthenticator
     private readonly PeerIdentity? _expected;
 
     private SessionAuth? _theirs;
+    private byte[]? _transcriptHash;
     private readonly ILogger _log;
 
     /// <summary>Starts authentication for a connection whose TLS has completed.</summary>
@@ -76,6 +77,18 @@ public sealed class PeerAuthenticator
 
     /// <summary>The grant the peer authenticated as, once it has.</summary>
     public PeerGrant? Peer { get; private set; }
+
+    /// <summary>
+    /// SHA-256 over this session's bound context (02 §3.2), set once the peer
+    /// has <em>successfully</em> authenticated and null before that.
+    /// </summary>
+    /// <remarks>
+    /// A later payload binds itself to this so it cannot be lifted out of the
+    /// connection that carried it — a replica claim signs it (07 §5.6). It is
+    /// deliberately not recorded on a failed verification: a stranger must
+    /// leave nothing behind that a subsequent frame could reference.
+    /// </remarks>
+    public ReadOnlyMemory<byte>? TranscriptHash => _transcriptHash;
 
     /// <summary>This side's claim, to send at once (02 §3.1).</summary>
     /// <returns>The message.</returns>
@@ -174,6 +187,7 @@ public sealed class PeerAuthenticator
                 $"Peer {_theirs.Identity.Fingerprint} did not prove possession of the identity it presented.");
         }
 
+        _transcriptHash = SessionBinding.ContextHash(initiator, responder);
         State = PeerSessionState.Authenticated;
         return Peer;
     }
@@ -239,7 +253,10 @@ public sealed class PeerAuthenticator
             or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
             or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
-            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData =>
+            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData
+            or PeerMessageType.ClaimRequest or PeerMessageType.ClaimChallenge
+            or PeerMessageType.ClaimProof or PeerMessageType.ClaimResult
+            or PeerMessageType.ClaimRegister =>
             state == PeerSessionState.Open,
 
         _ => false,

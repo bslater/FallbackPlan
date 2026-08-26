@@ -2,12 +2,12 @@
   "profiles": {
     "console": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099 --log-level trace",
       "launchBrowser": false
     },
-    "console (debug logging)": {
+    "console (quiet — shipped default)": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099 --log-level debug",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
       "launchBrowser": false
     }
   }

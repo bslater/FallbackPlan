@@ -16,7 +16,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - detect sparse extents and record them as logical zero extents rather than reading zeroes;
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
 - use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create — see [§4.2](#42-a-rename-is-a-move-not-a-new-file);
-- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued, and one whose name has come to mean a different object is recorded as a substitution and **not** re-read ([§4.1](#41-links-are-classified-before-they-are-traversed)).
+- **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued, and one whose name has come to mean a different object is recorded as a substitution and **not** re-read ([§4.1](#41-links-are-classified-before-they-are-traversed)). A revalidation that cannot observe the object at all — the file was deleted while it was being read — is recorded the same way as a change rather than accepted as unchanged: the bytes are complete, but nothing can state what they are the content of. A file for which **no** read completed while it was changing is an error-manifest entry (reason 4) rather than a version, because there are no bytes to publish; a file that did yield a complete read keeps that read, which is why an appended-to log is captured-inconsistent and not a partial backup ([ADR-0026 §Decision 2](../adr/0026-phase-1-capture-shapes.md)).
 
 ## 2. Path handling
 
@@ -108,14 +108,16 @@ That read is best-effort by construction. If the prior manifest cannot be fetche
 
 ## 5. Consistency
 
-| Method | Platform | Guarantee |
-|--------|----------|-----------|
-| VSS | Windows | Application-consistent where writers cooperate; crash-consistent otherwise |
-| Live capture + pre/post stat validation | All | Best-effort; per-file consistency detected, not guaranteed |
-| Filesystem snapshots (APFS, Btrfs, ZFS, LVM) | Later phase | Crash-consistent |
-| Application hooks | Later phase | Application-defined |
+| Method | Platform | Guarantee | Built |
+|--------|----------|-----------|-------|
+| Live capture + pre/post stat validation | All | Best-effort; per-file consistency detected, not guaranteed | **Yes** — the only method this build uses |
+| VSS | Windows | Application-consistent where writers cooperate; crash-consistent otherwise | Later phase |
+| Filesystem snapshots (APFS, Btrfs, ZFS, LVM) | Where the volume supports it | Crash-consistent | Later phase |
+| Application hooks | All | Application-defined | Later phase |
 
 The snapshot manifest records **which method was used**, and the status display reports it. "Best-effort" and "application-consistent" are materially different promises and a user restoring a database needs to know which one they have.
+
+The **Built** column was added after a review found this table read as though VSS already existed — it alone carried a platform where the other unbuilt rows carried "Later phase", which contradicted [00 §4.2](00-overview.md#42-later-releases) listing all of it as later work. Every snapshot this build takes records method 1, and now says so: the catalogue carries it, the contract carries it, and both `snapshot list` and the console's snapshot table show it. Until that plumbing landed the two sentences above were simply false — the value was recorded and read by nothing.
 
 ## 6. Backup set selection
 

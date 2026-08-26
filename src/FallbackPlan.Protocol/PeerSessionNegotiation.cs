@@ -40,9 +40,18 @@ public static class PeerSessionNegotiation
     /// <summary>An owner may read its replica back over the session (07; ADR-0041).</summary>
     public const string RetrievalFeature = "retrieval";
 
+    /// <summary>
+    /// The peer accepts a passphrase-proved claim that re-points a replica's
+    /// attribution (07 §5), and offers a token so one can be armed (03 §3.2.1).
+    /// </summary>
+    public const string ReplicaClaimFeature = "replica-claim";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
-        [DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature, RetrievalFeature];
+        [
+            DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature,
+            RetrievalFeature, ReplicaClaimFeature,
+        ];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>

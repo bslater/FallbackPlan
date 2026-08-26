@@ -1,7 +1,6 @@
 using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -66,7 +65,7 @@ internal static class RetrievalResponder
                     "No replica of that repository is retrievable under this pairing.");
             }
 
-            var replica = new LocalFileSystemObjectStore(replicaPath);
+            var replica = StoreComposition.OpenLocal(replicaPath);
             await PeerFrame.WriteAsync(stream, new RetrieveReady(), cancellationToken).ConfigureAwait(false);
 
             while (true)
@@ -142,7 +141,7 @@ internal static class RetrievalResponder
     }
 
     private static async Task ServeListAsync(
-        LocalFileSystemObjectStore replica, Stream stream, RetrieveList request, CancellationToken cancellationToken)
+        IObjectStore replica, Stream stream, RetrieveList request, CancellationToken cancellationToken)
     {
         if (!ObjectPrefix.TryParse(request.Prefix, out var prefix))
         {
@@ -174,7 +173,7 @@ internal static class RetrievalResponder
     }
 
     private static async Task ServeReadAsync(
-        LocalFileSystemObjectStore replica, Stream stream, RetrieveRead request, CancellationToken cancellationToken)
+        IObjectStore replica, Stream stream, RetrieveRead request, CancellationToken cancellationToken)
     {
         if (!ObjectKey.TryParse(request.Key, out var key))
         {

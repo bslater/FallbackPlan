@@ -25,7 +25,8 @@ internal static class ReplicationInitiator
     public static async Task<long> PushAllAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream, CancellationToken cancellationToken)
     {
-        var outcome = await PushAndConvergeAsync(source, repositoryId, stream, keeps: null, cancellationToken)
+        var outcome = await PushAndConvergeAsync(
+            source, repositoryId, stream, keeps: null, armClaim: null, cancellationToken)
             .ConfigureAwait(false);
         return outcome.Committed;
     }
@@ -59,11 +60,20 @@ internal static class ReplicationInitiator
     /// <param name="repositoryId">The repository the objects belong to (16 bytes).</param>
     /// <param name="stream">The open session stream.</param>
     /// <param name="keeps">The destination's keep filter, or null to push whole and instruct nothing.</param>
+    /// <param name="armClaim">
+    /// Given the destination's freshly minted claim token, the 32-byte public
+    /// half of the credential its passphrase reproduces (03 §3.2.1) — or null
+    /// to decline. Declining is a first-class answer: a source that cannot
+    /// reach the passphrase-derived root must send nothing rather than
+    /// register something derived from other material.
+    /// </param>
     /// <param name="cancellationToken">Cancels the exchange.</param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
-        Func<string, bool>? keeps, CancellationToken cancellationToken)
+        Func<string, bool>? keeps,
+        Func<ReadOnlyMemory<byte>, byte[]?>? armClaim,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -74,7 +84,20 @@ internal static class ReplicationInitiator
                 stream, new ReplicationOffer(repositoryId, FormatCapability, "all"), cancellationToken)
                 .ConfigureAwait(false);
 
-            var (held, headroom) = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
+            var (held, headroom, claimToken) = await ReadInventoryAsync(stream, cancellationToken)
+                .ConfigureAwait(false);
+
+            // A token offered means the destination holds no claim credential
+            // for this repository yet, and is asking for one before the first
+            // object crosses (03 §3.2.1). It is offered at most once per
+            // replica, so the Argon2id pass this costs is paid once per
+            // destination — not once per sync.
+            if (claimToken is { } token && armClaim is not null && armClaim(token) is { } claimPublicKey)
+            {
+                await PeerFrame.WriteAsync(
+                    stream, new ClaimRegister(repositoryId, claimPublicKey), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             var sent = 0L;
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -258,11 +281,12 @@ internal static class ReplicationInitiator
         : key.StartsWith("blobs/", StringComparison.Ordinal) ? 5
         : 1;
 
-    private static async Task<(HashSet<string> Held, ulong? Headroom)> ReadInventoryAsync(
-        Stream stream, CancellationToken cancellationToken)
+    private static async Task<(HashSet<string> Held, ulong? Headroom, ReadOnlyMemory<byte>? ClaimToken)>
+        ReadInventoryAsync(Stream stream, CancellationToken cancellationToken)
     {
         var held = new HashSet<string>(StringComparer.Ordinal);
         ulong? headroom = null;
+        ReadOnlyMemory<byte>? claimToken = null;
         while (true)
         {
             var page = await ReplicationWire.ReadAsync(
@@ -279,9 +303,13 @@ internal static class ReplicationInitiator
             // means "not told", never "no room".
             headroom = page.Headroom ?? headroom;
 
+            // The claim token rides the final page alone (03 §3.2.1), so the
+            // last one seen is the only one there ever was.
+            claimToken = page.ClaimToken ?? claimToken;
+
             if (!page.More)
             {
-                return (held, headroom);
+                return (held, headroom, claimToken);
             }
         }
     }

@@ -65,6 +65,15 @@ public sealed class DependencyRuleTests
     /// <summary>The platform keystores (ADR-0028 §9).</summary>
     private static Assembly Keystore => Assembly.Load("FallbackPlan.Keystore");
 
+    /// <summary>The logging sink host (ADR-0043) — loaded by name, no marker.</summary>
+    private static Assembly Diagnostics => Assembly.Load("FallbackPlan.Diagnostics");
+
+    /// <summary>The store-to-store copier (ADR-0034) — loaded by name, no marker.</summary>
+    private static Assembly Replication => Assembly.Load("FallbackPlan.Replication");
+
+    /// <summary>Retention and collection (ADR-0009) — loaded by name, no marker.</summary>
+    private static Assembly Retention => Assembly.Load("FallbackPlan.Retention");
+
     /// <summary>The peer protocol (ADR-0030).</summary>
     private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
@@ -79,7 +88,8 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web,
+         Diagnostics, Replication, Retention];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -594,6 +604,141 @@ public sealed class DependencyRuleTests
             ["FallbackPlan.Repository.Crypto", "FallbackPlan.Repository.Format",
              "FallbackPlan.Repository.Packing", "FallbackPlan.Storage.Abstractions", "FallbackPlan.Storage.Local"],
             references);
+    }
+
+    /// <summary>
+    /// The peer protocol speaks wire frames over Domain vocabulary and its
+    /// own stores (ADR-0030): it must not reach the use-case layer, the
+    /// engine, a provider, or a host. It referenced Application for years —
+    /// for two utility types, AtomicFile and ClientStateException, which now
+    /// live in Domain where a primitive with two consumers belongs — and no
+    /// rule existed to say otherwise.
+    /// </summary>
+    [TestMethod]
+    public void Protocol_DependencyClosure_KnowsNoUseCaseLayerAndNoEngine()
+    {
+        AssertPasses(
+            Types.InAssembly(Protocol)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Protocol must speak the wire over Domain alone (ADR-0030; 11 §2).");
+    }
+
+    /// <summary>
+    /// The engine composes format, crypto, segmentation, packing, index,
+    /// catalogue, the scanner contract and the storage <em>abstraction</em> —
+    /// and no concrete provider (11 §2: providers depend on the abstraction,
+    /// never the reverse). It carried an unused reference to
+    /// <c>Storage.Local</c> for months, and nothing noticed, because this
+    /// rule did not exist: the closure tests below it each guarded one
+    /// subproject while the root assembly answered to nobody. An exact
+    /// whitelist rather than a ban list, for the same reason the recovery
+    /// tool has one — a new ProjectReference must fail loudly, whatever it is.
+    /// </summary>
+    [TestMethod]
+    public void Engine_ProjectFileWhitelist_ComposesNoConcreteProvider()
+    {
+        var project = Path.Combine(RepositoryRoot(), "src", "FallbackPlan.Repository", "FallbackPlan.Repository.csproj");
+        var references = System.Text.RegularExpressions.Regex
+            .Matches(File.ReadAllText(project), "ProjectReference Include=\"[^\"]*\\\\([^\"\\\\]+)\\.csproj\"")
+            .Select(match => match.Groups[1].Value)
+            .Order()
+            .ToArray();
+
+        SequenceAssert.AreEqual(
+            ["FallbackPlan.Filesystem", "FallbackPlan.Import.Abstractions",
+             "FallbackPlan.Repository.Catalogue", "FallbackPlan.Repository.Crypto",
+             "FallbackPlan.Repository.Format", "FallbackPlan.Repository.Index",
+             "FallbackPlan.Repository.Packing", "FallbackPlan.Repository.Segmentation",
+             "FallbackPlan.Storage.Abstractions"],
+            references);
+    }
+
+    /// <summary>
+    /// Diagnostics hosts the logging sinks and nothing else (ADR-0043 §1):
+    /// it is referenced by every host precisely because it knows nothing
+    /// about what they do. A diagnostics project that could reach the
+    /// engine, a store, or the contract would make "add a log sink" a change
+    /// with engine consequences.
+    /// </summary>
+    [TestMethod]
+    public void Diagnostics_DependencyClosure_ReachesOnlyDomain()
+    {
+        AssertPasses(
+            Types.InAssembly(Diagnostics)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Api",
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Diagnostics must depend only on Domain and the logging stack (ADR-0043 §1).");
+    }
+
+    /// <summary>
+    /// Replication copies encrypted bytes between stores it cannot read
+    /// (ADR-0034): it works entirely over <c>IObjectStore</c>, so it must
+    /// not know a concrete provider, must not be able to decode what it
+    /// carries, and must not reach the use-case layer. This assembly and
+    /// Retention were outside <c>AllSourceAssemblies</c> for months — the
+    /// exact hole the list's own comment warns about.
+    /// </summary>
+    [TestMethod]
+    public void Replication_DependencyClosure_StaysAByteCopier()
+    {
+        AssertPasses(
+            Types.InAssembly(Replication)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage.Local",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034).");
+    }
+
+    /// <summary>
+    /// Retention joins policy (Application) to the engine (Repository) —
+    /// legitimately, it is the one place selection meets collection — but it
+    /// must still not know a concrete provider, a platform scanner, or
+    /// anything host-shaped. The collector deciding what to delete is the
+    /// last assembly that should have undeclared reach.
+    /// </summary>
+    [TestMethod]
+    public void Retention_DependencyClosure_KnowsNoProviderAndNoHost()
+    {
+        AssertPasses(
+            Types.InAssembly(Retention)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Storage.Local",
+                    "FallbackPlan.Filesystem.Local",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Keystore",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Retention may join policy to engine but must know no provider or host (11 §2).");
     }
 
     private static void AssertProjectReferences(string projectName, string expectedReference)

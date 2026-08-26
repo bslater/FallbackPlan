@@ -114,14 +114,6 @@
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
-      "fallbackplan.storage.local": {
-        "type": "Project",
-        "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
-        }
-      },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",
         "requested": "[0.2.0, )",

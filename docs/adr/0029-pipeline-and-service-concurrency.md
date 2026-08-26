@@ -230,6 +230,32 @@ budget per pass and resumes from a persisted cursor rather than running to
 completion. The cursor exists more for this than for the coverage claim it also
 supports.
 
+#### Amendment 4 (2026-08): backups coalesce per set, and a queued cancel is immediate
+
+Two gaps the first stranded-console session exposed, both in §4's writer lane.
+
+The coalescing rule keyed on job identity, and fan-out earned it by using
+deterministic ids per `(set, destination)`. Backups never could: their id is
+the journal row's GUID, fresh on every enqueue, so nothing stopped a scheduler
+pass — whose due-check anchors on the last *completed* run and cannot see a
+run in flight — from queueing a second backup for a set whose first was still
+running, and a set slower than its schedule interval accumulated a `Pending`
+duplicate per pass. Backups now coalesce **per set** at the scheduler's
+enqueue seam: a request for a set with an unsettled journal row that the queue
+still holds joins that job and is handed its id. The queue check is load-
+bearing — after a crash the journal can carry an unsettled row no queue
+remembers, and a ghost must not block a set for ever.
+
+And cancelling a job that had not started was truthful about the token and
+silent about the state: the CTS flipped, the acknowledgement went out, and the
+journal stayed `Pending` until the lane drained — behind a long backup, hours
+after the person clicked, with a `Scanning` flash on the way. A queued job
+that knows how to record its own cancellation is now taken out of play at the
+command: dequeued in effect, journalled `Cancelled` there and then, and a
+second cancel gets the honest not-found. A job already started keeps the
+cooperative path — cancellation remains a command whose effect the runner
+records (§4), only now the record never waits for a lane.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -397,3 +423,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
 | 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |
+| 2026-08 | Accepted (amended) | Amendment 4: backups coalesce per set at the enqueue seam, and cancelling a not-yet-started job journals `Cancelled` at the command rather than when the lane drains |

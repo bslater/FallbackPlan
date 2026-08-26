@@ -1,8 +1,8 @@
+using FallbackPlan.Domain;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using Bodu;
-using FallbackPlan.Application;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 
@@ -101,6 +101,15 @@ public sealed class GrantRecipient : IDisposable
     /// <exception cref="SealedContentException">The envelope does not open.</exception>
     public byte[] OpenGrant(ReadOnlySpan<byte> sealedBytes) =>
         WriteOnlyProvisioning.OpenGrant(_privateKey, sealedBytes);
+
+    /// <summary>
+    /// Opens a claim-root envelope sealed to this recipient (ADR-0046). The
+    /// caller owns the bytes and must zero them: this is the passphrase's
+    /// Argon2id output, held only for the length of one claim exchange.
+    /// </summary>
+    /// <exception cref="SealedContentException">The envelope does not open, or is not a claim root.</exception>
+    public byte[] OpenClaimRoot(ReadOnlySpan<byte> sealedBytes) =>
+        WriteOnlyProvisioning.OpenClaimRoot(_privateKey, sealedBytes);
 
     /// <inheritdoc />
     public void Dispose() => CryptographicOperations.ZeroMemory(_privateKey);

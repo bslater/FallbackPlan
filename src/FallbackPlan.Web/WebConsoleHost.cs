@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -187,24 +188,47 @@ public static class WebConsoleHost
             await next(context).ConfigureAwait(false);
         });
 
-        MapStaticAsset(app, "/", "wwwroot/index.html", "text/html; charset=utf-8");
-        MapStaticAsset(app, "/app.css", "wwwroot/app.css", "text/css; charset=utf-8");
-        MapStaticAsset(app, "/app.js", "wwwroot/app.js", "text/javascript; charset=utf-8");
+        MapStaticAsset(app, "/", "wwwroot/index.html", "text/html; charset=utf-8", log);
+        MapStaticAsset(app, "/app.css", "wwwroot/app.css", "text/css; charset=utf-8", log);
+        MapStaticAsset(app, "/app.js", "wwwroot/app.js", "text/javascript; charset=utf-8", log);
 
-        app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth));
+        app.MapPost("/api/command", (HttpContext context) =>
+            TimedAsync(context, log, "/api/command", () => ExchangeAsync(context, clients, auth, log)));
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
-        app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
-        app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
-        app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
-        app.MapPost("/api/recovery-kit", (HttpContext context) => RecoveryKitAsync(context, clients, auth));
-        app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
+        app.MapPost("/api/restore-gate", (HttpContext context) =>
+            TimedAsync(context, log, "/api/restore-gate", () => RestoreGateAsync(context, clients, auth)));
+        app.MapPost("/api/provision-write-only", (HttpContext context) =>
+            TimedAsync(context, log, "/api/provision-write-only", () => ProvisionWriteOnlyAsync(context, clients, auth)));
+        app.MapPost("/api/setup", (HttpContext context) =>
+            TimedAsync(context, log, "/api/setup", () => SetupAsync(context, clients, auth, log)));
+        app.MapPost("/api/recovery-kit", (HttpContext context) =>
+            TimedAsync(context, log, "/api/recovery-kit", () => RecoveryKitAsync(context, clients, auth, log)));
+        app.MapPost("/api/passphrase-strength", (HttpContext context) =>
+            TimedAsync(context, log, "/api/passphrase-strength", () => AssessPassphraseAsync(context, auth)));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
     }
 
+    /// <summary>
+    /// Runs one endpoint and leaves a trace line saying it happened. The
+    /// events stream is deliberately not wrapped: a connection that lives
+    /// for hours would report its lifetime, not a request.
+    /// </summary>
+    private static async Task TimedAsync(HttpContext context, ILogger log, string endpoint, Func<Task> handler)
+    {
+        var started = Stopwatch.GetTimestamp();
+        await handler().ConfigureAwait(false);
+        if (log.IsEnabled(LogLevel.Trace))
+        {
+            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Log.RequestHandled(log, endpoint, context.Response.StatusCode, elapsed);
+        }
+    }
+
     /// <summary>One command in, one result out — the whole data surface.</summary>
-    private static async Task ExchangeAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    private static async Task ExchangeAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -249,7 +273,13 @@ public static class WebConsoleHost
                     .ConfigureAwait(false);
             }
 
+            var relayed = Stopwatch.GetTimestamp();
             result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
+            if (log.IsEnabled(LogLevel.Trace))
+            {
+                var elapsed = (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds;
+                Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name, elapsed);
+            }
         }
         catch (ServiceConnectionException exception)
         {
@@ -589,7 +619,8 @@ public static class WebConsoleHost
     /// comes before the work for the same reason it does in the write-only
     /// ceremony — there is no recovery path to offer afterwards.
     /// </remarks>
-    private static async Task SetupAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    private static async Task SetupAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -620,6 +651,10 @@ public static class WebConsoleHost
 
         async Task AnswerAsync(SetupResponse response)
         {
+            // The outcome and whether a kit went with it — never the body.
+            // This is the server half of the pair the page's own trace line
+            // forms: the two disagreeing is what localises a stale page.
+            Log.SetupOutcome(log, response.Outcome, response.Kit is not null);
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.Headers.CacheControl = "no-store";
@@ -733,7 +768,8 @@ public static class WebConsoleHost
     /// so rather than minting a second root.
     /// </para>
     /// </remarks>
-    private static async Task RecoveryKitAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    private static async Task RecoveryKitAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -764,6 +800,7 @@ public static class WebConsoleHost
 
         async Task AnswerAsync(KitResponse response)
         {
+            Log.RecoveryKitOutcome(log, response.Outcome, response.Kit is not null);
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.Headers.CacheControl = "no-store";
@@ -892,7 +929,8 @@ public static class WebConsoleHost
         }
     }
 
-    private static void MapStaticAsset(WebApplication app, string path, string resource, string contentType)
+    private static void MapStaticAsset(
+        WebApplication app, string path, string resource, string contentType, ILogger log)
     {
         var bytes = LoadEmbedded(resource);
         app.MapGet(path, async (HttpContext context) =>
@@ -901,6 +939,10 @@ public static class WebConsoleHost
             context.Response.ContentType = contentType;
             context.Response.Headers.CacheControl = "no-cache";
             await context.Response.Body.WriteAsync(bytes, context.RequestAborted).ConfigureAwait(false);
+            // The assets are embedded at build time, so the byte count names
+            // the build: a page tracing one asset version while this line
+            // reports another settles a staleness question from both sides.
+            Log.StaticAssetServed(log, path, bytes.Length);
         });
     }
 

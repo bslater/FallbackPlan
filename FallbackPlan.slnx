@@ -45,6 +45,7 @@
     <Project Path="tests/FallbackPlan.Retention.Tests/FallbackPlan.Retention.Tests.csproj" />
     <Project Path="tests/FallbackPlan.Storage.ContractTests/FallbackPlan.Storage.ContractTests.csproj" />
     <Project Path="tests/FallbackPlan.TestSupport/FallbackPlan.TestSupport.csproj" />
+    <Project Path="tests/FallbackPlan.Web.DomTests/FallbackPlan.Web.DomTests.csproj" />
     <Project Path="tests/FallbackPlan.Web.Tests/FallbackPlan.Web.Tests.csproj" />
   </Folder>
 </Solution>

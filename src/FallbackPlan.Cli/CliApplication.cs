@@ -18,7 +18,6 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
-using FallbackPlan.Storage.Local;
 using FallbackPlan.Cli.Resources;
 using RestoreResult = FallbackPlan.Repository.RestoreResult;
 using FallbackPlan.Diagnostics;
@@ -40,6 +39,15 @@ namespace FallbackPlan.Cli;
 /// </remarks>
 public static class CliApplication
 {
+    /// <summary>
+    /// The seam is <see cref="FallbackPlan.Filesystem.IFileSystemSource.DeviceOf"/>
+    /// being an interface member — a test double answers it like any other
+    /// filesystem question. The field's own type is concrete because a
+    /// private field assigned exactly one implementation gains nothing from
+    /// interface typing (CA1859).
+    /// </summary>
+    private static readonly FallbackPlan.Filesystem.Local.LocalFileSystemSource DeviceProbe = new();
+
     /// <summary>Parses <paramref name="args"/> and runs the matching command.</summary>
     /// <param name="args">The command line, as the process received it.</param>
     /// <param name="configuration">Where output and errors are written; defaults to the console.</param>
@@ -318,6 +326,21 @@ public static class CliApplication
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
 
+        // The specification's own vocabulary (06 §6), not a friendlier
+        // paraphrase: "best-effort live capture" and "application-consistent"
+        // are materially different promises, and softening either is how a
+        // person ends up trusting a database restore they should not.
+        // An unassigned value is printed rather than guessed at — a future
+        // writer may use one this build has never heard of.
+        static string ConsistencyName(byte method) => method switch
+        {
+            1 => "live",
+            2 => "vss",
+            3 => "filesystem-snapshot",
+            4 => "application-quiesced",
+            _ => string.Create(CultureInfo.InvariantCulture, $"unknown({method})"),
+        };
+
         static bool TryParseEndpoint(string target, out string host, out int port)
         {
             host = string.Empty;
@@ -372,7 +395,7 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                var store = new LocalFileSystemObjectStore(Repo(parse));
+                var store = StoreComposition.OpenLocal(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
 
@@ -593,6 +616,7 @@ public static class CliApplication
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                             $"generation     {snapshot.Manifest.PublicationGeneration}"));
                         output.WriteLine($"client         {snapshot.Manifest.ClientVersion}");
+                        output.WriteLine($"consistency    {ConsistencyName(snapshot.Manifest.ConsistencyMethod)}");
                         break;
 
                     case ObjectType.PolicyManifest:
@@ -959,8 +983,15 @@ public static class CliApplication
                         var destinations = snapshot.Destinations is { Count: > 0 }
                             ? "  " + string.Join(", ", snapshot.Destinations)
                             : string.Empty;
+
+                        // A service too old to report the method says nothing
+                        // rather than claiming "live" on its behalf: those are
+                        // different answers (specification 06 §6).
+                        var consistency = snapshot.ConsistencyMethod is { } method
+                            ? $"  {ConsistencyName(method)}"
+                            : string.Empty;
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){destinations}"));
+                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{destinations}"));
                     }
 
                     return 0;
@@ -982,7 +1013,9 @@ public static class CliApplication
                         .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     var status = snapshot.CaptureStatus == 1 ? "complete" : "partial";
                     var signature = snapshot.SignatureState == 1 ? "verified" : snapshot.SignatureState == 2 ? "BAD-SIG" : "unverified";
-                    output.WriteLine($"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature}");
+                    output.WriteLine(
+                        $"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature,-10}  " +
+                        ConsistencyName(snapshot.ConsistencyMethod));
                 }
 
                 return 0;
@@ -1704,9 +1737,7 @@ public static class CliApplication
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
                             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                            path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
-                                ? stat.Device
-                                : null));
+                            DeviceProbe.DeviceOf));
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs

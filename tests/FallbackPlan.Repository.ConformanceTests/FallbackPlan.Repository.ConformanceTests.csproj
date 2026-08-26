@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <!-- Prebuilt package from the committed external/packages feed (ADR-0021). -->
     <PackageReference Include="Bodu.Security.Cryptography" />
   </ItemGroup>

@@ -48,9 +48,15 @@
     <section class="view" id="view-diagnostics" aria-label="Diagnostics" hidden></section>
   </main>
 
-  <div class="toasts" id="toasts" aria-live="polite"></div>
-  <dialog class="dialog" id="dialog"></dialog>
 </div>
+
+<!-- Page-level surfaces, deliberately OUTSIDE #app: both must render while
+     the app panel is hidden behind a gate. A modal dialog inside a hidden
+     ancestor is the worst of both worlds — it paints nothing, but its modal
+     state still makes the whole document inert, which froze the setup
+     ceremony and the sign-in screen with no visible cause. -->
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<dialog class="dialog" id="dialog"></dialog>
 
 <!-- First-run setup (ADR-0044). Rendered by app.js when describe_service
      answers setup_required: the operator cannot navigate past it, because

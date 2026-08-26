@@ -69,6 +69,22 @@ internal static partial class Log
     internal static partial void RetrievalServed(ILogger logger, string fingerprint);
 
     [LoggerMessage(
+        EventId = 3755, Level = LogLevel.Warning,
+        Message = "Peer {Fingerprint} claimed {Count} replica(s) by proving the passphrase; "
+            + "ageing them is refused until an operator acknowledges it")]
+    internal static partial void ReplicasClaimed(ILogger logger, string fingerprint, int count);
+
+    [LoggerMessage(
+        EventId = 3756, Level = LogLevel.Information,
+        Message = "Claimed {Count} replica(s) from peer {Fingerprint} by proving the passphrase")]
+    internal static partial void ReplicasClaimedFrom(ILogger logger, string fingerprint, int count);
+
+    [LoggerMessage(
+        EventId = 3757, Level = LogLevel.Warning,
+        Message = "Peer {Fingerprint} could not be asked to serve a claim: {Reason}")]
+    internal static partial void ClaimPeerUnreachable(ILogger logger, string fingerprint, string reason);
+
+    [LoggerMessage(
         EventId = 3722, Level = LogLevel.Information,
         Message = "Peering terminated by {Fingerprint}")]
     internal static partial void PeeringTerminated(ILogger logger, string fingerprint);
@@ -139,4 +155,20 @@ internal static partial class Log
         EventId = 3754, Level = LogLevel.Information,
         Message = "Account {User} removed; {Sessions} live session(s) ended with it")]
     internal static partial void AccountDeleted(ILogger logger, string user, int sessions);
+
+    [LoggerMessage(
+        EventId = 3758, Level = LogLevel.Trace,
+        Message = "{Command} answered {Result} in {ElapsedMilliseconds} ms")]
+    internal static partial void CommandExecuted(
+        ILogger logger, string command, string result, long elapsedMilliseconds);
+
+    [LoggerMessage(
+        EventId = 3760, Level = LogLevel.Debug,
+        Message = "Setup provisioning answered '{Outcome}'")]
+    internal static partial void ProvisionOutcome(ILogger logger, string outcome);
+
+    [LoggerMessage(
+        EventId = 3761, Level = LogLevel.Debug,
+        Message = "Recovery-kit confirmation answered '{Outcome}'")]
+    internal static partial void RecoveryKitConfirmation(ILogger logger, string outcome);
 }

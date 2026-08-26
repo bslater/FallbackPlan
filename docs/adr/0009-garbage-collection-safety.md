@@ -146,6 +146,37 @@ multi-writer archives exist, this returns to the index generation
 speaks of; the property preserved is the same — no clock, only visible
 advancement.
 
+## Amendment 6 (2026-08) — set-configuration objects are collection roots
+
+Reachability is the collector's whole safety argument: an object no snapshot
+reaches is garbage. The **set-configuration object**
+([specification 11 §5](../../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object),
+[ADR-0047](0047-recovering-operation-after-total-loss.md)) is reachable from
+nothing by design — no manifest references it, because it describes the
+operation rather than the data — and a reachability walk alone would therefore
+collect every one of them.
+
+That is not a small loss. It would leave the repository intact and quietly
+disarm recovery of *operation*: a machine rebuilt from a replica would get its
+files back and have nothing to tell it what it was protecting, which is the
+failure the object exists to prevent. It would also be invisible until a
+disaster, because nothing else reads these objects during ordinary running.
+
+**The newest set-configuration object for each backup set is a root.** A
+collector MUST NOT delete it, whatever reachability says. Older objects for the
+same set are ordinary garbage and follow the tombstone path of the Decision
+above, unchanged.
+
+This is a stated root, in the sense the lifecycle objects already establish —
+leases and audit records are likewise not reached from any manifest — rather
+than a new inference inside the reachability walk. The distinction matters for
+review: nothing about how reachability is *computed* changes, and the rule is
+one the collector can check by listing a prefix.
+
+The rule is per set rather than per repository because sets are independent
+([ADR-0034](0034-hub-and-spoke-destinations.md)): keeping only the globally
+newest object would disarm every set but the most recently edited one.
+
 ## Status history
 
 | Date | Status | Note |
@@ -153,3 +184,4 @@ advancement.
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |
 | 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 6: the newest set-configuration object per backup set is a collection root, because nothing references it and a reachability walk alone would collect the very objects that let a rebuilt machine resume operating ([ADR-0047](0047-recovering-operation-after-total-loss.md)) |

@@ -1,7 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\FallbackPlan.Application\FallbackPlan.Application.csproj" />
     <ProjectReference Include="..\FallbackPlan.Domain\FallbackPlan.Domain.csproj" />
   </ItemGroup>
 

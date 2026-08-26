@@ -12,13 +12,19 @@ namespace FallbackPlan.Protocol;
 public sealed class PeerSession
 {
     internal PeerSession(
-        Stream stream, PeerGrant peer, ushort version, IReadOnlyList<string> features, PeerTerms? theirTerms)
+        Stream stream,
+        PeerGrant peer,
+        ushort version,
+        IReadOnlyList<string> features,
+        PeerTerms? theirTerms,
+        ReadOnlyMemory<byte> transcriptHash)
     {
         Stream = stream;
         Peer = peer;
         Version = version;
         Features = features;
         TheirTerms = theirTerms;
+        TranscriptHash = transcriptHash;
     }
 
     /// <summary>The open duplex stream. What flows over it now is the payload, not the handshake.</summary>
@@ -44,6 +50,13 @@ public sealed class PeerSession
     /// its own grant either way.
     /// </summary>
     public PeerTerms? TheirTerms { get; }
+
+    /// <summary>
+    /// SHA-256 over this session's bound context (02 §3.2) — what a payload
+    /// binds itself to so it cannot be replayed into another connection. A
+    /// replica claim signs it (07 §5.6).
+    /// </summary>
+    public ReadOnlyMemory<byte> TranscriptHash { get; }
 }
 
 /// <summary>
@@ -206,7 +219,9 @@ public static class PeerSessionDriver
             var accept = PeerSessionNegotiation.Negotiate(ourHello, theirHello);
 
             authenticator.Open();
-            return new PeerSession(stream, peer, accept.Version, accept.Features, theirHello.Terms);
+            return new PeerSession(
+                stream, peer, accept.Version, accept.Features, theirHello.Terms,
+                authenticator.TranscriptHash!.Value);
         }
         catch (PeerProtocolException exception)
         {

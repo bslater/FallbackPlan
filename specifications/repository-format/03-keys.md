@@ -104,8 +104,11 @@ derive(info) = HKDF-Expand(PRK = master_key, info = info, L = 32)
 | Data key, generation *g* | `"fbp/data/v1" ‖ u32(g)` |
 | Metadata key, generation *g* | `"fbp/metadata/v1" ‖ u32(g)` |
 | Signing key, generation *g* | `"fbp/signing/v1" ‖ u32(g)` |
+| Recovery recipient key | `"fbp/recovery/v1"` |
 
 Info strings are ASCII, without a terminating NUL. Domain separation is by the string, not by chance.
+
+The **recovery recipient key** is an X25519 scalar, not an Ed25519 seed: it is a *recipient*, and what is sealed to it is the set-configuration envelope of [11 §5](11-lifecycle-objects.md#5-set-configuration-object). It is ungenerational because what it protects is not per-snapshot state — a repository has one recovery recipient for its life, and a recovering device must be able to derive it from the passphrase alone without first learning which generation to ask for. A format-v2 repository does not derive this key: it already has an X25519 recipient in its descriptor (`fbp/seal/v2`) and seals the envelope to that one instead, so one construction serves both formats with no second key to distribute.
 
 The signing key's 32 derived bytes are an **Ed25519 private-key seed** in the sense of [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) §5.1.5 — the input to the seed-expansion step, not a pre-clamped scalar. Every mainstream Ed25519 API takes exactly this. The corresponding public key is computed from the seed by any holder of the master key, which is why the format stores no public key anywhere: signatures in format version 1 are repository-scoped, not device-scoped. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md)
 

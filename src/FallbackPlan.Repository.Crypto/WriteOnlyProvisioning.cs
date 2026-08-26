@@ -6,13 +6,14 @@ using KdfParameters = FallbackPlan.Domain.Configuration.Argon2Parameters;
 namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
-/// The two sealed envelopes a write-only repository's ceremonies exchange
-/// (ADR-0042 §4): <b>provisioning</b> carries the write bundle plus the KDF
-/// salt and parameters the descriptor must record, and a <b>restore grant</b>
-/// carries the derived scalar alone. Each is sealed end-to-end to the
-/// service's published recipient key with its own associated-data purpose,
-/// so one can never be replayed as the other — and the passphrase itself is
-/// in neither.
+/// The sealed envelopes a service's ceremonies exchange (ADR-0042 §4,
+/// ADR-0046): <b>provisioning</b> carries the write bundle plus the KDF salt
+/// and parameters the descriptor must record, a <b>restore grant</b> carries
+/// the derived scalar alone, and a <b>claim root</b> carries the Argon2id
+/// output a rebuilt machine proves a replica with. Each is sealed end-to-end
+/// to the service's published recipient key with its own associated-data
+/// purpose, so none can be replayed as another — and the passphrase itself is
+/// in none of them.
 /// </summary>
 public static class WriteOnlyProvisioning
 {
@@ -21,6 +22,15 @@ public static class WriteOnlyProvisioning
     private static ReadOnlySpan<byte> ProvisionAad => "fbp/provision/v2"u8;
 
     private static ReadOnlySpan<byte> GrantAad => "fbp/restore-grant/v2"u8;
+
+    /// <summary>
+    /// The claim root's purpose (ADR-0046). Its own, and not the grant's: a
+    /// restore grant reads one repository's content, while a claim root can
+    /// re-point that repository's attribution at a new device on somebody
+    /// else's disk. Sharing an AAD would let either envelope be replayed as
+    /// the other, which is the whole reason each carries a purpose at all.
+    /// </summary>
+    private static ReadOnlySpan<byte> ClaimRootAad => "fbp/claim-root/v1"u8;
 
     /// <summary>The provisioning payload: magic ‖ credential ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
     private const int ProvisionPayloadLength = 8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
@@ -133,5 +143,48 @@ public static class WriteOnlyProvisioning
         }
 
         return scalar;
+    }
+
+    /// <summary>
+    /// Seals a claim root — the Argon2id output the passphrase produces — for
+    /// the service's recipient key (ADR-0046; peer-protocol 07 §5.2).
+    /// </summary>
+    /// <remarks>
+    /// The client derives this from the passphrase and the recovery kit's KDF
+    /// salt and parameters, because a rebuilt machine has the kit and no
+    /// repository to read the salt from. What crosses the contract is this
+    /// envelope; the passphrase stays where it was typed, exactly as in the
+    /// two ceremonies above.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="claimRoot">The 32-byte Argon2id root.</param>
+    /// <exception cref="ArgumentException"><paramref name="claimRoot"/> is not exactly 32 bytes.</exception>
+    public static byte[] SealClaimRoot(ReadOnlySpan<byte> recipientPublicKey, ReadOnlySpan<byte> claimRoot)
+    {
+        if (claimRoot.Length != KekDerivation.KekLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatContentSealing_KeyExactlyBytes(KekDerivation.KekLength),
+                nameof(claimRoot));
+        }
+
+        return ContentSealing.SealPayload(recipientPublicKey, claimRoot, ClaimRootAad);
+    }
+
+    /// <summary>Opens a claim root with the service's recipient scalar.</summary>
+    /// <param name="recipientPrivateKey">The service's recipient scalar.</param>
+    /// <param name="sealedBytes">The envelope.</param>
+    /// <returns>The root. The caller owns it and must zero it.</returns>
+    /// <exception cref="SealedContentException">The envelope does not open, or is not a claim root.</exception>
+    public static byte[] OpenClaimRoot(ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes)
+    {
+        var root = ContentSealing.OpenPayload(recipientPrivateKey, sealedBytes, ClaimRootAad);
+        if (root.Length != KekDerivation.KekLength)
+        {
+            CryptographicOperations.ZeroMemory(root);
+            throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
+        }
+
+        return root;
     }
 }

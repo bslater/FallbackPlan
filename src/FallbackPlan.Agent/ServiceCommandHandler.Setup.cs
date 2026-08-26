@@ -1,5 +1,6 @@
 using FallbackPlan.Api;
 using FallbackPlan.Repository.Crypto;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -23,6 +24,25 @@ public sealed partial class ServiceCommandHandler
         + "makes the archives readable at all — so setup runs exactly once (ADR-0044, ADR-0042 §11).";
 
     private ServiceResult ProvisionInstallation(ProvisionInstallationCommand command)
+    {
+        var answer = ProvisionInstallationCore(command);
+
+        // The discriminator, never the envelope: which refusal the ceremony
+        // met is the diagnosis, and the envelope is sealed key material.
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Debug))
+        {
+            Log.ProvisionOutcome(log, answer switch
+            {
+                ConfigurationChangeResult => "provisioned",
+                ServiceError error => error.Reason.ToString(),
+                _ => answer.GetType().Name,
+            });
+        }
+        return answer;
+    }
+
+    private ServiceResult ProvisionInstallationCore(ProvisionInstallationCommand command)
     {
         if (Scope == CallerScope.Remote)
         {
@@ -110,6 +130,22 @@ public sealed partial class ServiceCommandHandler
     }
 
     private ServiceResult ConfirmRecoveryKit(ConfirmRecoveryKitCommand command)
+    {
+        var answer = ConfirmRecoveryKitCore(command);
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Debug))
+        {
+            Log.RecoveryKitConfirmation(log, answer switch
+            {
+                ConfigurationChangeResult => "confirmed",
+                ServiceError error => error.Reason.ToString(),
+                _ => answer.GetType().Name,
+            });
+        }
+        return answer;
+    }
+
+    private ServiceResult ConfirmRecoveryKitCore(ConfirmRecoveryKitCommand command)
     {
         if (Scope == CallerScope.Remote)
         {

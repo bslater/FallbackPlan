@@ -128,7 +128,6 @@
         "dependencies": {
           "Bodu.Core": "[0.2.0, )",
           "Bodu.Security.Cryptography": "[0.2.0, )",
-          "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "System.Formats.Cbor": "[10.0.10, )"
@@ -155,7 +154,6 @@
           "FallbackPlan.Repository.Packing": "[1.0.0, )",
           "FallbackPlan.Repository.Segmentation": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
-          "FallbackPlan.Storage.Local": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },

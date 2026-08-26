@@ -17,7 +17,7 @@ public sealed class ObjectIdDeriverTests
     [TestMethod]
     [DataRow((byte)0x00)]
     [DataRow((byte)0x07)] // reserved store-key domain separator
-    [DataRow((byte)0x10)]
+    [DataRow((byte)0x11)] // the first value above the assigned range
     public void Derive_WhenTheObjectTypeIsUnassigned_ShouldThrow(byte value)
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);

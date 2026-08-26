@@ -69,6 +69,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(LogRecordsResult), "log_records")]
 [JsonDerivedType(typeof(SessionResult), "session")]
 [JsonDerivedType(typeof(UserListResult), "users")]
+[JsonDerivedType(typeof(ClaimedReplicasResult), "claimed_replicas")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -203,6 +204,43 @@ public sealed record PairingDescriptor(string Fingerprint, string Label, string 
 /// <summary>This device's paired peers.</summary>
 /// <param name="Pairings">The grants, oldest first.</param>
 public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) : ServiceResult;
+
+/// <summary>One replica whose attribution moved to this device (ADR-0046).</summary>
+/// <param name="RepositoryId">The repository, hex — the archive this replica holds.</param>
+/// <param name="SetIds">
+/// The backup sets its snapshots carry, hex. Read from the destination's own
+/// key namespace rather than from any manifest, so a peer that cannot decrypt
+/// a byte of the replica can still name them.
+/// </param>
+/// <remarks>
+/// Named for the contract rather than for the wire: <c>ClaimedReplica</c> is
+/// already the peer protocol's frame type, and a handler that needs both in one
+/// file should not have to alias its way out of the collision.
+/// </remarks>
+public sealed record ClaimedReplicaDescriptor(string RepositoryId, IReadOnlyList<string> SetIds);
+
+/// <summary>What one peer answered a claim with.</summary>
+/// <param name="Fingerprint">The peer that was asked.</param>
+/// <param name="Claimed">The replicas whose attribution moved here.</param>
+/// <param name="Unreachable">
+/// Why the peer could not be asked, or null when it answered. A household
+/// recovering from a disaster is exactly when the far end is least reachable,
+/// so this is reported per peer and never aborts the others.
+/// </param>
+public sealed record ClaimedFromPeer(
+    string Fingerprint, IReadOnlyList<ClaimedReplicaDescriptor> Claimed, string? Unreachable = null);
+
+/// <summary>
+/// The outcome of a claim across every peer it asked (ADR-0046).
+/// </summary>
+/// <remarks>
+/// A peer with nothing to offer is reported with an empty list rather than
+/// omitted: "that friend holds nothing of yours" and "that friend was never
+/// asked" send a recovering person to different places, and a claim is run
+/// precisely when they cannot afford to confuse the two.
+/// </remarks>
+/// <param name="Peers">One entry per peer asked, in the order they were asked.</param>
+public sealed record ClaimedReplicasResult(IReadOnlyList<ClaimedFromPeer> Peers) : ServiceResult;
 
 /// <summary>One directory on the service's machine, for a folder picker.</summary>
 /// <param name="Name">The directory's name.</param>
@@ -355,13 +393,21 @@ public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResu
 /// (<c>pending</c>, <c>replicating</c>, <c>durable</c>, <c>verified</c>,
 /// <c>degraded</c>); null from a service that could not derive it.
 /// </param>
+/// <param name="ConsistencyMethod">
+/// How the capture was taken: 1 live, 2 VSS, 3 filesystem snapshot,
+/// 4 application-quiesced (specification 06 §6). Null from a service too old
+/// to report it, which is not the same fact as 1 — "captured live" and "would
+/// not say" send a person restoring a database to different places, and this
+/// value exists precisely because those are different promises.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
     ulong CapturedAt,
     byte CaptureStatus,
     long Files,
-    IReadOnlyList<string>? Destinations = null);
+    IReadOnlyList<string>? Destinations = null,
+    byte? ConsistencyMethod = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">The snapshots, oldest first.</param>

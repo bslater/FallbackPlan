@@ -39,8 +39,18 @@ public static class CatalogueSchema
     /// discarded. On <c>file_versions</c> beside the other reuse inputs, so
     /// the covering parent index is untouched.
     /// </para>
+    /// <para>
+    /// v7 over v6: <c>snapshots.consistency_method</c>, the manifest's key 10.
+    /// It was recorded on every snapshot and read by nothing, while
+    /// [specification 06 §6](../../specifications/repository-format/06-manifests.md)
+    /// and [architecture 06 §5](../../docs/architecture/06-filesystem-capture.md)
+    /// both said it was surfaced. A user restoring a database needs to know
+    /// whether they hold a best-effort live capture or an application-consistent
+    /// one, and until this column existed there was nowhere for that answer to
+    /// come from without decoding a manifest per snapshot.
+    /// </para>
     /// </remarks>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -109,7 +119,8 @@ public static class CatalogueSchema
             publication_generation INTEGER NOT NULL,
             capture_status         INTEGER NOT NULL,
             signature_state        INTEGER NOT NULL,
-            captured_at            INTEGER NOT NULL DEFAULT 0
+            captured_at            INTEGER NOT NULL DEFAULT 0,
+            consistency_method     INTEGER NOT NULL DEFAULT 1
         ) WITHOUT ROWID;
 
         CREATE TABLE file_versions (

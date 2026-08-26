@@ -34,11 +34,37 @@ public sealed class WebConsoleOptionsTests
     }
 
     [TestMethod]
-    public void Parse_AbsentStateDirectory_FailsNamingThePath()
+    public void Parse_AbsentStateDirectory_IsAcceptedRatherThanRefused()
     {
+        // The service creates the directory; the console only reads through
+        // it, and the two are routinely started together. Refusing here lost
+        // that race, and it is the same fact as a service that is not yet
+        // listening — reported by the probe, not by the parser (ADR-0036).
         var absent = Path.Combine(_state, "not-there");
-        Assert.IsFalse(WebConsoleOptions.TryParse(["--state", absent], out _, out var failure));
-        StringAssert.Contains(failure, "not-there");
+
+        Assert.IsTrue(WebConsoleOptions.TryParse(["--state", absent], out var options, out var failure));
+        Assert.IsNull(failure);
+        Assert.AreEqual(Path.GetFullPath(absent), options!.StateDirectory);
+    }
+
+    [TestMethod]
+    public void Parse_LogLevel_IsAcceptedAndNotMistakenForAnUnknownFlag()
+    {
+        // The host documents --log-level in its own --help and reads it, so a
+        // parser that called it unknown refused the command line the program
+        // advertises. The shipped "console (debug logging)" profile passes it.
+        Assert.IsTrue(
+            WebConsoleOptions.TryParse(
+                ["--state", _state, "--port", "5099", "--log-level", "debug"], out var options, out var failure),
+            failure);
+        Assert.AreEqual(5099, options!.Port);
+
+        // Its value is consumed, not left to be read as the next flag.
+        Assert.IsTrue(WebConsoleOptions.TryParse(["--log-level", "trace", "--state", _state], out _, out _));
+
+        // And it still needs one.
+        Assert.IsFalse(WebConsoleOptions.TryParse(["--state", _state, "--log-level"], out _, out var needsValue));
+        StringAssert.Contains(needsValue, "--log-level");
     }
 
     [TestMethod]

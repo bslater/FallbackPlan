@@ -222,6 +222,33 @@ jobs:
       - name: Verify committed vectors match freshly computed ones
         run: python3 specifications/repository-format/conformance/generate.py --check
 
+  # The console page in a real browser (ADR-0049): dialog modality, CSP,
+  # focus and downloads only exist there, and the three defects that motivated
+  # the suite shipped invisibly past every DOM-less gate. One Linux Chromium
+  # run — the semantics under test are the browser's, not the OS's. Everywhere
+  # else the suite compiles and reports skipped, never passed (the
+  # BrowserCondition rule), so this job is the only place that installs a
+  # browser and the only place that sets the opt-in.
+  dom-tests:
+    name: Console DOM suite (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore FallbackPlan.slnx --locked-mode
+      - name: Build the suite
+        run: dotnet build tests/FallbackPlan.Web.DomTests -c Release --no-restore
+      - name: Install Chromium
+        run: pwsh tests/FallbackPlan.Web.DomTests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+      - name: Run the suite
+        env:
+          FALLBACKPLAN_DOM_TESTS: "1"
+        run: dotnet test tests/FallbackPlan.Web.DomTests -c Release --no-build
+
   documentation:
     name: Documentation integrity
     runs-on: ubuntu-latest

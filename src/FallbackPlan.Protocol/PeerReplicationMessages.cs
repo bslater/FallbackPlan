@@ -102,6 +102,12 @@ public sealed record ReplicationOffer(
 /// Bytes this destination can still accept under the peer's quota, as of the
 /// moment the inventory was taken; null when no quota bounds it (05 §1).
 /// </param>
+/// <param name="ClaimToken">
+/// This destination's own token for the offered repository, carried on the
+/// final page and only while no claim credential is registered for it
+/// (03 §3.2.1). Null the rest of the time, and a source reads that as "not
+/// asked" rather than as an empty token it should answer.
+/// </param>
 /// <remarks>
 /// The headroom rides here rather than in the hello or the terms, and the
 /// choice matters. Terms are persisted in the grant and compared for
@@ -113,8 +119,14 @@ public sealed record ReplicationOffer(
 /// and <c>quota − usage</c> is already sitting in a local.
 /// </remarks>
 public sealed record ReplicationInventory(
-    IReadOnlyList<string> Keys, bool More, ulong? Headroom = null) : IPeerMessage
+    IReadOnlyList<string> Keys,
+    bool More,
+    ulong? Headroom = null,
+    ReadOnlyMemory<byte>? ClaimToken = null) : IPeerMessage
 {
+    /// <summary>A claim token is 16 bytes (07 §5.3).</summary>
+    public const int ClaimTokenLength = 16;
+
     /// <summary>The most object keys one inventory page may carry (00 §2.3).</summary>
     public const int MaximumKeys = 4096;
 
@@ -125,7 +137,7 @@ public sealed record ReplicationInventory(
     public PeerMessageType Type => PeerMessageType.ReplicationInventory;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => Headroom is null ? 2 : 3;
+    public int BodyEntryCount => 2 + (Headroom is null ? 0 : 1) + (ClaimToken is null ? 0 : 1);
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -158,6 +170,24 @@ public sealed record ReplicationInventory(
             writer.WriteInt32(3);
             writer.WriteUInt64(headroom);
         }
+
+        // Sent once, and only while this destination holds no claim credential
+        // for the repository: it is how disaster recovery is armed a session
+        // ahead of the disaster (03 §3.2.1). A destination that already holds
+        // one never offers again — a second offer would invite a source to
+        // derive a keypair and register nothing.
+        if (ClaimToken is { } token)
+        {
+            if (token.Length != ClaimTokenLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A claim token of {token.Length} bytes is not the {ClaimTokenLength} bytes 07 §5.3 defines.");
+            }
+
+            writer.WriteInt32(4);
+            writer.WriteByteString(token.Span);
+        }
     }
 
     /// <summary>Reads an inventory page.</summary>
@@ -172,6 +202,14 @@ public sealed record ReplicationInventory(
         var more = false;
         ulong? headroom = null;
 
+        // Held as the nullable memory it is returned as, not as a byte[] that
+        // is converted at the end. A null array assigned to
+        // ReadOnlyMemory<byte>? lifts to HasValue TRUE wrapping an empty
+        // memory, so every page that carried no key 4 would read back as an
+        // offer of nothing — and a source would answer a token no destination
+        // ever minted.
+        ReadOnlyMemory<byte>? claimToken = null;
+
         PeerCbor.ReadEntries(reader, key =>
         {
             switch (key)
@@ -185,6 +223,9 @@ public sealed record ReplicationInventory(
                 case 3:
                     headroom = reader.ReadUInt64();
                     break;
+                case 4:
+                    claimToken = reader.ReadByteString();
+                    break;
                 default:
                     reader.SkipValue();
                     break;
@@ -197,7 +238,13 @@ public sealed record ReplicationInventory(
                 PeerRefusalReason.Malformed, "An inventory page carried no key array.");
         }
 
-        return new ReplicationInventory(keys, more, headroom);
+        if (claimToken is { } token && token.Length != ClaimTokenLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "An inventory's claim token is not the shape 07 §5.3 defines.");
+        }
+
+        return new ReplicationInventory(keys, more, headroom, claimToken);
     }
 
     private static List<string> ReadKeys(CborReader reader)
@@ -228,8 +275,16 @@ public sealed record ReplicationInventory(
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The claim token is compared by its bytes, like every other memory this
+    /// record carries: leaving it out would make an inventory that offers a
+    /// credential equal to one that offers none, which is the single most
+    /// consequential difference between two pages.
+    /// </remarks>
     public bool Equals(ReplicationInventory? other) =>
         other is not null && More == other.More && Headroom == other.Headroom
+        && ClaimToken.HasValue == other.ClaimToken.HasValue
+        && (!ClaimToken.HasValue || ClaimToken.Value.Span.SequenceEqual(other.ClaimToken!.Value.Span))
         && Keys.SequenceEqual(other.Keys, StringComparer.Ordinal);
 
     /// <inheritdoc/>
@@ -238,6 +293,7 @@ public sealed record ReplicationInventory(
         var hash = new HashCode();
         hash.Add(More);
         hash.Add(Headroom);
+        hash.Add(ClaimToken?.Length ?? -1);
         foreach (var objectKey in Keys)
         {
             hash.Add(objectKey, StringComparer.Ordinal);

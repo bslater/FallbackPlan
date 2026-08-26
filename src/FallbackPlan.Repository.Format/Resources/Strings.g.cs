@@ -1196,4 +1196,71 @@ internal static class Strings
     /// A repository kit must name the repository it opens.
     /// </summary>
     internal static string RecoveryKitCodec_RepositoryKitOmitsRepositoryId => Get(nameof(RecoveryKitCodec_RepositoryKitOmitsRepositoryId));
+
+    /// <summary>
+    /// The backup set identifier is exactly 16 bytes.
+    /// </summary>
+    internal static string SetConfigurationCodec_BackupSetIdExactlyBytes => Get(nameof(SetConfigurationCodec_BackupSetIdExactlyBytes));
+
+    /// <summary>
+    /// The set configuration carries an unknown key.
+    /// </summary>
+    internal static string SetConfigurationCodec_ConfigurationCarriesUnknownKey => Get(nameof(SetConfigurationCodec_ConfigurationCarriesUnknownKey));
+
+    /// <summary>
+    /// The set configuration is missing a required key.
+    /// </summary>
+    internal static string SetConfigurationCodec_ConfigurationIsMissingARequiredKey => Get(nameof(SetConfigurationCodec_ConfigurationIsMissingARequiredKey));
+
+    /// <summary>
+    /// The set configuration is not canonical CBOR: {0}
+    /// </summary>
+    private static string SetConfigurationCodec_ConfigurationNotCanonicalCBOR => Get(nameof(SetConfigurationCodec_ConfigurationNotCanonicalCBOR));
+
+    /// <summary>
+    /// The set configuration is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatSetConfigurationCodec_ConfigurationNotCanonicalCBOR(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SetConfigurationCodec_ConfigurationNotCanonicalCBOR, arg0);
+
+    /// <summary>
+    /// The set-configuration record carries an unknown key.
+    /// </summary>
+    internal static string SetConfigurationCodec_RecordCarriesUnknownKey => Get(nameof(SetConfigurationCodec_RecordCarriesUnknownKey));
+
+    /// <summary>
+    /// The set-configuration record is missing a required key.
+    /// </summary>
+    internal static string SetConfigurationCodec_RecordIsMissingARequiredKey => Get(nameof(SetConfigurationCodec_RecordIsMissingARequiredKey));
+
+    /// <summary>
+    /// The set-configuration record is not canonical CBOR: {0}
+    /// </summary>
+    private static string SetConfigurationCodec_RecordNotCanonicalCBOR => Get(nameof(SetConfigurationCodec_RecordNotCanonicalCBOR));
+
+    /// <summary>
+    /// The set-configuration record is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatSetConfigurationCodec_RecordNotCanonicalCBOR(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SetConfigurationCodec_RecordNotCanonicalCBOR, arg0);
+
+    /// <summary>
+    /// The retention policy carries an unknown key.
+    /// </summary>
+    internal static string SetConfigurationCodec_RetentionCarriesUnknownKey => Get(nameof(SetConfigurationCodec_RetentionCarriesUnknownKey));
+
+    /// <summary>
+    /// A retention value exceeds the representable range.
+    /// </summary>
+    internal static string SetConfigurationCodec_RetentionValueOutOfRange => Get(nameof(SetConfigurationCodec_RetentionValueOutOfRange));
+
+    /// <summary>
+    /// A capture root is not a label and a path.
+    /// </summary>
+    internal static string SetConfigurationCodec_RootIsNotALabelAndPath => Get(nameof(SetConfigurationCodec_RootIsNotALabelAndPath));
+
+    /// <summary>
+    /// The signature is exactly 64 bytes.
+    /// </summary>
+    internal static string SetConfigurationCodec_SignatureExactlyBytes => Get(nameof(SetConfigurationCodec_SignatureExactlyBytes));
 }

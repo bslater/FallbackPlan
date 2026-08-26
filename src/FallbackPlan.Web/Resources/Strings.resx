@@ -85,9 +85,6 @@
   <data name="WebConsoleOptions_PortInvalid" xml:space="preserve">
     <value>The port '{0}' is not a number between 0 and 65535.</value>
   </data>
-  <data name="WebConsoleOptions_StateDirectoryMissing" xml:space="preserve">
-    <value>The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.</value>
-  </data>
   <data name="WebConsoleOptions_StateDirectoryRequired" xml:space="preserve">
     <value>Pass --state &lt;dir&gt; — the state directory whose service this console talks to.</value>
   </data>

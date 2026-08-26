@@ -1,4 +1,5 @@
 using Bodu;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
@@ -9,6 +10,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Agent;
@@ -51,6 +53,25 @@ public sealed partial class ServiceCommandHandler(
         ThrowHelper.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var started = Stopwatch.GetTimestamp();
+        var answer = await ExecuteGuardedAsync(command, cancellationToken).ConfigureAwait(false);
+
+        // One trace line per command at the seam every verb crosses, so the
+        // service's log reads as a conversation. Type names only: several
+        // commands carry paths, and the names are enough to follow the flow.
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Trace))
+        {
+            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name, elapsed);
+        }
+        return answer;
+    }
+
+    /// <summary>Dispatch with the expected-failure guards; the timing above wraps it.</summary>
+    private async ValueTask<ServiceResult> ExecuteGuardedAsync(
+        ServiceCommand command, CancellationToken cancellationToken)
+    {
         try
         {
             // The read paths are the only commands that do open-ended work, so
@@ -312,7 +333,7 @@ public sealed partial class ServiceCommandHandler(
                     destination.Path!, archive.Repository.RepositoryId.ToString());
                 return Directory.Exists(replicaRoot)
                     ? Retention.TrimVerification.AgainstStore(
-                        new Storage.Local.LocalFileSystemObjectStore(replicaRoot))
+                        StoreComposition.OpenLocal(replicaRoot))
                     : Retention.TrimVerification.None;
 
             case DestinationKind.Peer:
@@ -348,6 +369,7 @@ public sealed partial class ServiceCommandHandler(
         ListNoticesCommand listNotices => ListNotices(listNotices),
         AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
+        ClaimReplicasCommand claim => await ClaimReplicasAsync(claim, cancellationToken).ConfigureAwait(false),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
@@ -1422,12 +1444,12 @@ public sealed partial class ServiceCommandHandler(
         // durable stamp goes through ToUnixTimeMilliseconds, which is
         // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
-        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
+        var (jobId, outcome) = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
 
         // A committed snapshot starts its fan-out promptly rather than waiting
         // for the next pass (ADR-0034 §3); the pass still catches up anything
         // this misses, so this is responsiveness, never correctness.
-        _ = job.ContinueWith(
+        _ = outcome.ContinueWith(
             completed =>
             {
                 if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
@@ -1437,7 +1459,10 @@ public sealed partial class ServiceCommandHandler(
             },
             TaskScheduler.Default);
 
-        return new JobAcceptedResult(Scheduler.LatestJobFor(runtime, set.Id) ?? string.Empty);
+        // The id Enqueue itself produced — a live job for the set joins that
+        // job rather than starting a second, and the caller tracks whichever
+        // one is actually doing the work.
+        return new JobAcceptedResult(jobId);
     }
 
     /// <summary>
@@ -1725,7 +1750,8 @@ public sealed partial class ServiceCommandHandler(
                     row.CapturedAt,
                     row.CaptureStatus,
                     catalogue.CountFiles(row.SnapshotId.Span),
-                    destinations));
+                    destinations,
+                    row.ConsistencyMethod));
             }
         }
 
@@ -1976,8 +2002,16 @@ public sealed partial class ServiceCommandHandler(
     /// the one piece of <see cref="DestinationStatus.Describe"/> that has to
     /// be supplied from outside the use-case layer (architecture 11 §2).
     /// </summary>
-    private static ulong? DeviceIdOf(string path) =>
-        Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat) ? stat.Device : null;
+    private static ulong? DeviceIdOf(string path) => DeviceProbe.DeviceOf(path);
+
+    /// <summary>
+    /// The seam is <see cref="Filesystem.IFileSystemSource.DeviceOf"/> being
+    /// an interface member — a test double answers it like any other
+    /// filesystem question. The field's own type is concrete because a
+    /// private field assigned exactly one implementation gains nothing from
+    /// interface typing, and the analyzer (CA1859) is right to say so.
+    /// </summary>
+    private static readonly Filesystem.Local.LocalFileSystemSource DeviceProbe = new();
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —

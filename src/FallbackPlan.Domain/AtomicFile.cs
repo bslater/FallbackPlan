@@ -1,6 +1,6 @@
 using Bodu;
 
-namespace FallbackPlan.Application;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// Whole-file replacement that a crash cannot half-apply.
@@ -16,7 +16,8 @@ namespace FallbackPlan.Application;
 /// </para>
 /// <para>
 /// This is not the cross-process fix. Two processes writing one state
-/// directory is prevented by <see cref="StateDirectoryLock"/> and the single
+/// directory is prevented by <c>StateDirectoryLock</c> (in Application — this type
+/// deliberately sits below it) and the single
 /// writer role (ADR-0028 §2) — atomic replacement only closes the case that
 /// survives single ownership, which is a crash mid-write.
 /// </para>

@@ -134,6 +134,22 @@ A local process, or a remote host once the remote binding is enabled, attempts t
 
 **Why content is withheld by default:** a management console that could pull plaintext from every machine it administers would concentrate what the repository design refuses to concede to a destination, a relay, or a peer. Withholding it is what lets an operator administer machines they are not entitled to read.
 
+### T-21 A stolen passphrase claims a peer's replica
+Disaster recovery lets a device that has lost its identity re-point a replica's attribution at a peer by proving it holds the repository passphrase ([ADR-0046](adr/0046-replica-claim-after-total-loss.md), [peer-protocol 07 §5](../specifications/peer-protocol/07-retrieval.md#5-claiming-a-replica)). An attacker who has stolen that passphrase can perform the same ceremony.
+
+**What it does not give them.** Nothing about *reading*. The passphrase decrypts the repository wherever they encounter its bytes — a stolen drive, a cloud copy, the source machine itself — so a claim gives an attacker holding it no read access they did not already have. This is why the ceremony is deliberately unattended: gating reads on the far household being awake would forfeit real recoveries to buy a control that stops nothing. The claim is also not a discovery tool — a claimant who cannot prove possession learns nothing about what a peer holds ([07 §5.7](../specifications/peer-protocol/07-retrieval.md#57-validation)), so it cannot be used to enumerate a stranger's replicas.
+
+**What it would give them, and what stops it.** Attribution carries the authority to instruct retention ([06 §3](../specifications/peer-protocol/06-retention.md#3-what-the-spoke-validates)), so an unbounded claim would let a stolen passphrase destroy the copy that survived the machine it was stolen from — the ransomware case exactly, where the local data is already gone.
+**Mitigation:** a claim that moves an attribution raises a durable notice at the destination, and retention instructions from the claiming identity are refused, deleting nothing, until that destination's own operator acknowledges it. Reading is unattended; deleting waits for the person who owns the disk. The retention floor of [01 §4](../specifications/peer-protocol/01-identity-and-pairing.md#4-terms) still applies on top, so an acknowledged claim cannot instruct history below it either.
+**Residual:** an attacker with the passphrase *and* the destination operator's acknowledgement can age that replica within the floor. That is the same authority the legitimate owner has, and distinguishing them is beyond what any credential the recovery model preserves could decide — which is the honest boundary, given the device key that might have decided it is destroyed by design ([ADR-0010](adr/0010-local-store-separation.md)). The floor is what bounds the damage in both cases.
+**Note:** the per-destination `claim_token` means a proof captured at one destination cannot be replayed at another holding the same repository, so a single observed exchange does not compromise every copy.
+
+### T-22 Operational configuration exposed to a destination or a compromised hub
+Recovering *operation* after total loss means the repository must carry the backup set's shape — root labels and their paths, capture rules, schedule, retention policy ([ADR-0047](adr/0047-recovering-operation-after-total-loss.md)). That is information about the user's machine and habits, written into objects a peer holds.
+**Mitigation:** the record's payload is sealed to an asymmetric recipient derived from the passphrase, so a destination holding it cannot read it, and neither can the service that wrote it. The outer record is an ordinary metadata-class record only so a writer can locate and replace these objects while running; nothing readable under the metadata key describes the source. This is the same posture format v2 takes for file contents, applied to configuration for the same reason: [T-19](#t-19-unlocked-key-material-at-rest-in-the-service-account)'s v2 residual concedes the whole structure plane to a compromised hub, and an unsealed configuration record would have widened that concession from "the structure of what exists" to "the user's folder layout and schedule".
+**Destinations are excluded from the record entirely** — no name, kind, path, endpoint, fingerprint or quota — so FR-DEST-006 continues to hold and the repository still names nobody who stores it. That is defence in depth rather than redundancy: a future weakness in the sealing scheme, or a compromised passphrase, must not additionally surrender the household's network of peers from repository bytes alone.
+**Residual:** the object's existence, its size, and the times it was written are visible to anyone holding the replica — metadata of the kind [T-11](#t-11-metadata-side-channels) already covers, disclosing that a set exists and was reconfigured, never what it says. A holder of the passphrase reads the configuration, which is the same authority that already reads the data.
+
 ## Threats not solvable by backup software
 
 Stated plainly so no other document implies otherwise:
@@ -165,6 +181,7 @@ OS-authenticated local command surface · key material confined to the service a
 | Repository-server rate limits and quotas | Phase 3 |
 | Signed audit trail for destructive operations | Retention and GC, which are not built at all |
 | Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
+| Acknowledge-before-delete interlock on a claimed replica (T-21) | The claim ceremony itself — specified in [ADR-0046](adr/0046-replica-claim-after-total-loss.md), built in phase 2 |
 
 **Dedup trust domains are not in either list above, and that is the point.** An earlier version of this page put them under *in force* with a note that the `device` domain was "specified and unexercised". That was wrong in the direction that matters: **verify-on-reuse is not implemented at all**, including for `repository`, which is the default. Reuse is decided by index presence alone. See T-10 above, and treat the control as absent rather than partial.
 

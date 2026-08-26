@@ -56,6 +56,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(CreateUserCommand), "create_user")]
 [JsonDerivedType(typeof(DeleteUserCommand), "delete_user")]
 [JsonDerivedType(typeof(ChangePasswordCommand), "change_password")]
+[JsonDerivedType(typeof(ClaimReplicasCommand), "claim_replicas")]
 public abstract record ServiceCommand;
 
 /// <summary>
@@ -607,3 +608,42 @@ public sealed record ExportConfigurationCommand : ServiceCommand;
 
 /// <summary>Reports what this service is and what it is doing.</summary>
 public sealed record DescribeServiceCommand : ServiceCommand;
+
+/// <summary>
+/// Claims the replicas a peer holds for this household, after the device
+/// identity that owned them is gone (ADR-0046; peer-protocol 07 §5).
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is the verb a rebuilt machine reaches for. A destination serves a
+/// replica back only to the identity its attribution ledger names, and that
+/// identity died with the state directory — so the passphrase, which survived
+/// in a human's keeping, is what proves the household is the same one. The
+/// destination has a token it minted while the pairing was still alive and the
+/// public half of a credential the passphrase reproduces; this side derives the
+/// private half against that token and signs.
+/// </para>
+/// <para>
+/// Deliberately not addressed by destination name. After bare metal there is
+/// no configuration to name one — recovering it is the point — so this takes a
+/// pairing, exactly as <see cref="UnpairCommand"/> does, and defaults to every
+/// pairing there is.
+/// </para>
+/// </remarks>
+/// <param name="Envelope">
+/// The claim root — the Argon2id output of the passphrase and the recovery
+/// kit's KDF salt and parameters — sealed to this service's recipient key and
+/// rendered as hex. The passphrase itself never crosses this contract, and the
+/// root is held only for the exchange.
+/// </param>
+/// <param name="Fingerprint">
+/// The pairing to claim from, or an unambiguous prefix of it; null claims from
+/// every pairing. A recovering household has usually just re-paired with
+/// whoever answered and need not yet know which of them holds what.
+/// </param>
+/// <param name="Endpoint">
+/// Where to dial, as <c>host:port</c>; null consults the endpoint recorded
+/// with the pairing. Only meaningful alongside a fingerprint.
+/// </param>
+public sealed record ClaimReplicasCommand(
+    string Envelope, string? Fingerprint = null, string? Endpoint = null) : ServiceCommand;

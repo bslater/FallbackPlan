@@ -1,4 +1,4 @@
-using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Protocol;
 
 namespace FallbackPlan.Protocol.Tests;

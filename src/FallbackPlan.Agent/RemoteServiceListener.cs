@@ -346,6 +346,21 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     return;
                 }
 
+                // A claim is the one payload a peer may send about replicas it
+                // does NOT own here, so it routes before the ownership-gated
+                // retrieval path rather than through it (07 §5).
+                if (payload.Value.Type == PeerMessageType.ClaimRequest
+                    && session.Supports(PeerSessionNegotiation.ReplicaClaimFeature))
+                {
+                    _ = ClaimRequest.Read(payload.Value.Body);
+                    var moved = await ClaimResponder.ServeAsync(
+                        _replicasRoot, session.Stream, session.Peer, _owners!,
+                        session.TranscriptHash, _stateDirectory!, _stopping.Token)
+                        .ConfigureAwait(false);
+                    Log.ReplicasClaimed(_log, peer, moved.Count);
+                    return;
+                }
+
                 if (payload.Value.Type == PeerMessageType.RetrieveOpen
                     && session.Supports(PeerSessionNegotiation.RetrievalFeature))
                 {
@@ -360,7 +375,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 var outcome = await ReplicationResponder.ServeAsync(
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
-                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token,
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),
+                    session.Supports(PeerSessionNegotiation.ReplicaClaimFeature), _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);
 

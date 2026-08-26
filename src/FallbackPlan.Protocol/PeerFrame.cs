@@ -84,6 +84,21 @@ public enum PeerMessageType : ushort
 
     /// <summary>The answer to one read (07 §3.4).</summary>
     RetrieveData = 277,
+
+    /// <summary>A peer asks what it could claim here (07 §5.4; feature-gated as "replica-claim").</summary>
+    ClaimRequest = 278,
+
+    /// <summary>The destination's tokens and nonces for the replicas it could serve (07 §5.5).</summary>
+    ClaimChallenge = 279,
+
+    /// <summary>The claimant's signatures over those challenges (07 §5.6).</summary>
+    ClaimProof = 280,
+
+    /// <summary>What the claim moved, and the set ids each replica holds (07 §5.8).</summary>
+    ClaimResult = 281,
+
+    /// <summary>A source registers the public half of its claim credential (03 §3.2.1).</summary>
+    ClaimRegister = 282,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

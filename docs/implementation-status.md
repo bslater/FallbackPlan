@@ -70,6 +70,10 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
+| [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
+| [0047](adr/0047-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Specified only** | [notes](#0047--recovering-the-data-was-only-half-of-it) |
+| [0048](adr/0048-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0048--the-two-things-live-capture-cannot-do) |
+| [0049](adr/0049-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
 
 ---
 
@@ -128,6 +132,8 @@ The decision is sound and unexercised because the collector, though built, delib
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 
 All ten shapes are built and tested: hardlink groups, the diagnostics vocabulary, capture-status triggers, special files, alternate streams, directory entries, the filesystem capability record, and the catalogue casefold key.
+
+Two of them were only partly true until a coverage pass went looking. Failure reason 4, *changed during read*, was assigned and never produced by any code path; and a file deleted while it was being read was recorded as a clean capture, because revalidation returning "I cannot see it" short-circuited to "nothing changed". Both are fixed, and decision 2 carries an [amendment](adr/0026-phase-1-capture-shapes.md) saying which reading of "no complete read" it meant — the other reading would have made every backup of every machine with an active log file partial, and retention keeps no partial capture as a set's only survivor. `capture_status` still means exactly what decision 3 says, so nothing that consumes it moved. `Repository.Tests/AdverseCaptureTests` covers the mechanism and `Repository.Tests/LocalTreeAdverseCaptureTests` the outcome against real files, including the pair that records where POSIX and Windows genuinely differ: a file held without sharing, or deleted under the reader, is captured cleanly where the walk holds its own content descriptor and is not where capture goes by name.
 
 The traversal underneath them is now handle-relative on POSIX (`Filesystem.Local/PosixDirectoryScope`, `Filesystem.Local/PosixHandleInterop`). Each directory is held open and its children are listed, stat'd, descended into, opened, and readlink'd by raw name bytes against that descriptor, with `O_NOFOLLOW` throughout — so the object that was classified is the object that is read, and revalidation stats the same handle rather than resolving the name again. An object carrying both a directory marker and a link marker is still classified as a link first, which is what keeps a junction from walking the scanner out of the approved root. Windows keeps the path-based walk and gains the identity check instead: a name that has come to mean a different object is recorded as `captured-identity-changed` and not re-read.
 
@@ -464,6 +470,111 @@ public-key mismatch), `WriteOnlyCommandTests` (CLI),
 the provisioning dialog to byte-identical restored files. Losing the
 passphrase loses the backup, acknowledged at setup; v2 has no
 passphrase change (03 §7).
+
+### 0046 — the disaster-recovery path is written down and not yet built
+
+Specified only, and deliberately filed as such rather than folded into
+0041's "built": the decision, the peer-protocol exchange and the
+architecture section exist; no code implements the claim, and no test
+exercises it.
+
+The gap it answers was found by a coverage review, and is worth recording
+because it read as covered. Two drills come close and neither reaches it.
+`Hosts.Tests/PeerRetrievalTests` and `Hosts.Tests/AlternateSiteTests`
+destroy the source's **archives** and recover from a peer — but both keep
+the state directory, so the device keypair and the pairing survive with
+them. 0044's installation-kit drill deletes the **entire state
+directory** — but recovers with the standalone tool against an archive
+still present on local disk. Total loss is the intersection neither
+covers: the state directory *and* the archives gone, the only copy at a
+peer, and therefore a device identity the peer has never seen.
+
+Under today's rules that recovery cannot succeed, and every rule
+involved is individually correct — attribution is keyed to the lost
+fingerprint ([peer-protocol 05
+§2](../specifications/peer-protocol/05-quotas.md)), the owner inventory
+answers for the dialling identity ([07
+§3.5](../specifications/peer-protocol/07-retrieval.md)), and the restore
+path matches candidates on a `backup_set_id` the lost configuration
+held. `Agent/RetrievalResponder.cs` and
+`Application/ReplicaOwnerStore.cs` are where the first two live today.
+
+What remains to build: the claim key derivation, the claim frames and
+their negotiated feature, the ledger's token and public-key fields, the
+`claim_replicas` verb, and the drill that destroys both stores and
+recovers over the wire. The requirements it owes — FR-DR-001 through
+FR-DR-005 — carry honest untested markers in the
+[traceability matrix](requirements/traceability.md) until then.
+
+### 0048 — the two things live capture cannot do
+
+Specified only. Written after the adverse-I/O coverage pass put numbers on
+live capture's limits, and it has two of them. A file that is written
+continuously exhausts the read budget, so the last read is published torn with
+a diagnostic and a clean `capture_status`. And on Windows a file held with
+`FILE_SHARE_NONE` is not captured at all — the POSIX walk reads a descriptor it
+already holds, so a lock on the name cannot reach it, but Windows takes no such
+handle and the open simply fails. That is Outlook PSTs and live database files
+absent from Windows backups, which is not a degradation but a hole.
+
+A snapshot fixes both, and the obstacle is privilege rather than API. The agent
+runs as a named ordinary account because the keystore is scoped to that account
+([0033](#0033--the-os-can-own-the-process)); elevating it to reach VSS or
+`lvcreate` costs unattended unlock. The decision is a separate privileged
+helper that creates and releases a snapshot and knows nothing else — no
+repository, no keystore, no key material.
+
+The VSS interop path is deliberately left open and gates the Windows half:
+there is no COM anywhere in this solution, every P/Invoke is source-generated,
+and the usual managed wrapper is unmaintained on an end-of-life target
+framework. Nothing here is testable on this project's CI and the ADR says so
+plainly rather than implying otherwise.
+
+### 0047 — recovering the data was only half of it
+
+Specified only, alongside [0046](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built),
+and filed separately because the two are separable: a claim is useful on its
+own, for a restore. Neither finishes the disaster alone.
+
+0046 got a rebuilt machine to its data. This one answers what that machine
+knows afterwards, which today is nothing: capture rules and root labels are
+readable from the replica's own manifests, but the set's name, the **paths**
+its labels pointed at, its schedule and its retention policy lived only in
+`config.json` and died with the machine. A user looking at restored files has
+no way to tell whether anything is protecting them again.
+
+The answer is a **set-configuration object** — type `0x10` at
+`/config/<backup-set-id>/…`, [specification 11
+§5](../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object)
+— written on every publication and on every configuration change, with its
+payload **sealed to an asymmetric recipient** so only the passphrase opens it.
+That second seal is the load-bearing part: a v2 service is granted the whole
+structure plane by design (ADR-0042), so an unsealed record would hand a
+compromised write-only hub the user's folder layout, schedule and rules.
+`Repository.Crypto/ContentSealing` already provides the envelope, and both
+formats already have a recipient key, so no new construction is introduced.
+
+Two findings from writing it are worth keeping, because both were nearly
+implemented the other way:
+
+**A configuration change must not publish a snapshot.**
+`Retention/RetentionPlanner` buckets snapshots by time and keeps the newest per
+bucket, and `SnapshotFact` carries no kind — so a configuration snapshot
+published later the same day would be the newest in that day's bucket and would
+**expire the day's real backup**. A separate namespace avoids the interaction
+rather than teaching the component that decides deletions a new exception.
+
+**The object needs a stated collection root.** Nothing references it, so a
+reachability walk alone would collect every one of them and silently disarm
+recovery of operation — invisibly, since nothing else reads them while running.
+Recorded as [ADR-0009 Amendment
+6](adr/0009-garbage-collection-safety.md).
+
+What remains to build: the `fbp/recovery/v1` derivation, the object codec, the
+publication and configuration-change write paths, the reconstruction verb, and
+the console step that confirms recovered paths rather than capturing from them.
+FR-DR-006 through FR-DR-009 carry honest untested markers in the
+[traceability matrix](requirements/traceability.md) until then.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 
