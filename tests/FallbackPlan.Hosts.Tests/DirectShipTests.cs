@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Repository.Crypto;
 
@@ -155,6 +156,94 @@ public sealed class DirectShipTests : IDisposable
             Directory.GetFiles(Path.Combine(replicaB, "snapshots"), "*", SearchOption.AllDirectories).Length == 1,
             "the caught-up replica must hold the snapshot it missed");
         await AssertOpensAloneAsync(replicaB);
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_ARestoreOverTheService_ComesBackByteIdentical()
+    {
+        // The read path with no local content: the restore reads blobs
+        // through the sink, which answers from whichever destination holds
+        // them — the same routing the dedupe probe uses.
+        Directory.CreateDirectory(VaultA);
+        Directory.CreateDirectory(VaultB);
+        WriteDirectShipConfiguration();
+        var payload = new string('r', 120_000) + "…and the tail that proves the bytes";
+        _harness.WriteSourceFile("docs/precious.txt", payload);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var snapshotId = Assert.ContainsSingle(listed.Snapshots).SnapshotId;
+
+        var output = Path.Combine(_harness.WorkPath, "restored");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(new RunRestoreCommand(snapshotId, null, output), Timeout),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.AreEqual(0, restored.Failed);
+
+        var recovered = Assert.ContainsSingle(
+            Directory.GetFiles(output, "precious.txt", SearchOption.AllDirectories));
+        Assert.AreEqual(payload, await File.ReadAllTextAsync(recovered, Timeout));
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_VerifyDestination_ReadsEachReplicaAgainstItsSealsCleanly()
+    {
+        // The deep sweep for a direct-ship pair: replica bytes re-read
+        // against their seals, with the "source" length comparison answered
+        // through the sink. Zero damage on an honest replica; verification
+        // must not silently narrow just because staging holds nothing.
+        Directory.CreateDirectory(VaultA);
+        Directory.CreateDirectory(VaultB);
+        WriteDirectShipConfiguration();
+        _harness.WriteSourceFile("docs/report.txt", new string('v', 50_000));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(
+                new VerifyDestinationCommand("docs", null, Full: true), Timeout),
+            out var verified);
+        Assert.AreEqual(0, verified.Damaged, string.Join(" | ", verified.Lines));
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_ARetentionReport_TraversesTheSinkWithoutAStagingCopy()
+    {
+        // Retention's closure walk (mark, keeps) reads manifests out of
+        // metadata blobs — which live at the destinations. The report must
+        // traverse cleanly through the sink; the destructive half's real
+        // deletes are per-destination convergence, and the sink ignoring
+        // blob deletes is what keeps the staging trim from meaning anything
+        // false here.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        _harness.WriteSourceFile("docs/report.txt", new string('k', 30_000));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: false), Timeout), out var report);
+        Assert.IsFalse(
+            report.Lines.Any(line => line.Contains("could not", StringComparison.OrdinalIgnoreCase)),
+            string.Join(" | ", report.Lines));
     }
 
     [TestMethod]
