@@ -440,6 +440,18 @@ public static class FanOut
     {
         var ledger = runtime.DestinationSync;
 
+        // A declaration the product itself calls defective (a relative path,
+        // hand-edited into the file) must not reach Directory.Exists and
+        // Path.Combine below — those resolve against the process working
+        // directory, which is how a replica tree once appeared beside the
+        // logs. Failed rather than Unavailable: this needs a person to fix
+        // the declaration, not a retry.
+        if (destination.AddressDefect is { } addressDefect)
+        {
+            ledger.RecordFailure(set.Id, destination.Name, DestinationSyncState.Failed, addressDefect, nowMs);
+            return;
+        }
+
         if (!Directory.Exists(destination.Path))
         {
             ledger.RecordFailure(
@@ -602,7 +614,12 @@ public static class FanOut
     {
         try
         {
-            return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(replicaRoot))!).AvailableFreeSpace;
+            // ProbeRootFor, not Path.GetPathRoot: on Unix the latter answers
+            // "/" for every absolute path, so the floor was measured on the
+            // OS volume — precisely wrong for a destination on a different
+            // volume, which is a destination's whole job.
+            return new DriveInfo(DestinationCapacity.ProbeRootFor(Path.GetFullPath(replicaRoot)))
+                .AvailableFreeSpace;
         }
         catch (Exception exception) when (exception is ArgumentException or IOException
             or UnauthorizedAccessException or NotSupportedException)

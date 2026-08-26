@@ -244,6 +244,47 @@ not act on. For the same reason the acknowledgement is refused outright on a
 `local-path` destination: the hub reads a directory it owns to verify it, so
 the excuse buys nothing measurable there and costs the trim its licence.
 
+## Amendment 2 (2026-08) — a destination is never inside the sources
+
+§5 declares destinations by name and lets a `local-path` destination be any
+directory. Nothing stopped that directory being *inside a backup set's source
+root* — a layout under which every backup captures its own archive and the
+next capture re-captures the copies of the last, growing without bound. The
+same circle exists for the service's own state directory and archives root
+under a source root.
+
+The guard (FR-DEST-011) refuses the layout **at the configuration
+boundaries** — `upsert_backup_set` and `upsert_destination`, and as a live
+defect in the editor's draft validation — naming both paths, with the file
+untouched. Deliberately **not** on the configuration load path: load-path
+validation re-runs on every property access, and a new refusal there would
+stop an installation that already carries the layout from loading at all.
+Such an installation keeps loading; the next edit of the offending set or
+destination is what gets refused.
+
+Two boundaries of the judgement, both stated rather than implied:
+
+- **The carve-out.** A folder the set's own exclude rules provably fence off
+  is not captured, so the layout is allowed — judged with the very rule
+  evaluation the scanner walks under (`PathRuleSet.IsExcluded`, in the
+  label-prefixed coordinates of ADR-0040), never a second opinion. Rules
+  change independently of destinations, so the rule edit that stops
+  excluding the folder re-enters the guard and is refused then.
+- **Lexical only.** Containment is decided from the strings (the
+  restore executor's separator-fenced prefix, case folded conservatively);
+  a layout only a symlink makes circular is out of this guard's scope, and
+  recorded as such rather than half-checked with disk reads the
+  configuration paths are forbidden to make.
+
+Alongside, the address rule is tightened one notch (FR-DEST-012): a relative
+`local-path` declared at the boundary is resolved to absolute **at
+declaration time** and the resolution said back to the declarer, and a
+stored relative path that bypassed the boundary (a hand-edit) is refused by
+the fan-out as `failed` — a defect needing a person — instead of being
+resolved against the process working directory at copy time, which is how a
+replica tree once appeared beside the service's logs while the intended
+folder stayed empty.
+
 ## Status history
 
 | Date | Status | Note |
@@ -252,3 +293,4 @@ the excuse buys nothing measurable there and costs the trim its licence.
 | 2026-08 | Built | All eleven arc slices landed, the §6 staging trim included, plus the sync/retention operator verbs; the trim's convergence hazard is closed by the per-set gate of [ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate). |
 | 2026-08 | Built (amended) | Amendment 1: destination verification ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)) is built and required, and the §6 trim gate now takes a proof rather than a claim for every destination kind. |
 | 2026-08 | Built | Whether a destination is *fit* to be relied on — admission, capacity, shortfall detection and confirmation on a schedule — is settled separately by [ADR-0035](0035-destination-fitness.md), which builds on this record's topology rather than changing it. |
+| 2026-08 | Built (amended) | Amendment 2: a `local-path` destination (or the service's own state/archives directory) at or under a source root is refused at the configuration boundaries unless the set's excludes provably fence it off (FR-DEST-011); relative destination paths are pinned absolute at declaration and refused by the fan-out when hand-edited in (FR-DEST-012). The free-space floor now measures the destination's own volume rather than the OS root on Unix. |

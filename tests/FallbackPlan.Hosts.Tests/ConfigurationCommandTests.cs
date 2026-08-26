@@ -333,6 +333,249 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.ContainsSingle(overflow.Defects);
     }
 
+    [TestMethod]
+    public async Task UpsertDestination_ARelativeLocalPath_IsStoredAbsolute()
+    {
+        // Stored verbatim, a relative path resolves against whatever working
+        // directory the service happens to have — which is how a replica tree
+        // appeared beside the logs in the 2026-08 report. The path is pinned
+        // to an absolute one at the boundary, and the reply says where it
+        // pinned, because the resolution is the part the operator did not type.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "portable", "local-path", "portable-vault", null, null)),
+            _timeout.Token);
+
+        var stored = ClientConfiguration.Load(ConfigurationPath).FindDestination("portable")!;
+        Assert.IsTrue(Path.IsPathRooted(stored.Path), $"'{stored.Path}' should have been made absolute");
+        Assert.AreEqual(Path.GetFullPath("portable-vault"), stored.Path);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var change);
+        Assert.IsTrue(change.Lines.Any(line => line.Contains(stored.Path!, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ARootContainingADeclaredDestination_IsRefusedNamingBoth()
+    {
+        // The circular capture (FR-DEST-011): a root over a destination backs
+        // the backup up into itself, growing without bound. Refused at the
+        // boundary, naming both paths, with the config file untouched.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var inside = Path.Combine(_harness.WorkPath, "vault2");
+        Directory.CreateDirectory(inside);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "vault2", "local-path", inside, null, null)),
+            _timeout.Token));
+
+        var before = await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "work", _harness.WorkPath, "every 4h", [], [], ["vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("vault2", error.Message, StringComparison.Ordinal);
+        Assert.Contains(_harness.WorkPath, error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(before, await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ARootContainingAnExcludedDestination_IsAccepted()
+    {
+        // The carve-out the owner chose: a destination the set's own exclude
+        // rules provably fence off is not captured, so the layout is allowed.
+        // The judgement is the scanner's own rule evaluation, not a second
+        // opinion.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var inside = Path.Combine(_harness.WorkPath, "vault2");
+        Directory.CreateDirectory(inside);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "vault2", "local-path", inside, null, null)),
+            _timeout.Token));
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "work", _harness.WorkPath, "every 4h", [], ["vault2"], ["vault"])),
+            _timeout.Token));
+
+        Assert.IsNotNull(ClientConfiguration.Load(ConfigurationPath).FindSet("work"));
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ARuleEditThatReincludesTheDestination_IsRefused()
+    {
+        // The carve-out's drift risk, closed at the moment it would open:
+        // rules change independently of destinations, so the edit that stops
+        // excluding the destination is the edit that gets refused.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var inside = Path.Combine(_harness.WorkPath, "vault2");
+        Directory.CreateDirectory(inside);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "vault2", "local-path", inside, null, null)),
+            _timeout.Token));
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "work", _harness.WorkPath, "every 4h", [], ["vault2"], ["vault"])),
+            _timeout.Token));
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "work", _harness.WorkPath, "every 4h", [], [], ["vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("vault2", error.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_APathInsideASetRoot_IsRefusedNamingTheSet()
+    {
+        // The same circle entered from the other door: declaring a
+        // destination inside a set's captured sources.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var before = await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "external", "local-path", Path.Combine(_harness.SourceRoot, "external-drive"), null, null)),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("docs", error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(before, await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_AnExcludedPathInsideASetRoot_IsAccepted()
+    {
+        // The carve-out holds from this door too: the set already excludes
+        // the folder, so the declaration is sound.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        // A rules change on the existing set is material, so the answer is
+        // the configuration-change report rather than a bare acknowledgement.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 4h", [], ["external-drive"], ["vault"])),
+            _timeout.Token));
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "external", "local-path", Path.Combine(_harness.SourceRoot, "external-drive"), null, null)),
+            _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ARootContainingTheStateDirectory_IsRefused()
+    {
+        // The service's own state directory inside a root is the same circle
+        // wearing a different coat — only the agent knows where that is, so
+        // only this boundary can refuse it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var before = await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "everything", _harness.StateDirectory, "every 4h", [], [], ["vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("state directory", error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(before, await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ARootContainingTheArchivesRoot_IsRefused()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "archives", _harness.ArchivesRoot, "every 4h", [], [], ["vault"])),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("archives", error.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ValidateSetDraft_ARootContainingADeclaredDestination_NamesTheDefect()
+    {
+        // The editor's live surface: a defect, not a warning, because the
+        // save it previews would be refused (defects refuse, warnings advise).
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var inside = Path.Combine(_harness.WorkPath, "vault2");
+        Directory.CreateDirectory(inside);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                null, "vault2", "local-path", inside, null, null)),
+            _timeout.Token));
+
+        Assert.IsInstanceOfType<SetDraftValidationResult>(
+            await handler.ExecuteAsync(
+                new ValidateSetDraftCommand("every 4h", [], [], [_harness.WorkPath]), _timeout.Token),
+            out var flagged);
+        Assert.IsTrue(flagged.Defects.Any(defect => defect.Contains("vault2", StringComparison.Ordinal)));
+
+        // And the same draft with the exclude in place is clean.
+        Assert.IsInstanceOfType<SetDraftValidationResult>(
+            await handler.ExecuteAsync(
+                new ValidateSetDraftCommand("every 4h", [], ["vault2"], [_harness.WorkPath]), _timeout.Token),
+            out var clean);
+        Assert.IsEmpty(clean.Defects);
+    }
+
     private async Task<ServiceRuntime> StartAsync()
     {
         using var passphrase = Passphrase.Create(

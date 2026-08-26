@@ -56,4 +56,23 @@ public sealed class DestinationCapacityTests
         // reads as room rather than as a refusal.
         Assert.IsNull(DestinationCapacity.FloorShortfall(ReplicaRoot, availableBytes: null));
     }
+
+    [TestMethod]
+    public void ProbeRootFor_APath_NamesTheDestinationsOwnVolume()
+    {
+        // The 2026-08 defect this pins against: Path.GetPathRoot answers "/"
+        // for every absolute path on Unix, so the floor was measured on the
+        // OS volume — precisely wrong for a destination on a different
+        // volume, which is a destination's whole job. On Unix the probe asks
+        // about the replica root itself (statvfs answers for whatever volume
+        // holds it); only Windows wants the drive root.
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.AreEqual("C:\\", DestinationCapacity.ProbeRootFor("C:\\vault\\abc"));
+        }
+        else
+        {
+            Assert.AreEqual("/mnt/vault/abc", DestinationCapacity.ProbeRootFor("/mnt/vault/abc"));
+        }
+    }
 }

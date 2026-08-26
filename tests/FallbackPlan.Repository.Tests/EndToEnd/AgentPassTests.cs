@@ -80,6 +80,48 @@ public sealed class AgentPassTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AgentPass_ADestinationDeclaredWithARelativePath_IsRecordedFailedAndWritesNothing()
+    {
+        // The boundary now pins relative paths absolute, but a hand-edited
+        // config.json still reaches the fan-out verbatim — and verbatim, the
+        // path resolves against the process working directory, which is how a
+        // replica tree once appeared beside the service's logs while the
+        // intended folder stayed empty. The pass must refuse the declaration
+        // as needing a person (Failed, not the retried-forever Unavailable)
+        // and write nothing anywhere.
+        await CreateRepositoryAsync();
+        var relative = "relative-vault-" + Guid.NewGuid().ToString("n")[..8];
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [Vault with { Path = relative }],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = new string('a', 32),
+                    Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
+                    Schedule = "every 4h",
+                    Destinations = [VaultRef],
+                },
+            ],
+        }.Save(Path.Combine(StateDirectory, "config.json"));
+
+        var pass = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+        Assert.AreEqual("ran", Assert.ContainsSingle(pass.Sets).Outcome);
+
+        var row = DestinationSyncStore.Open(StateDirectory).Find(new string('a', 32), "vault");
+        Assert.IsNotNull(row);
+        Assert.AreEqual(DestinationSyncState.Failed, row.State);
+        Assert.Contains("relative", row.LastError!, StringComparison.Ordinal);
+
+        Assert.IsFalse(
+            Directory.Exists(Path.GetFullPath(relative)),
+            "the defective declaration must never resolve against the working directory");
+    }
+
+    [TestMethod]
     public async Task AgentPass_ABackupSetIsDue_RunsItOnceAndSkipsItOnTheNextPass()
     {
         await CreateRepositoryAsync();

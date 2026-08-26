@@ -107,18 +107,37 @@ public sealed partial class ServiceCommandHandler
                 string.Equals(candidate.Id, id, StringComparison.Ordinal))
             : null;
 
+        // A relative path is pinned to an absolute one HERE, at the moment
+        // the operator can still see what it meant. Stored verbatim, it
+        // resolves against whatever working directory the service happens to
+        // run with — which is how a replica tree appeared beside the logs in
+        // the 2026-08 report while the intended folder stayed empty.
+        var declaredPath = command.Destination.Path;
+        var resolvedFromRelative =
+            kind == DestinationKind.LocalPath && declaredPath is { Length: > 0 } && !Path.IsPathRooted(declaredPath);
+        var path = resolvedFromRelative ? Path.GetFullPath(declaredPath!) : declaredPath;
+
         var replacement = new DestinationConfiguration
         {
             Id = command.Destination.Id ?? Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
             Name = command.Destination.Name,
             Kind = kind,
-            Path = command.Destination.Path,
+            Path = path,
             Fingerprint = command.Destination.Fingerprint,
             Endpoint = command.Destination.Endpoint,
             FailureDomain = domain,
             Verification = existing?.Verification,
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
         };
+
+        // The circular-capture guard (FR-DEST-011), entered from this door:
+        // a destination declared inside a set's captured sources is refused
+        // unless that set's own excludes provably fence it off.
+        var circular = CircularCapture.Defects(configuration.BackupSets, [replacement], serviceStorage: []);
+        if (circular.Count > 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
+        }
 
         var destinations = configuration.Destinations.ToList();
         var index = existing is null
@@ -159,7 +178,12 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
-        return new AcknowledgedResult();
+        // The resolution is the one part of the declaration the operator did
+        // not type, so it is said back rather than silently stored.
+        return resolvedFromRelative
+            ? new ConfigurationChangeResult(
+                [$"Destination '{replacement.Name}' named the relative path '{declaredPath}'; stored as '{path}'."])
+            : new AcknowledgedResult();
     }
 
     private ServiceResult DeleteDestination(DeleteDestinationCommand command)
@@ -424,6 +448,26 @@ public sealed partial class ServiceCommandHandler
             defects.AddRange(ruleDefects);
         }
 
+        // The circular-capture guard, live in the editor (FR-DEST-011): a
+        // defect rather than a warning, because the save this draft previews
+        // would be refused for exactly this reason. Judged against the
+        // declared destinations whatever the draft references — any set
+        // capturing any destination's storage is the hazard.
+        if (command.Roots is { Count: > 0 } draftRoots && ConfigurationOrNull() is { } declared)
+        {
+            var draft = new BackupSetConfiguration
+            {
+                Id = new string('0', 32),
+                Name = string.Empty,
+                Roots = ClientConfiguration.DeriveLabels(
+                    [.. draftRoots.Select(path => new BackupRootConfiguration { Path = path })]),
+                IncludeRules = command.IncludeRules,
+                ExcludeRules = command.ExcludeRules,
+            };
+            defects.AddRange(CircularCapture.Defects(
+                [draft], declared.Destinations, ServiceStorage(), named: false));
+        }
+
         List<string> nextRuns = [];
         if (!string.IsNullOrWhiteSpace(command.Schedule))
         {
@@ -538,6 +582,17 @@ public sealed partial class ServiceCommandHandler
 
         return warnings.Count == 0 ? null : warnings;
     }
+
+    /// <summary>
+    /// The service's own directories, for the circular-capture guard — a
+    /// source root over either captures the service into its own backup, and
+    /// only the agent knows where they are.
+    /// </summary>
+    private (string Description, string Path)[] ServiceStorage() =>
+    [
+        ("state directory", runtime.Options.StateDirectory),
+        ("archives root", runtime.Options.ArchivesRoot),
+    ];
 
     /// <summary>The configuration, or null when it will not load.</summary>
     /// <remarks>

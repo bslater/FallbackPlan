@@ -1199,6 +1199,18 @@ public sealed partial class ServiceCommandHandler(
             })],
         };
 
+        // The circular-capture guard (FR-DEST-011), judged on the resolved
+        // roots and the re-anchored rules — exactly what the set will walk.
+        // At the boundary and never at load: an installation already carrying
+        // the layout keeps loading, and the edit that would keep it is what
+        // gets refused.
+        var circular = CircularCapture.Defects(
+            [replacement], configuration.Destinations, ServiceStorage());
+        if (circular.Count > 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
+        }
+
         // Replace in place: the first set is the default RunBackupCommand
         // runs, and status renders declaration order — an edit must not
         // reshuffle either (ADR-0037 §5).
