@@ -2,13 +2,20 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding — see [implementation status](../implementation-status.md).
+**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built behind the default-off `direct_ship` flag — see [implementation status](../implementation-status.md).
 
 ---
 
 ## 1. What replication moves
 
 Peers exchange immutable repository objects — blobs, manifests, snapshots, and index generations. They never reconcile live folders, and there is no notion of a single "current" global file state. This is the distinction from a file synchroniser set out in [`00-overview.md` §5.2](00-overview.md#52-peer-synchronisation-protocols).
+
+Scope note ([ADR-0046](../adr/0046-direct-to-destination-publication.md)):
+this peer exchange is the write path for **staging sets'** peer destinations
+and the catch-up path generally. A **direct-ship** set's captures write
+through the ship sink (§4.1), which does not yet serve peer destinations —
+a peer on a direct-ship set is a stated `NotSupported` in the sync ledger,
+never a silent skip, until the peer write adapter lands.
 
 Exchange sequence:
 
@@ -62,11 +69,12 @@ Either side may end a peering unilaterally, at any time, for any reason — revo
 
 ## 4. Durability policy
 
-A backup set declares one or more named destinations, and its policy is evaluated over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication), [ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). **None of the destinations has to be local.** Publication always lands in the set's staging archive on the hub — that is what makes capture unconditional — but staging is a cache the hub manages, not a destination a policy may count:
+A backup set declares one or more named destinations, and its policy is evaluated over per-destination replication state ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication), [ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). **None of the destinations has to be local.** For a staging set, publication lands in the set's staging archive on the hub — that is what makes its capture unconditional — but staging is a cache the hub manages, not a destination a policy may count. For a direct-ship set (§4.1) publication lands at the destinations themselves, and "captured" means committed to at least one:
 
 ```text
 Snapshot captured when:
-  - committed to the set's staging archive
+  - staging set:     committed to the set's staging archive
+  - direct-ship set: committed to at least one destination
 
 Snapshot protected when:
   - at least one destination outside the source's failure domain: durable
@@ -94,8 +102,9 @@ reading because it fires only where nothing else is already complaining: an
 unproven, sequence-stale or knowingly-unprovable destination each earns its own
 line naming that situation. It is checked for every destination, including
 those inside the source's failure domain that can never earn `protected` — a
-local path's proof is what licenses the staging trim, so an overdue proof there
-quietly stops space being reclaimed.
+local path's proof is what licenses reclaiming a last copy (the staging trim
+for staging sets, per-destination convergence for direct-ship ones), so an
+overdue proof there quietly stops space being reclaimed.
 
 Two other fitness facts join the policy at the same place, on the same terms —
 reported, never enforced by refusing a configuration
@@ -109,9 +118,48 @@ reported, never enforced by refusing a configuration
   destination volume is under the floor the hub leaves for the machine that
   owns it.
 
-Because commit is to staging and replication is per destination, a destination that is offline delays *policy compliance* without blocking *capture*. The status display can say "captured, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all.
+For a staging set, because commit is to staging and replication is per destination, a destination that is offline delays *policy compliance* without blocking *capture*; the status display can say "captured, waiting on the offsite copy" — a true statement the original design could not make, because it would have had no snapshot to report at all. For a direct-ship set one offline destination still does not block a run — the run writes to the reachable ones and catch-up heals the rest — but with **no** reachable in-scope destination the capture refuses as a stated recoverable failure: [ADR-0046 §4](../adr/0046-direct-to-destination-publication.md) consciously gives up capture-unconditionally in exchange for holding no local copy.
 
-`protected` deliberately requires a destination outside the source's failure domain, so that a repository directory sharing a disk with the source data never reads as safe — and the staging archive, which shares the source's domain by construction, never counts at all ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
+`protected` deliberately requires a destination outside the source's failure domain, so that a repository directory sharing a disk with the source data never reads as safe — and the staging archive, which shares the source's domain by construction, never counts at all (a direct-ship set holds no such archive; its same-domain *destinations* are what can never earn `protected`) ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). Domains and rationale in [`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain).
+
+### 4.1 The direct write path
+
+A set flagged `direct_ship` ([ADR-0046](../adr/0046-direct-to-destination-publication.md))
+publishes through the **ship sink** — an `IObjectStore` the publication
+pipeline writes exactly as it wrote the staging store, with routing by key:
+`blobs/` objects go to the set's in-scope destinations and never to local
+disk; every other object (descriptor, keys, journal, index, snapshots,
+hints) goes to the local **metadata store** (`<state>/sets/<setId>/`) *and*
+the destinations. Each destination therefore holds a whole, independently
+restorable repository — ADR-0034 §2's invariant, kept without the staging
+archive. Reads route to whoever holds the bytes: metadata answers locally; a
+blob read is answered by the first destination holding the key in
+**priority order**; a blob listing is the **union** across destinations.
+The union is sufficient because a capture refuses to run with no reachable
+destination, so every committed snapshot's closure exists at at least one
+destination — which is also what lets a sibling seed a destination that
+missed a run.
+
+**Run scope.** A run writes to the set's defect-free, reachable, local-path
+destinations that hold a **baseline** — or all reachable ones when the set
+has never captured, because that first capture is every destination's full
+backup. A baseline-less destination on a set with history is *skipped* by
+the run (an incremental would hand it a snapshot without its closure) and
+**seeded by catch-up instead**: the existing exchange, running through the
+sink, copying from whichever sibling holds each object. The sync ledger
+(schema 2, [ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)) carries
+the facts this turns on — `baseline_completed_at`, `needs_full`,
+`baseline_snapshot_id`, `last_reconciled_at` — and contract 1.19 surfaces
+the first two on every status row.
+
+**Failure mid-run.** A destination that fails during a run is dropped and
+named in the ledger and the log (event 3758); its replica is
+lagging-but-valid — a journal intent nothing retired, exactly an
+interrupted copy's state — healed by the next catch-up. Only the last
+destination failing fails the run, through the pipeline's ordinary
+interruption safety. Fan-out and this section's peer exchange survive as
+the catch-up and seeding pump; they are no longer the write path for these
+sets.
 
 ## 5. Destination verification
 

@@ -27,13 +27,15 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Discovery/
 │   ├── FallbackPlan.Replication/             ✓ store-to-store copier and replica verifier (ADR-0034)
 │   ├── FallbackPlan.Restore/                 ✓ restore planner and executor
-│   ├── FallbackPlan.Retention/               ✓ planner, replication gate, mark, sweep, convergence, staging trim (ADR-0034)
+│   ├── FallbackPlan.Retention/               ✓ planner, replication gate, mark, sweep, convergence, staging trim (ADR-0034; the traversal also runs through the sink for direct-ship sets, ADR-0046)
 │   ├── FallbackPlan.Verification/
 │   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
 │   ├── FallbackPlan.Storage.{Local ✓,Peer,AzureBlob,S3}/
 │   ├── FallbackPlan.Import.Abstractions/     ✓ neutral legacy model
 │   ├── FallbackPlan.Import.Legacy/           optional, separately licensed
-│   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028)
+│   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028); the ship sink
+│   │                                         (`DestinationShipSink`, ADR-0046) and the pause
+│   │                                         gate live here — see §2
 │   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
 │   ├── FallbackPlan.Keystore/                ✓ platform unlock (ADR-0028 §9)
@@ -89,6 +91,7 @@ That policy needs the map to say which half is which, and for a while it did not
 - `Repository.Format` has no UI, host, or provider dependencies. It must be usable by the standalone recovery tool.
 - `Protocol` does not depend on `Desktop` or `Web`.
 - **`Replication` may reference `Protocol`; storage providers still may not.** Fan-out serves two transport shapes — plain store-to-store copy for `local-path` and cloud kinds, the peer protocol for `peer` — and the second must live somewhere. It lives in `Replication`, so a provider stays a dumb byte store and the "providers depend only on `Storage.Abstractions` and their SDK" rule above survives hub-and-spoke intact ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md), [ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)).
+- **The ship sink lives in `Agent`, beside the runtime that composes it** ([ADR-0046](../adr/0046-direct-to-destination-publication.md)). `DestinationShipSink` is an `IObjectStore` over N provider stores plus the metadata store, so it cannot live in `Storage.Abstractions` (it consumes the contract; providers must not know it exists) and does not belong in `Replication` (it is the *write* path, not the copier — though the copier runs through it for catch-up). When the peer write adapter lands it will reach `Protocol` the same way the copier does, through `Replication`'s existing licence; providers stay dumb byte stores throughout.
 - `Import.Legacy` depends on `Import.Abstractions` and may feed application services. **Nothing in the core ever references it** — see §4.
 - `Filesystem.Local` implements the shared contracts from `Filesystem`; platform differences (statx/lstat/Win32, xattrs, alternate streams, hole probing) are confined inside it behind platform guards rather than split into per-OS projects — one project keeps the identical scan semantics in one place, and the CI matrix proves each platform's interop. Both filesystem projects depend only on `Domain` and `Repository.Format`: the scanner describes what exists, it never decides what happens to it.
 - `Recovery` depends on format, crypto, packing, index, and storage only. It must build and run with no Agent, no catalogue engine, and no UI.
@@ -167,17 +170,18 @@ alternate streams and security descriptors) and the **process privilege**
 
 ## 3. Local state separation
 
-Three stores, three lifecycles. The original proposal put all three in one sentence and one SQLite database ([H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)), which made NFR-REL-002 — "deleting it shall not cause data loss" — true of one and false of the others.
+Three stores, three lifecycles — four since direct-ship. The original proposal put the first three in one sentence and one SQLite database ([H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)), which made NFR-REL-002 — "deleting it shall not cause data loss" — true of one and false of the others.
 
 | Store | Contents | Rebuildable? | Consequence of loss |
 |-------|----------|--------------|---------------------|
 | **Catalogue** | Path, version, segment, blob, and generation indexes; watermarks | ✅ From the repository | Slow rebuild. No data loss. |
 | **Durable local state** | Device keypair, pairing grants, destination authorisations, job history | ❌ | Device identity lost; every pairing must be re-approved manually at the other end |
 | **Configuration** | Backup sets, schedules, **named destinations and retention policies** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)), provider settings | Partially — policy manifests record what each snapshot used | Backups silently stop happening |
+| **Metadata store** (per direct-ship set, `<state>/sets/<setId>/` — [ADR-0046](../adr/0046-direct-to-destination-publication.md)) | The set's repository metadata: descriptor, keys, journal, index, snapshots, hints — everything except blob content | ✅ From any of the set's destinations, which hold every object it does | Slow re-seed from a destination. No data loss while a destination holds the set — which the capture-refusal rule guarantees for every committed snapshot |
 
 They are separate stores on disk, not separate tables in one file, so that "delete the catalogue and let it rebuild" — a legitimate and documented recovery action — cannot take the device identity with it.
 
-Hub-and-spoke adds two journal-shaped files **beside** the durable state, deliberately not inside it ([ADR-0010 Amendment 1](../adr/0010-local-store-separation.md#amendment-1-2026-08--where-the-hub-and-spoke-state-lands-in-the-split)): per-destination **sync state** (what each destination holds, when it was last reached, why it last failed) and **notices** (peering ended, terms narrowed, quota hit). Both are sacrificial the way `jobs.json` is — sync state re-derives from a destination inventory pass, and a lost notice is re-raised by the condition still holding — so their corruption or deletion can never touch the device identity. And a privacy note the export guidance now carries: configuration holds no secrets, but with destinations in it, it names who stores your backups and where.
+Hub-and-spoke adds two journal-shaped files **beside** the durable state, deliberately not inside it ([ADR-0010 Amendment 1](../adr/0010-local-store-separation.md#amendment-1-2026-08--where-the-hub-and-spoke-state-lands-in-the-split)): per-destination **sync state** (what each destination holds, when it was last reached, why it last failed) and **notices** (peering ended, terms narrowed, quota hit). Both are sacrificial the way `jobs.json` is — sync state re-derives from a destination inventory pass, and a lost notice is re-raised by the condition still holding — so their corruption or deletion can never touch the device identity. One nuance since sync-ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)): a re-derived ledger re-earns its baselines from the destinations' real inventories rather than re-shipping terabytes — "replicas seed the ledgers" — so sacrificing it costs a reconciliation pass, not a re-seed. And a privacy note the export guidance now carries: configuration holds no secrets, but with destinations in it, it names who stores your backups and where.
 
 **Durable local state** is backed up separately or re-established by re-pairing. The device *private key* is never written to the recovery kit; a recovering device establishes a new identity and is re-authorised ([`08-restore-and-recovery.md` §4.2](08-restore-and-recovery.md#42-what-is-deliberately-excluded)).
 
@@ -212,6 +216,7 @@ The neutral model exists so that the same import pipeline serves an importer for
 | Telemetry | OpenTelemetry | Opt-in — [`10-observability.md` §5](10-observability.md#5-telemetry) |
 | Streaming | `System.IO.Pipelines` | |
 | Pipeline stages | Bounded `Channel<T>` | Bounded, so memory is a function of configuration not workload |
+| Backup pool width | `max_concurrent_backups`, 1..5, default 2 ([ADR-0047 §3](../adr/0047-backup-pool-and-priorities.md)) | Pool concurrency multiplies the per-run memory bound above — which is why in-memory blob assembly was rejected and the spool kept (ADR-0046's alternatives) |
 | Recovery tool | Native AOT under evaluation | After compatibility is established |
 | SHA-256, HMAC, HKDF, AES-256-GCM | Platform (`System.Security.Cryptography`) | In-box and audited |
 | Argon2id | `Bodu.Security.Cryptography` | **No platform implementation exists** — [ADR-0019](../adr/0019-third-party-dependency-policy.md) |
@@ -263,7 +268,7 @@ public interface IRestoreService
 }
 ```
 
-`SnapshotCommitResult` reports commit against the **set's staging archive**; per-destination replication progresses separately and is observed through `IReplicationService` ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)). `IReplicationService.PlanAsync` is deliberately endpoint-shaped — source, destination, scope — because under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the same planner serves the wire path to a peer and the store-to-store copy to a directory or, later, a cloud bucket.
+`SnapshotCommitResult` reports commit against the **set's repository seat** — its staging archive, or for a direct-ship set the destinations reached through the ship sink ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); per-destination replication progresses separately and is observed through `IReplicationService` ([`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication)). `IReplicationService.PlanAsync` is deliberately endpoint-shaped — source, destination, scope — because under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the same planner serves the wire path to a peer and the store-to-store copy to a directory or, later, a cloud bucket.
 
 The corrected `IObjectStore` is in [`05-storage-providers.md` §2](05-storage-providers.md#2-the-store-interface).
 

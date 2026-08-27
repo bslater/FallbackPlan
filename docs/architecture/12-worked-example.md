@@ -9,6 +9,19 @@
 > **This document defines nothing.** Every rule it mentions is stated authoritatively in one of the numbered documents, and this one links there rather than restating it. Where the two disagree, **the numbered document wins** and this one is wrong.
 >
 > That constraint is deliberate. Principle 6 in [`00-overview.md`](00-overview.md#3-core-principles) rejects monolithic sources of truth, and a walkthrough that redefined rules would quietly become a second one. If you are tempted to copy a normative statement into this file, link to it instead.
+>
+> **Scope note (2026-08):** this walkthrough follows a **staging set** — the
+> default shape, where publication lands in the set's staging archive and
+> fan-out carries it to destinations. A **direct-ship set**
+> ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) diverges at
+> three points: stage 3c's verify-on-reuse becomes a destination presence
+> probe under `device` trust ([03 §5.2](03-crypto.md#52-the-domains)); stage
+> 4's upload writes one sealed spool file to *every* in-scope destination
+> through the ship sink, and refuses before a byte moves if none is
+> reachable; and "what done means" has no local replica — the snapshot is
+> committed at the destinations, which are the only copies. The order of
+> steps is identical; only where the bytes land changes.
+
 
 Everything else in this set describes one concern at a time. This describes one *file* at a time, which is the view you need before any of the rest is legible.
 

@@ -17,7 +17,7 @@ Restore the latest version · state at a chosen date and time · a named or tagg
 A plan is constructed **before** any transfer, and it is the mechanism by which the user finds out about problems while they are still cheap. It contains:
 
 - the selected source snapshot and the resolved file-version set;
-- the required object set and which replicas can serve it;
+- the required object set and which replicas can serve it — for a direct-ship set ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) that is always a destination read: no local content exists, the sink answers each blob from whichever destination holds it (proven byte-identical end to end), and a restore with no reachable destination is a plan that says so rather than a transfer that fails;
 - estimated logical and physical transfer size — these differ, sometimes greatly, when the store lacks range reads ([`05-storage-providers.md` §3](05-storage-providers.md#3-capabilities));
 - target conflicts: existing files, and the resolution policy that will apply to each;
 - **path and case collisions** ([`06-filesystem-capture.md` §2](06-filesystem-capture.md#2-path-handling));
@@ -75,7 +75,7 @@ The recovery kit is what makes clean-machine recovery possible, and it is a rele
 | Repository format profile | Lets the tool check compatibility before starting | No |
 | **Wrapped** repository master key | The key material, encrypted under the KEK | Yes — but useless without the passphrase |
 | KDF parameters (Argon2id salt, memory, iterations, parallelism) | Reproduces the KEK from the passphrase | No |
-| Destination descriptors | Where the repository lives — endpoint, bucket/container, prefix | Low |
+| Destination descriptors | Where the repository lives — endpoint, bucket/container, prefix. For a direct-ship set this list is the **only** road back: there is no local archive behind it, so a stale list costs the address of the backup, not merely convenience ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) | Low |
 | Issuing device identity (public) | Names the device that created the kit | No |
 | Issue timestamp | Detects an outdated kit | No |
 | Recovery instructions | Step-by-step, embedded in the kit | No |
@@ -106,7 +106,7 @@ On a write-only set the service cannot read file contents, so a guided restore (
 ### 4.4 Lifecycle
 
 - Generated during first-run setup, with **explicit confirmation** that it has been saved before setup completes.
-- Regenerated when destinations change materially, with a clear indication that the old kit's destination list is stale. The old kit still *opens* the repository; it just may not know where all of it is.
+- Regenerated when destinations change materially, with a clear indication that the old kit's destination list is stale. The old kit still *opens* the repository; it just may not know where all of it is — and for a direct-ship set "where" is everything it knows, since the destinations are the only copies (the stakes the kit-staleness surface exists for).
 - Status surfaced continuously ([`10-observability.md`](10-observability.md#1-user-level-status)): never generated, saved, or stale.
 - A **recovery drill** — actually restoring a file using only the kit — is a supported and prompted workflow. A kit that has never been tested is a kit whose failure is discovered at the worst possible moment.
 

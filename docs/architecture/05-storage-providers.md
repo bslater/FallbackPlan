@@ -103,6 +103,15 @@ Two capabilities change engine behaviour rather than merely informing it:
 
 `MinimumStorageDuration` and `ArchivalTiers` inform retention and garbage collection about early-deletion charges and rehydration latency. They never change what is *correct* to delete — only what is *advisable*, and when.
 
+**Capabilities of a composed store are an open edge.** The ship sink (§4.5)
+is itself an `IObjectStore` over N provider stores, and nothing yet defines
+whether such a store reports the intersection of its members' capabilities,
+its weakest member's, or its highest-priority member's. Today the question
+is moot in practice — every sink member is the local filesystem provider —
+but it becomes real with the first cloud or peer member, and the answer
+belongs here when it is needed. Stated so the gap is a decision awaiting a
+forcing case rather than an assumption nobody made.
+
 ## 4. Providers
 
 A provider is how a **destination kind** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
@@ -113,6 +122,9 @@ implementations behind the same contract. Fan-out neither knows nor cares which
 kind it is copying to — that indifference is the seam
 ([ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)),
 and it is why a cloud bucket is one more destination rather than a feature.
+The same indifference is what the ship sink (§4.5) inherits: it writes
+providers through the same contract, so a direct-ship set gains a new
+destination kind the day its provider exists.
 
 ### 4.1 Local filesystem
 
@@ -120,7 +132,7 @@ Durable file creation with explicit flush · atomic temp-to-final rename where t
 
 ### 4.2 FallbackPlan peer
 
-Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)).
+Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)). A peer destination is served by fan-out and catch-up today; the ship sink does not yet write to peers — on a direct-ship set a peer is a stated `NotSupported` in the sync ledger until the peer write adapter lands ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
 
 ### 4.3 Azure Blob Storage
 
@@ -131,6 +143,24 @@ Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather 
 AWS SDK for .NET · multipart upload above the threshold · IAM roles, profiles, web identity, access keys, custom endpoints · object lock only through explicit repository policy.
 
 S3-compatible implementations vary in conditional-operation semantics, checksum support, and listing consistency. A tested compatibility matrix is maintained per implementation, and a store whose behaviour cannot be established is treated as the weakest case rather than assumed compatible.
+
+### 4.5 The ship sink — a composed store, not a provider
+
+A direct-ship set's publication writes a `DestinationShipSink`
+([ADR-0046](../adr/0046-direct-to-destination-publication.md)): an
+`IObjectStore` composed over the set's in-scope destination stores plus its
+local metadata store, living in `Agent` beside the runtime that composes it
+([`11-solution-structure.md` §2](11-solution-structure.md#2-dependency-rules)).
+It is not a provider — providers stay dumb byte stores and never know it
+exists — and the pipeline above it cannot tell it from the staging store it
+replaced, which is the whole trick. Routing is by key prefix: `blobs/`
+objects go to the destinations and never to local disk; every other object
+goes to the metadata store *and* the destinations. Reads answer from whoever
+holds the bytes — metadata locally, a blob from the first destination
+holding the key in priority order, a listing as the union across
+destinations. §2.1's re-openable content factory is what makes the fan-write
+affordable: one sealed spool file re-opens per destination instead of
+buffering N copies.
 
 ## 5. Request economics
 

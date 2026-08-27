@@ -9,10 +9,12 @@ over the same authenticated session replication pushed it through. Everything
 served is the owner's ciphertext returning home: the destination decrypts
 nothing, learns nothing new about the content, and serves nobody but the peer
 its attribution ledger says the replica belongs to. What retrieval buys is a
-restore path that needs no shared disk and no recovery kit — a hub whose
-staging archive is gone opens the replica as a repository over the wire,
-rebuilds a catalogue from its index plane, and fetches only the objects a
-restore plan actually needs.
+restore path that needs no shared disk and no recovery kit — a hub with no
+local copy of the content (its staging archive lost, or a direct-ship set,
+for which that is the designed steady state —
+[ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)) opens
+the replica as a repository over the wire, rebuilds a catalogue from its
+index plane, and fetches only the objects a restore plan actually needs.
 
 ## 1 Posture
 
@@ -90,8 +92,8 @@ range is fetched by further reads.
 A `retrieve_open` whose `repository_id` is all zeros opens the **owner
 inventory**: `retrieve_list` pages then answer the repository ids (lowercase
 hex, as listing keys with length 0) the destination's attribution ledger
-assigns to the dialling identity — and nothing else. This is how a hub that
-lost its staging learns what to ask for. `retrieve_read` is refused
+assigns to the dialling identity — and nothing else. This is how a hub with no
+local content — its staging lost, or none by design — learns what to ask for. `retrieve_read` is refused
 `malformed` in an inventory session.
 
 ## 4 Authorization

@@ -80,11 +80,15 @@ TLS session — its purpose is domain separation and freshness, not secrecy.
 
 Three consequences the verifier MUST respect:
 
-- **It can only challenge what it can recompute.** A source challenges keys its
-  own staging archive still holds. A key the staging trim removed
-  ([ADR-0034 §6](../../docs/adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted))
-  has no local ground truth to compare against; challenging it from another
-  replica's answer is a stated future extension, not this document.
+- **It can only challenge what it can recompute.** A source challenges keys
+  it can read the ground truth for: a staging set's own archive, or — for a
+  direct-ship set, which holds no blob bytes locally — the object read back
+  through the ship sink from a sibling destination
+  ([ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)),
+  which is how destination verification is proven in that shape. A key no
+  reachable ground truth serves — the staging trim removed it
+  ([ADR-0034 §6](../../docs/adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)),
+  or every sibling holding it is away — cannot be challenged this pass.
 - **Ranges come from the verifier's copy.** The verifier knows the object's
   exact length; a range it sends is always inside it. A destination whose copy
   is shorter cannot read the range and MUST answer `cannot-prove` (§3) — a

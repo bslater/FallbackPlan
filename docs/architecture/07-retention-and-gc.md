@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §11 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. Compaction (steps 6–9) is not built — see [implementation status](../implementation-status.md).
+**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. For direct-ship sets ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) the retention traversal is proven through the ship sink — the report walks closures out of destination-held metadata — with convergence as the deleting half and a full retention-with-trimming drill on aged direct-ship snapshots still outstanding before the flag's default flips. Compaction (steps 6–9) is not built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -49,7 +49,9 @@ Consider a set keeping hourly snapshots for 7 days locally, replicating to a pee
 
 The rule is therefore: **retention shall not expire a snapshot that has not reached the destinations its own policy requires**, unless a configured bound on that deferral is exceeded — at which point the resulting history gap is raised as a warning requiring action, never applied silently.
 
-The set's staging archive is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default. The same gate, run to completion, is what makes staging *trimmable*, and that trim is built (`StagingTrim`, run inside every retention pass): once every destination entitled to a historic data blob verifiably holds it — a reachable local-path replica probed key by key, a peer through its sync-ledger claim — staging drops it under `--apply`. Only history leaves: the newest snapshot's closure stays as the dedup cache, all metadata stays so every derivation still sees the full history, and restoring a trimmed snapshot from staging is reported honestly by the restore plan while the destination replica remains the real restore path ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+For a staging set, the set's staging archive is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default. The same gate, run to completion, is what makes staging *trimmable*, and that trim is built (`StagingTrim`, run inside every retention pass): once every destination entitled to a historic data blob verifiably holds it — a reachable local-path replica probed key by key, a peer through its sync-ledger claim — staging drops it under `--apply`. Only history leaves: the newest snapshot's closure stays as the dedup cache, all metadata stays so every derivation still sees the full history, and restoring a trimmed snapshot from staging is reported honestly by the restore plan while the destination replica remains the real restore path ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+
+A **direct-ship set** has no staging copy and therefore nothing to trim: per-destination convergence is the deleting half, under exactly this section's gate — the deferral rule holds unchanged, and reclaiming any last copy still rests on proof of possession (FR-GC-009). The sink ignores staging-trim blob deletes by design; a migrated set's leftover archive is retired whole by `retire_staging`, never trimmed ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
 
 Deleted-file history is separately configured because it answers a different question. "How far back can I go?" is about snapshot age; "can I still get the file I deleted last spring?" is about how long tombstoned content survives, and users reason about the two independently.
 
@@ -87,17 +89,26 @@ That is permanent loss of live data reachable from protected snapshots: the exac
 
 ### 3.0.1 Where the collector runs under hub-and-spoke
 
-Every step above executes against a set's **staging archive**, on the hub,
-where the keys and the writer role live ([ADR-0009 Amendment 4](../adr/0009-garbage-collection-safety.md#amendment-4-2026-08--where-the-collector-runs-under-hub-and-spoke)).
-Destinations are never collected; they are **converged**: the hub computes what
-a destination should hold — that destination's keep-set closure, under its
+Every step above executes **on the hub, where the keys and the writer role
+live** ([ADR-0009 Amendment 4](../adr/0009-garbage-collection-safety.md#amendment-4-2026-08--where-the-collector-runs-under-hub-and-spoke)):
+against a set's staging archive for unflagged sets, and for a direct-ship set
+against the metadata store **through the ship sink** — the keep-set and its
+closure walked out of destination-held metadata blobs, a traversal proven in
+that shape ([ADR-0009 Amendment 6](../adr/0009-garbage-collection-safety.md#amendment-6-2026-08--marking-without-a-staging-archive),
+[ADR-0046](../adr/0046-direct-to-destination-publication.md)). Destinations
+are never collected; they are **converged**: the hub computes what a
+destination should hold — that destination's keep-set closure, under its
 policy override if it has one — and executes the difference as plain store
 operations against a local-path destination, or as deletion instructions to a
 peer, who deletes exactly what it is told and nothing else, bounded below by
 its own granted floor. A destination's local reachability is never an input,
 because a replica's view is exactly the partial view this algorithm exists to
-distrust. Compaction likewise runs only in staging and reaches destinations as
-ordinary replication ([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates)).
+distrust. For a direct-ship set, convergence is also the only deletion there
+is — §2.1's note. Compaction, still unbuilt, runs in staging and reaches
+destinations as ordinary replication for staging sets
+([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates));
+where it runs for a direct-ship set is an open question deferred to the
+compaction record (ADR-0009 Amendment 6).
 
 ### 3.1 Step 4 is the one that matters
 

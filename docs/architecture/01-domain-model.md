@@ -19,10 +19,10 @@ This document is **normative for terminology**. Where any other document, code i
 | **Repository** | The logical collection of encrypted content, metadata, indexes, and snapshots, identified by a repository ID. |
 | **Store** | Physical object storage holding repository objects — a local directory, a peer, or a cloud bucket/container. |
 | **Replica** | A store holding a copy of a repository's objects. A destination's replica is **whole-archive**: complete, self-verifying, independently restorable. It may lawfully lag the source or hold a hub-trimmed subset under retention; it never diverges ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). |
-| **Destination** | A named place a backup set replicates to, declared once in the client configuration and referenced by name from sets: a directory on a local or removable drive (`local-path`), a paired peer (`peer`), or — schema-accepted now, implemented later — a cloud store. Holds a whole-archive replica of the set's staging archive. None of a set's destinations has to be local. |
-| **Hub** | The service instance on a user's machine, in its orchestrating role: it manages the machine's backup sets, holds each set's staging archive, fans snapshots out to every available destination, and plans retention for all of them. |
+| **Destination** | A named place a backup set replicates to, declared once in the client configuration and referenced by name from sets: a directory on a local or removable drive (`local-path`), a paired peer (`peer`), or — schema-accepted now, implemented later — a cloud store. Holds a whole, independently restorable repository for each set that ships there — a staging set's destinations receive it as a replica of the staging archive by fan-out; a direct-ship set's receive it directly through the ship sink ([ADR-0046](../adr/0046-direct-to-destination-publication.md)). None of a set's destinations has to be local. |
+| **Hub** | The service instance on a user's machine, in its orchestrating role: it manages the machine's backup sets, plans retention for every destination, and holds each set's repository seat — a staging archive it fans out from (unflagged sets), or a metadata store it ships through the sink from (direct-ship sets). |
 | **Spoke** | A destination, viewed from its hub. A spoke that is a peer runs its own FallbackPlan service and is a hub for its own sets; the roles are per-relationship, not per-installation. |
-| **Staging archive** | The per-set repository archive on the hub where publication lands. Internal — a cache the hub manages, not a destination a user configures or a policy counts. What makes capture unconditional and fan-out a copy of sealed objects. |
+| **Staging archive** | The per-set repository archive on the hub where an *unflagged* set's publication lands. Internal — a cache the hub manages, not a destination a user configures or a policy counts. What makes a staging set's capture unconditional and fan-out a copy of sealed objects. A direct-ship set has none, and consciously trades the unconditional capture away ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §4); a migrated set's leftover archive is a read-only seed source until `retire_staging` deletes it. |
 | **Segment** | A logical portion of a file's byte stream, produced by the backup set's segmentation profile. |
 | **Segment record** | The stored form of one segment: compressed, independently encrypted, independently authenticated. |
 | **Blob** | An immutable physical container holding many segment or metadata records, plus a recovery footer. |
@@ -40,6 +40,13 @@ This document is **normative for terminology**. Where any other document, code i
 | **Tombstone** | A record marking an object as eligible for physical deletion after a grace period. |
 | **Recovery kit** | The export that makes clean-machine recovery possible. Contents specified in [`08-restore-and-recovery.md` §4](08-restore-and-recovery.md#4-recovery-kit). |
 | **Dedup trust domain** | The scope within which a device is willing to reuse another writer's segments. See [`03-crypto.md` §5](03-crypto.md#5-deduplication-trust-domains). |
+| **Direct-ship set** | A backup set flagged `direct_ship` ([ADR-0046](../adr/0046-direct-to-destination-publication.md)): its content is written to its destinations directly through the ship sink, the agent holds metadata only, and a capture with no reachable destination refuses. The flag defaults off until its tail (the peer write adapter, the trimming drill) lands. |
+| **Ship sink** | The `IObjectStore` a direct-ship set's publication writes (`DestinationShipSink`): `blobs/` route to the set's in-scope destinations and never to local disk; every other object routes to the metadata store *and* the destinations. Reads answer from whoever holds the bytes — metadata locally, blobs from the first destination in priority order, listings as the union. |
+| **Metadata store** | A direct-ship set's local repository seat at `<state>/sets/<setId>/`: descriptor, keys, journal, index, snapshots, hints — everything except blob content. Carries the set's writer role and sequence; deliberately not an openable repository (the destinations are); rebuildable from any destination since they hold every object it does. |
+| **Spool** | The per-set working buffer where blobs assemble before sealing and shipping ([`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing)). Not staging: a spool file lives from first record to the blob's last destination acknowledgement, bounded by in-flight blobs — a buffer, never a copy of the backup (ADR-0046 §5). |
+| **Priority** | An optional integer on a set, a destination, or a set's destination reference ([ADR-0047](../adr/0047-backup-pool-and-priorities.md) §4). Orders waiting work beneath user-initiation — a person always outranks any priority — and orders which destinations a run ships to first. |
+| **Baseline** | The fact that a destination holds a full backup of a set, recorded in the sync ledger as `baseline_completed_at`; a pair owed one is `needs_full` — skipped by incrementals and seeded by catch-up (ADR-0047 §§5–6, ADR-0046 §3). |
+| **Pause gate** | A run's cooperative suspension point ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)): the capture pipeline checks it between scan events, so a preempted run parks at a file boundary with its state held in memory and resumes without re-scanning. |
 
 ## 2. Terms we do not use
 
@@ -119,9 +126,9 @@ Conflating the two makes protection hostage to the least available destination: 
 
 The first release replicates repository objects, not live source folders:
 
-- a source scan produces a snapshot, published once into the set's staging archive;
+- a source scan produces a snapshot, published once — into the set's staging archive (unflagged sets), or through the ship sink to the set's reachable destinations directly (direct-ship sets, [ADR-0046](../adr/0046-direct-to-destination-publication.md));
 - the snapshot references immutable trees, file-version manifests, and segments;
-- the hub fans missing immutable objects out to each of the set's destinations as they are available, and catches up the ones that were not;
+- missing immutable objects reach each of the set's destinations as they are available — by fan-out from staging, or by catch-up through the sink from whichever destination holds them — and the ones that were away are caught up;
 - a snapshot commits to a replica once its referenced objects are durable there;
 - a deletion appears in a later snapshot and erases nothing;
 - retention selects which snapshots remain protected, per set and per destination;

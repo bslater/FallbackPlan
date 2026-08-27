@@ -191,6 +191,17 @@ An earlier draft made `device` the default on the grounds that it "costs nothing
 
 `repository-unverified` exists because there are legitimate deployments — a single administrator, uniform managed devices — where every writer really is equally trusted. It is never a default and never silent.
 
+Two set shapes override the default to `device`, for reasons that are not
+mistrust: a **write-only** set ([ADR-0042](../adr/0042-write-only-repositories.md))
+cannot read content back to verify a reuse, and a **direct-ship** set
+([ADR-0046](../adr/0046-direct-to-destination-publication.md) §6) could only
+verify by pulling ranges from a destination — a round trip per reuse to
+re-check bytes the catalogue already vouches for. Both run on catalogue-decided
+reuse guarded by the stale-catalogue check that survives in either shape: a
+**presence probe** against wherever the blob actually lives (the destinations,
+for direct-ship). Since a per-set repository is single-writer, this is the
+degenerate-to-`device`-at-zero-cost cell of the table, made explicit.
+
 #### Both domains need state that outlives the catalogue
 
 `device` must know which segments *this device* wrote; `repository` must remember which shared segments it has already verified, or it pays the cost repeatedly. Both are catalogue state, and the catalogue is disposable ([ADR-0010](../adr/0010-local-store-separation.md)).

@@ -17,6 +17,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
 - use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create — see [§4.2](#42-a-rename-is-a-move-not-a-new-file);
 - **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued, and one whose name has come to mean a different object is recorded as a substitution and **not** re-read ([§4.1](#41-links-are-classified-before-they-are-traversed)).
+- **honour the run's pause gate between events** ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)) — the publication awaits the gate between scan events, never inside a file, so a preempted run parks at a file boundary with the walk's state held and resumes without re-scanning; a big file defers the park until it finishes, which is the stated granularity.
 
 ## 2. Path handling
 

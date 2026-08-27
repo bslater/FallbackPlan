@@ -16,6 +16,7 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 | Next scheduled run | Schedule |
 | Files awaiting backup | Scan queue depth |
 | Destination health, **per destination** | Replication state ([`04-concurrency-and-publication.md` §6.1](04-concurrency-and-publication.md#61-the-distinction)) |
+| Full-backup standing, **per destination** — when its baseline completed, and whether it is still owed its seed | Sync ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by contract 1.19 |
 | Last verified restore point | Verification coverage ([`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification)) |
 | Warnings requiring action | Damage reports, quota exhaustion, stale recovery kit, unusual deletion rates |
 | Recovery-kit status | Never generated / saved / stale |
@@ -26,15 +27,18 @@ The status vocabulary is normative, because collapsing any two of these is how a
 
 | State | Meaning |
 |-------|---------|
-| `captured` | Snapshot committed to a replica, but only within the source's own failure domain — real, and **not** a defence against losing the machine |
+| `captured` | Snapshot committed to a replica — the staging archive, or for a direct-ship set a same-domain destination — but only within the source's own failure domain: real, and **not** a defence against losing the machine |
 | `protected` | Durable at a replica **outside** the source's failure domain ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain)) |
 | `replicated` | Durable at a named destination |
 | `verified` | Independently confirmed at that destination, with coverage and age |
 | `policy-compliant` | The backup set's durability policy is satisfied |
 | `degraded` | Recoverable, but below policy — an offline destination, failed verification, or quota exhaustion |
+| `awaiting seed` | A destination owed its first full backup (`needs_full` — [ADR-0047 §5](../adr/0047-backup-pool-and-priorities.md)): deliberately skipped by incrementals and being seeded by catch-up. Not `behind` — nothing it was ever sent is missing — and not `degraded` |
 | `unrecoverable` | Required objects are missing or damaged with no replica able to heal them |
 
 `degraded` and `unrecoverable` are materially different and are never merged into a single "problem" indicator. The first means act soon; the second means data is already gone.
+
+`awaiting seed` and `behind` are not merged either: "has not yet received its first full copy" and "has fallen behind on copies it held" call for different patience and different alarm. The console renders the former as its own chip for exactly this reason.
 
 `captured` and `protected` are likewise never merged. A repository sitting on the same disk as the source is a real safeguard against deleting a file by mistake and no safeguard at all against the disk failing — and the most common consumer configuration produces exactly that state. Reporting it as `protected` would be the false-confidence failure this project names as a major risk ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)).
 
@@ -73,18 +77,26 @@ Pending
   → Publishing
   → Verifying
   → Complete
+  → CompletedWithFailures   (terminal; committed, but not everything could be read)
 
 Any active state
-  → Paused
   → Retrying
   → Cancelled
   → FailedRecoverable
   → FailedPermanent
+
+Any active state ⇄ Paused    (live, not an exit:)
+  Paused → Publishing         (resumed — a pool slot freed)
+  Paused → Cancelled          (shutdown, or the max-pause age)
 ```
 
 Every transition and checkpoint is durable and idempotent. `Segmenting` replaces the original `Chunking` per the terminology rule in [`01-domain-model.md` §2](01-domain-model.md#2-terms-we-do-not-use).
 
 `FailedRecoverable` and `FailedPermanent` are separated because the user action differs: the first resolves itself or resumes, the second needs intervention and should say what kind.
+
+`Paused` is deliberately **not** terminal ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)): a run suspended for a higher-priority one holds its in-memory state, resumes unattended when a slot frees, and finishes — so a client awaiting the job keeps waiting, the console keeps it in the live list, and the one-run-per-set rule counts it as running. Its two exits are resumption (back to `Publishing`, detail "resumed") and cancellation, which shutdown and the max-pause age both take.
+
+`CompletedWithFailures` is terminal and distinct from `Complete` because "backed up your 40 000 files" and "backed up 39 998 of them" are different outcomes a caller must tell apart without parsing English; the snapshot is committed and anchors the schedule, but the surface never reports it as a clean success.
 
 ### 3.1 How a client learns any of this
 
@@ -101,7 +113,7 @@ Three channels, deliberately distinct:
 |---|---|---|---|
 | Answers | "am I protected?" (§1) | "what is happening right now?" | "what happened while I was not looking?" |
 | Shape | Queried, derived on demand | Streamed while a job runs | Durable records, held until acknowledged |
-| Carries | The §1.1 vocabulary, per set and per destination | Job identity, §3 state, counts of files and bytes | The event and its consequence: a peering ended, terms narrowed, a quota was hit, a removed destination still holds data |
+| Carries | The §1.1 vocabulary, per set and per destination, plus each destination's baseline facts (contract 1.19) | Job identity, §3 state, counts of files and bytes — a paused job's card says why it is suspended and that it resumes by itself | The event and its consequence: a peering ended, terms narrowed, a quota was hit, a removed destination still holds data, a migrated set's staging archive awaits retirement |
 | Survives a restart | Yes — derived from durable state | No — a job restarted is a new stream | Yes — that is the point |
 
 Notices exist because hub-and-spoke ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))

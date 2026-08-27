@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.10, §8.1–8.2 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
 
-**Built:** Publication yes; the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead — see [implementation status](../implementation-status.md).
+**Built:** Publication yes — including the direct-ship shape ([ADR-0046](../adr/0046-direct-to-destination-publication.md)), where step 4 fans one sealed spool file to N destinations through the ship sink; the writer pool and preemption of [ADR-0047](../adr/0047-backup-pool-and-priorities.md) are built (§9, §5.1); the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -101,6 +101,20 @@ Steps 1 and 8 are the additions to the original ordering. Steps 4→6→7 are un
 
 Readers go the other way: enumerate a stable snapshot set first, then load the index generation needed to resolve it. A reader therefore never observes a snapshot whose objects are not resolvable.
 
+For a **direct-ship set** ([ADR-0046](../adr/0046-direct-to-destination-publication.md))
+the order is unchanged and two things about step 4 are: the replica is
+plural — one sealed spool file is written to every in-scope destination,
+re-opened per destination from the spool, with a destination that fails
+mid-run dropped and named in the ledger rather than failing the run — and
+step 4 has a precondition the staging shape never needed: **a reachable
+in-scope destination, or the run refuses** before a byte moves (a stated
+recoverable failure the next pass retries; ADR-0046 §4). Steps 6–8 then run
+per destination plus the local metadata store, in the same order. The
+capture pipeline also honours a **pause gate** between scan events inside
+steps 2–3 ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)):
+a run suspended for a higher-priority one parks at a file boundary with its
+walker, session and spool held in memory, and resumes without re-scanning.
+
 ### 5.1 Interruption at each step
 
 | Interrupted after | State | Recovery |
@@ -114,6 +128,8 @@ Readers go the other way: enumerate a stable snapshot set first, then load the i
 | 7 | Snapshot published, intent live | Snapshot is valid and restorable; intent retires on next run or expires |
 | 8 | Publication complete: snapshot durable, intent retired | The caller sees a failure over committed work; the live catalogue may be unprojected, which costs nothing — it is a cache |
 | 9 | Complete | — |
+| Any pause point (steps 2–3) | **Paused** — parked at a file boundary by the scheduler, state held in memory, worker freed ([ADR-0047 A1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)) | Resumes in place when a slot frees; shutdown or the max-pause age cancels it through the job's own token, degrading to the ordinary cancelled → re-run path — on disk it is indistinguishable from any interrupted run |
+| Any step, direct-ship: one destination fails mid-run | That destination holds a lagging-but-valid replica — a journal intent nothing retired, exactly an interrupted copy's state | Dropped from the run and named in the ledger (event 3758); healed by the next catch-up through the sink. Only the **last** destination failing fails the run itself |
 
 No interruption at any step can make a previously committed snapshot unreadable (NFR-REL-001), and none can leave a published snapshot referencing a collectable blob.
 
@@ -135,6 +151,15 @@ The boundaries are not the only interruption points: a store can die at *every i
 | `verified` | Durability independently confirmed — [`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification) |
 | `degraded` | Previously durable, now failing verification or partially missing |
 
+Two per-pair facts ride beside these states since sync-ledger schema 2
+([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by
+contract 1.19: **when the destination's baseline completed** — its first
+full copy — and whether the pair is currently **owed its seed**
+(`needs_full`). A destination awaiting its first full backup is not
+`pending` on one snapshot and not `degraded`; it is a pair incrementals
+deliberately skip until catch-up seeds it, and the status matrix says so
+rather than showing a bare "behind".
+
 ### 6.2 Why they were separated
 
 The original FR-SNP-001 required publication "only after all required blobs and index deltas are durable". Read against a multi-destination policy, "required" makes a snapshot hostage to the least available destination: a peer switched off for a fortnight's holiday means no snapshot is published for a fortnight. Local protection that is working perfectly is withheld because a remote destination is unavailable — and because there is then no recent snapshot to compare against, the eventual catch-up costs far more than a series of incrementals would have.
@@ -143,11 +168,12 @@ Under the split, a snapshot commits locally and is immediately protective. It be
 
 ### 6.3 Policy evaluation
 
-A backup set declares one or more named destinations — none of which has to be local ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)) — and its durability policy is evaluated over their replication state. Commit itself is always against the set's **staging archive** on the hub, which is what keeps capture unconditional; staging is internal and no policy counts it:
+A backup set declares one or more named destinations — none of which has to be local ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)) — and its durability policy is evaluated over their replication state. For a **staging set**, commit is against the set's staging archive on the hub, which is what keeps its capture unconditional; staging is internal and no policy counts it. For a **direct-ship set** ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) there is no staging archive: commit is per destination through the ship sink, "captured" means committed to at least one destination, and a capture with no reachable destination refuses rather than fabricating the state — capture is deliberately *not* unconditional there (ADR-0046 §4):
 
 ```text
 Snapshot captured when:
-  - committed to the set's staging archive
+  - staging set:     committed to the set's staging archive
+  - direct-ship set: committed to at least one destination
 
 Snapshot protected when:
   - at least one destination outside the source's failure domain: durable
@@ -176,7 +202,7 @@ Replicas therefore declare a **failure domain**, and `protected` requires at lea
 | `same-site` | NAS or peer on the same LAN | Survives machine loss, not site loss |
 | `independent` | Offsite peer, cloud store | Yes |
 
-A snapshot committed only to staging, or replicated only to a same-volume destination, is `captured`, never `protected` — the staging archive shares the source's domain by construction and never counts ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). The first-run flow warns when all of a set's configured destinations share a failure domain with the source.
+A snapshot committed only to staging, or replicated only to a same-volume destination, is `captured`, never `protected` — the staging archive shares the source's domain by construction and never counts ([ADR-0018 Amendment 1](../adr/0018-replica-failure-domains.md#amendment-1-2026-08--the-domain-is-declared-per-configured-destination)). A direct-ship snapshot starts one rung up: its first commit is already at a destination, so `captured` there means "held only within the source's failure domain" — a same-volume or same-machine destination — and `protected` is earned exactly as below. The first-run flow warns when all of a set's configured destinations share a failure domain with the source.
 
 Without this, the most common consumer setup — accept the default local repository, never bring the offsite peer online — reads as `protected` right up until the disk dies. That is the "consumer UI hides degraded state → false confidence" risk the original proposal named as a major risk, and it would have been reintroduced by the fix for it ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain), [ADR-0018](../adr/0018-replica-failure-domains.md)).
 
@@ -221,10 +247,23 @@ machine may hold it, and the answer is exactly one:
 Under [ADR-0034](../adr/0034-hub-and-spoke-destinations.md) the hub holds one
 such archive — and therefore one writer role, one gapless sequence, one spool —
 **per backup set**, all inside the one process the state-directory lock
-protects. The rule's arithmetic changes; the rule does not. Destinations never
-hold a writer role at all: every object at a destination was sealed in a
-staging archive and copied there, so nothing at a destination ever allocates a
-sequence number ([ADR-0034 §3](../adr/0034-hub-and-spoke-destinations.md)).
+protects; for a direct-ship set the same role, sequence and spool attach to
+the set's metadata store ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
+The rule's arithmetic changes; the rule does not. Destinations never hold a
+writer role at all: every object at a destination was **sealed on the hub** —
+in a staging archive and copied out, or in the spool and shipped through the
+sink — so nothing at a destination ever allocates a sequence number
+([ADR-0034 §3](../adr/0034-hub-and-spoke-destinations.md), ADR-0046 §1).
+
+Per-set writer roles are also what make the **backup pool** safe
+([ADR-0047 §3](../adr/0047-backup-pool-and-priorities.md)): the writer lane
+runs 1..5 captures concurrently (`max_concurrent_backups`, default 2), and
+two sets' runs share no sequence, no spool and no catalogue — only the disk,
+which is why the cap and the modest default exist. One run per set at a time
+still holds, enforced by the journal. The reader and transfer lanes stay one
+worker each, and under priority pressure a running capture can park at its
+pause gate and hand its slot on — the preemption of ADR-0047 Amendment 1,
+whose interruption row §5.1 carries.
 
 The rule is not fastidiousness. Two processes sharing a state directory share a
 writer identity, and therefore share the single monotonic gapless sequence
