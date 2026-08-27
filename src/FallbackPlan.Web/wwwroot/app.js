@@ -1327,19 +1327,61 @@ function setupStep4() {
 // The kit is handed over as a download the page builds itself: the console
 // host returned it inline and keeps no copy, so there is nothing to fetch
 // back and nothing left behind if this tab closes.
-function setupTakeKit(kind) {
-  if (!U.kit) return;
-  const [data, name, type] = kind === "file"
-    ? [Uint8Array.from(atob(U.kit.machine), c => c.charCodeAt(0)),
-       "fallbackplan-recovery-kit.fbpkrkit", "application/octet-stream"]
-    : [U.kit.text, "fallbackplan-recovery-kit.txt", "text/plain;charset=utf-8"];
-
+function setupTakeKit(data, name, type) {
   const url = URL.createObjectURL(new Blob([data], { type }));
   const link = document.createElement("a");
   link.href = url;
   link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  U.taken = true;
+  setupRender();
+}
+
+function setupTakeKitFile() {
+  if (!U.kit) return;
+  setupTakeKit(
+    Uint8Array.from(atob(U.kit.machine), c => c.charCodeAt(0)),
+    "fallbackplan-recovery-kit.fbpkrkit", "application/octet-stream");
+}
+
+// The printable form OPENS, as the button promises: a new tab holding a
+// self-contained, script-free document — about:blank can inherit the
+// opener's CSP, so the opener drives the printing rather than the child —
+// and the print dialog over it. The page stays behind the dialog for
+// re-printing. A popup blocker that still wins degrades to the .txt
+// download, so the kit is handed over either way.
+function setupOpenPrintable() {
+  if (!U.kit) return;
+
+  const view = window.open("", "_blank");
+  if (!view) {
+    toast("warn", "The browser blocked the printable page — downloading the text form instead.");
+    setupTakeKit(U.kit.text, "fallbackplan-recovery-kit.txt", "text/plain;charset=utf-8");
+    return;
+  }
+
+  view.document.write(`<!doctype html>
+    <html lang="en"><head><meta charset="utf-8"><title>FallbackPlan recovery kit</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 720px; color: #111; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p.hint { color: #555; font-size: 13px; margin: 0 0 20px; }
+      pre { font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5;
+            white-space: pre-wrap; word-break: break-all; border: 1px solid #ccc;
+            border-radius: 6px; padding: 16px; }
+      @media print { p.hint { display: none; } pre { border: none; padding: 0; } }
+    </style></head><body>
+    <h1>FallbackPlan recovery kit</h1>
+    <p class="hint">Print this page, or save it as PDF from the print dialog. It holds no
+    passphrase and no keys — keep it somewhere apart from your passphrase.</p>
+    <pre>${esc(U.kit.text)}</pre>
+    </body></html>`);
+  view.document.close();
+
+  // From the opener, once the written document has had a beat to render.
+  setTimeout(() => { try { view.focus(); view.print(); } catch { /* the tab may already be closed */ } }, 150);
 
   U.taken = true;
   setupRender();
@@ -1434,9 +1476,9 @@ const setupActions = {
     setupRender();
   },
 
-  "setup-kit-file"() { setupTakeKit("file"); },
+  "setup-kit-file"() { setupTakeKitFile(); },
 
-  "setup-kit-print"() { setupTakeKit("print"); },
+  "setup-kit-print"() { setupOpenPrintable(); },
 
   "setup-kit-ack"(el) { U.saved = el.checked; setupRender(); },
 

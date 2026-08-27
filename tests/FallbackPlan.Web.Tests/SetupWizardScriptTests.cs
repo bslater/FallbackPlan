@@ -79,6 +79,25 @@ public sealed class SetupWizardScriptTests
     }
 
     [TestMethod]
+    public void ThePrintableForm_OpensAPage_RatherThanOnlyDownloadingAFile()
+    {
+        // The button says "Open the printable page", and for a while it
+        // quietly downloaded a .txt instead. The label is a promise: the
+        // print action opens a window and asks it to print; the download is
+        // only the popup-blocked fallback.
+        var script = AppJs();
+        var body = FunctionBody(script, "setupOpenPrintable");
+
+        Assert.Contains("window.open(", body, StringComparison.Ordinal,
+            "the printable form must open a page — that is what the button promises");
+        Assert.Contains(".print()", body, StringComparison.Ordinal,
+            "the opener drives printing (the child stays script-free, since about:blank can inherit the opener's CSP)");
+
+        Assert.Contains("\"setup-kit-print\"() { setupOpenPrintable(", script, StringComparison.Ordinal,
+            "the print button must route to the printable view, not to a download");
+    }
+
+    [TestMethod]
     public void TheStepTemplate_KeepsTheStableStrengthContainer()
     {
         // The patch target: an always-present container the answer writes
