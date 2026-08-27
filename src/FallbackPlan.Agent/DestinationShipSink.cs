@@ -192,7 +192,7 @@ public sealed class DestinationShipSink : IObjectStore
                 inScope.Add(new Shipment(
                     destination.Name,
                     ReplicaStoreFor(destination),
-                    reference.Priority ?? destination.Priority ?? 0));
+                    SetDestinationReference.EffectivePriority(reference, destination)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -567,7 +567,7 @@ public sealed class DestinationShipSink : IObjectStore
                 holders.Add(new Shipment(
                     destination.Name,
                     ReplicaStoreFor(destination),
-                    reference.Priority ?? destination.Priority ?? 0));
+                    SetDestinationReference.EffectivePriority(reference, destination)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {

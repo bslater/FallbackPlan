@@ -83,11 +83,10 @@ public static class FanOut
         // The destination's declared priority, overridable per set
         // (ADR-0047): among waiting transfers, the higher-priority
         // destination ships first.
-        var priority = set.Destinations
-            .FirstOrDefault(reference => string.Equals(reference.Ref, destinationName, StringComparison.Ordinal))
-            ?.Priority
-            ?? runtime.Configuration.FindDestination(destinationName)?.Priority
-            ?? 0;
+        var priority = SetDestinationReference.EffectivePriority(
+            set.Destinations.FirstOrDefault(reference =>
+                string.Equals(reference.Ref, destinationName, StringComparison.Ordinal)),
+            runtime.Configuration.FindDestination(destinationName));
 
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var accepted = runtime.Queue.Enqueue(new QueuedJob(

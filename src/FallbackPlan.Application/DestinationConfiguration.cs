@@ -297,6 +297,19 @@ public sealed record SetDestinationReference
     /// null defers to the destination's declaration.
     /// </summary>
     public int? Priority { get; init; }
+
+    /// <summary>
+    /// The effective transfer priority of a <c>(set, destination)</c> pair
+    /// (ADR-0047): the set's override, else the destination's declaration,
+    /// else 0. One resolution rule, shared, so ship order, restore-read
+    /// order and the transfer queue can never disagree about which copy
+    /// comes first.
+    /// </summary>
+    /// <param name="reference">The set's reference to the destination, when the set holds one.</param>
+    /// <param name="destination">The destination's declaration, when it resolves.</param>
+    /// <returns>The priority the pair's work carries.</returns>
+    public static int EffectivePriority(SetDestinationReference? reference, DestinationConfiguration? destination) =>
+        reference?.Priority ?? destination?.Priority ?? 0;
 }
 
 /// <summary>

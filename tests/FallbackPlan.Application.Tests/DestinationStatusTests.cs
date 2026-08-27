@@ -72,6 +72,23 @@ public sealed class DestinationStatusTests
     }
 
     [TestMethod]
+    public void Describe_APairOwedItsSeed_ReadsBehindNotInSync()
+    {
+        // RecordNeedsFull seeds a fresh row whose State defaults to InSync —
+        // an artefact of the blank row, not a claim about bytes. A pair that
+        // owes the destination its full backup holds nothing restorable, and
+        // "in sync" on that row is the worst lie a status page can tell
+        // (ADR-0047 §5). The set's completed-backup demotion cannot catch it:
+        // a brand-new pair has no success to be older than anything.
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot,
+            Row(DestinationSyncState.InSync) with { NeedsFull = true },
+            lastCompletedAt: 0, Now, DistinctDevice);
+
+        Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
+    }
+
+    [TestMethod]
     public void Describe_NeverAttempted_IsBehindRatherThanInvented()
     {
         var input = DestinationStatus.Describe(
@@ -79,6 +96,52 @@ public sealed class DestinationStatusTests
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
         Assert.IsNull(input.LastSuccessAt);
+    }
+
+    [TestMethod]
+    public void Describe_AReservedKind_AnswersItsRowRatherThanThrowing()
+    {
+        // An `s3` declaration is accepted by configuration and not yet served
+        // (FR-DEST-005): its ledger row says NotSupported, and status must
+        // repeat that — a row, not an exception, and no invented sync facts.
+        var declared = new DestinationConfiguration
+        {
+            Id = new string('2', 32),
+            Name = "cloud",
+            Kind = DestinationKind.S3,
+        };
+
+        var input = DestinationStatus.Describe(
+            "cloud", declared, SetRoot,
+            new DestinationSyncRecord
+            {
+                SetId = new string('a', 32),
+                Destination = "cloud",
+                State = DestinationSyncState.NotSupported,
+                LastAttemptAt = 1_000,
+                LastError = "the 's3' kind is reserved and not yet served",
+            },
+            lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(DestinationKind.S3, input.Kind);
+        Assert.AreEqual(DestinationSyncState.NotSupported, input.Sync);
+        Assert.IsNull(input.LastSuccessAt);
+        Assert.Contains("reserved", input.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_ADefectiveAddress_CarriesTheDefectThrough()
+    {
+        // The derived defect a repair flow reads (ADR-0037): a relative path
+        // is defective by construction, and the row keeps answering with the
+        // defect beside the ledger facts rather than throwing or hiding it.
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath("relative/vault"), SetRoot,
+            Row(DestinationSyncState.Failed), lastCompletedAt: 0, Now, DistinctDevice);
+
+        Assert.IsNotNull(input.AddressDefect);
+        Assert.Contains("relative", input.AddressDefect, StringComparison.Ordinal);
+        Assert.AreEqual(DestinationSyncState.Failed, input.Sync);
     }
 
     [TestMethod]

@@ -146,8 +146,10 @@ public sealed record DestinationSyncRecord
 
     /// <summary>
     /// The snapshot whose complete closure first made this destination a full
-    /// replica; null while it holds none. Filled by the direct-ship path
-    /// (ADR-0046); the staging path knows only when, not which.
+    /// replica; null while it holds none. Declared ahead of its writer
+    /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
+    /// the build that starts writing it needs no migration, and every reader
+    /// already treats null as "not recorded".
     /// </summary>
     [JsonPropertyName("baseline_snapshot_id")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -174,7 +176,9 @@ public sealed record DestinationSyncRecord
     /// <summary>
     /// When this row was last rebuilt from the destination's own inventory,
     /// Unix milliseconds; null when never. The ledger is metadata about the
-    /// destination, and the destination stays the ground truth.
+    /// destination, and the destination stays the ground truth. Declared
+    /// ahead of its writer (ADR-0047 §6): no reconciliation pass exists yet
+    /// to stamp it — the field waits so that pass needs no migration.
     /// </summary>
     [JsonPropertyName("last_reconciled_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -275,11 +279,15 @@ public sealed class DestinationSyncStore
         {
             // Pre-versioning shape: a bare array. Migrate rather than
             // quarantine — the rows are perfectly readable, and discarding
-            // them would silently restart every destination's history.
+            // them would silently restart every destination's history. It
+            // rides the same migration as schema 1: the bare array predates
+            // it, so its rows are owed every rule schema 1's are, baseline
+            // seeding included.
             try
             {
                 var legacy = JsonSerializer.Deserialize<List<DestinationSyncRecord>>(text, SerializerOptions) ?? [];
-                return new DestinationSyncStore(path, legacy);
+                return new DestinationSyncStore(
+                    path, Migrate(new LedgerFile { SchemaVersion = 1, Destinations = legacy }));
             }
             catch (JsonException)
             {
@@ -290,7 +298,20 @@ public sealed class DestinationSyncStore
 
     private static DestinationSyncStore Quarantine(string path)
     {
-        File.Move(path, path + ".corrupt", overwrite: true);
+        try
+        {
+            File.Move(path, path + ".corrupt", overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A .corrupt target something is holding must not turn a
+            // sacrificial ledger into a service that will not start: the
+            // empty store below is the same recovery either way, and the
+            // unreadable bytes stay where they are until the next write
+            // replaces them — strictly worse than the rename, still better
+            // than being down.
+        }
+
         return new DestinationSyncStore(path, []);
     }
 

@@ -148,6 +148,33 @@ public sealed class DestinationSyncStoreTests
         Assert.IsNotNull(record, "a pre-versioning ledger must be read, not discarded");
         Assert.AreEqual(42UL, record.SyncedSequence);
         Assert.IsFalse(File.Exists(path + ".corrupt"));
+
+        // The bare array is older than schema 1, so it must ride the same
+        // baseline seeding the schema-1 migration gets: a row with a success
+        // IS a full replica (ADR-0047). Skipping it here would leave the very
+        // oldest installs re-shipping everything a direct-ship flip touches.
+        Assert.AreEqual(1000UL, record.BaselineCompletedAt, "the legacy row's success must seed its baseline");
+        Assert.IsFalse(record.NeedsFull);
+    }
+
+    [TestMethod]
+    public void Open_UnreadableGarbage_SetsTheFileAsideAndStartsEmpty()
+    {
+        // Neither the versioned shape nor the legacy bare array: the ledger
+        // is sacrificial (its header says so), so the service must start —
+        // with the bytes preserved for a person, never silently overwritten.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, "{{{ this was never JSON");
+
+        var store = DestinationSyncStore.Open(_state);
+
+        Assert.IsNull(store.Find(SetId, "vault"));
+        Assert.IsTrue(File.Exists(path + ".corrupt"), "the unreadable bytes must be preserved for inspection");
+
+        // And the empty store is a working one: the next write starts a fresh
+        // versioned file in the vacated spot.
+        store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+        Assert.IsNotNull(DestinationSyncStore.Open(_state).Find(SetId, "vault"));
     }
 
     [TestMethod]
@@ -221,6 +248,49 @@ public sealed class DestinationSyncStoreTests
 
         var never = store.Find(SetId, "offsite")!;
         Assert.IsNull(never.BaselineCompletedAt);
+    }
+
+    [TestMethod]
+    public void EveryStampMutator_CarriesTheBaselineForward()
+    {
+        // A2's run-scope check reads BaselineCompletedAt, so a mutator that
+        // dropped it would silently evict a healthy destination from every
+        // later run. Failure, verification and sweep all touch the row after
+        // a baseline exists; none of them may move or lose it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Unavailable, "unplugged", 2_000);
+        store.RecordVerification(
+            SetId, "vault", objects: 2, population: 8, verifiedSequence: 1, sampleCursor: null,
+            nowUnixMilliseconds: 3_000);
+        store.RecordSweep(SetId, "vault", cursor: "blobs/aa", examined: 4, completedCircuit: false, 4_000);
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreEqual(1_000UL, record.BaselineCompletedAt, "a failure must not erase a baseline");
+        Assert.IsFalse(record.NeedsFull);
+
+        // And the debt side survives the same traffic: a pair owed its seed
+        // stays owed through a failed attempt.
+        store.RecordNeedsFull(SetId, "offsite", nowUnixMilliseconds: 500);
+        store.RecordFailure(SetId, "offsite", DestinationSyncState.Failed, "refused", 1_000);
+        Assert.IsTrue(store.Find(SetId, "offsite")!.NeedsFull);
+    }
+
+    [TestMethod]
+    public void RecordNeedsFull_OnAPairHoldingABaseline_IsANoOp()
+    {
+        // Re-adding a destination a set already seeded must not send it back
+        // to full-backup purgatory: the debt exists only while no baseline
+        // does (ADR-0047 §5).
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        store.RecordNeedsFull(SetId, "vault", nowUnixMilliseconds: 2_000);
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.IsFalse(record.NeedsFull);
+        Assert.AreEqual(1_000UL, record.BaselineCompletedAt);
     }
 
     [TestMethod]

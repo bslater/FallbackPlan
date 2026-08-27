@@ -654,4 +654,31 @@ public sealed class ClientConfigurationTests
         Assert.IsNull(ClientConfiguration.LabelDefect(derived[0].Label!));
         Assert.IsNull(ClientConfiguration.LabelDefect(derived[1].Label!));
     }
+
+    [TestMethod]
+    public void EffectivePriority_ResolvesTheOverrideThenTheDeclarationThenZero()
+    {
+        // One resolution rule for a pair's transfer priority (ADR-0047): the
+        // set's per-reference override, else the destination's declaration,
+        // else 0. Ship order, restore-read order and the transfer queue all
+        // call this one method, so they can never disagree about which copy
+        // comes first.
+        var declared = new DestinationConfiguration
+        {
+            Id = new string('1', 32),
+            Name = "vault",
+            Kind = DestinationKind.LocalPath,
+            Path = "/mnt/vault",
+            Priority = 3,
+        };
+
+        Assert.AreEqual(9, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault", Priority = 9 }, declared));
+        Assert.AreEqual(3, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault" }, declared));
+        Assert.AreEqual(0, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault" }, declared with { Priority = null }));
+        Assert.AreEqual(3, SetDestinationReference.EffectivePriority(reference: null, declared));
+        Assert.AreEqual(0, SetDestinationReference.EffectivePriority(reference: null, destination: null));
+    }
 }

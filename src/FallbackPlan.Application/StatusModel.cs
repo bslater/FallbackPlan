@@ -105,6 +105,16 @@ public static class DestinationStatus
             sync = DestinationSyncState.Behind;
         }
 
+        if (sync == DestinationSyncState.InSync && record is { NeedsFull: true })
+        {
+            // A pair owed its seeding full holds nothing restorable yet: its
+            // fresh ledger row defaults to InSync as an artefact of the blank
+            // row, and the completed-backup demotion above cannot catch it —
+            // a brand-new pair has no success to be older than anything
+            // (ADR-0047 §5).
+            sync = DestinationSyncState.Behind;
+        }
+
         return new DestinationStatusInput
         {
             Name = declared.Name,
