@@ -1,7 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "help (no prerequisites)": {
+    "service (default locations)": {
+      "commandName": "Project",
+      "commandLineArgs": ""
+    },
+    "help": {
       "commandName": "Project",
       "commandLineArgs": "--help"
     },

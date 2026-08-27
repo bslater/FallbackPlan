@@ -124,22 +124,16 @@ public sealed class AgentHostTests : IDisposable
         Assert.Contains("config.json", result.Error, StringComparison.Ordinal);
     }
 
+    // No-arguments behavior moved: a bare invocation now STARTS the service
+    // on the default locations (FR-SVC-016) rather than printing help —
+    // AgentDefaultLocationsTests owns that pin. The help flags above stay the
+    // way to ask for usage. Path-less invocations stopped being incomplete
+    // for the same reason, so the one refusal left to pin is a verb that
+    // does not exist.
     [TestMethod]
-    public async Task AgentHost_NoArguments_PrintsHelpRatherThanFailing()
+    public async Task AgentHost_AVerbNobodyRecognises_RefusesWithTheUsage()
     {
-        var result = await RunAsync();
-
-        Assert.AreEqual(0, result.ExitCode);
-        Assert.Contains("usage", result.Output, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [TestMethod]
-    [DataRow("walk")]                                  // not a command
-    [DataRow("run")]                                   // no options at all
-    [DataRow("run", "--archives", "/tmp/nowhere")]     // missing state and passphrase
-    public async Task AgentHost_CommandLineIsIncomplete_RefusesWithTheUsage(params string[] args)
-    {
-        var result = await RunAsync(args);
+        var result = await RunAsync("walk");
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("usage", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -320,9 +314,13 @@ public sealed class AgentHostTests : IDisposable
             Assert.Contains("diagnostics are not being written", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("diagnostics are not being written", result.Output, StringComparison.Ordinal);
 
-            // It got past composing logging and reached the verb, which is the
-            // half that used to be an access-denied stack trace.
-            Assert.Contains("usage is", result.Error, StringComparison.Ordinal);
+            // It got past composing logging and reached the verb, which then
+            // refuses the unopenable state directory with a stated reason —
+            // the half that used to be an access-denied stack trace. (Before
+            // paths gained defaults, an incomplete command line masked this
+            // with a usage error instead.)
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("error:", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
         }
         finally

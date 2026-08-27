@@ -61,11 +61,18 @@ public sealed class AgentInstallVerbTests
     }
 
     [TestMethod]
-    public async Task Install_WithoutRepo_IsRefused()
+    public async Task Install_WithoutTheArchivesFlag_BakesTheDefaultIntoTheDefinition()
     {
-        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "install", "--state", "/var/lib/fallbackplan");
+        // Path flags stopped being a prerequisite when the paths gained
+        // defaults (FR-SVC-016): a definition printed without --archives
+        // names the default root explicitly, so the registered service runs
+        // on exactly the installation a bare `run` would.
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync, "install", "--state", "/var/lib/fallbackplan");
 
-        Assert.AreEqual(1, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.Contains(AgentDefaults.ArchivesRoot, result.Output, StringComparison.Ordinal);
+        Assert.Contains("/var/lib/fallbackplan", result.Output, StringComparison.Ordinal);
     }
 
     /// <summary>

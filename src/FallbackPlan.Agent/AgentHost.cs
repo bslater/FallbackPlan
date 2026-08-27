@@ -44,13 +44,13 @@ public static class AgentHost
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(error);
 
-        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        if (args.Length > 0 && args[0] is "-h" or "--help" or "help")
         {
             output.WriteLine("""
                 FallbackPlan service — scheduled backups, and the command surface clients talk to
 
                 usage:
-                  fallbackplan-agent run    --archives <root> --state <dir> [--passphrase-env <VAR>]
+                  fallbackplan-agent [run]  [--archives <root>] [--state <dir>] [--passphrase-env <VAR>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
@@ -77,6 +77,14 @@ public static class AgentHost
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
                 when the flag is absent (ADR-0043 §6). Logs go to <state>/logs;
                 `run` echoes them to the console as well.
+
+                With no arguments the service simply starts: --archives and
+                --state default to the profile's data directory
+                (<local app data>/fallbackplan/archives and .../state),
+                overridable by FALLBACKPLAN_ARCHIVES and FALLBACKPLAN_STATE.
+                Every verb shares the defaults — name the paths only to aim
+                at a specific installation, such as the system paths a
+                service unit declares.
 
                 Backup sets, their destinations and their schedules come from
                 <state>/config.json. Each set's staging archive lives under
@@ -124,6 +132,14 @@ public static class AgentHost
             return 0;
         }
 
+        // A bare invocation — or one that leads with options — is `run`: the
+        // service starts on the installation the defaults name (FR-SVC-016).
+        // A verb is for doing something specific.
+        if (args.Length == 0 || args[0].StartsWith('-'))
+        {
+            args = ["run", .. args];
+        }
+
         string? Get(string name)
         {
             for (var i = 1; i < args.Length - 1; i++)
@@ -141,6 +157,32 @@ public static class AgentHost
         var repoPath = Get("--repo");
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
+
+        // The flags override; the environment overrides the platform default;
+        // a command line naming neither still names an installation
+        // (FR-SVC-016). Only a DEFAULT location is created on first touch — a
+        // path somebody typed is left to the verb, which reports what is
+        // missing rather than inventing it.
+        var archivesWereExplicit = archivesRoot is not null;
+        try
+        {
+            if (archivesRoot is null)
+            {
+                archivesRoot = AgentDefaults.ArchivesRoot;
+                Directory.CreateDirectory(archivesRoot);
+            }
+
+            if (stateDirectory is null)
+            {
+                stateDirectory = AgentDefaults.StateDirectory;
+                Directory.CreateDirectory(stateDirectory);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
 
         // The verb `replicate` used to push one archive by path. Removed, not
         // shimmed (pre-1.0): destinations are declared in the configuration
@@ -167,7 +209,7 @@ public static class AgentHost
         // configuration that does not load leaves the level to the flag, the
         // environment and the fallback, and the defect is reported through the
         // ordinary path a moment later.
-        var configured = stateDirectory is null ? null : LoggingFromConfiguration(stateDirectory);
+        var configured = LoggingFromConfiguration(stateDirectory);
 
         // The level in force, resolved before any verb runs: the flag, then
         // the environment, then config.json, then Information (ADR-0043 §6). A
@@ -217,12 +259,6 @@ public static class AgentHost
         // ended at 3 a.m. is still known at breakfast.
         if (args[0] == "notices")
         {
-            if (stateDirectory is null)
-            {
-                error.WriteLine("error: usage is `notices --state <dir> [--ack <id>]`.");
-                return 1;
-            }
-
             return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -232,12 +268,6 @@ public static class AgentHost
         // inside the repository (ADR-0030 §1).
         if (args[0] is "pair" or "pairings" or "unpair")
         {
-            if (stateDirectory is null)
-            {
-                error.WriteLine($"error: usage is `{args[0]} --state <dir>`.");
-                return 1;
-            }
-
             return args[0] switch
             {
                 "pairings" => ListPairings(stateDirectory, output),
@@ -249,7 +279,7 @@ public static class AgentHost
             };
         }
 
-        if (repoPath is not null && archivesRoot is null)
+        if (repoPath is not null && !archivesWereExplicit)
         {
             // The old single-repository flag, refused with directions rather
             // than reinterpreted: --archives names a root that holds one
@@ -259,12 +289,6 @@ public static class AgentHost
                 "error: `--repo` became `--archives <root>` — the service holds one staging archive per "
                 + "backup set under that root (ADR-0034). An existing single archive can be adopted by "
                 + "moving it to <root>/<set id>.");
-            return 1;
-        }
-
-        if (stateDirectory is null || (args[0] is not "lock" && archivesRoot is null))
-        {
-            error.WriteLine("error: usage is `run --archives <root> --state <dir>`.");
             return 1;
         }
 
@@ -423,6 +447,16 @@ public static class AgentHost
             catch (KeyUnwrapFailedException)
             {
                 error.WriteLine("error: the passphrase does not open this repository.");
+                return 1;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A state directory or archives root that cannot be used — a
+                // parent that is a file, a permission wall — is a stated
+                // refusal, never a stack trace. Surfaced here since the paths
+                // gained defaults: an unusable EXPLICIT path used to die on
+                // the usage check instead of reaching the verb.
+                error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
         }
@@ -935,6 +969,14 @@ public static class AgentHost
         catch (KeyUnwrapFailedException)
         {
             error.WriteLine("error: the passphrase does not open this repository.");
+            return 1;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // An unusable state directory or archives root is a stated
+            // refusal, never a stack trace — same mapping as the one-shot
+            // verbs above.
+            error.WriteLine($"error: {exception.Message}");
             return 1;
         }
     }
