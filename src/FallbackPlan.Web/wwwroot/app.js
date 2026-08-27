@@ -1219,7 +1219,6 @@ function setupStep1() {
 }
 
 function setupStep2() {
-  const meter = U.strength;
   return `
     <h1>Choose the passphrase</h1>
     <p>Longer is better than complicated. Several unrelated words you will
@@ -1227,14 +1226,35 @@ function setupStep2() {
     <input type="password" id="setup-pass" class="setup-field" autocomplete="new-password"
       spellcheck="false" placeholder="the passphrase for this installation"
       value="${esc(U.passphrase)}" data-action-input="setup-pass">
-    ${meter ? `
-      <div class="meter meter-${esc(meter.band)}"><i style="width:${Math.max(4, meter.score)}%"></i></div>
-      <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}
+    <div id="setup-strength">${setupStrengthMarkup()}</div>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="setup-back">‹ Back</button>
       <button type="button" class="btn primary" data-action="setup-to-confirm"
-        ${meter?.acceptable ? "" : "disabled"}>Continue</button>
+        ${U.strength?.acceptable ? "" : "disabled"}>Continue</button>
     </div>`;
+}
+
+// The meter's markup, shared by the step template and the in-place patch
+// below so the two cannot drift.
+function setupStrengthMarkup() {
+  const meter = U?.strength;
+  return meter ? `
+      <div class="meter meter-${esc(meter.band)}"><i style="width:${Math.max(4, meter.score)}%"></i></div>
+      <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
+}
+
+// Applies a strength answer WITHOUT re-rendering the step. The answer lands
+// while the operator is typing, and a re-render replaces the very field
+// they are typing in: focus is re-applied to a fresh element with the caret
+// wherever the browser puts it, so the cursor jumps on every debounced
+// answer and in-flight keystrokes can die. Only the meter and the Continue
+// button change, so only they are touched; if either is gone the operator
+// has moved on and there is nothing to show.
+function setupApplyStrength() {
+  const host = document.getElementById("setup-strength");
+  if (host) host.innerHTML = setupStrengthMarkup();
+  const go = document.querySelector('[data-action="setup-to-confirm"]');
+  if (go) go.disabled = !U?.strength?.acceptable;
 }
 
 function setupStep3() {
@@ -1334,7 +1354,7 @@ function setupScheduleStrength() {
   clearTimeout(setupStrengthTimer);
   setupStrengthTimer = setTimeout(async () => {
     const candidate = U?.passphrase ?? "";
-    if (!candidate) { if (U) { U.strength = null; setupRender(); } return; }
+    if (!candidate) { if (U) { U.strength = null; setupApplyStrength(); } return; }
     try {
       const response = await fetch("/api/passphrase-strength", {
         method: "POST",
@@ -1343,7 +1363,10 @@ function setupScheduleStrength() {
       });
       if (!response.ok || !U) return;
       U.strength = await response.json();
-      setupRender();
+      // Patched in place, never a full step re-render: the answer arrives
+      // while the operator is typing, and rebuilding the step would replace
+      // the focused field — SetupWizardScriptTests pins this.
+      setupApplyStrength();
     } catch {
       // The meter is a courtesy; the submit is where the policy is enforced.
     }
@@ -1361,8 +1384,7 @@ const setupActions = {
     U.passphrase = el.value;
     // No re-render here: it would replace the field the person is typing in.
     setupScheduleStrength();
-    const go = document.querySelector('[data-action="setup-to-confirm"]');
-    if (go) go.disabled = !U.strength?.acceptable;
+    setupApplyStrength();
   },
 
   "setup-to-confirm"() { if (U.strength?.acceptable) { U.step = 3; setupRender(); } },
