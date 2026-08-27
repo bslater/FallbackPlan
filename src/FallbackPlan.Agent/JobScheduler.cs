@@ -8,7 +8,10 @@ namespace FallbackPlan.Agent;
 /// <summary>Which lane a job runs in — decided by whether it takes the writer role.</summary>
 public enum JobLane
 {
-    /// <summary>Backups. They take the writer sequence, so they run one at a time.</summary>
+    /// <summary>
+    /// Backups. Each takes its own set's writer sequence, so the lane runs a
+    /// configured pool of them (ADR-0047) — one per set at a time.
+    /// </summary>
     Writer = 0,
 
     /// <summary>Restores and verification. Read paths, so they may run alongside a backup.</summary>
@@ -61,9 +64,10 @@ public sealed record QueuedJob(
 /// <remarks>
 /// <list type="bullet">
 /// <item><description>
-/// <b>Backup sets run one at a time.</b> They contend for the same disk and the
-/// same writer sequence, and two at once mostly makes both slower while
-/// doubling the memory bound.
+/// <b>Backups run as a pool of 1..5 workers</b> (ADR-0047): per-set archives
+/// gave every set its own writer sequence, spool and catalogue, so two runs
+/// contend only for the disk — which is what the cap and the modest default
+/// guard. One run per set at a time still holds, enforced by the journal.
 /// </description></item>
 /// <item><description>
 /// <b>Restore and verification are separately queued</b> and may run alongside a
