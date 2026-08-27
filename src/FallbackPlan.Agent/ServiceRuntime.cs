@@ -26,6 +26,13 @@ public sealed record ServiceOptions
     public int PollSeconds { get; init; } = 60;
 
     /// <summary>
+    /// An explicit backup-pool width (1..5), taking precedence over the
+    /// configuration's <c>max_concurrent_backups</c> — a host's or a test
+    /// harness's knob for a deterministic pool. Null reads the configuration.
+    /// </summary>
+    public int? MaxConcurrentBackupsOverride { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -112,6 +119,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// </summary>
     private static int ConfiguredBackupPoolWidth(ServiceOptions options)
     {
+        if (options.MaxConcurrentBackupsOverride is { } width)
+        {
+            return Math.Clamp(width, 1, 5);
+        }
+
         try
         {
             return Math.Clamp(

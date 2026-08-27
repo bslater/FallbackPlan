@@ -359,6 +359,20 @@ public static class Scheduler
         var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var completion = new TaskCompletionSource<BackupOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // The run's suspension point (ADR-0047 Amendment 1): when a higher-priority
+        // job needs the pool's last slot, the scheduler parks this run at a
+        // file boundary and the journal says so — Paused on the way down,
+        // back to Publishing on the way up. The stamps are wall-clock
+        // because they record when the suspension actually happened, not
+        // when the pass that queued the run began.
+        var gate = new PauseGate(
+            onParked: () => runtime.Jobs.Transition(
+                job.Id, JobState.Paused, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                "suspended for a higher-priority run"),
+            onResumed: () => runtime.Jobs.Transition(
+                job.Id, JobState.Publishing, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                "resumed"));
+
         var accepted = runtime.Queue.Enqueue(new QueuedJob(
             job.Id,
             JobLane.Writer,
@@ -369,7 +383,7 @@ public static class Scheduler
                 try
                 {
                     completion.SetResult(
-                        await BackupRunner.RunAsync(runtime, set, job.Id, now, full, cancellationToken)
+                        await BackupRunner.RunAsync(runtime, set, job.Id, now, full, gate, cancellationToken)
                             .ConfigureAwait(false));
                 }
                 catch (Exception exception)
@@ -378,7 +392,8 @@ public static class Scheduler
                     throw;
                 }
             },
-            Priority: set.Priority ?? 0));
+            Priority: set.Priority ?? 0,
+            PauseGate: gate));
 
         if (!accepted)
         {

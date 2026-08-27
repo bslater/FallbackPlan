@@ -73,8 +73,10 @@ const S = {
   setupState: null,         // setup_required | kit_required | ready — which step it resumes at
 };
 
+// Paused is deliberately live, not settled (ADR-0047): a suspended run holds
+// its place and resumes unattended when a pool slot frees.
 const SETTLED = new Set([
-  "Complete", "CompletedWithFailures", "Cancelled", "Paused", "FailedRecoverable", "FailedPermanent",
+  "Complete", "CompletedWithFailures", "Cancelled", "FailedRecoverable", "FailedPermanent",
 ]);
 
 const PROTECTION = {

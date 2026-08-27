@@ -565,7 +565,7 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
         JobState.CompletedWithFailures =>
             "PARTIAL — the snapshot is committed, but not everything could be read",
         JobState.Cancelled => "cancelled",
-        JobState.Paused => "PAUSED — resumable; the service will not finish it unattended",
+        JobState.Paused => "PAUSED — suspended for a higher-priority run; it resumes unattended",
         JobState.FailedRecoverable => "FAILED (recoverable) — the service retries on its next pass",
         JobState.FailedPermanent => "FAILED — needs intervention; it will not be retried",
         _ => state.ToString().ToLowerInvariant(),
@@ -576,10 +576,12 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     /// <see cref="JobState.CompletedWithFailures"/> belongs here for the same
     /// reason <see cref="JobState.Complete"/> does — it is terminal. Omitting
     /// it would leave <c>AwaitJobAsync</c> polling a job that will never
-    /// transition again.
+    /// transition again. <see cref="JobState.Paused"/> is deliberately NOT
+    /// here (ADR-0047 Amendment 1): a suspended run resumes unattended when a pool
+    /// slot frees, so a caller waiting on it keeps waiting.
     /// </remarks>
     private static bool HasSettled(JobState state) => state is
-        JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled or JobState.Paused
+        JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled
         or JobState.FailedRecoverable or JobState.FailedPermanent;
 
     private async ValueTask<JobDescriptor> AwaitJobAsync(string jobId, CancellationToken cancellationToken)

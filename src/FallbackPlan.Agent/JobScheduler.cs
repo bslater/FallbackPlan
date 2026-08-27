@@ -36,13 +36,22 @@ public enum JobLane
 /// (ADR-0047). It never outranks a person: <paramref name="UserInitiated"/>
 /// sorts first, exactly as ADR-0029 §4 always said.
 /// </param>
+/// <param name="PauseGate">
+/// The job's suspension point, when it has one (ADR-0047 Amendment 1). A writer-lane
+/// job carrying a gate is preemptible: when every writer worker is busy and
+/// a higher-ranked job arrives, the scheduler pauses the lowest-ranked
+/// gated job, runs the incomer in the freed slot, and resumes the parked
+/// run when a slot frees again. A job without a gate is never paused — it
+/// merely cannot yield, so the incomer waits behind it.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
     bool UserInitiated,
     string Description,
     Func<CancellationToken, ValueTask> Run,
-    int Priority = 0);
+    int Priority = 0,
+    PauseGate? PauseGate = null);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -75,6 +84,15 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly PriorityQueue<QueuedJob, (int Initiation, int Priority, long Arrival)> _transferLane = new();
     private readonly Dictionary<string, CancellationTokenSource> _running = [];
 
+    // The writer lane's preemption bookkeeping (ADR-0047 Amendment 1). A writer job a
+    // worker is actually running sits in _attended; one that parked at its
+    // pause gate — its task alive, its worker handed to someone else — sits
+    // in _paused. Both are keyed by job identity; both are guarded by _gate.
+    private readonly Dictionary<string, WriterAttendance> _attended = [];
+    private readonly Dictionary<string, WriterAttendance> _paused = [];
+    private readonly int _writerWorkers;
+    private readonly TimeSpan _maxPause;
+
     // One signal per lane, not one shared: with a shared semaphore, a token
     // released for a busy lane could only be consumed by the OTHER lanes'
     // workers, which handed it back and re-waited at thread-pool speed for
@@ -85,6 +103,7 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly SemaphoreSlim _transferPending = new(0);
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _stopping = new();
+    private readonly CancellationToken _stoppingToken;
     private readonly Task[] _workers;
     private readonly ILogger _log;
     private long _arrival;
@@ -98,10 +117,19 @@ public sealed class JobScheduler : IAsyncDisposable
     /// own; the cap exists because past a handful they contend for the same
     /// disk and mostly make each other slower.
     /// </param>
-    public JobScheduler(ILogger? log = null, int writerWorkers = 1)
+    /// <param name="maxPause">
+    /// How long a parked run may hold its in-memory state and its live write
+    /// intent before it self-cancels to the interruption-safe re-run path —
+    /// the guard against a busy pool pinning a suspended capture's memory
+    /// for ever. An hour by default.
+    /// </param>
+    public JobScheduler(ILogger? log = null, int writerWorkers = 1, TimeSpan? maxPause = null)
     {
         ThrowHelper.ThrowIfOutOfRange(writerWorkers, 1, 5);
         _log = log ?? NullLogger.Instance;
+        _writerWorkers = writerWorkers;
+        _maxPause = maxPause ?? TimeSpan.FromHours(1);
+        _stoppingToken = _stopping.Token;
 
         // The reader lane stays one worker because restores are themselves
         // internally bounded and a second would only compete for the same
@@ -170,8 +198,14 @@ public sealed class JobScheduler : IAsyncDisposable
                 JobLane.Reader => _readerLane,
                 _ => _transferLane,
             };
-            lane.Enqueue(job, (initiation, -job.Priority, Interlocked.Increment(ref _arrival)));
+            var key = (initiation, -job.Priority, Interlocked.Increment(ref _arrival));
+            lane.Enqueue(job, key);
             _running[job.JobId] = new CancellationTokenSource();
+
+            if (job.Lane == JobLane.Writer)
+            {
+                MaybePreemptLocked(key);
+            }
         }
 
         Pending(job.Lane).Release();
@@ -217,9 +251,19 @@ public sealed class JobScheduler : IAsyncDisposable
         _readerPending.Release();
         _transferPending.Release();
 
+        // A parked run has no worker attending it, so awaiting the workers
+        // alone would leave its task mid-cancellation. Its own token was
+        // cancelled above, which cuts through the park; this waits for the
+        // exit to actually land.
+        Task[] parked;
+        lock (_gate)
+        {
+            parked = [.. _paused.Values.Select(entry => entry.RunTask).OfType<Task>()];
+        }
+
         try
         {
-            await Task.WhenAll(_workers).ConfigureAwait(false);
+            await Task.WhenAll([.. _workers, .. parked]).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -262,6 +306,16 @@ public sealed class JobScheduler : IAsyncDisposable
                 return;
             }
 
+            if (lane == JobLane.Writer)
+            {
+                if (TryTakeWriterWork(out var work))
+                {
+                    await AttendWriterAsync(work!).ConfigureAwait(false);
+                }
+
+                continue;
+            }
+
             if (!TryDequeue(lane, out var job, out var cancellation))
             {
                 // A token with no job behind it — the queue was drained by
@@ -284,6 +338,184 @@ public sealed class JobScheduler : IAsyncDisposable
             {
                 Complete(job!.JobId);
             }
+        }
+    }
+
+    /// <summary>
+    /// Picks the writer worker's next charge: the best-ranked parked run when
+    /// it outranks (or ties) everything still queued — a freed slot resumes
+    /// suspended work before starting new work of equal standing — and the
+    /// queue's head otherwise.
+    /// </summary>
+    private bool TryTakeWriterWork(out WriterAttendance? work)
+    {
+        lock (_gate)
+        {
+            WriterAttendance? bestPaused = null;
+            foreach (var entry in _paused.Values)
+            {
+                if (bestPaused is null || entry.Key.CompareTo(bestPaused.Key) < 0)
+                {
+                    bestPaused = entry;
+                }
+            }
+
+            var hasQueued = _writerLane.TryPeek(out _, out var queuedKey);
+            if (bestPaused is not null && (!hasQueued || bestPaused.Key.CompareTo(queuedKey) <= 0))
+            {
+                _paused.Remove(bestPaused.Job.JobId);
+                _attended[bestPaused.Job.JobId] = bestPaused;
+                bestPaused.NeedsResume = true;
+                work = bestPaused;
+                return true;
+            }
+
+            if (_writerLane.TryDequeue(out var job, out var key) && _running.TryGetValue(job.JobId, out var source))
+            {
+                var fresh = new WriterAttendance(job, key, source);
+                _attended[job.JobId] = fresh;
+                work = fresh;
+                return true;
+            }
+
+            work = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Attends one writer charge until it finishes or parks. A parked run
+    /// keeps its task and its state; the worker hands its slot on — that is
+    /// the whole preemption mechanism (ADR-0047 Amendment 1).
+    /// </summary>
+    private async Task AttendWriterAsync(WriterAttendance work)
+    {
+        var gate = work.Job.PauseGate;
+        if (work.NeedsResume)
+        {
+            work.NeedsResume = false;
+            gate!.Resume();
+        }
+
+        // The supervision task starts here, outside the pickup lock, because
+        // an async method runs synchronously to its first await — which is
+        // the job's own code.
+        work.RunTask ??= SuperviseAsync(work.Job, work.Cancellation);
+
+        if (gate is null)
+        {
+            await work.RunTask.ConfigureAwait(false);
+            lock (_gate)
+            {
+                _attended.Remove(work.Job.JobId);
+            }
+
+            return;
+        }
+
+        var finished = await Task.WhenAny(work.RunTask, gate.Parked).ConfigureAwait(false);
+        if (finished == work.RunTask || work.RunTask.IsCompleted)
+        {
+            await work.RunTask.ConfigureAwait(false);
+            lock (_gate)
+            {
+                _attended.Remove(work.Job.JobId);
+            }
+
+            return;
+        }
+
+        // The job parked. Move it aside, arm the max-pause guard, and free
+        // this worker: the released token is the parked run's claim on the
+        // next slot, weighed against the queue at every pickup.
+        lock (_gate)
+        {
+            _attended.Remove(work.Job.JobId);
+            _paused[work.Job.JobId] = work;
+        }
+
+        _ = ExpireIfStillPausedAsync(work.Job.JobId);
+        _writerPending.Release();
+    }
+
+    /// <summary>
+    /// Runs one writer job to its end, wherever the awaiting worker has got
+    /// to — completion bookkeeping lives here precisely so a job cancelled
+    /// while parked still closes out, with no worker attending it.
+    /// </summary>
+    private async Task SuperviseAsync(QueuedJob job, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await job.Run(cancellation.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Log.JobFaulted(_log, job.JobId, job.Description, exception);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _paused.Remove(job.JobId);
+            }
+
+            Complete(job.JobId);
+        }
+    }
+
+    /// <summary>
+    /// Pauses the worst-ranked attended writer job when the incomer outranks
+    /// it and no worker is free. Called under <see cref="_gate"/> from
+    /// <see cref="Enqueue"/>; a gate whose job never reaches another pause
+    /// point simply finishes instead — the request costs nothing.
+    /// </summary>
+    private void MaybePreemptLocked((int Initiation, int Priority, long Arrival) incomer)
+    {
+        if (_attended.Count < _writerWorkers)
+        {
+            return;
+        }
+
+        WriterAttendance? victim = null;
+        foreach (var entry in _attended.Values)
+        {
+            if (entry.Job.PauseGate is { IsPaused: false }
+                && (victim is null || entry.Key.CompareTo(victim.Key) > 0))
+            {
+                victim = entry;
+            }
+        }
+
+        if (victim is not null && incomer.CompareTo(victim.Key) < 0)
+        {
+            victim.Job.PauseGate!.Pause();
+        }
+    }
+
+    private async Task ExpireIfStillPausedAsync(string jobId)
+    {
+        try
+        {
+            await Task.Delay(_maxPause, _stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        bool stillPaused;
+        lock (_gate)
+        {
+            stillPaused = _paused.ContainsKey(jobId);
+        }
+
+        if (stillPaused)
+        {
+            // Holding a run suspended costs its in-memory state and a live
+            // write intent; past the configured age that price stops being
+            // worth paying, and the interruption-safe re-run path takes over.
+            Cancel(jobId);
         }
     }
 
@@ -319,5 +551,24 @@ public sealed class JobScheduler : IAsyncDisposable
                 cancellation.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// One writer job in a worker's charge: its queue key (for preemption
+    /// and resumption ranking), its cancellation, and — once started — the
+    /// supervision task that outlives any one worker's attention.
+    /// </summary>
+    private sealed class WriterAttendance(
+        QueuedJob job, (int Initiation, int Priority, long Arrival) key, CancellationTokenSource cancellation)
+    {
+        public QueuedJob Job { get; } = job;
+
+        public (int Initiation, int Priority, long Arrival) Key { get; } = key;
+
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        public Task? RunTask { get; set; }
+
+        public bool NeedsResume { get; set; }
     }
 }

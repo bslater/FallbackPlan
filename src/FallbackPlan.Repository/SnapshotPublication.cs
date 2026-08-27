@@ -92,6 +92,14 @@ public sealed record SnapshotJob
 
     /// <summary>The writing client's version string.</summary>
     public required string ClientVersion { get; init; }
+
+    /// <summary>
+    /// The job's suspension point, when its scheduler preempts (ADR-0047 Amendment 1).
+    /// The publication checks it between scan events — so a paused run parks
+    /// between files, its walker, session and spool held exactly where they
+    /// were, and resumes without re-scanning. Null runs unpausable.
+    /// </summary>
+    public IPauseGate? PauseGate { get; init; }
 }
 
 /// <summary>
@@ -309,6 +317,14 @@ public sealed partial class PublicationOrchestrator
             await foreach (var scanEvent in MultiRootScan
                 .ScanAsync(job.Source, job.Roots, options, cancellationToken).ConfigureAwait(false))
             {
+                // The suspension point (ADR-0047 Amendment 1): between events, never
+                // inside one, so a paused run parks at a file boundary with
+                // the walker's whole state held in place.
+                if (job.PauseGate is { } pauseGate)
+                {
+                    await pauseGate.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 await walker.ConsumeAsync(scanEvent, cancellationToken).ConfigureAwait(false);
                 reporter.Observe(JobState.Packing, walker.Files, walker.Failures.Count);
             }

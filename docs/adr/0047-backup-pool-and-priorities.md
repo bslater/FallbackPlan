@@ -122,9 +122,51 @@ observable ledger behaviour, only when the pass answers.
   pass.** Two clocks racing over one journal, to avoid handing a task to a
   caller.
 
+## Amendment 1 — Preemption: true suspend/resume (2026-08)
+
+Rule 4 ordered the queue; this amendment makes the order bite while work is
+already running. The owner's requirement: a triggered backup of higher
+priority than a running one must **pause** the running backup when no
+concurrent handler is free, and the paused run must resume — not restart —
+when a slot frees.
+
+1. **The pause gate.** A backup's job carries a `PauseGate`; the capture
+   pipeline checks it between scan events (`IPauseGate`, honoured in the
+   publication's scan loop), so a run parks at a file boundary — never
+   inside a file — with its walker, catalogue session and spool held in
+   memory exactly where they were. A resumed run continues from the next
+   scan event: nothing is re-scanned, nothing re-packaged, and any blob
+   sealed short at the boundary is the already-proven "durable but
+   unreferenced" state.
+2. **Park frees the slot.** The scheduler attends a gated writer job by
+   racing its task against the gate's park signal. A parked run keeps its
+   task alive but loses its worker: the freed slot is announced to the lane,
+   and every pickup weighs the best-ranked parked run against the queue's
+   head by the same `(initiation, -priority, arrival)` key — a suspended run
+   resumes before new work of equal standing starts.
+3. **One victim, chosen worst-first.** An arriving writer job preempts only
+   when every pool worker is busy, and only the worst-ranked running job
+   that carries a gate and is not already pausing — and only when the
+   incomer strictly outranks it. A job without a gate is never paused; the
+   incomer waits behind it, exactly as before this amendment.
+4. **Paused is a live state.** The journal says `Paused` the moment the run
+   parks and returns to `Publishing` ("resumed") when it wakes; the console
+   and the CLI treat it as in-flight — a waiting `backup` command keeps
+   waiting, because the run finishes unattended. The one-run-per-set rule
+   already counted an unsettled journal row as running, so a paused set
+   cannot be double-queued or deleted from under its run.
+5. **Suspension is bounded.** A parked run holds memory and a live write
+   intent, so it self-cancels past a max-pause age (an hour by default) into
+   the interruption-safe re-run path — the same path shutdown takes:
+   disposal cancels the run's own token, which cuts through the park, and
+   the void-delta discharge heals the remains on the next run. Crash safety
+   is unchanged for the same reason: a paused run's on-disk state is an
+   interrupted run's on-disk state.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Written from the 2026-08 field reports and the owner's re-architecture direction, alongside the plan that supersedes staging |
 | 2026-08 | Built | The decoupled pass and its `Transfers` hand-back, the one-run-per-set guard, the writer pool (schema 5's `max_concurrent_backups`), set/destination priorities end to end (schema 5, contract 1.17, both console editors), first-backup-on-save, gained-destination seeding, and the sync ledger's schema 2 baselines |
+| 2026-08 | Built (Amendment 1) | True suspend/resume under priority pressure: the pause gate through the capture pipeline's scan loop, park-frees-the-slot scheduling with resume-before-equal-work pickup, worst-first single-victim preemption, the live Paused journal state (console and CLI both treat it as in-flight), the max-pause self-cancel, and shutdown degrading a parked run to the ordinary cancelled → re-run path |

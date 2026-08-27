@@ -34,6 +34,10 @@ public static class BackupRunner
     /// <param name="jobId">The journal entry to transition.</param>
     /// <param name="now">The clock, passed in so the caller decides it.</param>
     /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
+    /// <param name="pauseGate">
+    /// The run's suspension point (ADR-0047 Amendment 1), when its scheduler preempts;
+    /// the capture pipeline honours it between scan events.
+    /// </param>
     /// <param name="cancellationToken">Cancels the backup.</param>
     /// <returns>What happened.</returns>
     public static async ValueTask<BackupOutcome> RunAsync(
@@ -42,6 +46,7 @@ public static class BackupRunner
         string jobId,
         DateTimeOffset now,
         bool full = false,
+        IPauseGate? pauseGate = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(runtime);
@@ -148,6 +153,7 @@ public static class BackupRunner
                     DeclaredMaxDurationMs = 3_600_000,
                     ExpiryGeneration = generation.Value + 2,
                     ClientVersion = "fallbackplan-agent/0.1",
+                    PauseGate = pauseGate,
                 },
                 cancellationToken).ConfigureAwait(false);
 

@@ -36,7 +36,13 @@ public enum JobState
     /// <summary>Finished, with a committed snapshot.</summary>
     Complete = 8,
 
-    /// <summary>Suspended by request; resumable.</summary>
+    /// <summary>
+    /// Suspended at a file boundary by the scheduler, its in-memory state
+    /// held, so a higher-priority run can use its pool slot (ADR-0047 Amendment 1).
+    /// Not terminal: the run resumes unattended when a slot frees, degrades
+    /// to <see cref="Cancelled"/> on shutdown, and self-cancels past the
+    /// max-pause age.
+    /// </summary>
     Paused = 9,
 
     /// <summary>Retrying after a recoverable failure.</summary>
