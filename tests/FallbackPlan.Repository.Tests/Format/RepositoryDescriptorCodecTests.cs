@@ -10,6 +10,7 @@ namespace FallbackPlan.Repository.Tests.Format;
 /// NFR-COMP-003): round-trips canonically, distinguishes "not a repository"
 /// from damage, verifies the digest before interpreting the body, ignores
 /// the reserved field, and refuses unknown required features by name.
+/// Establishes NFR-COMP-001 and NFR-COMP-002.
 /// </summary>
 [TestClass]
 public sealed class RepositoryDescriptorCodecTests

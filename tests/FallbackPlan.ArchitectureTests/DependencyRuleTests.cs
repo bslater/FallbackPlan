@@ -26,6 +26,7 @@ namespace FallbackPlan.ArchitectureTests;
 /// separated behind tested interfaces — cite this file as proof rather than as
 /// intent. The caveat is recorded here rather than silently deleted, because a
 /// test whose strength changed is worth saying so once.
+/// Establishes FR-CP-006.
 /// </summary>
 [TestClass]
 public sealed class DependencyRuleTests

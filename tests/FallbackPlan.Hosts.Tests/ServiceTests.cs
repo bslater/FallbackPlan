@@ -10,6 +10,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The service (ADR-0028): sole writer role, a command surface, real job
 /// states, and cancellation that lands in the journal.
+/// Establishes FR-SVC-001.
 /// </summary>
 [TestClass]
 public sealed class ServiceTests : IDisposable

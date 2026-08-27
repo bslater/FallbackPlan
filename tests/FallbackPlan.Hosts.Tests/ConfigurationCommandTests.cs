@@ -11,6 +11,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// browser, and draft validation — every refusal asserted on the reason and
 /// the file left byte-identical, because the page branches on reasons and the
 /// scheduler reads the file.
+/// Establishes FR-DEST-007, FR-DEST-011 and FR-DEST-012 alongside FR-SVC-015.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable

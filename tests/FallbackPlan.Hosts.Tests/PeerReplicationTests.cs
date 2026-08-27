@@ -18,6 +18,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// Phase-2 peer criterion (a source destroyed and recovered from its
 /// destination) in its first concrete form. The role a grant carries decides
 /// whether a peer replicates or commands; the exchange is idempotent on re-run.
+/// Establishes FR-REP-001 and FR-REP-003.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

@@ -17,6 +17,7 @@ namespace FallbackPlan.Retention.Tests;
 /// still deletes nothing, the grace runs only when the writer publishes
 /// again, and the sweep then removes exactly what the plan condemned while
 /// the archive keeps publishing and walking clean.
+/// Establishes FR-GC-002 and FR-GC-003.
 /// </summary>
 [TestClass]
 public sealed class RetentionCycleTests : IDisposable

@@ -7,6 +7,7 @@ namespace FallbackPlan.Application.Tests;
 /// (FR-DEST-003). The decision lives apart from the measurement so it can be
 /// exercised without arranging a nearly-full disk — which is the only reason
 /// this rule would otherwise ship untested.
+/// Establishes FR-DEST-010's floor arithmetic.
 /// </summary>
 [TestClass]
 public sealed class DestinationCapacityTests

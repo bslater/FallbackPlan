@@ -13,6 +13,7 @@ namespace FallbackPlan.Retention.Tests;
 /// the spoke deletes exactly what it is told, and the granted floor is the
 /// one safeguard that holds when the hub is compromised — an instruction
 /// below it is refused whole, deleting nothing.
+/// Establishes FR-GC-007.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

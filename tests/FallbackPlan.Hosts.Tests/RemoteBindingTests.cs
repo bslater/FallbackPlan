@@ -15,6 +15,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// ADR-0030): a paired console authenticates and opens a session over a real
 /// TCP+TLS socket, an unpaired one is refused, and neither touches the local
 /// binding — which is always present and answers regardless.
+/// Establishes FR-SVC-004.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

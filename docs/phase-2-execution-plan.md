@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and peer replication (specs 03–05) is what remains of Phase 2 · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and the peer-protocol documents this phase owed (03–06) are written and implemented — what remains is the direct-to-destination tail ([ADR-0046](adr/0046-direct-to-destination-publication.md): the peer write adapter, the retention-with-trimming drill, and the default flip) and the reference-machine measurement H1 still owes · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -223,6 +223,16 @@ restated here with the test that will prove each:
 
 The next round starts here. Everything below is in priority order, and each item
 says what "done" looks like so it does not have to be re-derived.
+
+**The lead item is the direct-to-destination tail
+([ADR-0046](adr/0046-direct-to-destination-publication.md)).** The write path,
+the read paths, the migration, retirement, and the kill sweep are built and
+held by tests; what stands between the `direct_ship` flag and being the
+default is the peer write adapter (a declared peer is a stated `NotSupported`
+in the ledger today), a retention-with-trimming drill over aged direct-ship
+snapshots, and the flip itself. Done looks like: a set shipping to a peer
+destination through the sink, a trim proven destination-side, and new sets
+defaulting to direct-ship with staging the explicit opt-in.
 
 F1 is done and off this list, and it has now been measured — what it decided is
 recorded under Wave F above, what it bought in

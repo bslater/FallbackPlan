@@ -10,6 +10,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
+/// Establishes FR-SVC-008.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable

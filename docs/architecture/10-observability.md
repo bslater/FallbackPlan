@@ -63,6 +63,8 @@ Exported via OpenTelemetry. These exist to make the performance targets in [`../
 
 **Peers** — connectivity path (direct or relayed) · relay bytes · per-set fairness share · resumed-transfer count.
 
+**Jobs and the pool** ([ADR-0047](../adr/0047-backup-pool-and-priorities.md)) — pool occupancy · queue depth and time-to-slot by priority band · preemption count · pause age against the max-pause bound · resumes versus expiries.
+
 The emphasised metrics are the ones tied directly to NFR-PERF thresholds. Without them, "object-store request amplification" — a named major risk with packing as its mitigation — has no way of being detected when the mitigation stops working.
 
 ## 3. Job state machine

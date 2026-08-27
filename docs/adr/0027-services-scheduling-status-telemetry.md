@@ -329,3 +329,12 @@ because the states are right there. Rejected: `Running` is not `Protected`, and
 a status model that says what the software is *doing* rather than whether the
 user's data is *safe* answers a question nobody asked. §4 keeps them separate
 for that reason.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-08 | Accepted | Schedule semantics with missed-run coalescing, the journal-backed job-state store, in-box OpenTelemetry API with exporters deferred, and the derived status model |
+| 2026-08 | Amended (§1 ×2) | The due-ness rules restated for a pass that ticks during captures, a pool, and save-queues-first-backup (ADR-0047); the schedule arithmetic moved to the shared library both the service and the console read |
+| 2026-08 | Amended (§4 ×2) | The status derivation gained its destination axis — one `DestinationStatus.Describe` both producers call — and a warning class that surfaces without moving the derived state |
+| 2026-08 | Amended (Consequences) | The peer-host model superseded: peers are destinations under ADR-0030's pairing, not a second service shape |

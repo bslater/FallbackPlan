@@ -6,6 +6,7 @@ namespace FallbackPlan.Api.Tests;
 /// <summary>
 /// NFR-OPS-006 and ADR-0028 §8: a fleet view is where one green tick per
 /// machine is most tempting and most wrong.
+/// Establishes NFR-OPS-001.
 /// </summary>
 [TestClass]
 public sealed class StatusAggregationTests

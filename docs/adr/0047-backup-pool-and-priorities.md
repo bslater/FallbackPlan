@@ -163,6 +163,45 @@ when a slot frees.
    is unchanged for the same reason: a paused run's on-disk state is an
    interrupted run's on-disk state.
 
+## Amendment 2 — Preemption hardened: escalation, visibility, honest expiry (2026-08)
+
+The scenario sweep ran Amendment 1's rules through a multi-worker pool for
+the first time and found four places where the letter of the rules diverged
+from their intent. Each is a rule refinement, not a reversal.
+
+1. **A victim that never parks is escalated past.** Rule 3 asked exactly
+   one victim and never re-asked; a victim stuck inside one enormous file
+   blocked the incomer indefinitely while a responsive gated job sat beside
+   it. After a configurable escalation delay (seconds, not minutes), if the
+   chosen victim has not parked and outranked work still waits, the
+   next-worst gated, not-yet-pausing job is asked — repeating, worst-first,
+   until someone parks or candidates run out. A victim that parks late
+   simply joins the paused set (rank still decides resume order), and its
+   stale pause request is harmless.
+2. **The max-pause expiry is generation-stamped.** Rule 5's timer asked "is
+   the job paused *now*", so a run parked, resumed, and parked again just
+   before an earlier timer fired was killed by the stale timer. Each park
+   stamps a generation; a timer expires only the park it was armed for. The
+   bound itself became host-configurable (`ServiceOptions.MaxPauseOverride`
+   — a knob for hosts and harnesses, deliberately not configuration: the
+   bound guards the service's own memory and intents).
+3. **A suspension is visible on the progress stream, not only in the
+   journal.** The pause gate accepts additional observers, and the runner
+   registers the run's progress reporter: parking emits a `Paused` report
+   that keeps the run's live counts — a watcher's meter must not zero — and
+   the first scan event after resume refreshes the state.
+4. **The terminal record carries the run's summary, never "resumed".** The
+   journal keeps the prior detail when a transition supplies none, and a
+   preempted run's prior detail was the transient "resumed" — which then
+   survived onto the Complete row a person reads. Completion now always
+   writes an explicit detail (the run summary); clean-vs-partial stays a
+   state distinction.
+
+The park/complete race is closed alongside (insertion into the paused set
+is guarded by the job still running, and the supervisor removes paused and
+running state under one lock), and a dequeued writer id absent from the
+running table is logged (event 3759) rather than silently discarded.
+
 ## Status history
 
 | Date | Status | Note |
@@ -171,3 +210,4 @@ when a slot frees.
 | 2026-08 | Built | The decoupled pass and its `Transfers` hand-back, the one-run-per-set guard, the writer pool (schema 5's `max_concurrent_backups`), set/destination priorities end to end (schema 5, contract 1.17, both console editors), first-backup-on-save, gained-destination seeding, and the sync ledger's schema 2 baselines |
 | 2026-08 | Built (Amendment 1) | True suspend/resume under priority pressure: the pause gate through the capture pipeline's scan loop, park-frees-the-slot scheduling with resume-before-equal-work pickup, worst-first single-victim preemption, the live Paused journal state (console and CLI both treat it as in-flight), the max-pause self-cancel, and shutdown degrading a parked run to the ordinary cancelled → re-run path |
 | 2026-08 | Built (surfaces) | Contract 1.19 puts the rules' full-backup facts on the status matrix — each destination row says when its baseline completed and whether the pair is owed its seed — and the console's overview renders them as a Full backup column ("awaiting seed" against a bare "behind"); a paused run stays a live jobs card that says why it is suspended |
+| 2026-08 | Built (Amendment 2) | Escalating worst-first preemption past an unresponsive victim (`JobScheduler`), generation-stamped max-pause expiry with the `ServiceOptions.MaxPauseOverride` knob, pause/resume emitted on the progress stream with counts held (`PauseGate` observers through `BackupRunner`), the explicit terminal summary, and the park/complete race closed — pinned by `Hosts.Tests/JobSchedulerPreemptionTests` across multi-worker pools |

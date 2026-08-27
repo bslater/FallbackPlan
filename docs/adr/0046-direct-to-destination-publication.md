@@ -103,7 +103,17 @@ cheap for local paths, and memoized per blob per publication); verification
 and retention convergence for direct-ship sets read through the sink and
 land properly destination-side in the next record; peer destinations are
 not yet served by the sink (a stated `NotSupported` in the ledger, never a
-silent skip) until the peer write adapter lands.
+silent skip) until the peer write adapter lands. Two narrower consequences
+are accepted and named: each object is put **local metadata store first,
+then the targets**, so a put that fails at every target can leave the
+metadata store one object ahead of every destination — the run fails
+through the pipeline's ordinary interruption safety and the next catch-up
+carries the object out, exactly as it heals a dropped destination. And the
+unchanged-file short-circuit stays catalogue-trusting (NFR-PERF-003: the
+content is never opened), so a blob deleted from every replica behind the
+catalogue's back is re-shipped only when the dedupe probe next asks about
+its content; loss discovery belongs to verification and the sweep, not to
+capture.
 
 **Neutral** — the publication pipeline is untouched above the store
 interface; interruption safety is the same intent/ordering machinery,
@@ -131,3 +141,4 @@ per destination; staging sets behave exactly as before.
 | 2026-08 | Built (read paths) | Restore, destination verification and the retention traversal proven THROUGH the sink, unchanged: a restore of a direct-ship set comes back byte-identical (blobs read from whichever destination holds them), verify-destination re-reads each replica against its seals with zero damage, and the retention report walks closures out of destination-held metadata blobs. The staging trim's blob deletes are ignored by the sink by design — per-destination convergence is the deleting half. Outstanding before the flag flips: the peer write adapter, the migration record, and a full retention-with-trimming drill on aged direct-ship snapshots |
 | 2026-08 | Built (migration) | A staging set flagged direct_ship migrates at first open: metadata copies into the metadata store, the staging archive stays as a read-only seed source the sink consults last (so reuse and restores of unseeded history keep working), a standing notice says retirement awaits, and the pass keeps syncing while staging remains — the catch-up through the sink is what carries history outward. Contract 1.18's retire_staging deletes staging only when every non-lifecycle object it holds is present in the union of the destinations, refusing by count otherwise; retirement resolves the notice, and history then restores from the destinations alone. FanOut and the staging machinery stay in the codebase for unflagged sets until the default flips |
 | 2026-08 | Built (console retirement) | The staging-retirable notice carries the act it announces: a Retire staging button on the notice opens a typed confirmation and invokes retire_staging, refusals surfacing verbatim — and the threat model records what leaving the staging copy means (the source device no longer holds a whole-archive replica; capture now depends on a reachable destination) |
+| 2026-08 | Built (hardened) | The scenario sweep's correctness round: a behind destination is excluded from run scope like a baseline-less one (metadata without closure must not mint an in-sync row; migrating sets excepted while staging remains the union's promise), run scope is released on completion so reads resolve freshly, `CompleteRun` records outcomes on failure too, seeding is per-destination under the drop rule, the capacity floor applies to sink writes (FR-DEST-010), a pair owed its seed is recorded behind — never a counted failure that starves its own catch-up — and the 04 §5.1 kill matrix runs through a two-destination sink in `Hosts.Tests/DirectShipFaultSweepTests`, every put-death healing to sibling convergence. The direct-ship edges stopped assuming staging exists: the console's restore gate scans the metadata stores, write-only provisioning routes by the set's shape, and delete-set names what actually remains |

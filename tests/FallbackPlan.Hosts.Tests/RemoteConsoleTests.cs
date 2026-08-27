@@ -18,6 +18,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// criterion — a restore commanded from a console writes on the service's
 /// machine — reached through the real command surface rather than the client
 /// directly, and the refusal paths a human would hit.
+/// Establishes FR-SVC-005.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
