@@ -69,8 +69,8 @@ FallbackPlan.slnx
 │   └── FallbackPlan.Hosts.Tests/             ✓ drives the Agent and Recovery hosts
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
-├── specifications/                repository-format, peer-protocol, discovery-protocol,
-│                                  recovery-kit, conformance-vectors
+├── specifications/                repository-format, peer-protocol, command-contract,
+│                                  discovery-protocol, recovery-kit, conformance-vectors
 ├── docs/                          this set
 ├── tools/                         repository-inspector, fixture-generator,
 │                                  corruption-injector, network-fault-proxy

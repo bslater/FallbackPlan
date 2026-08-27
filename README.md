@@ -4,7 +4,7 @@
 
 An open-source backup and archival platform for Windows, macOS, and Linux. Its purpose is to restore a capability the consumer market has largely withdrawn — backing up one computer to another computer you control or trust, across a LAN or the internet, with no proprietary cloud service in between.
 
-**Status: Phase 0 ready to start.** The architecture is reviewed, the repository format is specified with conformance vectors, and the solution scaffold builds. Engine implementation has not begun.
+**Status: engine and service built and under active development.** The repository format is specified with conformance vectors and frozen behind its gate; the archive engine, the background service with its scheduling, destinations, retention and verification, the CLI, the local web console and the standalone recovery tool are all real, proven by a failing-test-first suite of a couple of thousand tests. The live picture — which of the 47 decision records is built, partly built, or specified only — is kept in the [documentation index](docs/README.md) and [implementation status](docs/implementation-status.md), deliberately not here, so this line does not rot.
 
 ---
 
