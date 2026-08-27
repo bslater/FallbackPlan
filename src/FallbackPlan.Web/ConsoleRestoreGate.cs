@@ -49,27 +49,49 @@ public static class ConsoleRestoreGate
     public sealed record GateAnswer(GateOutcome Outcome, string? Detail = null, string? GrantEnvelope = null);
 
     /// <summary>
-    /// Verifies a typed passphrase against the first staging archive under
-    /// <paramref name="archivesRoot"/> that will answer. Every archive a
-    /// service manages opens under the one service passphrase, so any archive
-    /// is as good a witness as another; a damaged one is skipped for the
-    /// next. A write-only archive is verified by derive-and-compare against
-    /// its descriptor's sealing public key (ADR-0042 §1 — no key object
-    /// exists to unwrap), and when <paramref name="grantRecipientHex"/> names
-    /// the service's recipient key the verified scalar is sealed into a
-    /// restore grant on the way out.
+    /// Verifies a typed passphrase against the first repository of the
+    /// installation that will answer: a staging archive under
+    /// <paramref name="archivesRoot"/>, or a direct-ship set's metadata
+    /// store under <paramref name="stateDirectory"/><c>/sets</c> (ADR-0046 —
+    /// on an install whose every set ships direct, the metadata stores are
+    /// the only local key files there are). Every repository a service
+    /// manages opens under the one service passphrase, so any is as good a
+    /// witness as another; a damaged one is skipped for the next. A
+    /// write-only repository is verified by derive-and-compare against its
+    /// descriptor's sealing public key (ADR-0042 §1 — no key object exists
+    /// to unwrap), and when <paramref name="grantRecipientHex"/> names the
+    /// service's recipient key the verified scalar is sealed into a restore
+    /// grant on the way out.
     /// </summary>
     /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
+    /// <param name="stateDirectory">The service's state directory, from <c>describe_service</c>; its <c>sets</c> child holds the metadata stores.</param>
     /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
     /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>; null mints no grant.</param>
     /// <param name="cancellationToken">Cancels the derivation.</param>
     /// <returns>The answer.</returns>
     public static async Task<GateAnswer> VerifyAsync(
-        string? archivesRoot, string passphraseText, string? grantRecipientHex, CancellationToken cancellationToken)
+        string? archivesRoot,
+        string? stateDirectory,
+        string passphraseText,
+        string? grantRecipientHex,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(passphraseText);
 
-        if (string.IsNullOrWhiteSpace(archivesRoot) || !Directory.Exists(archivesRoot))
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(archivesRoot) && Directory.Exists(archivesRoot))
+        {
+            roots.Add(archivesRoot);
+        }
+
+        if (!string.IsNullOrWhiteSpace(stateDirectory)
+            && Path.Combine(stateDirectory, "sets") is { } metadataRoot
+            && Directory.Exists(metadataRoot))
+        {
+            roots.Add(metadataRoot);
+        }
+
+        if (roots.Count == 0)
         {
             return new GateAnswer(
                 GateOutcome.Unavailable,
@@ -94,7 +116,7 @@ public static class ConsoleRestoreGate
 
         using var passphrase = Passphrase.Create(passphraseText);
         var sawAnArchive = false;
-        foreach (var archive in Directory.GetDirectories(archivesRoot))
+        foreach (var archive in roots.SelectMany(Directory.GetDirectories))
         {
             if (!File.Exists(Path.Combine(archive, RepositoryLifecycle.DescriptorKey.Value)))
             {
@@ -153,7 +175,7 @@ public static class ConsoleRestoreGate
             GateOutcome.Unavailable,
             sawAnArchive
                 ? "No local archive could answer the check."
-                : "No staging archive exists yet to verify against.");
+                : "No local repository exists yet to verify against — run a backup first.");
     }
 
     /// <summary>A provisioning ceremony's client half, resolved.</summary>

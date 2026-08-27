@@ -163,6 +163,43 @@ public sealed class ConfigurationCommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DeleteBackupSet_ADirectShipSet_NamesItsMetadataStoreNotAStagingArchive()
+    {
+        // The what-remains reply must describe what actually remains: a
+        // direct-ship set has no staging archive — its local remainder is the
+        // metadata store at <state>/sets/<id> (ADR-0046). Pointing the
+        // operator at a staging path that never existed invites deleting the
+        // wrong directory by hand.
+        _harness.WriteConfiguration("every 1h");
+        var path = ConfigurationPath;
+        var configuration = ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets =
+            [
+                .. configuration.BackupSets.Select(set =>
+                    string.Equals(set.Name, "docs", StringComparison.Ordinal)
+                        ? set with { DirectShip = true }
+                        : set),
+            ],
+        }).Save(path);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new DeleteBackupSetCommand("docs"), _timeout.Token);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var change);
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        Assert.IsTrue(
+            change.Lines.Any(line => line.Contains(metadata, StringComparison.Ordinal)),
+            $"the remainder line must name the metadata store: {string.Join(" | ", change.Lines)}");
+        Assert.IsFalse(
+            change.Lines.Any(line => line.Contains("staging archive", StringComparison.Ordinal)),
+            "a set that ships direct has no staging archive to point at");
+    }
+
+    [TestMethod]
     public async Task DeleteBackupSet_NamingNoConfiguredSet_IsNotFound()
     {
         await _harness.CreateRepositoryAsync();
@@ -209,6 +246,34 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.IsInstanceOfType<ConfigurationChangeResult>(deleted, out var change);
         Assert.IsTrue(change.Lines.Any(line => line.Contains(second, StringComparison.Ordinal)));
         Assert.ContainsSingle(ClientConfiguration.Load(ConfigurationPath).Destinations);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_WithoutAPriority_PreservesTheStoredOne()
+    {
+        // Null on an upsert preserves (contract 1.17): a pre-1.17 client
+        // edits nothing it cannot see, so re-saving a destination without
+        // the priority field must not silently reset the transfer order.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, Priority: 7)),
+            _timeout.Token));
+        Assert.AreEqual(7, ClientConfiguration.Load(ConfigurationPath).Destinations.Single().Priority);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null)),
+            _timeout.Token));
+        Assert.AreEqual(
+            7, ClientConfiguration.Load(ConfigurationPath).Destinations.Single().Priority,
+            "an upsert that says nothing about priority must preserve the stored one");
     }
 
     [TestMethod]

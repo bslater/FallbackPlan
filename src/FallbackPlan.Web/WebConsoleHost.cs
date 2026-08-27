@@ -338,6 +338,7 @@ public static class WebConsoleHost
         }
 
         string? archivesRoot = null;
+        string? stateDirectory = null;
         string? grantRecipient = null;
         try
         {
@@ -346,6 +347,7 @@ public static class WebConsoleHost
                 is ServiceDescriptionResult description)
             {
                 archivesRoot = description.ArchivesRoot;
+                stateDirectory = description.StateDirectory;
                 grantRecipient = description.RestoreGrantRecipient;
             }
         }
@@ -356,7 +358,7 @@ public static class WebConsoleHost
         }
 
         var answer = await ConsoleRestoreGate.VerifyAsync(
-            archivesRoot, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
+            archivesRoot, stateDirectory, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
 
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json; charset=utf-8";

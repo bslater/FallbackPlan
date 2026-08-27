@@ -54,12 +54,21 @@ public sealed partial class ServiceCommandHandler
 
         using (credential)
         {
-            var path = runtime.ArchivePath(set.Id);
+            // The set's repository lives where its shape says (ADR-0046): a
+            // direct-ship set's is its metadata store beside the state, a
+            // staging set's is its staging archive. Routing by flag keeps a
+            // provision-then-flag ceremony from minting a staging archive
+            // that would read as a bogus migration source — and existence is
+            // asked of the SAME path, so an already-captured direct-ship set
+            // adopts its metadata store instead of mis-detecting against an
+            // empty staging directory.
+            var path = set.DirectShip ? runtime.SetMetadataPath(set.Id) : runtime.ArchivePath(set.Id);
+            var exists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
             Directory.CreateDirectory(path);
             var store = new LocalFileSystemObjectStore(path);
             var lines = new List<string>();
 
-            if (runtime.ArchiveExists(set.Id))
+            if (exists)
             {
                 // Adoption (ADR-0042 §10): a descriptor is already there — a
                 // moved archive, a restored replica, or a state directory that
@@ -78,13 +87,13 @@ public sealed partial class ServiceCommandHandler
                     // the provisioning verb.
                     return new ServiceError(
                         ServiceErrorReason.Failed,
-                        $"Set '{set.Name}' has a staging archive whose descriptor does not read: {damaged.Message}");
+                        $"Set '{set.Name}' has a repository whose descriptor does not read: {damaged.Message}");
                 }
                 if (!RepositoryLifecycle.IsWriteOnly(descriptor))
                 {
                     return new ServiceError(
                         ServiceErrorReason.InvalidArgument,
-                        $"Set '{set.Name}' has a format {descriptor.FormatVersion} staging archive — an existing "
+                        $"Set '{set.Name}' has a format {descriptor.FormatVersion} repository — an existing "
                         + "repository cannot become write-only; write-only is chosen at creation (ADR-0042).");
                 }
 
@@ -105,7 +114,9 @@ public sealed partial class ServiceCommandHandler
                         (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
                     .ConfigureAwait(false);
                 opened.Dispose();
-                lines.Add($"Set '{set.Name}' now has a write-only (format 2) staging archive; the write credential is stored.");
+                lines.Add(set.DirectShip
+                    ? $"Set '{set.Name}' now has a write-only (format 2) metadata store; the write credential is stored."
+                    : $"Set '{set.Name}' now has a write-only (format 2) staging archive; the write credential is stored.");
             }
 
             runtime.WriteCredentials.Save(set.Id, credential);

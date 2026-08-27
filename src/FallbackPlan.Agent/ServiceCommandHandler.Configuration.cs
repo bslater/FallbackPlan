@@ -55,11 +55,15 @@ public sealed partial class ServiceCommandHandler
         }
 
         // Removal is a config edit, never an erasure — say what remains,
-        // because "deleted the set" is the dangerous misreading (ADR-0037 §4).
+        // because "deleted the set" is the dangerous misreading (ADR-0037 §4)
+        // — and what remains depends on the set's shape: a direct-ship set
+        // has no staging archive, only its local metadata store (ADR-0046).
         List<string> lines =
         [
             $"Backup set '{command.Name}' is no longer configured; no data was deleted.",
-            $"Its staging archive remains at '{runtime.ArchivePath(set.Id)}'.",
+            set.DirectShip
+                ? $"Its local metadata store remains at '{runtime.SetMetadataPath(set.Id)}'."
+                : $"Its staging archive remains at '{runtime.ArchivePath(set.Id)}'.",
         ];
         lines.AddRange(set.Destinations.Select(reference =>
             $"Destination '{reference.Ref}' keeps every copy it holds for this set."));
@@ -285,6 +289,16 @@ public sealed partial class ServiceCommandHandler
                 ServiceErrorReason.Refused, $"Backup set '{set.Name}' holds no staging archive to retire.");
         }
 
+        // The archive names the repository id every replica directory is
+        // keyed by — one open, outside the loop, because it answers the same
+        // for every destination.
+        var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+        if (archive is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused, $"Backup set '{set.Name}' has no archive open to compare against.");
+        }
+
         // The union of what the destinations hold. Reachability is required
         // of every referenced local-path destination: an absent drive might
         // be the only holder of something staging is about to stop holding.
@@ -309,13 +323,6 @@ public sealed partial class ServiceCommandHandler
                     ServiceErrorReason.Refused,
                     $"Destination '{destination.Name}' at '{destination.Path}' is not reachable; retirement "
                     + "needs every destination present to prove nothing would be lost.");
-            }
-
-            var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
-            if (archive is null)
-            {
-                return new ServiceError(
-                    ServiceErrorReason.Refused, $"Backup set '{set.Name}' has no archive open to compare against.");
             }
 
             var replica = new Storage.Local.LocalFileSystemObjectStore(

@@ -105,6 +105,61 @@ public sealed class RestoreGateTests
     }
 
     [TestMethod]
+    public async Task Gate_OnADirectShipOnlyInstall_VerifiesAgainstTheMetadataStore()
+    {
+        // A direct-ship set stages nothing: its key objects live in the
+        // metadata store at <state>/sets/<set id> (ADR-0046), and an install
+        // whose every set ships direct has an EMPTY archives root. The gate
+        // must scan the metadata stores too, or such an install can never
+        // verify a restore passphrase without a service restart onto the
+        // staging path.
+        var scratch = Path.Combine(Path.GetTempPath(), "fbp-gate-ship", Guid.NewGuid().ToString("n")[..12]);
+        var archives = Path.Combine(scratch, "archives");
+        var state = Path.Combine(scratch, "state");
+        var metadata = Path.Combine(state, "sets", new string('a', 32));
+        Directory.CreateDirectory(archives);
+        Directory.CreateDirectory(metadata);
+        try
+        {
+            using (var right = Passphrase.Create("the right passphrase!!"))
+            {
+                (await RepositoryLifecycle.CreateAsync(
+                    new LocalFileSystemObjectStore(metadata), right, RepositoryCreationSettings.Default,
+                    1_722_700_000_000UL, CancellationToken.None)).Dispose();
+            }
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            harness.Clients.Client.Respond = _ => new ServiceDescriptionResult(
+                "1.19", "test", "vm", state, false, 0, ArchivesRoot: archives);
+
+            using var good = Gate(harness, """{"passphrase":"the right passphrase!!"}""");
+            using var verified = await harness.Http.SendAsync(good);
+            Assert.AreEqual(HttpStatusCode.OK, verified.StatusCode);
+            using (var body = JsonDocument.Parse(await verified.Content.ReadAsStringAsync()))
+            {
+                Assert.AreEqual("verified", body.RootElement.GetProperty("outcome").GetString());
+            }
+
+            using var bad = Gate(harness, """{"passphrase":"not the passphrase"}""");
+            using var wrong = await harness.Http.SendAsync(bad);
+            using (var body = JsonDocument.Parse(await wrong.Content.ReadAsStringAsync()))
+            {
+                Assert.AreEqual("wrong", body.RootElement.GetProperty("outcome").GetString());
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(scratch, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task Gate_WithNothingLocalToCheck_SaysUnavailableRatherThanPretending()
     {
         await using var harness = await ConsoleHarness.StartAsync();

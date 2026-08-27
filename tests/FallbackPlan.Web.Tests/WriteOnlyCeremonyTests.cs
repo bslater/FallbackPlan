@@ -188,14 +188,14 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         foreach (var unusable in new[] { "this is not hex", "abcd" })
         {
             var answer = await ConsoleRestoreGate.VerifyAsync(
-                _archives, PassphraseText, unusable, CancellationToken.None);
+                _archives, stateDirectory: null, PassphraseText, unusable, CancellationToken.None);
             Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, answer.Outcome, unusable);
             Assert.Contains("grant-recipient", answer.Detail!, StringComparison.Ordinal);
         }
 
         // No recipient at all still verifies — it just mints no grant.
         var verified = await ConsoleRestoreGate.VerifyAsync(
-            _archives, PassphraseText, grantRecipientHex: null, CancellationToken.None);
+            _archives, stateDirectory: null, PassphraseText, grantRecipientHex: null, CancellationToken.None);
         Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Verified, verified.Outcome);
         Assert.IsNull(verified.GrantEnvelope);
     }

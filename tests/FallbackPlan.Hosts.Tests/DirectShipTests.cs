@@ -583,6 +583,217 @@ public sealed class DirectShipTests : IDisposable
     }
 
     /// <summary>Proves a replica is a whole repository: it unlocks alone.</summary>
+    [TestMethod]
+    public async Task DirectShipSet_APeerBesideALocalPath_IsAStatedIncapacityNotAFailure()
+    {
+        // Peer shipping is ADR-0046's later slice: a declared peer is a
+        // stated incapacity in the ledger (FR-DEST-005's rule — never a
+        // silent skip, never a fault), while the local-path sibling carries
+        // the run.
+        Directory.CreateDirectory(VaultA);
+        WritePeerConfiguration(vaultAToo: true);
+        _harness.WriteSourceFile("docs/report.txt", "served by the local sibling");
+
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets.Single();
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
+            .WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+
+        var peer = runtime.DestinationSync.Find(set.Id, "offsite-peer");
+        Assert.IsNotNull(peer, "the incapacity must be a ledger row, not silence");
+        Assert.AreEqual(DestinationSyncState.NotSupported, peer.State);
+        Assert.Contains("peer", peer.LastError!, StringComparison.Ordinal);
+
+        Assert.AreEqual(
+            DestinationSyncState.InSync, runtime.DestinationSync.Find(set.Id, "vault-a")!.State);
+        await AssertOpensAloneAsync(Assert.ContainsSingle(Directory.GetDirectories(VaultA)));
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_OnlyAPeerDestination_RefusesTheCaptureAsAStatedFailure()
+    {
+        // With every destination unservable there is nowhere to write; the
+        // refusal is stated, and the peer's row still says why.
+        WritePeerConfiguration(vaultAToo: false);
+        _harness.WriteSourceFile("docs/report.txt", "nowhere serviceable");
+
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets.Single();
+
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
+            .WaitAsync(Timeout);
+        Assert.AreEqual("failed", outcome.Outcome);
+        Assert.Contains("destination", outcome.Detail!, StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(
+            DestinationSyncState.NotSupported,
+            runtime.DestinationSync.Find(set.Id, "offsite-peer")!.State);
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_ADedupeCandidateLostFromTheDestination_IsReShippedNotAssumedPresent()
+    {
+        // The stale-catalogue negative, at the layer the architecture
+        // defends it: the catalogue is a cache whose row can outlive the
+        // store's object, so the reuse gate probes blob presence before
+        // referencing (DedupTrustGate) — and on a direct-ship set that probe
+        // reads THROUGH the sink to the destination, the only place the
+        // bytes live. A new file whose content matches a blob no destination
+        // holds any more must be written again, never referenced into a
+        // dangling manifest. (The unchanged-file short-circuit deliberately
+        // stays catalogue-trusting — NFR-PERF-003's "the content is never
+        // opened" — with verification and catch-up owning loss discovery.)
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        _harness.WriteSourceFile("docs/report.txt", new string('r', 50_000) + "bytes that will go missing");
+
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(VaultA));
+        var data = Path.Combine(replica, "blobs", "data");
+        var shipped = Directory.GetFiles(data, "*", SearchOption.AllDirectories);
+        Assert.IsTrue(shipped.Length > 0);
+        foreach (var blob in shipped)
+        {
+            File.Delete(blob);
+        }
+
+        // A SECOND file with the same content: its segments dedupe against
+        // the first capture's catalogue rows, whose blobs are now gone.
+        _harness.WriteSourceFile("docs/copy.txt", new string('r', 50_000) + "bytes that will go missing");
+        var outcome = await Scheduler
+            .Enqueue(runtime, set, DateTimeOffset.Now.AddMinutes(5), userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsTrue(
+            Directory.GetFiles(data, "*", SearchOption.AllDirectories).Length > 0,
+            "content whose catalogue row points at a blob no destination holds must be re-shipped");
+    }
+
+    [TestMethod]
+    public async Task TwoDirectShipSets_ShareAWidthTwoPoolWithoutCrossTalk()
+    {
+        // Two direct-ship sets, two destinations, a pool wide enough to run
+        // them together (FR-SVC-012): each set's run scope, metadata store
+        // and replica stay its own — the sink state is per set, not per
+        // service.
+        Directory.CreateDirectory(VaultA);
+        Directory.CreateDirectory(VaultB);
+        _harness.WriteSourceFile("docs/one.txt", "the first set's bytes");
+        _harness.WriteSourceFile("pics/two.bin", new string('p', 120_000));
+        WriteTwoSetConfiguration();
+
+        using var passphrase = Passphrase.Create(
+            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                MaxConcurrentBackupsOverride = 2,
+            },
+            passphrase,
+            Timeout);
+
+        var docs = runtime.Configuration.BackupSets.Single(set => set.Name == "docs");
+        var pics = runtime.Configuration.BackupSets.Single(set => set.Name == "pics");
+        var first = Scheduler.Enqueue(runtime, docs, DateTimeOffset.Now, userInitiated: true);
+        var second = Scheduler.Enqueue(runtime, pics, DateTimeOffset.Now, userInitiated: true);
+
+        var outcomes = await Task.WhenAll(first, second).WaitAsync(Timeout);
+        Assert.IsTrue(outcomes.All(outcome => outcome.Outcome == "ran"),
+            string.Join(" | ", outcomes.Select(outcome => $"{outcome.SetName}: {outcome.Outcome} {outcome.Detail}")));
+
+        // One replica per vault, each a whole repository of ITS set.
+        await AssertOpensAloneAsync(Assert.ContainsSingle(Directory.GetDirectories(VaultA)));
+        await AssertOpensAloneAsync(Assert.ContainsSingle(Directory.GetDirectories(VaultB)));
+        Assert.IsTrue(File.Exists(Path.Combine(
+            _harness.StateDirectory, "sets", docs.Id, "repository-format")));
+        Assert.IsTrue(File.Exists(Path.Combine(
+            _harness.StateDirectory, "sets", pics.Id, "repository-format")));
+    }
+
+    /// <summary>A declared peer destination — with or without a local-path sibling.</summary>
+    private void WritePeerConfiguration(bool vaultAToo)
+    {
+        List<DestinationConfiguration> destinations =
+        [
+            new()
+            {
+                Id = new string('9', 32), Name = "offsite-peer", Kind = DestinationKind.Peer,
+                Fingerprint = new string('f', 52), Endpoint = "203.0.113.9:7423",
+            },
+        ];
+        List<SetDestinationReference> references = [new() { Ref = "offsite-peer" }];
+        if (vaultAToo)
+        {
+            destinations.Insert(0, new()
+            {
+                Id = new string('1', 32), Name = "vault-a", Kind = DestinationKind.LocalPath, Path = VaultA,
+            });
+            references.Insert(0, new() { Ref = "vault-a" });
+        }
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = destinations,
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = _harness.DocsSetId,
+                    Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
+                    Schedule = "every 1h",
+                    Destinations = references,
+                    DirectShip = true,
+                },
+            ],
+        }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+    }
+
+    /// <summary>Two direct-ship sets on disjoint roots and disjoint vaults.</summary>
+    private void WriteTwoSetConfiguration() => new ClientConfiguration
+    {
+        SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+        Destinations =
+        [
+            new()
+            {
+                Id = new string('1', 32), Name = "vault-a", Kind = DestinationKind.LocalPath, Path = VaultA,
+            },
+            new()
+            {
+                Id = new string('2', 32), Name = "vault-b", Kind = DestinationKind.LocalPath, Path = VaultB,
+            },
+        ],
+        BackupSets =
+        [
+            new BackupSetConfiguration
+            {
+                Id = _harness.DocsSetId,
+                Name = "docs",
+                Roots = [new BackupRootConfiguration { Path = Path.Combine(_harness.SourceRoot, "docs") }],
+                Schedule = "every 1h",
+                Destinations = [new SetDestinationReference { Ref = "vault-a" }],
+                DirectShip = true,
+            },
+            new BackupSetConfiguration
+            {
+                Id = new string('b', 32),
+                Name = "pics",
+                Roots = [new BackupRootConfiguration { Path = Path.Combine(_harness.SourceRoot, "pics") }],
+                Schedule = "every 1h",
+                Destinations = [new SetDestinationReference { Ref = "vault-b" }],
+                DirectShip = true,
+            },
+        ],
+    }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+
     private async Task AssertOpensAloneAsync(string replica)
     {
         using var passphrase = Passphrase.Create(

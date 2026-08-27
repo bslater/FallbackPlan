@@ -33,6 +33,97 @@ public sealed class WriteOnlySetTests : IDisposable
         _harness.Dispose();
     }
 
+    /// <summary>Flips the harness's docs set to ship direct, by file edit.</summary>
+    private void MakeDocsDirectShip()
+    {
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        var configuration = Application.ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets =
+            [
+                .. configuration.BackupSets.Select(set =>
+                    string.Equals(set.Name, "docs", StringComparison.Ordinal)
+                        ? set with { DirectShip = true }
+                        : set),
+            ],
+        }).Save(path);
+    }
+
+    [TestMethod]
+    public async Task ProvisioningADirectShipSet_CreatesItsMetadataStore_NeverAStagingArchive()
+    {
+        // A direct-ship set's local repository IS its metadata store at
+        // <state>/sets/<id> (ADR-0046). Provisioning one write-only must
+        // create THERE: a staging archive minted for a set that ships direct
+        // is a bogus migration source and a false staging-retirable notice
+        // waiting to happen.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        MakeDocsDirectShip();
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        Assert.IsTrue(
+            File.Exists(Path.Combine(metadata, RepositoryLifecycle.DescriptorKey.Value)),
+            "the write-only repository of a direct-ship set is its metadata store");
+        Assert.IsFalse(
+            File.Exists(Path.Combine(_harness.RepositoryPath, RepositoryLifecycle.DescriptorKey.Value)),
+            "no staging archive may be minted for a set that ships direct");
+    }
+
+    [TestMethod]
+    public async Task ReProvisioningADirectShipSet_AdoptsItsExistingMetadataStore()
+    {
+        // The adoption story a lost state directory needs (ADR-0042 §10),
+        // routed by the set's shape: the existing v2 repository to prove
+        // against lives in the metadata store, and the verb must read THAT
+        // descriptor — not mis-detect adoption against an empty staging
+        // directory it had no business creating.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        MakeDocsDirectShip();
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        Directory.CreateDirectory(metadata);
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        using (var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.CreateRepository))
+        {
+            (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+                new LocalFileSystemObjectStore(metadata), authority.Credential, salt,
+                RepositoryCreationSettings.Default.KdfParameters, createdBy: "drill",
+                1_722_700_000_000UL, _timeout.Token)).Dispose();
+        }
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token),
+            out var adopted);
+        Assert.IsTrue(
+            adopted.Lines.Any(line => line.Contains("adopted", StringComparison.Ordinal)),
+            $"the existing metadata store must be adopted, not shadowed: {string.Join(" | ", adopted.Lines)}");
+    }
+
     [TestMethod]
     public async Task WriteOnlySet_ProvisionBackupBrowseAndGrantedRestore_WorksWithoutAServicePassphrase()
     {
