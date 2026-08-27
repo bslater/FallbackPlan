@@ -1,5 +1,12 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
+    "console (opens the browser)": {
+      "commandName": "Project",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:5099"
+    },
     "console": {
       "commandName": "Project",
       "commandLineArgs": "--state C:\\fbp\\state --port 5099",

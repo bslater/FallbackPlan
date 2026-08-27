@@ -1,6 +1,27 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "init (create a repo)": {
+    "help (no prerequisites)": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "status (via running service)": {
+      "commandName": "Project",
+      "commandLineArgs": "status --state C:\\fbp\\state"
+    },
+    "snapshots (via running service)": {
+      "commandName": "Project",
+      "commandLineArgs": "snapshots --state C:\\fbp\\state"
+    },
+    "backup (via running service, named set)": {
+      "commandName": "Project",
+      "commandLineArgs": "backup --state C:\\fbp\\state --set docs"
+    },
+    "changes (what would the next backup do)": {
+      "commandName": "Project",
+      "commandLineArgs": "changes --state C:\\fbp\\state --set docs"
+    },
+    "init (create a repo, direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "init --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE",
       "environmentVariables": {
@@ -14,14 +35,14 @@
         "FBP_PASSPHRASE": "a long local dev passphrase"
       }
     },
-    "snapshots": {
+    "snapshots (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "snapshots --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct",
       "environmentVariables": {
         "FBP_PASSPHRASE": "a long local dev passphrase"
       }
     },
-    "check": {
+    "check (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "check --level records --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct --log-level debug",
       "environmentVariables": {

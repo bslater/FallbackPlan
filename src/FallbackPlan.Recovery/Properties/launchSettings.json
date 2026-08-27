@@ -1,5 +1,10 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
+    "help (no prerequisites)": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
     "open (prove the kit and passphrase)": {
       "commandName": "Project",
       "commandLineArgs": "open --repo C:\\fbp\\archives\\<set-id> --kit C:\\fbp\\kit.fbpkit --passphrase-env FBP_PASSPHRASE",
