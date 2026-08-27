@@ -7,8 +7,11 @@
     },
     "setup (first run)": {
       "commandName": "Project",
-      "commandLineArgs": "setup --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --acknowledge-loss --kit-output C:\\fbp\\kit.fbpkit",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "commandLineArgs": "setup --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --acknowledge-loss --kit-output C:\\fbp\\kit.fbpkit --user admin --password-env FBP_ADMIN_PASSWORD",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "a long local dev passphrase",
+        "FBP_ADMIN_PASSWORD": "a local dev admin password"
+      }
     },
     "run (foreground)": {
       "commandName": "Project",
