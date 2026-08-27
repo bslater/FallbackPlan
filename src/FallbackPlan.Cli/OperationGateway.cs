@@ -98,7 +98,7 @@ public interface IOperationGateway : IAsyncDisposable
     /// <summary>
     /// Converges destinations now, outside the schedule (FR-DEST-002). Only a
     /// service can serve this — the fan-out needs its scheduler, ledger and
-    /// staging archives — so direct mode refuses with directions.
+    /// per-set archives — so direct mode refuses with directions.
     /// </summary>
     /// <param name="setName">The set to sync, or null for every configured set.</param>
     /// <param name="destinationName">The destination to sync, or null for each set's every destination.</param>
@@ -110,8 +110,8 @@ public interface IOperationGateway : IAsyncDisposable
     /// Reports what changed under a set's source since its last backup —
     /// new, updated, moved, deleted, and files the rules no longer include
     /// (ADR-0038, FR-SVC-009). Only a service can serve this — the rescan
-    /// reads the set's staging catalogue under the service's runtime — so
-    /// direct mode refuses with directions.
+    /// reads the set's catalogue under the service's runtime — so direct
+    /// mode refuses with directions.
     /// </summary>
     /// <param name="setName">The set to compare, or null for the default set.</param>
     /// <param name="sampleLimit">The most paths listed per bucket; null takes the service default.</param>
@@ -962,7 +962,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         string? setName, string? destinationName, CancellationToken cancellationToken) =>
         // Fan-out belongs to the service: its scheduler owns the transfer
         // lane, its ledger records the outcome, and its runtime holds every
-        // set's staging archive. A direct-mode copy would race all three.
+        // set's archive. A direct-mode copy would race all three.
         throw new CliFailureException(Strings.DirectGateway_SyncNeedsTheService);
 
     /// <inheritdoc/>
@@ -976,8 +976,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     /// <inheritdoc/>
     public ValueTask<OperationReport> PreviewSetChangesAsync(
         string? setName, int? sampleLimit, CancellationToken cancellationToken) =>
-        // The rescan reads a set's staging catalogue, which the running
-        // service holds open — a second direct open would race its writer.
+        // The rescan reads a set's catalogue, which the running service
+        // holds open — a second direct open would race its writer.
         throw new CliFailureException(Strings.DirectGateway_ChangesNeedsTheService);
 
     /// <inheritdoc/>

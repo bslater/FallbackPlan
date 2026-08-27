@@ -6,8 +6,10 @@ using FallbackPlan.Storage.Local;
 namespace FallbackPlan.Agent;
 
 /// <summary>
-/// Fans one backup set's staging archive out to its declared destinations
-/// (ADR-0034 §3): the copy runs on the transfer lane, at most one queued or
+/// Converges one backup set's declared destinations from its archive
+/// (ADR-0034 §3) — the staging archive, or, for a direct-ship set, the
+/// catch-up pass behind bytes the ship sink already sent (ADR-0046): the
+/// copy runs on the transfer lane, at most one queued or
 /// running sync per <c>(set, destination)</c>, and every outcome — success,
 /// unreachable, refused, not-yet-served — lands in the sync ledger the status
 /// surface reads (FR-DEST-002/003/004).
@@ -398,13 +400,13 @@ public static class FanOut
     }
 
     /// <summary>
-    /// The staging archive's highest snapshot publication sequence — the
+    /// The archive's highest snapshot publication sequence — the
     /// replication gate's currency (FR-GC-009) — and the store key of the
     /// snapshot carrying it, which every verification sample includes so the
     /// newest recovery point is the best-verified one (FR-VER-002). Read
     /// from the standalone snapshot records' cleartext counters: the one
-    /// per-publication monotonic a single-writer staging archive has,
-    /// needing no keys and no catalogue.
+    /// per-publication monotonic a single-writer archive has — staging or
+    /// direct-ship — needing no keys and no catalogue.
     /// </summary>
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)

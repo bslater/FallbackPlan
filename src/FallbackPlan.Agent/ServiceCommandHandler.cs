@@ -154,8 +154,10 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// Runs a pass on the queue's writer lane and waits for it. Retention is
-    /// a writer: it tombstones and deletes in the staging archives, so it
-    /// serialises against backups rather than racing them (ADR-0029 §4's
+    /// a writer: it tombstones and deletes in the sets' archives, so it takes
+    /// the writer lane rather than racing the captures that share it — and
+    /// the per-set exclusion, not the lane (now a pool, ADR-0047), is what
+    /// keeps one set's retention and its capture apart (ADR-0029 §4's
     /// reasoning, applied to the one maintenance path that mutates).
     /// </summary>
     private async ValueTask<ServiceResult> OnWriterLaneAsync(
@@ -188,8 +190,8 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>
-    /// One retention pass per configured set with a staging archive
-    /// (architecture 07): report always, tombstone and sweep only on apply.
+    /// One retention pass per configured set with an archive on disk —
+    /// staging, or a direct-ship metadata store (architecture 07, ADR-0046): report always, tombstone and sweep only on apply.
     /// A gate hold past its deferral bound raises the FR-GC-009 warning as a
     /// durable notice.
     /// </summary>
@@ -1529,13 +1531,6 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>
-    /// Converges destinations on demand (FR-DEST-002, ADR-0034 §3): one
-    /// transfer-lane sync per matching pair, awaited here so the answer
-    /// reflects the refreshed ledger. Deliberately NOT on the writer lane —
-    /// fan-out reads staging and runs on the transfer lane; a pair whose
-    /// sync is already queued or running is reported, not doubled.
-    /// </summary>
-    /// <summary>
     /// Re-reads the named destinations' stored objects and reports what no
     /// longer matches its seal (FR-VER-002, FR-VER-004).
     /// </summary>
@@ -1661,6 +1656,15 @@ public sealed partial class ServiceCommandHandler(
         }
     }
 
+    /// <summary>
+    /// Converges destinations on demand (FR-DEST-002, ADR-0034 §3): one
+    /// transfer-lane sync per matching pair, awaited here so the answer
+    /// reflects the refreshed ledger. Deliberately NOT on the writer lane —
+    /// fan-out reads the set's archive (staging, or a direct-ship set's
+    /// replicas through the sink, ADR-0046) and runs on the transfer lane;
+    /// a pair whose sync is already queued or running is reported, not
+    /// doubled.
+    /// </summary>
     private async ValueTask<ServiceResult> SyncAsync(SyncCommand command, CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;

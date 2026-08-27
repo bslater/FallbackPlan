@@ -15,8 +15,8 @@ namespace FallbackPlan.Agent;
 /// Extracted from <see cref="ServiceRuntime"/>'s flat fields so that "an
 /// archive and its writer-side state" is one value with one lifetime. Under
 /// ADR-0034 the service holds one of these per backup set — each set's
-/// staging archive with its own gapless sequence — and this type is the unit
-/// that multiplies; the runtime keeps everything that stays singular (the
+/// archive, staging or direct-ship (ADR-0046), with its own gapless sequence
+/// — and this type is the unit that multiplies; the runtime keeps everything that stays singular (the
 /// state-directory lock, the job journal, the queue, the progress hub).
 /// </remarks>
 public sealed class ArchiveHandle : IDisposable

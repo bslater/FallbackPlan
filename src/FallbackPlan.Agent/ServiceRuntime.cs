@@ -16,7 +16,7 @@ namespace FallbackPlan.Agent;
 /// <summary>How a service is configured at start-up.</summary>
 public sealed record ServiceOptions
 {
-    /// <summary>The directory holding one staging archive per backup set, each under its set id (ADR-0034).</summary>
+    /// <summary>The directory holding a staging archive per staging-mode backup set, each under its set id (ADR-0034); a direct-ship set keeps nothing here (ADR-0046).</summary>
     public required string ArchivesRoot { get; init; }
 
     /// <summary>The state directory whose writer role the service holds.</summary>
@@ -74,8 +74,9 @@ public sealed record ServiceOptions
 
 /// <summary>
 /// The long-lived service (ADR-0028 §2): sole holder of the state directory
-/// and, per backup set, of that set's staging archive — its writer sequence,
-/// its catalogue, its spool (ADR-0034, ADR-0028 amendment).
+/// and, per backup set, of that set's archive — its staging archive, or a
+/// direct-ship set's local metadata store (ADR-0046) — with its writer
+/// sequence, its catalogue, its spool (ADR-0034, ADR-0028 amendment).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -213,8 +214,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     internal WriteCredentialStore WriteCredentials { get; }
 
     /// <summary>
-    /// What first-run setup provisioned, from which every set's staging
-    /// archive is created (ADR-0044 §2).
+    /// What first-run setup provisioned, from which every set's archive —
+    /// staging, or a direct-ship set's metadata store — is created
+    /// (ADR-0044 §2).
     /// </summary>
     internal InstallationCredentialStore InstallationCredential { get; }
 
@@ -397,8 +399,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
         || File.Exists(Path.Combine(SetMetadataPath(setId), RepositoryLifecycle.DescriptorKey.Value));
 
     /// <summary>
-    /// Takes the writer role. No archive opens here: each set's staging
-    /// archive opens — or is created — on first use, so start-up cost does
+    /// Takes the writer role. No archive opens here: each set's archive —
+    /// its staging archive, or a direct-ship set's metadata store — opens,
+    /// or is created, on first use, so start-up cost does
     /// not scale with sets configured. Failure to take the role is refused
     /// with the holder named — never worked around (FR-SVC-002).
     /// </summary>
@@ -448,9 +451,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// The set's staging archive, opened on first use — and created on first
-    /// backup, because staging is internal and nobody runs `init` for it
-    /// (ADR-0034 §1).
+    /// The set's archive, opened on first use — its staging archive, or a
+    /// direct-ship set's metadata store fronted by the ship sink (ADR-0046)
+    /// — and created on first backup, because neither is something anybody
+    /// runs `init` for (ADR-0034 §1).
     /// </summary>
     /// <param name="set">The set whose archive to resolve.</param>
     /// <param name="cancellationToken">Cancels an open or create.</param>
@@ -465,8 +469,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// A set's staging archive when it already exists on disk; null when the
-    /// set has never been backed up. Read paths use this so that listing
+    /// A set's archive — staging or direct-ship metadata store — when it
+    /// already exists on disk; null when the set has never been backed up. Read paths use this so that listing
     /// snapshots never mints an empty archive as a side effect.
     /// </summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -481,8 +485,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// Every configured set whose staging archive exists, with the archive
-    /// open — the enumeration behind snapshots, status, verify and check.
+    /// Every configured set whose archive exists on disk — staging or
+    /// direct-ship — with the archive open — the enumeration behind snapshots, status, verify and check.
     /// </summary>
     /// <param name="cancellationToken">Cancels the opens.</param>
     /// <returns>Pairs of set and open archive, in configuration order.</returns>
@@ -501,24 +505,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
         return result;
     }
 
-    /// <summary>
-    /// Opens — or creates — a set's staging archive from the installation
-    /// credential first-run setup provisioned (ADR-0044 §2), or returns null
-    /// when this installation has none or this set is not its business.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Returning null rather than throwing is what keeps the ladder in
-    /// <see cref="ArchiveForAsync(string, bool, CancellationToken)"/> a ladder: two of the three ways out of
-    /// here are "not mine", and the arm below still has a passphrase to try.
-    /// </para>
-    /// <para>
-    /// A format 1 archive is one of those ways out. An installation set up
-    /// after such a set already existed keeps opening it with the passphrase;
-    /// nothing is migrated, because write-only is chosen at creation
-    /// (ADR-0042).
-    /// </para>
-    /// </remarks>
     /// <summary>
     /// Copies a staging archive's metadata — everything except blob content
     /// and the lifecycle objects that never leave staging — into a
@@ -569,6 +555,24 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Opens — or creates — a set's archive from the installation
+    /// credential first-run setup provisioned (ADR-0044 §2), or returns null
+    /// when this installation has none or this set is not its business.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Returning null rather than throwing is what keeps the ladder in
+    /// <see cref="ArchiveForAsync(string, bool, CancellationToken)"/> a ladder: two of the three ways out of
+    /// here are "not mine", and the arm below still has a passphrase to try.
+    /// </para>
+    /// <para>
+    /// A format 1 archive is one of those ways out. An installation set up
+    /// after such a set already existed keeps opening it with the passphrase;
+    /// nothing is migrated, because write-only is chosen at creation
+    /// (ADR-0042).
+    /// </para>
+    /// </remarks>
     private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
         string setId, LocalFileSystemObjectStore store, bool descriptorExists, bool createIfMissing,
         CancellationToken cancellationToken)

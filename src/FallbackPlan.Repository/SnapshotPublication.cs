@@ -159,9 +159,10 @@ public sealed partial class PublicationOrchestrator
         ThrowHelper.ThrowIfNull(job);
 
         // The last step to complete, so a throw can name where the publication
-        // got to. Held on the instance rather than threaded through: the writer
-        // lane serialises publications (ADR-0029 §1), so there is only ever one
-        // in flight against one of these.
+        // got to. Held on the instance rather than threaded through: one
+        // publication at a time runs against one of these — a set's archive
+        // opens once, and the writer pool never gives two workers the same
+        // set (ADR-0029 §1, ADR-0047).
         _lastStep = PublicationStep.PublishIntent;
 
         try
@@ -231,8 +232,9 @@ public sealed partial class PublicationOrchestrator
 
         // A previous run's leftovers — crash or cancellation alike — get
         // their void deltas on this publication, not on a restart
-        // (ADR-0029 §4); the serialised writer lane makes the live pending
-        // set safe to read here.
+        // (ADR-0029 §4); this set's exclusive hold on its own writer
+        // sequence — not the lane, which is now a pool (ADR-0047) — makes
+        // the live pending set safe to read here.
         foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);

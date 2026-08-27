@@ -151,8 +151,10 @@ public sealed class WriterSequence : IBlobCounterAllocator
 
     /// <summary>
     /// Sequence numbers allocated and not yet accounted for. Read at
-    /// publication start — where the serialised writer lane guarantees no
-    /// allocation is in flight — these are exactly a previous run's
+    /// publication start — where this sequence's sole publication guarantees
+    /// no allocation is in flight (the writer lane is a pool, but one set's
+    /// sequence is held by one run at a time, ADR-0047) — these are exactly
+    /// a previous run's
     /// leftovers, and each one MUST get a void delta so readers can
     /// distinguish "skipped" from "missing" (specification 07 §4). Reading
     /// the live pending set rather than a construction-time snapshot is what

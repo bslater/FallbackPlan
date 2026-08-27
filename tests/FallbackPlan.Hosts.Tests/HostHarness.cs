@@ -32,13 +32,14 @@ public sealed class HostHarness : IDisposable
     /// <summary>The "docs" set's 32-hex identity, matching <see cref="WriteConfiguration"/>.</summary>
     public string DocsSetId { get; } = new string('a', 32);
 
-    /// <summary>The root holding one staging archive per set (ADR-0034).</summary>
+    /// <summary>The root holding a staging archive per staging-mode set (ADR-0034); a direct-ship set stages nothing here.</summary>
     public string ArchivesRoot => Path.Combine(_scratch, "archives");
 
     /// <summary>
     /// The "docs" set's staging archive — the path CLI direct-mode verbs and
-    /// recovery assertions aim at, and the archive the service opens for the
-    /// one configured set.
+    /// recovery assertions aim at. The harness's "docs" set stages
+    /// (ADR-0034), so this is the archive the service opens for it; a
+    /// direct-ship fixture keeps its store under <c>state/sets</c> instead.
     /// </summary>
     public string RepositoryPath => Path.Combine(ArchivesRoot, DocsSetId);
 

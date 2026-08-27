@@ -244,9 +244,10 @@ public sealed partial class PublicationOrchestrator
         // Leftovers first: numbers a previous run allocated and never
         // accounted for get their void deltas (07 §4) before new work — a
         // crash's and a cancellation's alike, on the next publication rather
-        // than the next restart (ADR-0029 §4). Reading the obligations here,
-        // in the serialised writer lane, is what makes the live pending set
-        // safe: nothing else is allocating.
+        // than the next restart (ADR-0029 §4). Reading the obligations here
+        // is safe because this set's writer sequence has exactly one
+        // publication against it — the pool widened the lane, not the
+        // per-set hold (ADR-0047): nothing else is allocating.
         foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);

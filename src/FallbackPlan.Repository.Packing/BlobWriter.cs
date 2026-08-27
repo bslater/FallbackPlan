@@ -345,7 +345,8 @@ public sealed class BlobWriter : IAsyncDisposable
     /// The walk takes the lexicographically first checkpoint in the
     /// directory, which is safe only because one session owns the directory
     /// at a time — the writer role serialises processes (ADR-0028 §2) and
-    /// the scheduler's single writer lane serialises jobs within one.
+    /// every set owns its own spool directory, so the writer pool's workers
+    /// never meet in one (ADR-0047).
     /// Nothing here enforces that ownership; a second concurrent session
     /// over one spool directory is a caller bug.
     /// </para>

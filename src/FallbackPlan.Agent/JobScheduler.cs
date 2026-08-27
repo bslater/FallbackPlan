@@ -119,8 +119,9 @@ public sealed class JobScheduler : IAsyncDisposable
     /// <param name="writerWorkers">
     /// The backup pool's width (ADR-0047): how many writer-lane jobs may run
     /// at once, 1..5. Safe by construction at more than one because each
-    /// set's staging archive, writer sequence, spool and catalogue are its
-    /// own; the cap exists because past a handful they contend for the same
+    /// set's archive — staging or direct-ship metadata store (ADR-0046) —
+    /// with its writer sequence, spool and catalogue is its own; the cap
+    /// exists because past a handful they contend for the same
     /// disk and mostly make each other slower.
     /// </param>
     /// <param name="maxPause">

@@ -90,10 +90,11 @@ public static class AgentHost
                 to aim at a specific installation.
 
                 Backup sets, their destinations and their schedules come from
-                <state>/config.json. Each set's staging archive lives under
+                <state>/config.json. A staging set's archive lives under
                 --archives as <root>/<set id>, created on the set's first backup
-                (ADR-0034). Missed runs coalesce to one catch-up run per set
-                (ADR-0027 §1).
+                (ADR-0034); a direct-ship set keeps only metadata, under
+                <state>/sets/<set id> (ADR-0046). Missed runs coalesce to
+                one catch-up run per set (ADR-0027 §1).
 
                 `setup` gives a fresh installation the passphrase everything derives
                 from (ADR-0044). It is for headless installs with no browser; the
@@ -285,13 +286,13 @@ public static class AgentHost
         if (repoPath is not null && !archivesWereExplicit)
         {
             // The old single-repository flag, refused with directions rather
-            // than reinterpreted: --archives names a root that holds one
-            // staging archive per set (ADR-0034), which is not what a --repo
-            // caller was pointing at.
+            // than reinterpreted: --archives names a root that holds staging
+            // sets' archives (ADR-0034), which is not what a --repo caller
+            // was pointing at.
             error.WriteLine(
-                "error: `--repo` became `--archives <root>` — the service holds one staging archive per "
-                + "backup set under that root (ADR-0034). An existing single archive can be adopted by "
-                + "moving it to <root>/<set id>.");
+                "error: `--repo` became `--archives <root>` — the service holds a staging set's archive "
+                + "under that root, at <root>/<set id> (ADR-0034). An existing single archive can be "
+                + "adopted by moving it there.");
             return 1;
         }
 

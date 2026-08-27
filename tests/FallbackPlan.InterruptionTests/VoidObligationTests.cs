@@ -12,10 +12,10 @@ namespace FallbackPlan.InterruptionTests;
 /// A crash's void-delta obligations are discharged exactly once
 /// (specification 07 §4): the numbers a dead run allocated and never
 /// accounted for get one void delta each, not one per subsequent
-/// publication. The long-lived service holds a single writer sequence for
-/// its process lifetime, so an obligation that never leaves the recovered
-/// list is republished by every run the process ever makes — junk a store
-/// nothing collects yet keeps forever.
+/// publication. The long-lived service holds each set's writer sequence for
+/// its whole process lifetime, so an obligation that never leaves the
+/// recovered list is republished by every run against that set the process
+/// ever makes — junk a store nothing collects yet keeps forever.
 /// </summary>
 [TestClass]
 public sealed class VoidObligationTests : InterruptionHarness
