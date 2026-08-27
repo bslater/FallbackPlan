@@ -159,7 +159,15 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
         var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
         Assert.AreEqual(JobState.Complete, job.State);
-        Assert.IsNull(job.Detail, "a clean backup should have nothing to say");
+
+        // The terminal detail is the run summary — always written explicitly,
+        // because Transition keeps the prior detail on null and a preempted
+        // run's prior detail is "resumed", which must not survive onto the
+        // record a person reads (ADR-0047). Clean-vs-partial stays a state
+        // distinction: the summary never says "partial".
+        Assert.IsNotNull(job.Detail);
+        Assert.Contains("file(s)", job.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("partial", job.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>

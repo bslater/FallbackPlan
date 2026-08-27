@@ -96,6 +96,8 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly Dictionary<string, WriterAttendance> _paused = [];
     private readonly int _writerWorkers;
     private readonly TimeSpan _maxPause;
+    private readonly TimeSpan _escalationDelay;
+    private long _parkSequence;
 
     // One signal per lane, not one shared: with a shared semaphore, a token
     // released for a busy lane could only be consumed by the OTHER lanes'
@@ -127,12 +129,20 @@ public sealed class JobScheduler : IAsyncDisposable
     /// the guard against a busy pool pinning a suspended capture's memory
     /// for ever. An hour by default.
     /// </param>
-    public JobScheduler(ILogger? log = null, int writerWorkers = 1, TimeSpan? maxPause = null)
+    /// <param name="escalation">
+    /// How long a preemption ask may go unanswered before it moves to the
+    /// next-worst gated run (ADR-0047 Amendment 2) — the worst-ranked victim
+    /// may be inside one huge file and unable to yield while a responsive
+    /// run sits beside it. Two seconds by default.
+    /// </param>
+    public JobScheduler(
+        ILogger? log = null, int writerWorkers = 1, TimeSpan? maxPause = null, TimeSpan? escalation = null)
     {
         ThrowHelper.ThrowIfOutOfRange(writerWorkers, 1, 5);
         _log = log ?? NullLogger.Instance;
         _writerWorkers = writerWorkers;
         _maxPause = maxPause ?? TimeSpan.FromHours(1);
+        _escalationDelay = escalation ?? TimeSpan.FromSeconds(2);
         _stoppingToken = _stopping.Token;
 
         // The reader lane stays one worker because restores are themselves
@@ -184,6 +194,7 @@ public sealed class JobScheduler : IAsyncDisposable
     {
         ThrowHelper.ThrowIfNull(job);
 
+        string? victim = null;
         lock (_gate)
         {
             if (_running.ContainsKey(job.JobId))
@@ -208,8 +219,13 @@ public sealed class JobScheduler : IAsyncDisposable
 
             if (job.Lane == JobLane.Writer)
             {
-                MaybePreemptLocked(key);
+                victim = MaybePreemptLocked(key);
             }
+        }
+
+        if (victim is not null)
+        {
+            _ = EscalateIfUnparkedAsync(victim);
         }
 
         Pending(job.Lane).Release();
@@ -255,10 +271,19 @@ public sealed class JobScheduler : IAsyncDisposable
         _readerPending.Release();
         _transferPending.Release();
 
+        try
+        {
+            await Task.WhenAll(_workers).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping is not a failure.
+        }
+
         // A parked run has no worker attending it, so awaiting the workers
-        // alone would leave its task mid-cancellation. Its own token was
-        // cancelled above, which cuts through the park; this waits for the
-        // exit to actually land.
+        // alone would leave its task mid-cancellation. The snapshot happens
+        // AFTER the workers exit: only workers move jobs into the paused
+        // set, so nothing can slip in behind it.
         Task[] parked;
         lock (_gate)
         {
@@ -267,7 +292,7 @@ public sealed class JobScheduler : IAsyncDisposable
 
         try
         {
-            await Task.WhenAll([.. _workers, .. parked]).ConfigureAwait(false);
+            await Task.WhenAll(parked).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -374,12 +399,20 @@ public sealed class JobScheduler : IAsyncDisposable
                 return true;
             }
 
-            if (_writerLane.TryDequeue(out var job, out var key) && _running.TryGetValue(job.JobId, out var source))
+            if (_writerLane.TryDequeue(out var job, out var key))
             {
-                var fresh = new WriterAttendance(job, key, source);
-                _attended[job.JobId] = fresh;
-                work = fresh;
-                return true;
+                if (_running.TryGetValue(job.JobId, out var source))
+                {
+                    var fresh = new WriterAttendance(job, key, source);
+                    _attended[job.JobId] = fresh;
+                    work = fresh;
+                    return true;
+                }
+
+                // Unreachable while queued jobs stay tracked — and exactly the
+                // silent-orphan hazard Scheduler.Enqueue guards its completion
+                // against, so it is a log line, never a quiet discard.
+                Log.QueuedJobUntracked(_log, job.JobId, job.Description);
             }
 
             work = null;
@@ -431,14 +464,25 @@ public sealed class JobScheduler : IAsyncDisposable
 
         // The job parked. Move it aside, arm the max-pause guard, and free
         // this worker: the released token is the parked run's claim on the
-        // next slot, weighed against the queue at every pickup.
+        // next slot, weighed against the queue at every pickup. A job whose
+        // supervision already closed out — cancelled in the instant between
+        // the park signal and this lock — must NOT enter the paused set: a
+        // ghost there would be resumed dead, and disposal would miss it.
+        long parkGeneration;
         lock (_gate)
         {
             _attended.Remove(work.Job.JobId);
+            if (!_running.ContainsKey(work.Job.JobId))
+            {
+                return;
+            }
+
+            parkGeneration = ++_parkSequence;
+            work.ParkGeneration = parkGeneration;
             _paused[work.Job.JobId] = work;
         }
 
-        _ = ExpireIfStillPausedAsync(work.Job.JobId);
+        _ = ExpireIfStillPausedAsync(work.Job.JobId, parkGeneration);
         _writerPending.Release();
     }
 
@@ -459,12 +503,17 @@ public sealed class JobScheduler : IAsyncDisposable
         }
         finally
         {
+            // One lock for both removals: the park path checks _running under
+            // the same gate before inserting into _paused, so a job can never
+            // be parked and completed at once.
             lock (_gate)
             {
                 _paused.Remove(job.JobId);
+                if (_running.Remove(job.JobId, out var tracked))
+                {
+                    tracked.Dispose();
+                }
             }
-
-            Complete(job.JobId);
         }
     }
 
@@ -474,11 +523,11 @@ public sealed class JobScheduler : IAsyncDisposable
     /// <see cref="Enqueue"/>; a gate whose job never reaches another pause
     /// point simply finishes instead — the request costs nothing.
     /// </summary>
-    private void MaybePreemptLocked((int Initiation, int Priority, long Arrival) incomer)
+    private string? MaybePreemptLocked((int Initiation, int Priority, long Arrival) incomer)
     {
         if (_attended.Count < _writerWorkers)
         {
-            return;
+            return null;
         }
 
         WriterAttendance? victim = null;
@@ -494,10 +543,55 @@ public sealed class JobScheduler : IAsyncDisposable
         if (victim is not null && incomer.CompareTo(victim.Key) < 0)
         {
             victim.Job.PauseGate!.Pause();
+            return victim.Job.JobId;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The ask moves on when unanswered (ADR-0047 Amendment 2): after the
+    /// escalation window, a victim still attended and still merely ASKED —
+    /// running, not parked — is stepped past, and the next-worst gated run
+    /// is asked instead, so the incomer is never hostage to the one job
+    /// that cannot reach a pause point. Chains until someone parks or the
+    /// gated population runs out; a victim that parks later simply joins
+    /// the paused set, resumed by rank like any other.
+    /// </summary>
+    private async Task EscalateIfUnparkedAsync(string victimId)
+    {
+        try
+        {
+            await Task.Delay(_escalationDelay, _stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        string? next = null;
+        lock (_gate)
+        {
+            if (!_attended.TryGetValue(victimId, out var entry)
+                || entry.Job.PauseGate is not { IsPaused: true })
+            {
+                // Parked, finished, or the ask was withdrawn — no escalation.
+                return;
+            }
+
+            if (_writerLane.TryPeek(out _, out var queuedKey))
+            {
+                next = MaybePreemptLocked(queuedKey);
+            }
+        }
+
+        if (next is not null)
+        {
+            _ = EscalateIfUnparkedAsync(next);
         }
     }
 
-    private async Task ExpireIfStillPausedAsync(string jobId)
+    private async Task ExpireIfStillPausedAsync(string jobId, long parkGeneration)
     {
         try
         {
@@ -511,7 +605,11 @@ public sealed class JobScheduler : IAsyncDisposable
         bool stillPaused;
         lock (_gate)
         {
-            stillPaused = _paused.ContainsKey(jobId);
+            // The SAME park only: a run that resumed and re-parked inside
+            // this window is younger than the bound, whatever this timer
+            // thinks — its own park armed its own expiry.
+            stillPaused = _paused.TryGetValue(jobId, out var entry)
+                && entry.ParkGeneration == parkGeneration;
         }
 
         if (stillPaused)
@@ -574,5 +672,12 @@ public sealed class JobScheduler : IAsyncDisposable
         public Task? RunTask { get; set; }
 
         public bool NeedsResume { get; set; }
+
+        /// <summary>
+        /// Which park the max-pause expiry was armed for: a resume-and-re-park
+        /// inside the first park's window must not be cancelled by the first
+        /// park's timer.
+        /// </summary>
+        public long ParkGeneration { get; set; }
     }
 }

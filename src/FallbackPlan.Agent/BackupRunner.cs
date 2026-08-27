@@ -56,6 +56,22 @@ public static class BackupRunner
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
         var progress = new BackupProgress(runtime.Progress, jobId);
 
+        // A suspension must reach progress watchers, not only the journal
+        // (ADR-0047 Amendment 2). The paused report re-emits the run's live
+        // counts, so a watching card keeps its meter; on resume the state it
+        // parked from is restored, and the next scan event refreshes it.
+        if (pauseGate is PauseGate gate)
+        {
+            var resumeTo = JobState.Scanning;
+            gate.AddCallbacks(
+                onParked: () =>
+                {
+                    resumeTo = progress.LastState;
+                    progress.Enter(JobState.Paused);
+                },
+                onResumed: () => progress.Enter(resumeTo));
+        }
+
         // Every root must be there, or the run refuses: capturing a snapshot
         // silently missing a whole labelled subtree would make everything
         // under it read "deleted" (ADR-0040). A vanished root may be an
@@ -71,22 +87,26 @@ public static class BackupRunner
             return new BackupOutcome(set.Name, "failed", detail);
         }
 
+        DestinationShipSink? sink = null;
+        var runCommitted = false;
         try
         {
             jobs.Transition(jobId, JobState.Scanning, nowMs);
             progress.Enter(JobState.Scanning);
 
-            // The set's staging archive, created on its first backup — staging
-            // is internal, so nobody runs `init` for it (ADR-0034 §1).
+            // The set's archive — staging, or a direct-ship sink over the
+            // metadata store — created on its first backup; either way it is
+            // internal, so nobody runs `init` for it (ADR-0034 §1, ADR-0046).
             var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
 
             // A direct-ship run (ADR-0046) resolves its destinations before a
             // byte moves: with no staging archive, a capture with nowhere to
             // ship refuses here (an IOException, recoverable — the next pass
             // retries once a destination returns).
-            if (archive.ShipSink is { } sink)
+            if (archive.ShipSink is { } shipSink)
             {
-                await sink.BeginRunAsync(set, nowMs, cancellationToken).ConfigureAwait(false);
+                sink = shipSink;
+                await shipSink.BeginRunAsync(set, nowMs, cancellationToken).ConfigureAwait(false);
             }
 
             // A full run empties both the parent list and the incremental
@@ -170,28 +190,25 @@ public static class BackupRunner
             var partial = published.ErrorManifestObjectId is not null;
             var outcome = partial ? JobState.CompletedWithFailures : JobState.Complete;
 
+            // Always an explicit detail: Transition keeps the prior detail on
+            // null, and a preempted run's prior detail is "resumed" — which
+            // must not survive onto the terminal record a person reads.
+            var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged";
             jobs.Transition(
                 jobId,
                 outcome,
                 nowMs,
-                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
+                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
                 snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
             progress.Enter(outcome);
-
-            // The run's per-destination outcomes land in the sync ledger:
-            // successes (and first-time baselines) for the destinations that
-            // stayed, named failures for the dropped and the skipped.
-            archive.ShipSink?.CompleteRun(nowMs);
+            runCommitted = true;
 
             // The set-changed notice's condition is "the last backup predates
             // the settings", and this backup just captured under them
             // (ADR-0038). A no-op when no such notice stands.
             runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs);
 
-            return new BackupOutcome(
-                set.Name,
-                "ran",
-                $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged");
+            return new BackupOutcome(set.Name, "ran", summary);
         }
         catch (OperationCanceledException)
         {
@@ -219,12 +236,22 @@ public static class BackupRunner
         }
         catch (Exception exception) when (exception is RepositoryOpenException or Repository.Crypto.KeyUnwrapFailedException)
         {
-            // The staging archive refused to open — damage, or a passphrase
+            // The set's archive refused to open — damage, or a passphrase
             // that no longer matches. Retrying cannot fix either; a human can
             // (10 §3).
             jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
+        }
+        finally
+        {
+            // The run's books close however the run ended (ADR-0046 §3): a
+            // failed or cancelled run still owes the ledger its drops and
+            // skips — without them no back-off arms and the healing catch-up
+            // never schedules — and the run's read scope is released so a
+            // destination plugged back in answers without a restart.
+            // Successes are recorded only when the snapshot committed.
+            sink?.CompleteRun(nowMs, runCommitted);
         }
     }
 
@@ -235,6 +262,8 @@ public static class BackupRunner
     private sealed class BackupProgress(ProgressHub hub, string jobId) : IJobProgressReporter
     {
         private JobProgress _latest = new(jobId, JobState.Pending, 0, 0, 0, 0, 0, 0);
+
+        public JobState LastState => _latest.State;
 
         public void Report(JobProgress progress)
         {

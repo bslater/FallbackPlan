@@ -1192,9 +1192,20 @@ public sealed partial class ServiceCommandHandler(
             // Null preserves (a pre-1.17 client cannot see the field); zero
             // is the explicit default a 1.17 client may set back.
             Priority = command.Set.Priority ?? existing?.Priority,
+            // The contract does not carry the flag at all yet (ADR-0046 §7:
+            // the console must not offer it while restore paths mature), so
+            // an upsert must preserve it unconditionally — dropping it here
+            // silently converted a direct-ship set back to staging mode and
+            // the next open minted a fresh repository over the orphaned one.
+            DirectShip = existing?.DirectShip ?? false,
             Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
             {
                 Ref = name,
+                // The per-reference priority (ADR-0047 §4) has no wire field
+                // either; preserved by name, exactly like the retention
+                // override below.
+                Priority = existing?.Destinations.FirstOrDefault(reference =>
+                    string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Priority,
                 Retention = command.Set.DestinationRetention is { } overrides
                     // A carried map is the complete truth: named entries set
                     // (empty clears), unnamed destinations carry no override.

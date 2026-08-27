@@ -27,6 +27,14 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- The gateway's job-await loop is internal and its Paused behavior is a
+       stated promise (ADR-0047 Amendment 1: a suspended run resumes
+       unattended, so a waiting `backup` keeps waiting) — pinned by a unit
+       test over a fake client rather than a live preempted service. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FallbackPlan.Cli.Tests" />
+  </ItemGroup>
+
   <!-- The logging abstraction only: ILogger, NullLogger and the
        [LoggerMessage] source generator. Providers and sinks are the host's,
        and a canary in DependencyRuleTests keeps them there (ADR-0043). -->

@@ -178,4 +178,12 @@ internal static partial class Log
         EventId = 3758, Level = LogLevel.Warning,
         Message = "Destination {Destination} dropped from this backup run: {Reason}. Its replica lags until the next catch-up")]
     internal static partial void ShipDestinationDropped(ILogger logger, string destination, string reason);
+
+    // Warning: a queued job with no tracked cancellation cannot be run and is
+    // discarded — unreachable while identities stay fresh, and the silent
+    // version of this is an awaiter that hangs forever.
+    [LoggerMessage(
+        EventId = 3759, Level = LogLevel.Warning,
+        Message = "Job {JobId} ({Description}) was dequeued with no tracked cancellation and was discarded")]
+    internal static partial void QueuedJobUntracked(ILogger logger, string jobId, string description);
 }

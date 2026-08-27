@@ -325,6 +325,11 @@ public static class Scheduler
         return record.State switch
         {
             DestinationSyncState.InSync => behind,
+
+            // A run held the pair out for missing history (ADR-0046 §3's
+            // scope rule): the catch-up IS the heal, so it runs at once —
+            // backing off here would delay the very copy the skip waits on.
+            DestinationSyncState.Behind => true,
             DestinationSyncState.NotSupported => record.LastAttemptAt < lastCompleted,
 
             // Unavailable and failed retry under exponential back-off, capped

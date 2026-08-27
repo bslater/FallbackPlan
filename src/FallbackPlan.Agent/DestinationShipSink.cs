@@ -55,6 +55,7 @@ public sealed class DestinationShipSink : IObjectStore
     private readonly LocalFileSystemObjectStore? _stagingFallback;
     private readonly Lock _gate = new();
     private List<Shipment> _inScope = [];
+    private bool _runActive;
     private readonly Dictionary<string, string> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
     private long _shippedThisRun;
@@ -105,8 +106,10 @@ public sealed class DestinationShipSink : IObjectStore
 
         var neverCaptured = !await AnySnapshotAsync(cancellationToken).ConfigureAwait(false);
         var configuration = _runtime.Configuration;
+        var lastCompleted = _runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
         var inScope = new List<Shipment>();
         var skipped = new List<(string, DestinationSyncState, string)>();
+        var dropped = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var reference in set.Destinations)
         {
@@ -139,8 +142,8 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            var baseline = _runtime.DestinationSync.Find(set.Id, destination.Name)?.BaselineCompletedAt;
-            if (!neverCaptured && baseline is null)
+            var record = _runtime.DestinationSync.Find(set.Id, destination.Name);
+            if (!neverCaptured && record?.BaselineCompletedAt is null)
             {
                 // Catch-up's job, not this run's: an incremental would hand
                 // this destination a snapshot without its closure.
@@ -149,17 +152,84 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            inScope.Add(new Shipment(
-                destination.Name,
-                ReplicaStoreFor(destination),
-                reference.Priority ?? destination.Priority ?? 0));
+            if (!neverCaptured
+                && _stagingFallback is null
+                && (record!.LastSuccessAt is null || record.LastSuccessAt < lastCompleted))
+            {
+                // A destination that missed a run holds an incomplete
+                // history, and this run's dedupe probe is satisfied by ANY
+                // holder — including it would write snapshot metadata whose
+                // blob closure never ships, a replica that is not
+                // independently restorable while the ledger says it is.
+                // Catch-up brings it current; the next run re-admits it.
+                // A MIGRATING set is the stated exception (ADR-0046's
+                // migration record): while the staging archive remains as
+                // the read-only seed source, per-destination completeness is
+                // deliberately the union's promise, the pass always syncs
+                // the pair, and retire_staging is what certifies the
+                // destinations before staging leaves.
+                skipped.Add((destination.Name, DestinationSyncState.Behind,
+                    "this destination missed a run and holds an incomplete history; catch-up brings it current first"));
+                continue;
+            }
+
+            if (DestinationCapacity.FloorShortfall(
+                    destination.Path!, AvailableBytesOn(destination.Path!)) is { } shortOfSpace)
+            {
+                // The same floor the fan-out keeps (FR-DEST-010): a backup
+                // must never be the reason the machine that owns the volume
+                // cannot function. Unavailable, not failed — space freeing up
+                // is the gap closing itself.
+                skipped.Add((destination.Name, DestinationSyncState.Unavailable, shortOfSpace));
+                continue;
+            }
+
+            // The store's own construction can refuse — a file squatting on
+            // the replica root, a permission lost since the probe — and that
+            // is this destination's drop, never the run's failure.
+            try
+            {
+                inScope.Add(new Shipment(
+                    destination.Name,
+                    ReplicaStoreFor(destination),
+                    reference.Priority ?? destination.Priority ?? 0));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Log.ShipDestinationDropped(_log, destination.Name, exception.Message);
+                dropped[destination.Name] = exception.Message;
+            }
         }
 
-        if (inScope.Count == 0)
+        // Seeding is per destination under the same drop rule as every later
+        // put: one unwritable destination is dropped and named, never the
+        // reason a capture with a healthy sibling refuses (ADR-0046 §3).
+        var seeded = new List<Shipment>();
+        foreach (var shipment in inScope.OrderByDescending(candidate => candidate.Priority))
         {
+            try
+            {
+                await SeedDescriptorAndKeysAsync(shipment, cancellationToken).ConfigureAwait(false);
+                seeded.Add(shipment);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Log.ShipDestinationDropped(_log, shipment.Name, exception.Message);
+                dropped[shipment.Name] = exception.Message;
+            }
+        }
+
+        if (seeded.Count == 0)
+        {
+            foreach (var (name, error) in dropped)
+            {
+                _runtime.DestinationSync.RecordFailure(
+                    set.Id, name, DestinationSyncState.Failed, error, nowUnixMilliseconds);
+            }
+
             foreach (var (name, state, error) in skipped)
             {
-                _runtime.DestinationSync.RecordFailure(set.Id, name, state, error, nowUnixMilliseconds);
+                RecordSkip(set.Id, name, state, error, nowUnixMilliseconds);
             }
 
             throw new IOException(
@@ -168,15 +238,16 @@ public sealed class DestinationShipSink : IObjectStore
                 + "Reconnect a destination and run again.");
         }
 
-        foreach (var shipment in inScope.OrderByDescending(candidate => candidate.Priority))
-        {
-            await SeedDescriptorAndKeysAsync(shipment, cancellationToken).ConfigureAwait(false);
-        }
-
         lock (_gate)
         {
-            _inScope = [.. inScope.OrderByDescending(candidate => candidate.Priority)];
+            _inScope = seeded;
+            _runActive = true;
             _droppedThisRun.Clear();
+            foreach (var (name, error) in dropped)
+            {
+                _droppedThisRun[name] = error;
+            }
+
             _skippedThisRun.Clear();
             _skippedThisRun.AddRange(skipped);
             _shippedThisRun = 0;
@@ -184,13 +255,18 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>
-    /// Records this run's per-destination outcomes in the sync ledger: a
-    /// success (and, first time, the baseline) for every destination that
-    /// stayed in scope, the named failure for every one that was dropped or
-    /// skipped.
+    /// Closes the run's books, whatever ended it: on success a ledger row
+    /// (and, first time, the baseline) for every destination that stayed in
+    /// scope; on ANY ending, the named failure for every destination dropped
+    /// or skipped — a run that failed still owes the ledger its drops, or no
+    /// back-off arms and the healing catch-up never schedules. Also releases
+    /// the run's read scope: outside a run, reads resolve fresh from the
+    /// configuration, so a destination plugged back in answers without a
+    /// service restart.
     /// </summary>
     /// <param name="nowUnixMilliseconds">The clock.</param>
-    public void CompleteRun(ulong nowUnixMilliseconds)
+    /// <param name="succeeded">Whether the run committed its snapshot.</param>
+    public void CompleteRun(ulong nowUnixMilliseconds, bool succeeded = true)
     {
         List<Shipment> survivors;
         List<(string Name, string Error)> dropped;
@@ -202,11 +278,19 @@ public sealed class DestinationShipSink : IObjectStore
             dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value))];
             skipped = [.. _skippedThisRun];
             shipped = _shippedThisRun;
+            _inScope = [];
+            _runActive = false;
+            _droppedThisRun.Clear();
+            _skippedThisRun.Clear();
+            _shippedThisRun = 0;
         }
 
-        foreach (var survivor in survivors)
+        if (succeeded)
         {
-            _runtime.DestinationSync.RecordSuccess(_setId, survivor.Name, shipped, nowUnixMilliseconds);
+            foreach (var survivor in survivors)
+            {
+                _runtime.DestinationSync.RecordSuccess(_setId, survivor.Name, shipped, nowUnixMilliseconds);
+            }
         }
 
         foreach (var (name, error) in dropped)
@@ -217,8 +301,25 @@ public sealed class DestinationShipSink : IObjectStore
 
         foreach (var (name, state, error) in skipped)
         {
-            _runtime.DestinationSync.RecordFailure(_setId, name, state, error, nowUnixMilliseconds);
+            RecordSkip(_setId, name, state, error, nowUnixMilliseconds);
         }
+    }
+
+    /// <summary>
+    /// A skip is not always a failure: a behind destination is deliberately
+    /// held out for catch-up, and counting that against it would start a
+    /// back-off exactly where an immediate heal is wanted.
+    /// </summary>
+    private void RecordSkip(
+        string setId, string name, DestinationSyncState state, string error, ulong nowUnixMilliseconds)
+    {
+        if (state == DestinationSyncState.Behind)
+        {
+            _runtime.DestinationSync.RecordBehind(setId, name, error, nowUnixMilliseconds);
+            return;
+        }
+
+        _runtime.DestinationSync.RecordFailure(setId, name, state, error, nowUnixMilliseconds);
     }
 
     /// <inheritdoc />
@@ -229,27 +330,49 @@ public sealed class DestinationShipSink : IObjectStore
         CancellationToken cancellationToken)
     {
         var isBlob = IsBlobKey(key.Value);
+        PutResult? metadataResult = null;
 
         if (!isBlob)
         {
             // The planning copy first: a metadata object the agent cannot
             // read back is a diff it cannot plan.
-            _ = await _metadata.PutAsync(key, openContent, conditions, cancellationToken).ConfigureAwait(false);
+            metadataResult = await _metadata.PutAsync(key, openContent, conditions, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         List<Shipment> targets;
+        bool runActive;
         lock (_gate)
         {
             targets = [.. _inScope];
+            runActive = _runActive;
+        }
+
+        if (!runActive)
+        {
+            // Outside a run — migration, a seeding copy, an operator verb —
+            // targets resolve fresh from the configuration, exactly as reads
+            // do, so a destination plugged back in receives without a
+            // service restart.
+            targets = ReadOrder();
         }
 
         if (targets.Count == 0)
         {
-            // Writes happen only inside a run; a run begins with at least one
-            // destination or refuses. Reaching zero mid-run is every
-            // destination failing, and the last failure already threw.
-            throw new IOException(
-                $"Every destination of set '{_setId}' failed mid-run; nothing remains to write to.");
+            if (metadataResult is { } local)
+            {
+                // A metadata write outside a run has a home even with every
+                // destination away: the planning copy. The catch-up carries
+                // it outward when one returns.
+                return local;
+            }
+
+            // Mid-run this is every destination having failed (the last
+            // failure already threw); outside a run it is a blob write with
+            // nowhere at all to land.
+            throw new IOException(runActive
+                ? $"Every destination of set '{_setId}' failed mid-run; nothing remains to write to."
+                : $"Set '{_setId}' has no reachable destination to write '{key.Value}' to.");
         }
 
         // The first copy lands at the highest-priority destination before the
@@ -343,22 +466,21 @@ public sealed class DestinationShipSink : IObjectStore
         ListOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // A prefix inside blobs/ can match no metadata key; anything shorter
+        // — including one that merely shares letters with "blobs/", like "b"
+        // — can match both planes, and the planning copy must answer even
+        // with every destination away.
         var value = prefix.Value;
-        if (value.Length > 0 && !IsBlobKey(value) && !"blobs/".StartsWith(value, StringComparison.Ordinal))
+        if (!IsBlobKey(value))
         {
             await foreach (var entry in _metadata.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
             {
                 yield return entry;
             }
 
-            yield break;
-        }
-
-        if (value.Length == 0)
-        {
-            await foreach (var entry in _metadata.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
+            if (value.Length > 0 && !"blobs/".StartsWith(value, StringComparison.Ordinal))
             {
-                yield return entry;
+                yield break;
             }
         }
 
@@ -433,14 +555,24 @@ public sealed class DestinationShipSink : IObjectStore
         var holders = new List<Shipment>();
         foreach (var reference in set.Destinations)
         {
-            if (configuration.FindDestination(reference.Ref) is
+            if (configuration.FindDestination(reference.Ref) is not
                 { Kind: DestinationKind.LocalPath, AddressDefect: null } destination
-                && Directory.Exists(destination.Path))
+                || !Directory.Exists(destination.Path))
+            {
+                continue;
+            }
+
+            try
             {
                 holders.Add(new Shipment(
                     destination.Name,
                     ReplicaStoreFor(destination),
                     reference.Priority ?? destination.Priority ?? 0));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A replica root that cannot even be opened is a holder that
+                // cannot answer; the next holder, or not-found, is the truth.
             }
         }
 
@@ -526,6 +658,21 @@ public sealed class DestinationShipSink : IObjectStore
 
     private LocalFileSystemObjectStore ReplicaStoreFor(DestinationConfiguration destination) =>
         new(Path.Combine(destination.Path!, _repositoryIdHex), _log);
+
+    private static long? AvailableBytesOn(string destinationRoot)
+    {
+        try
+        {
+            return new DriveInfo(DestinationCapacity.ProbeRootFor(destinationRoot)).AvailableFreeSpace;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // A platform that will not say answers "there is room": the floor
+            // exists to stop a disk being filled, never to stop a healthy
+            // destination receiving backups (FR-DEST-010).
+            return null;
+        }
+    }
 
     private async ValueTask<bool> AnySnapshotAsync(CancellationToken cancellationToken)
     {

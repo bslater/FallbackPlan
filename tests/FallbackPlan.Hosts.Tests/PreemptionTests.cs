@@ -151,38 +151,81 @@ public sealed class PreemptionTests : IDisposable
             Timeout);
 
         var set = runtime.Configuration.BackupSets.Single();
+
+        // A watcher on the progress stream: a suspension must be visible to
+        // it, not only to the journal (ADR-0047 Amendment 2).
+        var progressStates = new System.Collections.Concurrent.ConcurrentBag<JobProgress>();
+        using var watchDone = new CancellationTokenSource();
+        var watcher = Task.Run(async () =>
+        {
+            await foreach (var progressEvent in runtime.Progress.WatchAsync(watchDone.Token))
+            {
+                progressStates.Add(progressEvent.Progress);
+            }
+        });
+
         var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
 
-        // Wait until the capture is genuinely running, then outrank it.
+        // Wait until the capture is genuinely mid-scan — the journal active
+        // AND at least one file counted, so the paused report provably
+        // carries live counts — then outrank it. The incomer HOLDS its slot
+        // so the suspension window is observable.
         while (!runtime.Jobs.Jobs.Any(job =>
-            job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing))
+                job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing)
+            || !progressStates.Any(progress => progress.FilesSeen > 0))
         {
             Assert.IsFalse(backup.IsCompleted, "the backup finished before the test could preempt it");
             await Task.Delay(10, Timeout);
         }
 
         var highRan = Tcs();
-        EnqueueHighPriorityJob(runtime, highRan);
+        var releaseHigh = Tcs();
+        runtime.Queue.Enqueue(new QueuedJob(
+            "priority-visitor", JobLane.Writer, UserInitiated: false, "outranks the capture",
+            async token =>
+            {
+                highRan.SetResult();
+                await releaseHigh.Task.WaitAsync(token);
+            },
+            Priority: 50));
 
         await highRan.Task.WaitAsync(Timeout);
         Assert.IsFalse(
             backup.IsCompleted,
             "the high-priority job must have run while the backup was suspended, not after it");
 
+        // The journal says Paused — a live state the run resumes out of.
+        while (!runtime.Jobs.Jobs.Any(job => job.BackupSetId == set.Id && job.State == JobState.Paused))
+        {
+            Assert.IsFalse(backup.IsCompleted, "the backup finished before it ever reported Paused");
+            await Task.Delay(10, Timeout);
+        }
+
+        // One run per set holds THROUGH the suspension: a pass ticking while
+        // the run is parked reports already-running, never double-queues.
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddHours(2), Timeout);
+        Assert.AreEqual(
+            "already-running",
+            Assert.ContainsSingle(pass.Sets.Where(outcome => outcome.SetName == set.Name)).Outcome);
+
+        releaseHigh.SetResult();
         var outcome = await backup.WaitAsync(Timeout);
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
-        Assert.IsTrue(
-            runtime.Jobs.Jobs.Any(job => job.BackupSetId == set.Id && job.State == JobState.Complete));
 
-        static void EnqueueHighPriorityJob(ServiceRuntime runtime, TaskCompletionSource highRan) =>
-            runtime.Queue.Enqueue(new QueuedJob(
-                "priority-visitor", JobLane.Writer, UserInitiated: false, "outranks the capture",
-                token =>
-                {
-                    highRan.SetResult();
-                    return ValueTask.CompletedTask;
-                },
-                Priority: 50));
+        var final = runtime.Jobs.Jobs.Single(job => job.BackupSetId == set.Id && job.State == JobState.Complete);
+        Assert.IsNotNull(final.Detail);
+        Assert.AreNotEqual(
+            "resumed", final.Detail,
+            "the suspension's transient detail must not survive onto the terminal record");
+        Assert.Contains("file(s)", final.Detail, StringComparison.Ordinal);
+
+        watchDone.Cancel();
+        await watcher.WaitAsync(Timeout).ContinueWith(_ => { }, TaskScheduler.Default);
+        var paused = progressStates.Where(progress => progress.State == JobState.Paused).ToList();
+        Assert.IsTrue(paused.Count > 0, "the suspension must reach progress watchers, not only the journal");
+        Assert.IsTrue(
+            paused.Any(progress => progress.FilesSeen > 0),
+            "a paused report must keep the run's counts — a zeroed card would wipe the live meter");
     }
 
     private static TaskCompletionSource Tcs() => new(TaskCreationOptions.RunContinuationsAsynchronously);

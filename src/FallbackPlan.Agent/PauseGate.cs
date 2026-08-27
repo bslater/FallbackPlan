@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Agent;
@@ -28,6 +29,8 @@ public sealed class PauseGate : IPauseGate
     private readonly Lock _lock = new();
     private readonly Action? _onParked;
     private readonly Action? _onResumed;
+    private List<Action>? _alsoOnParked;
+    private List<Action>? _alsoOnResumed;
     private TaskCompletionSource _parked = NewSignal();
     private TaskCompletionSource? _resume;
 
@@ -38,6 +41,26 @@ public sealed class PauseGate : IPauseGate
     {
         _onParked = onParked;
         _onResumed = onResumed;
+    }
+
+    /// <summary>
+    /// Registers a further pair of park/resume observers — the run's own
+    /// progress reporter, beside the scheduler's journal callbacks fixed at
+    /// construction (ADR-0047 Amendment 2: a suspension must reach progress
+    /// watchers too, not only the journal).
+    /// </summary>
+    /// <param name="onParked">Runs on the job's thread the moment it parks.</param>
+    /// <param name="onResumed">Runs on the job's thread when it wakes.</param>
+    public void AddCallbacks(Action onParked, Action onResumed)
+    {
+        ThrowHelper.ThrowIfNull(onParked);
+        ThrowHelper.ThrowIfNull(onResumed);
+
+        lock (_lock)
+        {
+            (_alsoOnParked ??= []).Add(onParked);
+            (_alsoOnResumed ??= []).Add(onResumed);
+        }
     }
 
     /// <summary>
@@ -118,10 +141,31 @@ public sealed class PauseGate : IPauseGate
             if (parkedSignal.TrySetResult())
             {
                 _onParked?.Invoke();
+                InvokeAll(_alsoOnParked);
             }
 
             await resumeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
             _onResumed?.Invoke();
+            InvokeAll(_alsoOnResumed);
+        }
+    }
+
+    private void InvokeAll(List<Action>? callbacks)
+    {
+        Action[] snapshot;
+        lock (_lock)
+        {
+            if (callbacks is null || callbacks.Count == 0)
+            {
+                return;
+            }
+
+            snapshot = [.. callbacks];
+        }
+
+        foreach (var callback in snapshot)
+        {
+            callback();
         }
     }
 

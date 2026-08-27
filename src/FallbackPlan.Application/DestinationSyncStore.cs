@@ -383,6 +383,30 @@ public sealed class DestinationSyncStore
     }
 
     /// <summary>
+    /// Marks a pair as behind without counting it a failure: a run held the
+    /// destination out because it missed a prior run (ADR-0046 §3), which is
+    /// a fact about its history, not a fault of its own — the failure
+    /// counter stays put so the healing catch-up runs immediately instead of
+    /// backing off from a "failure" nothing failed.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="reason">Why the pair was held out, for status.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordBehind(
+        string setId, string destination, string reason, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(reason);
+
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        {
+            State = DestinationSyncState.Behind,
+            LastAttemptAt = nowUnixMilliseconds,
+            LastError = reason,
+        });
+    }
+
+    /// <summary>
     /// Records a passed verification: sampled bytes were proven present at
     /// the destination just now (FR-VER-005's happy half). The failure half
     /// goes through <see cref="RecordFailure"/> — a failed proof is a sync

@@ -33,6 +33,14 @@ public sealed record ServiceOptions
     public int? MaxConcurrentBackupsOverride { get; init; }
 
     /// <summary>
+    /// How long a preempted run may stay suspended before it self-cancels to
+    /// the interruption-safe re-run path (ADR-0047 Amendment 1 rule 5). An
+    /// hour when null — a host's or a test harness's knob, deliberately not
+    /// configuration: the bound guards the service's own memory and intents.
+    /// </summary>
+    public TimeSpan? MaxPauseOverride { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -96,7 +104,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
-        Queue = new JobScheduler(Logger(options, typeof(JobScheduler)), ConfiguredBackupPoolWidth(options));
+        Queue = new JobScheduler(
+            Logger(options, typeof(JobScheduler)), ConfiguredBackupPoolWidth(options), options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
