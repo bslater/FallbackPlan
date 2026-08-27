@@ -156,7 +156,9 @@ question inside one process rather than a locking question across several.
 
 - **Backup sets run one at a time by default.** They contend for the same disk
   and the same writer sequence, and two sets at once mostly makes both slower
-  while doubling the memory bound.
+  while doubling the memory bound. *(Superseded by Amendment 4 below: per-set
+  archives dissolved the shared writer sequence, and the lane is now a
+  configurable pool of 1..5 — [ADR-0047](0047-backup-pool-and-priorities.md).)*
 - **Restore and verification are separately queued and may run alongside a
   backup.** A user waiting on a restore must not wait for a scheduled backup to
   finish; a restore is a read path and does not take the writer role.
@@ -229,6 +231,26 @@ so a long sweep would starve replication. That is why the sweep takes a bounded
 budget per pass and resumes from a persisted cursor rather than running to
 completion. The cursor exists more for this than for the coverage claim it also
 supports.
+
+#### Amendment 4 (2026-08): the writer lane becomes a pool, priorities enter the key, and a run can park
+
+[ADR-0047](0047-backup-pool-and-priorities.md) revises §4's first bullet: the
+writer lane is now a **pool** of 1..5 workers (`max_concurrent_backups`,
+default 2), safe because §4's stated reason for serialising no longer holds —
+under per-set archives (ADR-0034 §1) two sets share no writer sequence, no
+spool and no catalogue, only the disk, and the cap plus the modest default are
+the disk's guard. One run per set at a time survives as its own rule, enforced
+by the journal. The queue's ordering widens from "user-initiated outranks
+scheduled" to the full key `(initiation, -priority, arrival)` — a person still
+outranks any priority, then the configured set or destination priority, then
+arrival so nothing starves. And under priority pressure a running backup can
+now **park**: ADR-0047 Amendment 1's pause gate sits inside §1's pipeline at
+the scan loop's file boundary, suspending a run with its in-memory state held
+and its worker freed, resuming it — not restarting it — when a slot frees.
+The scheduler pass also stopped awaiting its own transfer phases inline
+(`AgentPassResult.Transfers`), so due-ness evaluation is never hostage to a
+multi-hour copy. The reader and transfer lanes stay one worker each, for this
+record's original reasons.
 
 ### 5. Progress is emitted, not inferred
 
@@ -334,8 +356,9 @@ guarantee that is not tracked.
 **All of it is built.**
 
 §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested value.
-§4's service-level scheduling — sets serialised, read work in its own lane,
-user-initiated work ahead of scheduled, and cancellation recording
+§4's service-level scheduling — the writer pool of Amendment 4 (formerly
+sets serialised), read work in its own lane, user-initiated work ahead of
+scheduled with priorities beneath it, and cancellation recording
 `JobState.Cancelled` — with §4's full acceptance now held by tests: the five
 T-2 cancellation tests (`InterruptionTests/CancellationTests`,
 `Hosts.Tests/ServiceTests`), and "discharged by the next publication, exactly
@@ -397,3 +420,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
 | 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |
+| 2026-08 | Accepted (amended) | Amendment 4: the writer lane is a pool of 1..5 with priorities in the queue key and a pause gate at the pipeline's file boundary, and the pass no longer awaits its transfer phases ([ADR-0047](0047-backup-pool-and-priorities.md)) |

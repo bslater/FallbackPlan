@@ -447,6 +447,17 @@ The CLI's direct mode and the recovery tool carry over unchanged: a repository
 path is a repository path, whether it is a staging archive, a destination copy,
 or the pre-0034 single archive.
 
+**Qualified by [ADR-0046](0046-direct-to-destination-publication.md)** for a
+set flagged `direct_ship`: such a set has no staging archive — the service
+holds the set's **metadata store** (`<state>/sets/<setId>/`) and writes
+content through the ship sink to the destinations — and its writer role, its
+gapless sequence and the lock arithmetic above attach to that store exactly
+as they attached to the archive. But the local path is then *not* an openable
+repository: it holds every object **except** `blobs/`, so "a repository path
+is a repository path" narrows to the destination copies, which are the whole
+repositories, and the recovery tool opens those. The hazard analysis is still
+untouched — one process, one lock, N sequences.
+
 ## Amendment (2026-08): "no password" is about the connection, not about the person
 
 §5 says of the local binding: *"No password, no token file, no port."*
@@ -556,3 +567,4 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Accepted (amended) | One process, N staging archives: the writer rule is per archive, all roles held by the one locked service process ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Amended | §5's "no password, no token file, no port" is scoped explicitly to the connection: [ADR-0045](0045-client-authentication.md) adds person-identity inside the already-authenticated channel, with no new listener and a session that is never written to disk |
 | 2026-08 | Amended | A connection's death cancels its in-flight command: the pump reads ahead while a command runs, end of stream fires the command's token — the one the reader lane already registers — and the abandonment is one log line (3606) instead of a seven-hour "success" and an unrelated-looking broken pipe |
+| 2026-08 | Amended | The several-archives amendment is qualified for direct-ship sets ([ADR-0046](0046-direct-to-destination-publication.md)): the writer role attaches to the set's metadata store, whose local path is deliberately not an openable repository — the destination copies are, and "a repository path is a repository path" narrows to them |

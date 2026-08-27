@@ -54,6 +54,24 @@ Rules:
 - An empty or absent `schedule` means manual-only — the Agent skips the
   set and says so.
 
+#### Amendment (2026-08): the rules under a pass that ticks, a pool, and a save that backs up
+
+[ADR-0047](0047-backup-pool-and-priorities.md) leaves the schedule grammar
+and coalescing untouched and changes what enforces the third rule and what
+"nothing queues" covers. **One run per set at a time** was structural while
+the pass was serial; a pass now ticks during long captures and during
+transfers (the pass no longer awaits its fan-out inline), so the rule is
+enforced explicitly — a set whose most recent journal row is unsettled and
+still active in the queue is reported `already-running`, never double-queued.
+"Nothing queues" still holds for *schedule-owed* runs, but no longer
+describes every capture: **saving a new set queues its first backup at
+once**, and a set gaining a destination queues that destination's seed
+(ADR-0047 §5) — a person clicking Save is asking for a backup, not a
+schedule entry. The §4 status model also gained a live state this record
+predates: a run suspended for a higher-priority one reports `Paused` and
+resumes unattended (ADR-0047 Amendment 1); it is in-flight, not settled, and
+anchors nothing.
+
 #### Amendment (2026-08-05): the arithmetic moves to a shared library
 
 The grammar above is unchanged and the rules still hold; what changed is

@@ -146,6 +146,34 @@ multi-writer archives exist, this returns to the index generation
 speaks of; the property preserved is the same — no clock, only visible
 advancement.
 
+## Amendment 6 (2026-08) — marking without a staging archive
+
+[ADR-0046](0046-direct-to-destination-publication.md) removes the staging
+archive for direct-ship sets, and Amendment 4's placement rewords rather than
+moves: **marking still happens where the keys are** — on the hub — but the
+keep-set and its closure are computed against the set's **metadata store**
+plus the sink, whose blob reads answer from whichever destination holds each
+key and whose listings are the union across destinations. The retention
+traversal has been proven through that path (ADR-0046's read-paths record).
+Every safety mechanism above — intents, generation cut-off, grace counted in
+the journal sequence, revalidation — is unchanged, because none of it ever
+depended on the marked objects being local, only on the marker holding the
+keys and the journal.
+
+What Amendment 4 said about staging's own lifecycle goes moot for these sets:
+there is no "object leaves staging" — per-destination convergence is the
+deleting half, each destination bounded by its floor exactly as before, and
+"deletion may not outrun replication" keeps its force as FR-GC-009's
+proof-before-reclaim rule, now guarding the *destinations'* copies since no
+local copy exists behind them. A migrated set's leftover staging archive
+leaves only by `retire_staging` (ADR-0046, contract 1.18), refused while it
+holds anything the destination union lacks. Amendment 5's single-writer
+grace arithmetic carries over verbatim — the metadata store is single-writer
+by the same construction. Compaction, still unbuilt, is the open question:
+"re-seals in staging and propagates as replication" has no staging to re-seal
+in for direct-ship sets, and the answer belongs to the compaction record when
+it lands (ADR-0025).
+
 ## Status history
 
 | Date | Status | Note |
@@ -153,3 +181,4 @@ advancement.
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |
 | 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 6: for direct-ship sets the hub marks against the metadata store through the sink, convergence is the deleting half, and compaction's placement is deferred to ADR-0025's record ([ADR-0046](0046-direct-to-destination-publication.md)). |

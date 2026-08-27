@@ -49,6 +49,18 @@ inventing one would touch every reader.
 
 ### 1. Each backup set publishes into its own staging archive
 
+> **Superseded by [ADR-0046](0046-direct-to-destination-publication.md) for
+> direct-ship sets.** A set flagged `direct_ship` has no staging archive:
+> publication writes through the ship sink to the destinations directly, the
+> agent keeps only the set's metadata store and a bounded spool, and this
+> section's closing property — a backup never blocks on destination
+> availability — is consciously given up there (ADR-0046 §4: with no
+> reachable destination the capture refuses). This section remains the record
+> for unflagged sets, which are the default until the flag flips. §2's
+> invariant — one snapshot history, N lawful whole-repository copies —
+> survives the staging archive's removal unchanged, as ADR-0046 §1 records;
+> §4 and §5 stand for both shapes.
+
 A backup set owns a repository archive on the hub — its **staging archive**,
 under the service's archives root — with its own writer sequence, catalogue and
 spool. Capture publishes into it exactly as capture publishes today; nothing
@@ -79,6 +91,16 @@ chosen by the hub (§4), both of which the replication inventory already
 expresses.
 
 ### 3. Publish once; fan out immutable objects; destinations never allocate
+
+> **Superseded in part by [ADR-0046](0046-direct-to-destination-publication.md)
+> for direct-ship sets.** Publish-once survives — content is still scanned,
+> split, compressed and sealed exactly one time — but for a direct-ship set
+> the sealed objects ship from the spool to every in-scope destination
+> directly, and "writes originate in staging, always" no longer holds: they
+> originate in the spool and land through the sink. Fan-out itself survives
+> as the *catch-up and seeding* pump (running through the sink, reading from
+> whichever sibling holds each object), no longer the write path. Destinations
+> still never allocate, for both shapes.
 
 A snapshot is captured and sealed exactly once, into the staging archive, under
 that archive's single writer sequence. Fan-out copies immutable objects — the
@@ -128,6 +150,14 @@ one destination kind among several. ADR-0018's domains now attach to
 destinations, declared in the same configuration entry.
 
 ### 6. The costs, accepted
+
+> **Moot for direct-ship sets
+> ([ADR-0046](0046-direct-to-destination-publication.md)).** With no staging
+> copy there is nothing to trim: per-destination retention convergence is the
+> deleting half, and the sink ignores staging-trim blob deletes by design. A
+> migrated set's leftover staging archive leaves by the explicit
+> `retire_staging` verb (contract 1.18), not by this section's trim. The
+> dedup-narrows-to-the-set cost stays true for both shapes.
 
 **Deduplication narrows from the repository to the set.** Two sets with
 overlapping roots store overlapping content twice, once per staging archive, and
@@ -294,3 +324,4 @@ folder stayed empty.
 | 2026-08 | Built (amended) | Amendment 1: destination verification ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)) is built and required, and the §6 trim gate now takes a proof rather than a claim for every destination kind. |
 | 2026-08 | Built | Whether a destination is *fit* to be relied on — admission, capacity, shortfall detection and confirmation on a schedule — is settled separately by [ADR-0035](0035-destination-fitness.md), which builds on this record's topology rather than changing it. |
 | 2026-08 | Built (amended) | Amendment 2: a `local-path` destination (or the service's own state/archives directory) at or under a source root is refused at the configuration boundaries unless the set's excludes provably fence it off (FR-DEST-011); relative destination paths are pinned absolute at declaration and refused by the fan-out when hand-edited in (FR-DEST-012). The free-space floor now measures the destination's own volume rather than the OS root on Unix. |
+| 2026-08 | Superseded in part | [ADR-0046](0046-direct-to-destination-publication.md) removes the staging archive for direct-ship sets: §1 and §6 no longer apply there, §3's fan-out becomes the catch-up/seeding pump rather than the write path (the blockquotes at each section scope the change), and the capture-never-blocks property is consciously traded away (ADR-0046 §4). §2, §4 and §5 stand for both shapes; this record remains authoritative for unflagged sets until the `direct_ship` default flips. |
