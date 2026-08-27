@@ -83,6 +83,50 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RepoLessVerbs_AreAnsweredByTheServiceAlone()
+    {
+        // FR-SVC-016's client half: a command that names no repository is
+        // service-only — the same connection the web console makes, no
+        // passphrase involved — so `status` and `snapshots` against a
+        // running installation need nothing but the state (and not even
+        // that, when it is the shared default).
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        foreach (var verb in new[] { "status", "snapshots" })
+        {
+            var result = await HostHarness.RunAsync(
+                (a, o, e, c) => Cli.CliApplication.RunAsync(
+                    a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+                verb, "--state", _harness.StateDirectory);
+
+            Assert.AreEqual(0, result.ExitCode, $"{verb}: {result.All}");
+            Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task ARepoLessVerb_NothingListening_RefusesWithDirections()
+    {
+        // Without --repo there is no direct fallback to guess at: the only
+        // honest answer is a stated refusal that names both ways forward.
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("no service is listening", result.All, StringComparison.Ordinal);
+        Assert.Contains("--repo", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task ReadCommand_AskedOfClientAndService_ReturnsTheSameAnswer()
     {
         await _harness.CreateRepositoryAsync();

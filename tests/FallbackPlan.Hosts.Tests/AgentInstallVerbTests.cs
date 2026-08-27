@@ -71,7 +71,7 @@ public sealed class AgentInstallVerbTests
             AgentHost.RunAsync, "install", "--state", "/var/lib/fallbackplan");
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
-        Assert.Contains(AgentDefaults.ArchivesRoot, result.Output, StringComparison.Ordinal);
+        Assert.Contains(FallbackPlan.Api.InstallationDefaults.ArchivesRoot, result.Output, StringComparison.Ordinal);
         Assert.Contains("/var/lib/fallbackplan", result.Output, StringComparison.Ordinal);
     }
 

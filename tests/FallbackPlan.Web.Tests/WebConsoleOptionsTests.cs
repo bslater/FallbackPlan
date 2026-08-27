@@ -27,10 +27,36 @@ public sealed class WebConsoleOptionsTests
     }
 
     [TestMethod]
-    public void Parse_MissingState_FailsNamingTheFlag()
+    public void Parse_NoState_ResolvesTheSharedInstallationDefault()
     {
-        Assert.IsFalse(WebConsoleOptions.TryParse(["--port", "8123"], out _, out var failure));
-        StringAssert.Contains(failure, "--state");
+        // The same default every process of the installation resolves
+        // (FR-SVC-016): a console started with no --state watches the state a
+        // bare `fallbackplan-agent` serves — created on first touch, so a
+        // console started before the service still comes up and waits.
+        var shared = Path.Combine(_state, "shared-default");
+        Environment.SetEnvironmentVariable(FallbackPlan.Api.InstallationDefaults.StateVariable, shared);
+        try
+        {
+            Assert.IsTrue(WebConsoleOptions.TryParse(["--port", "8123"], out var options, out var failure), failure);
+            Assert.AreEqual(Path.GetFullPath(shared), options!.StateDirectory);
+            Assert.IsTrue(Directory.Exists(shared), "the default state is created on first touch");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(FallbackPlan.Api.InstallationDefaults.StateVariable, null);
+        }
+    }
+
+    [TestMethod]
+    public void Parse_LogLevel_IsAcceptedRatherThanBouncedAsUnknown()
+    {
+        // The host reads --log-level itself, before the parse — but the parse
+        // sees the same argv, and it refused the flag the usage advertises,
+        // which made it unusable end to end.
+        Assert.IsTrue(
+            WebConsoleOptions.TryParse(["--state", _state, "--log-level", "debug"], out var options, out var failure),
+            failure);
+        Assert.AreEqual(Path.GetFullPath(_state), options!.StateDirectory);
     }
 
     [TestMethod]

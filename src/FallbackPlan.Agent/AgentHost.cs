@@ -79,12 +79,15 @@ public static class AgentHost
                 `run` echoes them to the console as well.
 
                 With no arguments the service simply starts: --archives and
-                --state default to the profile's data directory
-                (<local app data>/fallbackplan/archives and .../state),
-                overridable by FALLBACKPLAN_ARCHIVES and FALLBACKPLAN_STATE.
-                Every verb shares the defaults — name the paths only to aim
-                at a specific installation, such as the system paths a
-                service unit declares.
+                --state default to the machine's data directory —
+                %ProgramData%\FallbackPlan on Windows, /var/lib/fallbackplan
+                on Linux, /Library/Application Support/FallbackPlan on macOS
+                (falling back to the user profile only where that cannot be
+                created) — overridable by FALLBACKPLAN_ARCHIVES and
+                FALLBACKPLAN_STATE. Every process of the installation shares
+                the same default, so the web console and the CLI find this
+                service with no path arguments either. Name the paths only
+                to aim at a specific installation.
 
                 Backup sets, their destinations and their schedules come from
                 <state>/config.json. Each set's staging archive lives under
@@ -168,13 +171,13 @@ public static class AgentHost
         {
             if (archivesRoot is null)
             {
-                archivesRoot = AgentDefaults.ArchivesRoot;
+                archivesRoot = Api.InstallationDefaults.ArchivesRoot;
                 Directory.CreateDirectory(archivesRoot);
             }
 
             if (stateDirectory is null)
             {
-                stateDirectory = AgentDefaults.StateDirectory;
+                stateDirectory = Api.InstallationDefaults.StateDirectory;
                 Directory.CreateDirectory(stateDirectory);
             }
         }

@@ -69,16 +69,20 @@ public static class WebConsoleHost
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(error);
 
-        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        if (args.Length > 0 && args[0] is "-h" or "--help" or "help")
         {
             await output.WriteLineAsync("""
                 FallbackPlan web console — a browser front end for a running service
 
                 usage:
-                  fallbackplan-web --state <dir> [--port <n>] [--log-level <level>]
+                  fallbackplan-web [--state <dir>] [--port <n>] [--log-level <level>]
 
-                The console talks to the service holding the writer role for <dir>
-                over its local binding, exactly as the CLI does. It binds
+                The console talks to the service holding the writer role for the
+                state directory over its local binding, exactly as the CLI does.
+                With no --state it uses the machine's default installation — the
+                same directory a bare `fallbackplan-agent` serves (FR-SVC-016),
+                overridable by FALLBACKPLAN_STATE — so a default install of the
+                whole solution connects with no arguments at all. It binds
                 http://127.0.0.1 only — remote access to a service is what device
                 pairing is for — and prints a URL carrying a fresh access token on
                 every start. It holds no repository, no keys and no writer role: if
@@ -89,7 +93,7 @@ public static class WebConsoleHost
                 or none, and reads FALLBACKPLAN_LOG_LEVEL when absent. Logs go to
                 standard error; the service keeps its own (ADR-0043 §6).
                 """).ConfigureAwait(false);
-            return args.Length == 0 ? 1 : 0;
+            return 0;
         }
 
         if (!WebConsoleOptions.TryParse(args, out var options, out var failure))

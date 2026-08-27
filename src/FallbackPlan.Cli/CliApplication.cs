@@ -227,6 +227,46 @@ public static class CliApplication
             };
         }
 
+        // The same one-command query against the LOCAL service, for the verbs
+        // whose local path otherwise reads the catalogue directly: with no
+        // --repo they are service-only, against the shared default
+        // installation when --state is absent too (FR-SVC-016) — the same
+        // connection the web console makes, no repository and no passphrase
+        // involved.
+        async Task<TResult> QueryLocalServiceAsync<TResult>(
+            string? stateDirectory, ServiceCommand command, CancellationToken cancellationToken)
+            where TResult : ServiceResult
+        {
+            var state = stateDirectory is { Length: > 0 } ? stateDirectory : InstallationDefaults.StateDirectory;
+
+            LocalServiceClient client;
+            try
+            {
+                client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException)
+            {
+                throw new CliFailureException(
+                    $"no service is listening for '{state}'. Start one (`fallbackplan-agent`), or name --repo "
+                    + "to read the repository directly.");
+            }
+
+            await using (client.ConfigureAwait(false))
+            {
+                await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                error.WriteLine($"mode: service — the service holding the writer role for '{state}' answered this.");
+
+                var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+                return result switch
+                {
+                    TResult expected => expected,
+                    ServiceError serviceError => throw new CliFailureException(serviceError.Message),
+                    _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+                };
+            }
+        }
+
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken, sessionLogger);
 
@@ -256,7 +296,10 @@ public static class CliApplication
         // A read verb goes to the service when one is listening and reads the
         // repository itself when none is. Unlike a write, neither path takes the
         // writer role, so this is never refused for holding it — the choice is
-        // about who does the reading, not about who is allowed to.
+        // about who does the reading, not about who is allowed to. A command
+        // that named NO repository is service-only, against the shared default
+        // installation when --state is absent too (FR-SVC-016) — the same
+        // connection the web console makes, no passphrase involved.
         async Task<int> ReadThroughGatewayAsync(
             ParseResult parse,
             Func<IOperationGateway, CancellationToken, ValueTask<OperationReport>> operation,
@@ -266,6 +309,9 @@ public static class CliApplication
             var gateway = remote is { } target
                 ? await OperationGateway.OpenForRemoteAsync(
                     target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                : parse.GetValue(repoOption) is not { Length: > 0 } && !parse.GetValue(directOption)
+                ? await OperationGateway.OpenServiceOnlyAsync(
+                    parse.GetValue(stateOption), cancellationToken).ConfigureAwait(false)
                 : await OperationGateway.OpenForReadAsync(
                     Repo(parse),
                     PassphraseEnv(parse),
@@ -936,21 +982,17 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                if (ResolveRemote(parse, direct: false) is { } target)
+                // The service carries no signature state on the wire, so a
+                // service-answered listing — local or remote — shows the file
+                // count where the catalogue's own shows the signature column.
+                int RenderServiceSnapshots(SnapshotsResult result)
                 {
-                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
-                    var result = await QueryRemoteAsync<SnapshotsResult>(
-                        target, new ListSnapshotsCommand(), cancellationToken).ConfigureAwait(false);
-
                     if (result.Snapshots.Count == 0)
                     {
                         output.WriteLine("no snapshots known to the service.");
                         return 0;
                     }
 
-                    // The service carries no signature state on the wire, so the
-                    // remote listing shows the file count where the local one
-                    // shows the signature column.
                     foreach (var snapshot in result.Snapshots)
                     {
                         var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
@@ -964,6 +1006,22 @@ public static class CliApplication
                     }
 
                     return 0;
+                }
+
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    return RenderServiceSnapshots(await QueryRemoteAsync<SnapshotsResult>(
+                        target, new ListSnapshotsCommand(), cancellationToken).ConfigureAwait(false));
+                }
+
+                // No repository named: service-only, against the shared
+                // default installation (FR-SVC-016).
+                if (parse.GetValue(repoOption) is not { Length: > 0 })
+                {
+                    return RenderServiceSnapshots(await QueryLocalServiceAsync<SnapshotsResult>(
+                        parse.GetValue(stateOption), new ListSnapshotsCommand(), cancellationToken)
+                        .ConfigureAwait(false));
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
@@ -1635,12 +1693,12 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                if (ResolveRemote(parse, direct: false) is { } target)
+                // One rendering for every service-answered status, local or
+                // remote — the matrix beneath the roll-up (ADR-0028 §8), and
+                // a verification claim always a coverage and a date, never a
+                // bare tick (10 §1.2).
+                void RenderServiceStatus(StatusResult result)
                 {
-                    var result = await QueryRemoteAsync<StatusResult>(
-                        target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
-
-                    error.WriteLine($"mode: service (remote) — {result.MachineName}");
                     foreach (var notice in result.Notices)
                     {
                         output.WriteLine($"notice: {notice}");
@@ -1648,19 +1706,32 @@ public static class CliApplication
 
                     foreach (var set in result.Sets)
                     {
-                        // A verification claim is a coverage and a date, never
-                        // a bare tick (10 §1.2) — rendered wherever it exists.
                         output.WriteLine(
                             $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}");
                         foreach (var row in set.Destinations)
                         {
-                            // The matrix beneath the roll-up (ADR-0028 §8):
-                            // the detail is what the summary was computed from.
                             output.WriteLine(
                                 $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
+                }
 
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    var result = await QueryRemoteAsync<StatusResult>(
+                        target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
+
+                    error.WriteLine($"mode: service (remote) — {result.MachineName}");
+                    RenderServiceStatus(result);
+                    return 0;
+                }
+
+                // No repository named: service-only, against the shared
+                // default installation (FR-SVC-016).
+                if (parse.GetValue(repoOption) is not { Length: > 0 })
+                {
+                    RenderServiceStatus(await QueryLocalServiceAsync<StatusResult>(
+                        parse.GetValue(stateOption), new GetStatusCommand(), cancellationToken).ConfigureAwait(false));
                     return 0;
                 }
 

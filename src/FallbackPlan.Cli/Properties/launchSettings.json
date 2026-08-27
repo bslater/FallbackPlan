@@ -1,36 +1,33 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "help (no prerequisites)": {
+    "status (default installation)": {
+      "commandName": "Project",
+      "commandLineArgs": "status"
+    },
+    "snapshots (default installation)": {
+      "commandName": "Project",
+      "commandLineArgs": "snapshots"
+    },
+    "backup (default installation, named set)": {
+      "commandName": "Project",
+      "commandLineArgs": "backup --set docs"
+    },
+    "changes (default installation, named set)": {
+      "commandName": "Project",
+      "commandLineArgs": "changes --set docs"
+    },
+    "help": {
       "commandName": "Project",
       "commandLineArgs": "--help"
     },
-    "status (via running service)": {
+    "status (specific state)": {
       "commandName": "Project",
       "commandLineArgs": "status --state C:\\fbp\\state"
-    },
-    "snapshots (via running service)": {
-      "commandName": "Project",
-      "commandLineArgs": "snapshots --state C:\\fbp\\state"
-    },
-    "backup (via running service, named set)": {
-      "commandName": "Project",
-      "commandLineArgs": "backup --state C:\\fbp\\state --set docs"
-    },
-    "changes (what would the next backup do)": {
-      "commandName": "Project",
-      "commandLineArgs": "changes --state C:\\fbp\\state --set docs"
     },
     "init (create a repo, direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "init --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE",
-      "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
-      }
-    },
-    "init --write-only": {
-      "commandName": "Project",
-      "commandLineArgs": "init --write-only --acknowledge-loss --repo C:\\fbp\\repo-wo --passphrase-env FBP_PASSPHRASE",
       "environmentVariables": {
         "FBP_PASSPHRASE": "a long local dev passphrase"
       }

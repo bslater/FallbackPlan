@@ -301,6 +301,49 @@ public static class OperationGateway
     }
 
     /// <summary>
+    /// Opens the gateway for a command that named no repository: the running
+    /// service holding <paramref name="stateDirectory"/> — by default the
+    /// machine's shared installation state, the same one a bare service start
+    /// serves (FR-SVC-016) — exactly as the web console connects. There is no
+    /// direct fallback here, deliberately: direct mode IS the repository, so
+    /// without <c>--repo</c> the only honest answer when nothing listens is a
+    /// stated refusal with directions, never a guess at which archive was
+    /// meant.
+    /// </summary>
+    /// <param name="stateDirectory">The state directory, or null for the shared default.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <returns>The gateway; dispose to close the connection.</returns>
+    public static async ValueTask<IOperationGateway> OpenServiceOnlyAsync(
+        string? stateDirectory, CancellationToken cancellationToken)
+    {
+        var state = stateDirectory is { Length: > 0 } ? stateDirectory : InstallationDefaults.StateDirectory;
+
+        LocalServiceClient client;
+        try
+        {
+            client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException)
+        {
+            throw new CliFailureException(
+                $"no service is listening for '{state}'. Start one (`fallbackplan-agent`), or name --repo to "
+                + "work on a repository directly.");
+        }
+
+        try
+        {
+            await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+            return new ServiceGateway(client, LocalMode(state), client);
+        }
+        catch
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Opens the gateway a command needs against a <em>remote</em> paired service
     /// (ADR-0028 §5): dial the endpoint, authenticate as the pinned peer, and
     /// carry the command contract over the opened session.

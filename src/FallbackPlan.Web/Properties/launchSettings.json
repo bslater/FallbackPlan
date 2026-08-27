@@ -1,20 +1,25 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "console (opens the browser)": {
+    "console (default installation, opens the browser)": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
+      "commandLineArgs": "--port 5099",
       "launchBrowser": true,
       "applicationUrl": "http://localhost:5099"
     },
-    "console": {
+    "console (default installation)": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
+      "commandLineArgs": "--port 5099",
       "launchBrowser": false
     },
     "console (debug logging)": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099 --log-level debug",
+      "commandLineArgs": "--port 5099 --log-level debug",
+      "launchBrowser": false
+    },
+    "console (specific state)": {
+      "commandName": "Project",
+      "commandLineArgs": "--state C:\\fbp\\state --port 5099",
       "launchBrowser": false
     }
   }

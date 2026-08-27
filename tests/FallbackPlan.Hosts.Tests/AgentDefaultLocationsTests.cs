@@ -1,13 +1,15 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// A bare <c>fallbackplan-agent</c> starts the service on the installation it
-/// finds — or creates — in the platform profile's data directory; the path
-/// flags exist for pointing somewhere specific, never as a prerequisite
-/// (FR-SVC-016). Environment overrides sit between the two so a harness or a
-/// second install can redirect the defaults without composing a command line.
+/// finds — or creates — at the machine's default data directory, the same one
+/// every client resolves; the path flags exist for pointing somewhere
+/// specific, never as a prerequisite (FR-SVC-016). Environment overrides sit
+/// between the two so a harness or a second install can redirect the
+/// defaults without composing a command line.
 /// </summary>
 /// <remarks>
 /// Not parallelised: the environment overrides are process-global, and two of
@@ -24,35 +26,45 @@ public sealed class AgentDefaultLocationsTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(AgentDefaults.StateVariable, null);
-        Environment.SetEnvironmentVariable(AgentDefaults.ArchivesVariable, null);
+        Environment.SetEnvironmentVariable(InstallationDefaults.StateVariable, null);
+        Environment.SetEnvironmentVariable(InstallationDefaults.ArchivesVariable, null);
         _timeout.Dispose();
         _harness.Dispose();
     }
 
     private void PointDefaultsAtTheHarness()
     {
-        Environment.SetEnvironmentVariable(AgentDefaults.StateVariable, _harness.StateDirectory);
-        Environment.SetEnvironmentVariable(AgentDefaults.ArchivesVariable, _harness.ArchivesRoot);
+        Environment.SetEnvironmentVariable(InstallationDefaults.StateVariable, _harness.StateDirectory);
+        Environment.SetEnvironmentVariable(InstallationDefaults.ArchivesVariable, _harness.ArchivesRoot);
     }
 
     [TestMethod]
-    public void Defaults_DeriveFromThePlatformProfile_UnlessTheEnvironmentSaysOtherwise()
+    public void Defaults_PreferTheMachineRoot_UnlessTheEnvironmentSaysOtherwise()
     {
-        Environment.SetEnvironmentVariable(AgentDefaults.StateVariable, null);
-        Environment.SetEnvironmentVariable(AgentDefaults.ArchivesVariable, null);
+        Environment.SetEnvironmentVariable(InstallationDefaults.StateVariable, null);
+        Environment.SetEnvironmentVariable(InstallationDefaults.ArchivesVariable, null);
 
-        // The derived shape, not a literal path: the profile root is the
-        // platform's and the test must hold on every platform.
-        var expectedRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "fallbackplan");
-        Assert.AreEqual(Path.Combine(expectedRoot, "state"), AgentDefaults.StateDirectory);
-        Assert.AreEqual(Path.Combine(expectedRoot, "archives"), AgentDefaults.ArchivesRoot);
+        // The resolution rule, not a literal path: the machine-wide root
+        // (ProgramData\FallbackPlan, /var/lib/fallbackplan, /Library/...)
+        // wins whenever it exists or can be created, so every process of a
+        // default installation lands on ONE state; only a machine root this
+        // account cannot create falls back to the profile.
+        var resolved = Path.GetDirectoryName(InstallationDefaults.StateDirectory);
+        if (Directory.Exists(InstallationDefaults.MachineRoot))
+        {
+            Assert.AreEqual(InstallationDefaults.MachineRoot, resolved);
+        }
+        else
+        {
+            Assert.AreEqual(InstallationDefaults.ProfileRoot, resolved);
+        }
+
+        Assert.AreEqual(Path.Combine(resolved!, "state"), InstallationDefaults.StateDirectory);
+        Assert.AreEqual(Path.Combine(resolved!, "archives"), InstallationDefaults.ArchivesRoot);
 
         PointDefaultsAtTheHarness();
-        Assert.AreEqual(_harness.StateDirectory, AgentDefaults.StateDirectory);
-        Assert.AreEqual(_harness.ArchivesRoot, AgentDefaults.ArchivesRoot);
+        Assert.AreEqual(_harness.StateDirectory, InstallationDefaults.StateDirectory);
+        Assert.AreEqual(_harness.ArchivesRoot, InstallationDefaults.ArchivesRoot);
     }
 
     [TestMethod]
