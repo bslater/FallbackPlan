@@ -152,6 +152,11 @@ answer.
 
 ### 6. A minimum length **and** a strength estimate, at the setup boundary only
 
+> **Amended (2026-08, second amendment below):** the floor is now sixteen,
+> and composition rules — an uppercase letter, two digits, a special
+> character — are required besides. The boundary-only scoping in this
+> section is unchanged and remains the governing rule.
+
 This settles [open question Q14](../open-questions.md), which has stood
 undecided since specification 03 §2.1 asked for a minimum and named no
 number. Q14 poses the choice as "length alone versus a strength estimate,
@@ -308,6 +313,46 @@ itself a second factor.
 never-generated/saved/stale model. Setup gets a durable "confirmed saved" and
 no more, and both remain recorded as unmet.
 
+## Amendment (2026-08): composition rules, a combined entry step, and the first account in the ceremony
+
+Three changes from operating the ceremony, all landing together because they
+reshape one wizard.
+
+**The policy tightens.** §6's floor rises from twelve to sixteen, and
+composition rules join it: at least one uppercase letter, two digits, and one
+special character (anything that is neither letter nor digit — a space
+counts, deliberately, so word separators satisfy it). A composition miss caps
+the band at `Weak` whatever the estimator scores, and every unmet rule is
+named at once so the operator fixes a checklist rather than playing
+whack-a-mole. §6's scoping is untouched and load-bearing: the rules apply
+where a passphrase is *chosen* — the console ceremony and the headless
+`setup` verb, one implementation in `Domain/Configuration/PassphraseStrength`
+— and never where one is *used*. The kit-rebuild resume path in particular
+derives and compares, so an installation set up under the old rules still
+rebuilds its kit. The estimator's stated ceiling stands: it still consults no
+dictionary, and a compliant-shaped famous phrase still passes.
+
+**The passphrase and its confirmation share one step.** The old
+separate-confirm step read, on the resume screen especially, as if the
+ceremony asked for one entry only. "Build the recovery kit" — named for what
+it does — enables only when the server's strength verdict passes AND the
+confirmation matches, both patched in place while typing.
+
+**The ceremony ends with the owner, not before them.** A completed setup used
+to hand off to a bare sign-in gate in create-first-account mode; the account
+is the ceremony's business, so it is now its final step: account name,
+password, confirmation, with a live checklist of the account policy
+(ADR-0045: at least ten characters, the same composition), a
+must-not-be-the-passphrase rule enforced by comparing SHA-256 hashes — the
+hash is captured in the moment before the passphrase is wiped, so the secret
+itself is never held past provisioning — and "Create User" enabled only when
+every rule reads met. Creation rides the existing bootstrap window
+(ADR-0045 §5: `create_user` needs no session while no accounts exist), and
+success signs the new owner straight in. The sign-in gate's own first-account
+mode remains as the fallback for a service that reaches `users_required`
+outside the ceremony — an installation whose owner was created headlessly
+skips the step entirely.
+
 ## Status history
 
 | Date | Status | Note |
@@ -315,3 +360,4 @@ no more, and both remain recorded as unmet.
 | 2026-08 | Proposed | Written with the model, scope, client set and strength policy fixed by the user: write-only format 2, passphrase-only ceremony, local console plus an agent verb, and a length floor with a strength estimate. Build sequenced as strength assessment → installation credential and the archive ladder → contract 1.13 with caller scope → console ceremony → agent verb and sweep |
 | 2026-08 | Accepted | Built end to end: the strength policy in Domain with the floor enforced only where a passphrase is chosen, the installation credential and the new rung in ServiceRuntime's archive ladder, contract 1.13's provision_installation with a caller scope so a remote console is refused, the console's three-step ceremony shown in place of its views, and the headless `fallbackplan-agent setup` verb — proven by service-level drills including a passphrase-free backup that seals to the chosen passphrase and a restore-side derivation check against each archive's descriptor |
 | 2026-08 | Amended | The ceremony no longer stops at the passphrase: it generates the installation recovery kit and will not complete until the operator confirms saving it (FR-KIT-004), adding a `kit_required` state between `setup_required` and `ready`. §3's original scoping is kept above rather than rewritten, because the reasoning it rested on is worth being able to find |
+| 2026-08 | Amended | The passphrase policy tightens to a floor of sixteen with composition rules (an uppercase letter, two digits, a special character), enforced at the same creation-only boundary; the wizard's passphrase and confirmation share one step gated together; and the ceremony ends by creating the owner account — the account policy live as a checklist, the passphrase excluded by hash comparison, and the new owner signed straight in |

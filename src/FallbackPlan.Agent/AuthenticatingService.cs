@@ -315,7 +315,8 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 $"An account name must be 1 to {UserStore.MaximumNameLength} characters with no spaces "
                 + "and no control characters — one that could carry a line break could forge a log line.",
             UserStoreOutcome.PasswordRefused =>
-                $"A password must be at least {UserStore.MinimumPasswordLength} characters.",
+                $"A password must be at least {UserStore.MinimumPasswordLength} characters, with an "
+                + "uppercase letter, two digits and a special character.",
             UserStoreOutcome.WrongPassword or UserStoreOutcome.Throttled =>
                 "That password was not accepted.",
             UserStoreOutcome.OwnerIsPermanent =>

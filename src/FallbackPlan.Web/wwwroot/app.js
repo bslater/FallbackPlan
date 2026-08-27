@@ -1037,14 +1037,14 @@ async function withBusy(button, work) {
 
 /* -------------------------------------------------- first-run setup (ADR-0044) */
 
-// The one ceremony that runs before anything else works. Three steps —
-// what you are about to commit to, the passphrase, and confirming it —
-// shown INSTEAD of the console rather than in a dialog over it, because
-// there is nothing behind it that functions until an installation has a
-// passphrase.
+// The one ceremony that runs before anything else works. Four steps —
+// what you are about to commit to, the passphrase with its confirmation,
+// the recovery kit, and the first account — shown INSTEAD of the console
+// rather than in a dialog over it, because there is nothing behind it that
+// functions until an installation has a passphrase and an owner.
 let U = null;
 
-const SETUP_STEPS = ["What this is", "Passphrase", "Confirm", "Recovery kit"];
+const SETUP_STEPS = ["What this is", "Passphrase", "Recovery kit", "Account"];
 
 /* ------------------------------------------------------------- sign-in */
 
@@ -1065,6 +1065,15 @@ function renderSignIn() {
   if (out) {
     out.hidden = !S.signedInUser;
     out.onclick = signOut;
+  }
+
+  // While the setup ceremony is mid-flight it owns the screen — including
+  // its own account step — so the sign-in gate stays down until the wizard
+  // object is gone. Without this, the moment the kit is confirmed the
+  // service reports users_required and BOTH gates would render.
+  if (U) {
+    host.hidden = true;
+    return;
   }
 
   if (!S.signInRequired) {
@@ -1091,7 +1100,7 @@ function renderSignIn() {
   host.innerHTML = `<div class="gate-card">
     <h2>${esc(heading)}</h2>
     <p class="muted">${blurb}</p>
-    <label>Account name<input id="signin-user" autocomplete="username" value="${esc(SI.user)}"></label>
+    <label>Account name<input type="text" id="signin-user" autocomplete="username" value="${esc(SI.user)}"></label>
     <label>Password<input id="signin-pass" type="password"
       autocomplete="${SI.first ? "new-password" : "current-password"}"></label>
     ${SI.message ? `<p class="warn">${esc(SI.message)}</p>` : ""}
@@ -1157,6 +1166,17 @@ async function signOut() {
 function renderSetupGate() {
   const host = document.getElementById("setup");
   if (!S.setupRequired) {
+    // The account step outlives setup_required: the moment the kit is
+    // confirmed the service reads ready-or-users_required, but the
+    // ceremony is not over until the first account exists (or the service
+    // says one already does). A live step-4 wizard keeps the gate up.
+    if (U && U.step === 4) {
+      appEl.hidden = true;
+      host.hidden = false;
+      setupRender();
+      return;
+    }
+
     host.hidden = true;
     appEl.hidden = false;
     U = null;
@@ -1166,10 +1186,12 @@ function renderSetupGate() {
   // A service in kit_required has a passphrase already: the ceremony
   // resumes at the kit step rather than asking for one again.
   if (!U) U = S.setupState === "kit_required"
-    ? { step: 4, passphrase: "", confirmation: "", acknowledged: true, strength: null, busy: false,
-        kit: null, taken: false, resumed: true }
+    ? { step: 3, passphrase: "", confirmation: "", acknowledged: true, strength: null, busy: false,
+        kit: null, taken: false, saved: false, resumed: true, passHash: null, kitLines: [],
+        account: { user: "", password: "", confirm: "", check: null, hash: null } }
     : { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false,
-        kit: null, taken: false, resumed: false };
+        kit: null, taken: false, saved: false, resumed: false, passHash: null, kitLines: [],
+        account: { user: "", password: "", confirm: "", check: null, hash: null } };
   appEl.hidden = true;
   host.hidden = false;
   setupRender();
@@ -1180,11 +1202,16 @@ function setupRender() {
   const body = [setupStep1, setupStep2, setupStep3, setupStep4][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
     <div class="rst-steps">${SETUP_STEPS.map((label, index) =>
-      `<span class="${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
+      `<span class="rst-step ${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
     ${body}
   </div>`;
   if (U.step === 2) {
     const field = document.getElementById("setup-pass");
+    field?.focus();
+  }
+
+  if (U.step === 4) {
+    const field = document.getElementById("setup-user");
     field?.focus();
   }
 }
@@ -1221,16 +1248,22 @@ function setupStep1() {
 function setupStep2() {
   return `
     <h1>Choose the passphrase</h1>
-    <p>Longer is better than complicated. Several unrelated words you will
-    remember beat a short string of symbols you will not.</p>
+    <p>At least 16 characters, with an uppercase letter, two digits and a
+    special character. Several unrelated words you will remember beat a short
+    string of symbols you will not.</p>
     <input type="password" id="setup-pass" class="setup-field" autocomplete="new-password"
       spellcheck="false" placeholder="the passphrase for this installation"
       value="${esc(U.passphrase)}" data-action-input="setup-pass">
     <div id="setup-strength">${setupStrengthMarkup()}</div>
+    <input type="password" id="setup-confirm" class="setup-field" autocomplete="new-password"
+      spellcheck="false" placeholder="the same passphrase, again" value="${esc(U.confirmation)}"
+      data-action-input="setup-confirm">
+    <div id="setup-match">${setupMatchMarkup()}</div>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="setup-back">‹ Back</button>
-      <button type="button" class="btn primary" data-action="setup-to-confirm"
-        ${U.strength?.acceptable ? "" : "disabled"}>Continue</button>
+      <button type="button" class="btn danger" data-action="setup-finish"
+        ${setupBuildReady() ? "" : "disabled"}>
+        ${U.busy ? "Building…" : "Build the recovery kit"}</button>
     </div>`;
 }
 
@@ -1243,39 +1276,53 @@ function setupStrengthMarkup() {
       <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
 }
 
+function setupMatchMarkup() {
+  return U && U.confirmation.length > 0 && U.confirmation !== U.passphrase
+    ? `<p class="setup-danger">These do not match.</p>` : "";
+}
+
+// The one gate for "Build the recovery kit": the server's strength verdict,
+// AND a non-empty confirmation that matches, AND not mid-request.
+function setupBuildReady() {
+  return !!U && !U.busy
+    && U.strength?.acceptable === true
+    && U.confirmation.length > 0
+    && U.confirmation === U.passphrase;
+}
+
 // Applies a strength answer WITHOUT re-rendering the step. The answer lands
 // while the operator is typing, and a re-render replaces the very field
 // they are typing in: focus is re-applied to a fresh element with the caret
 // wherever the browser puts it, so the cursor jumps on every debounced
-// answer and in-flight keystrokes can die. Only the meter and the Continue
-// button change, so only they are touched; if either is gone the operator
-// has moved on and there is nothing to show.
+// answer and in-flight keystrokes can die. Only the meter, the match hint
+// and the build button change, so only they are touched; if any is gone the
+// operator has moved on and there is nothing to show.
 function setupApplyStrength() {
   const host = document.getElementById("setup-strength");
   if (host) host.innerHTML = setupStrengthMarkup();
-  const go = document.querySelector('[data-action="setup-to-confirm"]');
-  if (go) go.disabled = !U?.strength?.acceptable;
+  const match = document.getElementById("setup-match");
+  if (match) match.innerHTML = setupMatchMarkup();
+  const go = document.querySelector('[data-action="setup-finish"]');
+  if (go) go.disabled = !setupBuildReady();
+
+  // The resume screen shares the #setup-pass field: its rebuild button
+  // gates only on a non-empty entry (the server verifies the passphrase
+  // against the installation — strength is a creation-time policy, and an
+  // existing passphrase must never be refused for predating it).
+  const rebuild = document.querySelector('[data-action="setup-rebuild-kit"]');
+  if (rebuild) rebuild.disabled = U.busy || U.passphrase.length === 0;
+}
+
+// SHA-256 as lowercase hex, for comparing secrets without holding them:
+// the account step must refuse a password equal to the passphrase, and a
+// hash lets it ask that question after the passphrase itself is gone.
+// crypto.subtle is available because 127.0.0.1 is a secure context.
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
 function setupStep3() {
-  const mismatch = U.confirmation.length > 0 && U.confirmation !== U.passphrase;
-  return `
-    <h1>Type it again</h1>
-    <p>The one thing that cannot be fixed later is a typo in a passphrase you
-    only ever entered once.</p>
-    <input type="password" id="setup-confirm" class="setup-field" autocomplete="new-password"
-      spellcheck="false" placeholder="the same passphrase" value="${esc(U.confirmation)}"
-      data-action-input="setup-confirm">
-    ${mismatch ? `<p class="setup-danger">These do not match.</p>` : ""}
-    <div class="dlg-actions">
-      <button type="button" class="btn" data-action="setup-back">‹ Back</button>
-      <button type="button" class="btn danger" data-action="setup-finish"
-        ${U.busy || mismatch || U.confirmation.length === 0 ? "disabled" : ""}>
-        ${U.busy ? "Setting up…" : "Set up this installation"}</button>
-    </div>`;
-}
-
-function setupStep4() {
   // The kit is the second of the two things a recovery needs, and the only
   // one this ceremony can hand over. It holds no passphrase and no keys, so
   // it is safe to print — and useless to anyone who does not also have the
@@ -1322,6 +1369,106 @@ function setupStep4() {
         ${U.busy || !U.saved ? "disabled" : ""}>
         ${U.busy ? "Finishing…" : "Finish setup"}</button>
     </div>`;
+}
+
+function setupStep4() {
+  // The first account, inside the ceremony (FR-USR-001): the service is in
+  // its bootstrap window — no accounts yet, so create_user needs no session
+  // — and this first account becomes the owner (FR-USR-004). The password
+  // policy is the server's; the checklist below only repeats its verdict.
+  const a = U.account;
+  return `
+    <h1>Create the first account</h1>
+    <p>The installation is set up. Actions on it are recorded against a
+    person, so it needs its owner account — this one.</p>
+    <label class="setup-label">Account name
+      <input type="text" id="setup-user" class="setup-field" autocomplete="username"
+        spellcheck="false" maxlength="64" value="${esc(a.user)}" data-action-input="setup-user"></label>
+    <label class="setup-label">Password — at least 10 characters, with an uppercase letter, two digits
+      and a special character; not the installation passphrase
+      <input type="password" id="setup-user-pass" class="setup-field" autocomplete="new-password"
+        spellcheck="false" value="${esc(a.password)}" data-action-input="setup-user-pass"></label>
+    <label class="setup-label">Confirm password
+      <input type="password" id="setup-user-confirm" class="setup-field" autocomplete="new-password"
+        spellcheck="false" value="${esc(a.confirm)}" data-action-input="setup-user-confirm"></label>
+    <div id="setup-account-rules">${setupAccountRulesMarkup()}</div>
+    <div class="dlg-actions">
+      <button type="button" class="btn danger" data-action="setup-create-user"
+        ${setupAccountReady() ? "" : "disabled"}>
+        ${U.busy ? "Creating…" : "Create User"}</button>
+    </div>`;
+}
+
+// The one gate for "Create User": a name, the server's password verdict, a
+// password that is not the passphrase (by hash), a matching confirmation,
+// and not mid-request.
+function setupAccountReady() {
+  const a = U?.account;
+  return !!a && !U.busy
+    && a.user.trim().length > 0
+    && a.check?.acceptable === true
+    && a.hash !== null && a.hash !== U.passHash
+    && a.confirm.length > 0 && a.confirm === a.password;
+}
+
+function setupAccountRulesMarkup() {
+  const a = U?.account;
+  if (!a) return "";
+  const rules = [...(a.check?.findings ?? []).map(line => `<li>${esc(line)}</li>`)];
+  if (a.hash !== null && U.passHash && a.hash === U.passHash) {
+    rules.push("<li>The password must not be the installation passphrase.</li>");
+  }
+  if (a.confirm.length > 0 && a.confirm !== a.password) {
+    rules.push("<li>The two passwords do not match.</li>");
+  }
+  return rules.length ? `<ul class="setup-findings">${rules.join("")}</ul>` : "";
+}
+
+// Same in-place discipline as the strength meter: the checklist and the
+// button change while the operator types, so only they are touched.
+function setupApplyAccount() {
+  const host = document.getElementById("setup-account-rules");
+  if (host) host.innerHTML = setupAccountRulesMarkup();
+  const go = document.querySelector('[data-action="setup-create-user"]');
+  if (go) go.disabled = !setupAccountReady();
+}
+
+// Debounced like the strength meter, and for the same reason: the policy is
+// the server's, asked per pause rather than per keystroke. The hash rides
+// the same beat so the not-the-passphrase verdict stays current.
+let setupPasswordTimer = null;
+function setupSchedulePasswordCheck() {
+  clearTimeout(setupPasswordTimer);
+  setupPasswordTimer = setTimeout(async () => {
+    const account = U?.account;
+    if (!account) return;
+    const candidate = account.password;
+    if (!candidate) {
+      account.check = null;
+      account.hash = null;
+      setupApplyAccount();
+      return;
+    }
+
+    try {
+      const [response, hash] = await Promise.all([
+        fetch("/api/password-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ candidate }),
+        }),
+        sha256Hex(candidate),
+      ]);
+      if (U?.account !== account || account.password !== candidate) return;
+      account.hash = hash;
+      if (response.ok) account.check = await response.json();
+      // Patched in place, never a full step re-render — the same rule the
+      // strength meter follows, pinned by SetupWizardScriptTests.
+      setupApplyAccount();
+    } catch {
+      // The checklist is a courtesy; create_user is where the policy is enforced.
+    }
+  }, 250);
 }
 
 // The kit is handed over as a download the page builds itself: the console
@@ -1429,12 +1576,9 @@ const setupActions = {
     setupApplyStrength();
   },
 
-  "setup-to-confirm"() { if (U.strength?.acceptable) { U.step = 3; setupRender(); } },
-
   "setup-confirm"(el) {
     U.confirmation = el.value;
-    const go = document.querySelector('[data-action="setup-finish"]');
-    if (go) go.disabled = U.busy || U.confirmation.length === 0 || U.confirmation !== U.passphrase;
+    setupApplyStrength();
   },
 
   async "setup-finish"() {
@@ -1465,13 +1609,17 @@ const setupActions = {
       return;
     }
 
-    // The passphrase is done with; the kit is not. Setup is not finished
-    // until the operator says they saved it (FR-KIT-004).
+    // The hash first, the wipe second: the account step must refuse a
+    // password equal to the passphrase, and once the secret is cleared a
+    // hash is the only form of it this page may keep (pinned by
+    // SetupWizardScriptTests).
+    U.passHash = await sha256Hex(U.passphrase);
     U.passphrase = "";
     U.confirmation = "";
     U.strength = null;
     U.kit = body.kit ?? null;
-    U.step = 4;
+    U.kitLines = body.lines ?? [];
+    U.step = 3;
     reportDialog("Passphrase accepted", body.lines ?? []);
     setupRender();
   },
@@ -1511,6 +1659,9 @@ const setupActions = {
       return;
     }
 
+    // Hash before wipe, exactly as the fresh ceremony does: the account
+    // step may still be ahead, and its not-the-passphrase check needs this.
+    U.passHash = await sha256Hex(U.passphrase);
     U.passphrase = "";
     U.kit = body.kit;
     U.resumed = false;
@@ -1537,12 +1688,100 @@ const setupActions = {
       return;
     }
 
-    // Held only as long as the ceremony took.
+    U.kitLines = result?.lines ?? U.kitLines;
+
+    // The kit is confirmed; whether the ceremony is over depends on whether
+    // the installation has its first account. Step 4 is claimed BEFORE the
+    // refresh so renderSetupGate keeps this gate up while the service
+    // re-describes itself; a headless setup that already created the owner
+    // ends the ceremony here instead.
+    U.step = 4;
+    await refreshDesc();
+    if (S.setupState === "users_required") {
+      setupRender();
+      return;
+    }
+
+    const lines = U.kitLines;
     U = null;
     S.setupRequired = false;
     renderSetupGate();
-    reportDialog("Setup complete", result?.lines ?? []);
+    renderSignIn();
+    reportDialog("Setup complete", lines);
     refreshAll();
+  },
+
+  "setup-user"(el) {
+    U.account.user = el.value;
+    setupApplyAccount();
+  },
+
+  "setup-user-pass"(el) {
+    U.account.password = el.value;
+    // No re-render here either: the checklist answer patches in place.
+    setupSchedulePasswordCheck();
+    setupApplyAccount();
+  },
+
+  "setup-user-confirm"(el) {
+    U.account.confirm = el.value;
+    setupApplyAccount();
+  },
+
+  async "setup-create-user"() {
+    // The bootstrap window (ADR-0045 §5): no accounts exist, so create_user
+    // needs no session — and the account it creates is the owner. Then sign
+    // straight in as them, because a wizard that ends at a login form asking
+    // for what was just typed is a wizard with one step too many.
+    const account = U.account;
+    U.busy = true;
+    setupApplyAccount();
+
+    let created;
+    try {
+      created = await api({
+        command: "create_user", name: account.user.trim(), password: account.password,
+      });
+    } catch (error) {
+      U.busy = false;
+      toast("bad", error?.message ?? "The console process stopped answering.");
+      setupApplyAccount();
+      return;
+    }
+
+    if (created?.result === "error") {
+      U.busy = false;
+      toast("warn", created.message ?? "The account was not created.");
+      setupApplyAccount();
+      return;
+    }
+
+    let answered = null;
+    try {
+      answered = await api({ command: "login", user: account.user.trim(), password: account.password });
+    } catch {
+      // Signing in is a convenience on top of a created account; the gate
+      // below handles a service that would not answer.
+    }
+
+    U.busy = false;
+    const lines = U.kitLines;
+    U = null;
+
+    if (answered?.result === "session") {
+      rememberSession(answered.token);
+      S.signedInUser = answered.user;
+      S.signInRequired = false;
+      S.everRefused = false;
+    }
+
+    S.setupRequired = false;
+    renderSetupGate();
+    renderSignIn();
+    connectEvents();
+    reportDialog("Setup complete", lines);
+    refreshAll();
+    refreshDesc();
   },
 };
 

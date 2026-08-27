@@ -59,6 +59,118 @@ public sealed class SetupWizardScriptTests
         return end < 0 ? script[start..] : script[start..end];
     }
 
+    /// <summary>
+    /// One action handler's body from the <c>setupActions</c> table, sliced
+    /// from its key to the next action key.
+    /// </summary>
+    private static string ActionBody(string script, string name)
+    {
+        var start = script.IndexOf($"\"{name}\"(", StringComparison.Ordinal);
+        Assert.IsTrue(start >= 0, $"app.js no longer declares the '{name}' action");
+
+        var end = script.IndexOf("\n  \"", start + 1, StringComparison.Ordinal);
+        var alt = script.IndexOf("\n  async \"", start + 1, StringComparison.Ordinal);
+        if (alt >= 0 && (end < 0 || alt < end))
+        {
+            end = alt;
+        }
+
+        return end < 0 ? script[start..] : script[start..end];
+    }
+
+    [TestMethod]
+    public void TheCombinedPassphraseStep_GatesBuildOnStrengthAndMatch()
+    {
+        // The user's spec for the wizard's passphrase step: one screen with
+        // the passphrase AND its confirmation, and "Build the recovery kit"
+        // disabled until the strength policy passes and the two entries
+        // match.
+        var script = AppJs();
+        var step = FunctionBody(script, "setupStep2");
+
+        Assert.Contains("id=\"setup-pass\"", step, StringComparison.Ordinal);
+        Assert.Contains("id=\"setup-confirm\"", step, StringComparison.Ordinal,
+            "the confirmation belongs on the same step as the passphrase");
+        Assert.Contains("id=\"setup-match\"", step, StringComparison.Ordinal,
+            "the mismatch hint needs a stable container so typing patches it in place");
+        Assert.Contains("data-action=\"setup-finish\"", step, StringComparison.Ordinal);
+        Assert.Contains("Build the recovery kit", step, StringComparison.Ordinal);
+
+        var gate = FunctionBody(script, "setupBuildReady");
+        Assert.Contains("strength?.acceptable", gate, StringComparison.Ordinal,
+            "the build button must gate on the server's strength verdict");
+        Assert.Contains("confirmation === U.passphrase", gate, StringComparison.Ordinal,
+            "the build button must gate on the confirmation matching");
+
+        Assert.Contains("\"setup-finish\"", FunctionBody(script, "setupApplyStrength"), StringComparison.Ordinal,
+            "the in-place patch must keep the build button's disabled state current while typing");
+    }
+
+    [TestMethod]
+    public void TheKitStep_GatesFinishOnTheSavedAcknowledgement()
+    {
+        // Step two of the user's spec: no way past the kit step until one of
+        // the two forms was taken and the checkbox says it was saved.
+        var step = FunctionBody(AppJs(), "setupStep3");
+
+        Assert.Contains("data-action-change=\"setup-kit-ack\"", step, StringComparison.Ordinal);
+        Assert.Contains("!U.saved", step, StringComparison.Ordinal,
+            "the finishing button must stay disabled until the checkbox is ticked");
+        Assert.Contains("data-action=\"setup-kit-file\"", step, StringComparison.Ordinal);
+        Assert.Contains("data-action=\"setup-kit-print\"", step, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheAccountStep_GatesCreateUserOnEveryRule()
+    {
+        // Step three of the user's spec: username, password, confirmation;
+        // Create User enabled only when the server accepts the password, it
+        // is not the passphrase (compared by hash), and the confirmation
+        // matches.
+        var script = AppJs();
+        var step = FunctionBody(script, "setupStep4");
+
+        Assert.Contains("id=\"setup-user\"", step, StringComparison.Ordinal);
+        Assert.Contains("id=\"setup-user-pass\"", step, StringComparison.Ordinal);
+        Assert.Contains("id=\"setup-user-confirm\"", step, StringComparison.Ordinal);
+        Assert.Contains("id=\"setup-account-rules\"", step, StringComparison.Ordinal,
+            "the rule checklist needs a stable container so typing patches it in place");
+        Assert.Contains("data-action=\"setup-create-user\"", step, StringComparison.Ordinal);
+
+        var gate = FunctionBody(script, "setupAccountReady");
+        Assert.Contains("check?.acceptable", gate, StringComparison.Ordinal,
+            "Create User must gate on the server's password verdict");
+        Assert.Contains("hash !== U.passHash", gate, StringComparison.Ordinal,
+            "Create User must refuse a password equal to the passphrase — compared by hash");
+        Assert.Contains("confirm === a.password", gate, StringComparison.Ordinal,
+            "Create User must gate on the confirmation matching");
+
+        var check = FunctionBody(script, "setupSchedulePasswordCheck");
+        Assert.Contains("setupApplyAccount(", check, StringComparison.Ordinal);
+        Assert.DoesNotContain("setupRender(", check, StringComparison.Ordinal,
+            "the checklist answer must patch in place — a re-render replaces the field being typed in");
+    }
+
+    [TestMethod]
+    public void ThePassphraseHash_IsCapturedBeforeTheSecretIsCleared()
+    {
+        // The account step compares by hash precisely so the passphrase is
+        // not held past provisioning. That only works if the hash is taken
+        // BEFORE the secret is wiped — on both paths that learn it.
+        var script = AppJs();
+
+        foreach (var action in new[] { "setup-finish", "setup-rebuild-kit" })
+        {
+            var body = ActionBody(script, action);
+            var hashed = body.IndexOf("passHash = await sha256Hex(", StringComparison.Ordinal);
+            var cleared = body.IndexOf("U.passphrase = \"\"", StringComparison.Ordinal);
+
+            Assert.IsTrue(hashed >= 0, $"'{action}' must capture the passphrase hash");
+            Assert.IsTrue(cleared >= 0, $"'{action}' must clear the passphrase");
+            Assert.IsTrue(hashed < cleared, $"'{action}' must hash before it clears — afterwards there is nothing to hash");
+        }
+    }
+
     [TestMethod]
     public void TheStrengthAnswer_PatchesTheMeter_NeverReRendersTheStep()
     {

@@ -86,7 +86,7 @@ public sealed class AuthenticationGateTests : IDisposable
     private AuthenticatingService Connect() => new(_inner, _users, _sessions, _log);
 
     private void GiveTheInstallationAnOwner() =>
-        _users.Create("ben", "a-good-password", parameters: Fast);
+        _users.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
     [TestMethod]
     public async Task AnInstallationWithNoAccounts_IsNotLockedOut()
@@ -196,7 +196,7 @@ public sealed class AuthenticationGateTests : IDisposable
             await connection.ExecuteAsync(new DescribeServiceCommand(), CancellationToken.None));
 
         Assert.IsInstanceOfType<SessionResult>(
-            await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None));
+            await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None));
     }
 
     [TestMethod]
@@ -205,7 +205,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var connection = Connect();
 
-        await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
         var answered = await connection.ExecuteAsync(new GetStatusCommand(), CancellationToken.None);
 
         Assert.IsInstanceOfType<AcknowledgedResult>(answered);
@@ -222,7 +222,7 @@ public sealed class AuthenticationGateTests : IDisposable
         var wrongPassword = (ServiceError)await connection.ExecuteAsync(
             new LoginCommand("ben", "not-the-password"), CancellationToken.None);
         var wrongName = (ServiceError)await connection.ExecuteAsync(
-            new LoginCommand("nobody", "a-good-password"), CancellationToken.None);
+            new LoginCommand("nobody", "A-good-passw0rd9"), CancellationToken.None);
 
         Assert.AreEqual(wrongPassword.Message, wrongName.Message);
         Assert.DoesNotContain("exist", wrongName.Message, StringComparison.OrdinalIgnoreCase);
@@ -237,7 +237,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var first = Connect();
         var minted = (SessionResult)await first.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var second = Connect();
         Assert.IsInstanceOfType<ServiceError>(
@@ -270,7 +270,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var first = Connect();
         var minted = (SessionResult)await first.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var second = Connect();
         await second.ExecuteAsync(new ResumeSessionCommand(minted.Token), CancellationToken.None);
@@ -290,7 +290,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var before = Connect();
         var minted = (SessionResult)await before.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         _sessions = new SessionRegistry();
         var after = Connect();
@@ -306,7 +306,7 @@ public sealed class AuthenticationGateTests : IDisposable
         _sessions = new SessionRegistry(idleTimeout: TimeSpan.FromMilliseconds(1));
         var connection = Connect();
         var minted = (SessionResult)await connection.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         await Task.Delay(20, CancellationToken.None);
 
@@ -319,7 +319,7 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var connection = Connect();
-        await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var described = (ServiceDescriptionResult)await connection.ExecuteAsync(
             new DescribeServiceCommand(), CancellationToken.None);
@@ -333,12 +333,12 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
-        await owner.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var operatorConnection = Connect();
         await operatorConnection.ExecuteAsync(
-            new LoginCommand("sam", "another-password"), CancellationToken.None);
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var refusedCreate = (ServiceError)await operatorConnection.ExecuteAsync(
             new CreateUserCommand("mallory", "third-password"), CancellationToken.None);
@@ -355,7 +355,7 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var refused = (ServiceError)await owner.ExecuteAsync(
             new DeleteUserCommand("ben"), CancellationToken.None);
@@ -371,11 +371,11 @@ public sealed class AuthenticationGateTests : IDisposable
         // close a console.
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
-        await owner.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var theirs = Connect();
-        await theirs.ExecuteAsync(new LoginCommand("sam", "another-password"), CancellationToken.None);
+        await theirs.ExecuteAsync(new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await theirs.ExecuteAsync(new GetStatusCommand(), CancellationToken.None));
 
@@ -393,14 +393,14 @@ public sealed class AuthenticationGateTests : IDisposable
         // person. The verb names no account for exactly that reason.
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var changed = await owner.ExecuteAsync(
-            new ChangePasswordCommand("a-good-password", "a-newer-password"), CancellationToken.None);
+            new ChangePasswordCommand("A-good-passw0rd9", "A-newer-passw0rd9"), CancellationToken.None);
 
         Assert.IsInstanceOfType<AcknowledgedResult>(changed);
         Assert.IsInstanceOfType<SessionResult>(
-            await Connect().ExecuteAsync(new LoginCommand("ben", "a-newer-password"), CancellationToken.None));
+            await Connect().ExecuteAsync(new LoginCommand("ben", "A-newer-passw0rd9"), CancellationToken.None));
     }
 
     [TestMethod]
@@ -408,7 +408,7 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var listed = (UserListResult)await owner.ExecuteAsync(new ListUsersCommand(), CancellationToken.None);
 
@@ -443,14 +443,14 @@ public sealed class AuthenticationGateTests : IDisposable
         // FR-USR-002 over the channel this arc adds. Asserted against every
         // record the whole flow produced, rendered, rather than against the
         // call sites one at a time.
-        const string Password = "Sup3rSecretPhrase";
+        const string Password = "Sup3r-Secr3tPhrase";
         _users.Create("ben", Password, parameters: Fast);
 
         var connection = Connect();
         await connection.ExecuteAsync(new LoginCommand("ben", "wrong-one-first"), CancellationToken.None);
         var minted = (SessionResult)await connection.ExecuteAsync(
             new LoginCommand("ben", Password), CancellationToken.None);
-        await connection.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
         await connection.ExecuteAsync(new LogoutCommand(), CancellationToken.None);
 
         Assert.IsNotEmpty(_log.Records, "the flow logged nothing, so this would prove nothing");
@@ -461,7 +461,7 @@ public sealed class AuthenticationGateTests : IDisposable
                 " ", record.Values.Select(value => $"{value.Key}={value.Value}"));
 
             Assert.DoesNotContain(Password, rendered, StringComparison.Ordinal);
-            Assert.DoesNotContain("another-password", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("Another-passw0rd9", rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(minted.Token, rendered, StringComparison.Ordinal);
         }
 
@@ -505,7 +505,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var first = Connect();
         var minted = (SessionResult)await first.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var second = Connect();
         await second.ExecuteAsync(new ResumeSessionCommand(minted.Token), CancellationToken.None);

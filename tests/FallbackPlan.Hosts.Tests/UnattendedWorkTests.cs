@@ -24,7 +24,7 @@ public sealed class UnattendedWorkTests : IDisposable
     {
         _harness.WriteConfiguration("every 1h");
         UserStore.Open(_harness.StateDirectory).Create(
-            "ben", "the-owner-password",
+            "ben", "The-0wner-passw0rd",
             parameters: new Domain.Configuration.Argon2Parameters
             {
                 MemoryKiB = 64,

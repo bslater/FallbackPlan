@@ -13,8 +13,8 @@
       "commandName": "Project",
       "commandLineArgs": "setup --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --acknowledge-loss --kit-output C:\\fbp\\kit.fbpkit --user admin --password-env FBP_ADMIN_PASSWORD",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase",
-        "FBP_ADMIN_PASSWORD": "a local dev admin password"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!",
+        "FBP_ADMIN_PASSWORD": "A local dev Admin password 42!"
       }
     },
     "run (foreground)": {
@@ -28,7 +28,7 @@
     "run (with a passphrase, no keystore)": {
       "commandName": "Project",
       "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --passphrase-env FBP_PASSPHRASE --log-level trace",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "environmentVariables": { "FBP_PASSPHRASE": "A long local Dev passphrase 42!" }
     },
     "run (remote binding on)": {
       "commandName": "Project",
@@ -37,22 +37,22 @@
     "sync (all sets, all destinations)": {
       "commandName": "Project",
       "commandLineArgs": "sync --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --log-level debug",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "environmentVariables": { "FBP_PASSPHRASE": "A long local Dev passphrase 42!" }
     },
     "verify-destination --probe": {
       "commandName": "Project",
       "commandLineArgs": "verify-destination --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --probe",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "environmentVariables": { "FBP_PASSPHRASE": "A long local Dev passphrase 42!" }
     },
     "retention (dry run)": {
       "commandName": "Project",
       "commandLineArgs": "retention --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --log-level debug",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "environmentVariables": { "FBP_PASSPHRASE": "A long local Dev passphrase 42!" }
     },
     "unlock": {
       "commandName": "Project",
       "commandLineArgs": "unlock --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "environmentVariables": { "FBP_PASSPHRASE": "A long local Dev passphrase 42!" }
     },
     "lock": {
       "commandName": "Project",

@@ -202,6 +202,7 @@ public static class WebConsoleHost
         app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
         app.MapPost("/api/recovery-kit", (HttpContext context) => RecoveryKitAsync(context, clients, auth));
         app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
+        app.MapPost("/api/password-check", (HttpContext context) => CheckPasswordAsync(context, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
@@ -565,6 +566,64 @@ public static class WebConsoleHost
             context.RequestAborted).ConfigureAwait(false);
     }
 
+    /// <summary>The password-check endpoint's answer, for the account form's live checklist.</summary>
+    /// <param name="Acceptable">Whether the account policy would accept this candidate.</param>
+    /// <param name="Findings">Plain sentences naming each unmet rule.</param>
+    private sealed record PasswordCheckResponse(bool Acceptable, IReadOnlyList<string> Findings);
+
+    /// <summary>
+    /// Checks a half-typed account password against the policy the service
+    /// will enforce (FR-USR-001 as amended) — same posture as the passphrase
+    /// meter above: one implementation, one verdict, computed in this local
+    /// process and never sent to the service.
+    /// </summary>
+    private static async Task CheckPasswordAsync(HttpContext context, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        StrengthRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<StrengthRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        var assessment = PasswordPolicy.Assess(request?.Candidate ?? string.Empty);
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new PasswordCheckResponse(
+                assessment.IsAcceptable, [.. assessment.Findings.Select(Describe)]),
+            SerializerOptions,
+            context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>The account-policy sentences the checklist renders.</summary>
+    private static string Describe(PasswordFinding finding) => finding switch
+    {
+        PasswordFinding.TooShort =>
+            $"At least {PasswordPolicy.MinimumLength} characters.",
+        PasswordFinding.NoUppercase => "At least one uppercase letter.",
+        PasswordFinding.FewerThanTwoDigits => "At least two digits.",
+        PasswordFinding.NoSpecialCharacter =>
+            "At least one special character — anything that is not a letter or digit.",
+        _ => finding.ToString(),
+    };
+
     /// <summary>What the setup endpoint reads from the page.</summary>
     /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0044 §4).</param>
     /// <param name="Confirmation">The second entry, which must match.</param>
@@ -677,7 +736,8 @@ public static class WebConsoleHost
             await AnswerAsync(new SetupResponse(
                 "weak",
                 $"This passphrase is too weak to be an installation's master key (it needs at least "
-                + $"{PassphraseStrength.MinimumLength} characters, and more than one repeated unit).",
+                + $"{PassphraseStrength.MinimumLength} characters including an uppercase letter, two "
+                + "digits and a special character, and more than one repeated unit).",
                 Findings: [.. assessment.Findings.Select(Describe)])).ConfigureAwait(false);
             return;
         }
@@ -859,7 +919,11 @@ public static class WebConsoleHost
         PassphraseFinding.FewDistinctCharacters =>
             "Long, but built from very few different characters.",
         PassphraseFinding.LengthCarriesIt =>
-            "Long enough that ordinary words are fine — no digits or symbols needed.",
+            "Good length — ordinary words carry it, once the required characters are in.",
+        PassphraseFinding.NoUppercase => "Add at least one uppercase letter.",
+        PassphraseFinding.FewerThanTwoDigits => "Add at least two digits.",
+        PassphraseFinding.NoSpecialCharacter =>
+            "Add at least one special character — anything that is not a letter or digit.",
         _ => "Several kinds of character, which is what you want.",
     };
 

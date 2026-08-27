@@ -29,21 +29,21 @@
       "commandName": "Project",
       "commandLineArgs": "init --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     },
     "snapshots (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "snapshots --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     },
     "check (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "check --level records --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct --log-level debug",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     }
   }

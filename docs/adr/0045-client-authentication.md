@@ -312,6 +312,31 @@ silently. A refused resume, a successful resume, and a command refused for
 want of a session now log by name (3755–3757; the token, like the password,
 has no parameter to ride in).
 
+## Amendment (2026-08): the password policy gains composition, and the ceremony creates the owner
+
+The password floor rises from eight to ten, and the passphrase's composition
+rules join it: at least one uppercase letter, two digits, and one special
+character. The policy lives in `Domain/Configuration/PasswordPolicy` and is
+enforced at the one chokepoint every creation path crosses —
+`UserStore.Create` and `ChangePasswordAsync` — so the console's bootstrap
+`create_user`, the headless setup verb's `--password-env`, and any future
+caller answer identically. Like the passphrase policy it applies where a
+password is *chosen*, never where one is presented: a login verifies against
+the stored hash whatever rules were in force when the password was set, so
+tightening strands nobody outside their account. The original rationale for
+the floor sitting below the passphrase's stands — a password is changeable
+and throttled where a passphrase is neither — the number is just no longer
+eight.
+
+The console's first account also moved: it is now the setup ceremony's final
+step (ADR-0044's second amendment) rather than a bare sign-in gate the
+operator lands on afterwards, with the account policy rendered live as a
+checklist and a rule the store cannot check — the password must not be the
+installation passphrase — enforced client-side by hash comparison, since the
+service never holds the passphrase to compare. The sign-in gate's
+create-first-account mode remains for a service that reaches
+`users_required` outside the ceremony.
+
 ## Status history
 
 | Date | Status | Note |
@@ -319,3 +344,4 @@ has no parameter to ride in).
 | 2026-08 | Proposed | Written with the storage location, client scope, session mechanism, owner rule, failure policy and session lifetime all fixed by the user: service state directory, console and CLI both, a service-minted token, first user is the owner, throttle but never lock, and sessions that live only in the process. Build sequenced as the primitive → the store and its policy → contract 1.16 with the per-connection gate → setup captures the first account → the clients → drills |
 | 2026-08 | Accepted | Built end to end: the password primitive in Repository.Crypto, the account store with the owner rules and a throttle that never locks, contract 1.16's seven verbs behind a per-connection decorator, setup capturing the first account, and the CLI and console signing in. Three amendments above record where implementation corrected the decision — the session is presented by a connection rather than owned by one, enforcement engages only once an installation has accounts, and the browser rather than the console holds a viewer's session |
 | 2026-08 | Amended | A lapsed session is answered once: the console short-circuits a refused resume, the event stream presents (and reports) the session, the page forgets a dead token and pauses its pollers behind sign-in, and the gate logs its refusals (3755–3757). Driven by a real wedge — 581 doomed resumes and a watch every two seconds across sixteen minutes of service log |
+| 2026-08 | Amended | The password policy gains composition — a floor of ten with an uppercase letter, two digits and a special character, enforced in `UserStore` where every creation path converges and never at login — and the first account becomes the setup ceremony's final step, with a hash-compared must-not-be-the-passphrase rule the service itself cannot check |

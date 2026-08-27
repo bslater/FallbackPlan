@@ -21,13 +21,13 @@ namespace FallbackPlan.Hosts.Tests;
 [TestClass]
 public sealed class FirstRunSetupTests : IDisposable
 {
-    private const string PassphraseText = "the one long passphrase of this installation";
+    private const string PassphraseText = "The one long Passphrase 42 of this installation!";
 
     /// <summary>The variable the first account's password is named by (FR-USR-006).</summary>
     private static readonly string PasswordVariable =
         "FBP_FIRST_ACCOUNT_" + Guid.NewGuid().ToString("N");
 
-    private const string FirstPassword = "the-owner-password";
+    private const string FirstPassword = "The-0wner-passw0rd";
 
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(5));
@@ -335,6 +335,59 @@ public sealed class FirstRunSetupTests : IDisposable
         finally
         {
             Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        }
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_ALongPassphraseMissingTheComposition_IsStillRefused()
+    {
+        // Length alone stopped being enough (ADR-0044 §6 as amended): twenty
+        // lowercase characters fail the uppercase/digits/special rules, and
+        // the refusal says what the policy wants.
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, "twentylowercasechars");
+        try
+        {
+            var result = await HostHarness.RunAsync(
+                AgentHost.RunAsync,
+                "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("too weak", result.All, StringComparison.Ordinal);
+            Assert.Contains("uppercase", result.All, StringComparison.Ordinal);
+            Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        }
+    }
+
+    [TestMethod]
+    public async Task SetupVerb_AFirstPasswordMissingTheComposition_IsRefusedByName()
+    {
+        // The account policy (FR-USR-001 as amended) guards the headless
+        // first account exactly as it guards the console's: long enough is
+        // not enough without the composition. The passphrase is compliant,
+        // so the refusal below is the password's own.
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+        Environment.SetEnvironmentVariable(PasswordVariable, "all-lowercase-password");
+        try
+        {
+            var result = await HostHarness.RunAsync(
+                AgentHost.RunAsync,
+                "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("account policy", result.All, StringComparison.Ordinal);
+            Assert.IsFalse(new InstallationCredentialStore(_harness.StateDirectory).Holds);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(PasswordVariable, FirstPassword);
         }
     }
 

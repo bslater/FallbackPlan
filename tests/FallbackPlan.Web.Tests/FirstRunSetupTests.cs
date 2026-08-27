@@ -109,6 +109,78 @@ public sealed class FirstRunSetupTests
     }
 
     [TestMethod]
+    public async Task Setup_ALongPassphraseMissingTheComposition_IsWeakAndNamesTheRules()
+    {
+        // Length alone stopped being enough (ADR-0044 §6 as amended): the
+        // refusal's findings name the missing uppercase, digits and special
+        // character so the operator fixes the checklist in one pass.
+        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
+        await using var harness = await ConsoleHarness.StartAsync();
+        Describes(harness, recipient, "setup_required");
+
+        using var body = await SetupAsync(harness,
+            """{"passphrase":"twentylowercasechars","confirmation":"twentylowercasechars","acknowledged":true}""");
+
+        Assert.AreEqual("weak", body.RootElement.GetProperty("outcome").GetString());
+        var findings = string.Join(" | ", body.RootElement.GetProperty("findings")
+            .EnumerateArray().Select(finding => finding.GetString()));
+        Assert.Contains("uppercase", findings, StringComparison.Ordinal);
+        Assert.Contains("two digits", findings, StringComparison.Ordinal);
+        Assert.Contains("special character", findings, StringComparison.Ordinal);
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ProvisionInstallationCommand>());
+    }
+
+    [TestMethod]
+    public async Task PasswordCheck_AnswersEachRuleAndAsksTheServiceNothing()
+    {
+        // The account form's checklist speaks the same policy the service
+        // enforces (FR-USR-001 as amended) — one implementation, one verdict,
+        // and both polarities proven on the bytes.
+        await using var harness = await ConsoleHarness.StartAsync();
+
+        foreach (var (candidate, acceptable, named) in new (string, bool, string?)[]
+                 {
+                     ("Owner-Pass-19!", true, null),
+                     ("Aa12!Aa12", false, "10 characters"),          // 9 — below the floor
+                     ("long-enough-42!", false, "uppercase"),
+                     ("Long-Enough-Here!", false, "two digits"),
+                     ("LongEnough42x9", false, "special character"),
+                 })
+        {
+            using var response = await harness.Http.SendAsync(Post(
+                harness, "/api/password-check", $$"""{"candidate":"{{candidate}}"}"""));
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.AreEqual(
+                acceptable, body.RootElement.GetProperty("acceptable").GetBoolean(), $"'{candidate}'");
+            if (named is not null)
+            {
+                Assert.Contains(named, string.Join(" | ", body.RootElement.GetProperty("findings")
+                    .EnumerateArray().Select(finding => finding.GetString())), StringComparison.Ordinal);
+            }
+        }
+
+        Assert.IsEmpty(harness.Clients.Client.Received, "the checklist asks the service nothing");
+    }
+
+    [TestMethod]
+    public async Task PasswordCheck_WithoutTheConsoleToken_IsRefused()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post, new Uri("/api/password-check", UriKind.Relative))
+        {
+            Content = new StringContent(
+                """{"candidate":"Owner-Pass-19!"}""", System.Text.Encoding.UTF8, "application/json"),
+        };
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [TestMethod]
     public async Task Setup_AcceptedPassphrase_SendsASealedEnvelopeAndNeverThePassphrase()
     {
         var recipientScalar = RandomNumberGenerator.GetBytes(32);

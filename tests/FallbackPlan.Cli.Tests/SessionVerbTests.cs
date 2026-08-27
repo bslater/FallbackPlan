@@ -16,7 +16,7 @@ public sealed class SessionVerbTests : IDisposable
     public SessionVerbTests()
     {
         Directory.CreateDirectory(_harness.StatePath);
-        Environment.SetEnvironmentVariable(_passwordVariable, "the-owner-password");
+        Environment.SetEnvironmentVariable(_passwordVariable, "The-0wner-passw0rd");
     }
 
     public void Dispose()

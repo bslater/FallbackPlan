@@ -669,8 +669,9 @@ public static class AgentHost
             {
                 error.WriteLine(
                     $"error: that passphrase is too weak to be an installation's master key — it needs at "
-                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters, and more "
-                    + "than one repeated unit (ADR-0044 §6).");
+                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters including "
+                    + "an uppercase letter, two digits and a special character, and more than one repeated "
+                    + "unit (ADR-0044 §6).");
                 return 1;
             }
 
@@ -711,10 +712,12 @@ public static class AgentHost
                 return 1;
             }
 
-            if (firstPassword.Length < UserStore.MinimumPasswordLength)
+            if (!Domain.Configuration.PasswordPolicy.Assess(firstPassword).IsAcceptable)
             {
                 error.WriteLine(
-                    $"error: that password is shorter than {UserStore.MinimumPasswordLength} characters.");
+                    $"error: that password does not meet the account policy — at least "
+                    + $"{UserStore.MinimumPasswordLength} characters, with an uppercase letter, two digits "
+                    + "and a special character (ADR-0045).");
                 return 1;
             }
 
