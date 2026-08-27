@@ -466,12 +466,21 @@ function renderSetCard(set) {
 
   const destinations = set.destinations?.length ? `
     <div class="table-wrap"><table class="data">
-      <thead><tr><th>Destination</th><th>State</th><th>Failure domain</th><th>Possession</th><th>Last sync</th></tr></thead>
+      <thead><tr><th>Destination</th><th>State</th><th>Full backup</th><th>Failure domain</th><th>Possession</th><th>Last sync</th></tr></thead>
       <tbody>${set.destinations.map(d => {
         const ds = DEST_STATE[d.state] ?? { cls: "", icon: "?" };
+        // The ledger's two full-backup facts (contract 1.19): a pair owed
+        // its seed says so — "behind" alone under-describes a destination
+        // incrementals will skip until its full backup lands.
+        const baseline = d.needsFull
+          ? badge({ cls: "warn", icon: "◐" }, "awaiting seed")
+          : d.baselineCompletedAt
+            ? `<span class="detail" title="First held a full backup ${esc(fmtWhen(d.baselineCompletedAt))}">✓ since ${esc(rel(d.baselineCompletedAt))}</span>`
+            : `<span class="detail">never</span>`;
         return `<tr>
           <td><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>${d.detail ? `<div class="detail">${esc(d.detail)}</div>` : ""}</td>
           <td>${badge(ds, d.state)}</td>
+          <td>${baseline}</td>
           <td>${esc(d.failureDomain)}</td>
           <td class="detail">${esc(d.verification)}</td>
           <td class="detail">${esc(rel(d.lastSuccessAt))}</td>
@@ -566,15 +575,21 @@ function renderJobs() {
 
 function renderLiveJob(job) {
   const progress = S.progress.get(job.id);
-  const meta = JOBSTATE[progress?.state ?? job.state] ?? { cls: "accent", label: job.state };
+  // The journal outranks the progress stream for Paused (ADR-0047
+  // Amendment 1): a suspended run's engine is silent, so the last progress
+  // event still says Packing while the truth is "parked for a
+  // higher-priority run".
+  const paused = job.state === "Paused";
+  const meta = JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
   const seen = progress?.filesSeen ?? 0;
   const handled = (progress?.filesDone ?? 0) + (progress?.filesReused ?? 0) + (progress?.filesFailed ?? 0);
   const ratio = seen > 0 ? Math.min(100, Math.round(handled / seen * 100)) : 0;
-  const scanning = !progress || progress.state === "Scanning" || seen === 0;
+  const scanning = !paused && (!progress || progress.state === "Scanning" || seen === 0);
 
   return `<div class="card job-live">
     <h3>${esc(setName(job.backupSetId))} ${badge(meta, meta.label)}</h3>
     <p class="sub">Job <span class="mono">${esc(job.id)}</span> · started ${esc(rel(job.startedAt))}</p>
+    ${paused ? `<p class="sub">${esc(job.detail || "Suspended for a higher-priority run — it resumes when a pool slot frees.")}</p>` : ""}
     <div class="meter ${scanning ? "indeterminate" : ""}"><i data-w="${ratio}"></i></div>
     ${progress ? `<div class="job-stats">
         <span><b>${fmtCount(handled)}</b> of <b>${fmtCount(seen)}</b> files seen</span>
@@ -614,6 +629,8 @@ function renderNotices() {
             <span class="text">${esc(notice.message)}
               <span class="subtle" title="${esc(fmtWhen(notice.raisedAt))}">· raised ${esc(rel(notice.raisedAt))}
               ${notice.acknowledgedAt ? `· acknowledged ${esc(rel(notice.acknowledgedAt))}` : ""}</span></span>
+            ${!notice.acknowledgedAt && notice.key?.startsWith("staging-retirable:")
+              ? `<button type="button" class="btn small" data-action="retire-staging" data-key="${esc(notice.key)}">Retire staging…</button>` : ""}
             ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
           </div>`).join("")}</div>`}`;
 }
@@ -1710,6 +1727,43 @@ const actions = {
         { command: "acknowledge_notice", id: el.dataset.id },
         { errToast: "Could not acknowledge" });
       if (result) { await refreshNotices(); refreshStatus(); }
+    });
+  },
+
+  // The staging-retirable notice's act (ADR-0046, contract 1.18): delete a
+  // migrated direct-ship set's staging archive. The service refuses while
+  // staging holds anything no destination has, so the typed confirmation is
+  // about intent, not the safety check.
+  async "retire-staging"(el) {
+    const setId = (el.dataset.key ?? "").split(":")[1] ?? "";
+    if (!S.sets.length) await refreshSets();
+    const set = S.sets.find(s => s.id === setId);
+    if (!set) { toast("bad", "The set this notice names is no longer configured"); return; }
+    openDialog(`
+      <h3>Retire the staging archive for '${esc(set.name)}'</h3>
+      <p class="dlg-sub">Deletes the local staging archive this set no longer publishes to. The service
+      refuses unless every object staging holds has already reached a destination — history then
+      restores from the destinations alone.</p>
+      <label class="field" for="confirm-word">Type <b>retire</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="retire" data-enables="retire-staging-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="retire-staging-go" data-action="retire-staging-go"
+                data-set="${esc(set.name)}" disabled>Retire staging</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "retire-staging-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "retire_staging", setName: el.dataset.set },
+        { errToast: "Staging was not retired" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Staging retired", result.lines);
+        await refreshNotices(); refreshStatus();
+      }
     });
   },
 

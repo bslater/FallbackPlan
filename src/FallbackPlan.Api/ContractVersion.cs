@@ -109,8 +109,13 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// 1.18 carries retire_staging (ADR-0046): a migrated direct-ship set's
     /// staging archive is deleted only by this explicit verb, refused while
     /// anything staging holds has not reached a destination.
+    /// 1.19 puts the full-backup facts on the status matrix (ADR-0047 §§5–6):
+    /// each destination row says when its baseline completed and whether the
+    /// pair is still owed its seed, so a console can render "awaiting full
+    /// backup" instead of a bare "behind". Additive with defaults — a
+    /// pre-1.19 client simply does not see the fields.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 18);
+    public static ContractVersion Current { get; } = new(1, 19);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

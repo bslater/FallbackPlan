@@ -2033,16 +2033,18 @@ public sealed partial class ServiceCommandHandler(
         foreach (var reference in set.Destinations)
         {
             var destination = configuration.FindDestination(reference.Ref);
+            var ledger = runtime.DestinationSync.Find(set.Id, reference.Ref);
             var input = DestinationStatus.Describe(
                 reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
-                runtime.DestinationSync.Find(set.Id, reference.Ref),
-                lastCompleted, nowMs, DeviceIdOf);
+                ledger, lastCompleted, nowMs, DeviceIdOf);
 
             inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(
                 input.Name, destination is null ? "?" : KindLabel(input.Kind), StateLabel(input.Sync),
                 input.LastSuccessAt, input.Detail, StatusDeriver.DomainLabel(input.Domain),
-                StatusDeriver.VerificationLabel(input)));
+                StatusDeriver.VerificationLabel(input),
+                BaselineCompletedAt: ledger?.BaselineCompletedAt,
+                NeedsFull: ledger?.NeedsFull ?? false));
         }
 
         return (inputs, rows);

@@ -35,6 +35,8 @@ This document is versioned alongside the format and must be reviewed before the 
 
 The fourth boundary is the addition. The original model treated everything holding repository keys as fully trusted, which is what let [C3](review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard) through.
 
+**Note (2026-08, [ADR-0046](adr/0046-direct-to-destination-publication.md)) — the staging copy leaves the source device.** A direct-ship set's content is written to its destinations directly: the service account's state holds the set's *metadata* (descriptor, keys, journal, index, snapshots) and a bounded in-flight spool, but no whole-archive replica of the backup. Nothing about the crypto boundary moves — every object was already encrypted and authenticated before leaving the trusted zone, so direct-ship changes where objects land, not what they contain, and every threat above reads the same. What changes is exposure and dependency, in opposite directions: media stolen from the source machine (T-5) no longer carries a full encrypted copy of the backup beside the originals, while the *availability* of capture now depends on a destination being reachable — with every destination away there is nowhere to write and the run refuses, a durability property consciously traded away and recorded in ADR-0046 §4. The metadata store keeps the structure plane readable to whoever holds the service account, exactly as T-19 already states for the write bundle.
+
 ## Threats in scope
 
 ### T-1 Untrusted store reads repository content

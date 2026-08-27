@@ -544,6 +544,15 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// <c>unproven</c> (no challenge has ever succeeded), or
 /// <c>unprovable (accepted)</c> (knowingly kept without proof).
 /// </param>
+/// <param name="BaselineCompletedAt">
+/// When this destination first held a full backup (ADR-0047 §6), Unix
+/// milliseconds; null while it never has. Contract 1.19.
+/// </param>
+/// <param name="NeedsFull">
+/// Whether the pair is owed its full backup (ADR-0047 §5) — a gained
+/// destination waiting on its seed, skipped by incrementals until it
+/// holds one. Contract 1.19.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -551,7 +560,9 @@ public sealed record DestinationStatusDescriptor(
     ulong? LastSuccessAt,
     string? Detail,
     string FailureDomain,
-    string Verification);
+    string Verification,
+    ulong? BaselineCompletedAt = null,
+    bool NeedsFull = false);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>
