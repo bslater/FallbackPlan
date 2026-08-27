@@ -45,7 +45,7 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 public sealed class DestinationShipSink : IObjectStore
 {
-    private sealed record Shipment(string Name, LocalFileSystemObjectStore Store, int Priority);
+    private sealed record Shipment(string Name, IObjectStore Store, int Priority);
 
     private readonly ServiceRuntime _runtime;
     private readonly LocalFileSystemObjectStore _metadata;
@@ -146,8 +146,15 @@ public sealed class DestinationShipSink : IObjectStore
             if (!neverCaptured && record?.BaselineCompletedAt is null)
             {
                 // Catch-up's job, not this run's: an incremental would hand
-                // this destination a snapshot without its closure.
-                skipped.Add((destination.Name, DestinationSyncState.Unavailable,
+                // this destination a snapshot without its closure. Recorded
+                // as BEHIND, never as a counted failure — the destination
+                // did nothing wrong, and the distinction is load-bearing:
+                // the pass runs captures before its fan-out phase, so a
+                // failure stamped here would push the seeding sync behind
+                // its own back-off on every due capture. On a schedule
+                // whose period is at or under the back-off cap that seed
+                // would never run at all; a behind row syncs at once.
+                skipped.Add((destination.Name, DestinationSyncState.Behind,
                     "this destination holds no full backup yet; it is seeded from a sibling replica"));
                 continue;
             }
@@ -656,11 +663,19 @@ public sealed class DestinationShipSink : IObjectStore
             cancellationToken).ConfigureAwait(false);
     }
 
-    private LocalFileSystemObjectStore ReplicaStoreFor(DestinationConfiguration destination) =>
-        new(Path.Combine(destination.Path!, _repositoryIdHex), _log);
-
-    private static long? AvailableBytesOn(string destinationRoot)
+    private IObjectStore ReplicaStoreFor(DestinationConfiguration destination)
     {
+        var store = new LocalFileSystemObjectStore(Path.Combine(destination.Path!, _repositoryIdHex), _log);
+        return _runtime.Options.ReplicaStoreDecorator?.Invoke(destination.Name, store) ?? store;
+    }
+
+    private long? AvailableBytesOn(string destinationRoot)
+    {
+        if (_runtime.Options.AvailableBytesProbe is { } probe)
+        {
+            return probe(destinationRoot);
+        }
+
         try
         {
             return new DriveInfo(DestinationCapacity.ProbeRootFor(destinationRoot)).AvailableFreeSpace;

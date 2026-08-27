@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The 04 §5.1 kill sweep runs through the ship-sink's fault-injection
+       seams (ServiceOptions.ReplicaStoreDecorator / AvailableBytesProbe),
+       which are internal because a production host has no business wrapping
+       replica stores — same posture as the Cli's gateway internals. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FallbackPlan.Hosts.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>

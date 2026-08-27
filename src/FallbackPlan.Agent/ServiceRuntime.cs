@@ -41,6 +41,23 @@ public sealed record ServiceOptions
     public TimeSpan? MaxPauseOverride { get; init; }
 
     /// <summary>
+    /// Wraps the store a ship-sink opens per destination — the fault-injection
+    /// seam the 04 §5.1 kill sweep runs through the direct-ship path
+    /// (destination name, real store) → store the run writes. Null, the
+    /// production value, writes the replica directly.
+    /// </summary>
+    internal Func<string, Storage.Abstractions.IObjectStore, Storage.Abstractions.IObjectStore>?
+        ReplicaStoreDecorator { get; init; }
+
+    /// <summary>
+    /// Overrides the free-space probe behind the ship-sink's capacity floor
+    /// (FR-DEST-010): destination root → available bytes, null meaning "the
+    /// platform will not say", which is answered as room. Null, the
+    /// production value, asks <see cref="DriveInfo"/>.
+    /// </summary>
+    internal Func<string, long?>? AvailableBytesProbe { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
