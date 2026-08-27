@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** NFR-PERF-013, FR-DEST-003
+**Requirements:** FR-SVC-012, FR-SVC-013, FR-SVC-014, FR-SVC-015, FR-DEST-014
 **Related:** [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0037](0037-configuration-over-the-command-contract.md)
 
 ---

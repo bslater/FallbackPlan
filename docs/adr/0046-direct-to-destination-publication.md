@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-DEST-002, FR-DEST-003, NFR-PERF-001
+**Requirements:** FR-DEST-002, FR-DEST-003, FR-DEST-013, FR-DEST-015, FR-DEST-016, NFR-PERF-001
 **Related:** [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0042](0042-write-only-repositories.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md)
 
 ---

@@ -13,7 +13,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// boundary — its in-memory state held, its worker freed — the incomer
 /// runs, and the freed slot resumes the paused run exactly where it
 /// stopped. Shutdown degrades a paused run to the ordinary cancelled →
-/// re-run path.
+/// re-run path. Establishes FR-SVC-014.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

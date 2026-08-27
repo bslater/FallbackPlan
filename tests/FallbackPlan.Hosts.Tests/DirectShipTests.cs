@@ -13,7 +13,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// file content at all. Each destination is a whole, independently
 /// restorable repository; a destination that missed a run is caught up from
 /// a sibling, because every committed snapshot's closure exists at at least
-/// one destination by construction.
+/// one destination by construction. Establishes FR-DEST-013 and
+/// FR-DEST-015, and the direct-ship shape of FR-DEST-002, FR-DEST-003,
+/// FR-DEST-004 and FR-DEST-014.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

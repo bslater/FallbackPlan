@@ -10,7 +10,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// at all: due-ness was never evaluated, so every set's scheduled
 /// incrementals silently stopped — not queued, not refused, simply never
 /// considered — until the copy finished and the missed slots coalesced into
-/// one catch-up.
+/// one catch-up. The due-ness-keeps-flowing half of FR-SVC-012.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

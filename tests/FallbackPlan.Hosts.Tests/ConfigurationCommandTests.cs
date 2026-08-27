@@ -415,8 +415,9 @@ public sealed class ConfigurationCommandTests : IDisposable
                 null, "vault2", "local-path", inside, null, null)),
             _timeout.Token));
 
-        // A new set answers with its queued first backup (ADR-0047), so the
-        // acceptance here is the configuration-change report.
+        // A new set answers with its queued first backup (ADR-0047,
+        // FR-SVC-015), so the acceptance here is the configuration-change
+        // report.
         Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "work", _harness.WorkPath, "every 4h", [], ["vault2"], ["vault"])),

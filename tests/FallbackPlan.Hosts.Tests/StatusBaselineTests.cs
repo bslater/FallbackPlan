@@ -9,7 +9,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// The status matrix says where each destination stands on holding a full
 /// backup (ADR-0047 §6, ADR-0046 §3): a destination that has completed its
 /// baseline says when; one still owed its seed says so — the console's
-/// per-destination panel renders exactly these two facts.
+/// per-destination panel renders exactly these two facts (FR-DEST-014).
 /// </summary>
 [TestClass]
 [DoNotParallelize]

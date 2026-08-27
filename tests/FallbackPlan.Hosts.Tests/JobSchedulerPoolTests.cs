@@ -6,7 +6,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The backup pool and its ordering (ADR-0047): the writer lane widens to a
 /// configured number of workers, a set's priority orders waiting work, and a
-/// person still outranks any priority.
+/// person still outranks any priority. Establishes FR-SVC-012 and
+/// FR-SVC-013.
 /// </summary>
 [TestClass]
 public sealed class JobSchedulerPoolTests : IDisposable

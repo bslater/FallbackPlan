@@ -59,9 +59,9 @@ public sealed class ClientConfigurationTests
     [TestMethod]
     public void SaveThenLoad_PrioritiesAndConcurrency_RoundTrip()
     {
-        // ADR-0047: a set and a destination each carry a priority, a set's
-        // reference may override the destination's, and the pool width is a
-        // configured number. Absent everywhere means default — a v4 file is a
+        // ADR-0047 (FR-SVC-012): a set and a destination each carry a
+        // priority, a set's reference may override the destination's, and
+        // the pool width is a configured number. Absent everywhere means default — a v4 file is a
         // valid v5 file that simply says nothing.
         new ClientConfiguration
         {

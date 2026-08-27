@@ -10,7 +10,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// the set migrates its metadata into the local metadata store at first open,
 /// the staging archive stays on disk as a read-only seed source until every
 /// object it holds has reached a destination, and only the explicit
-/// retire_staging verb — refused while anything would be lost — deletes it.
+/// retire_staging verb — refused while anything would be lost — deletes
+/// it (FR-DEST-016).
 /// </summary>
 [TestClass]
 [DoNotParallelize]
