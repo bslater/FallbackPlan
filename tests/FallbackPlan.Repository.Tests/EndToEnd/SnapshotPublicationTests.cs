@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
@@ -29,7 +30,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     private static readonly byte[] DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)];
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, ILogger? logger = null) =>
+        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, ILogger? logger = null,
+        IJobProgressReporter? progress = null) =>
         new(
             SmallBlobPolicy,
             Repo,
@@ -41,6 +43,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
             observer: null,
+            progress: progress,
             logger: logger);
 
     private static SnapshotJob Job(FakeFileSystemSource source) => new()
@@ -793,14 +796,110 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.AreEqual(PublicationStep.PublishIntent, failure.Value("Step"));
     }
 
+    [TestMethod]
+    public async Task TreePublication_TheCountingPass_FixesThePlanBeforeArchivingBegins()
+    {
+        // FR-SVC-006's determinate half: a run first counts what it will
+        // process, so every later report carries a fixed denominator a
+        // client can honestly divide by. 300 files crosses the counting
+        // pass's report interval, so the feed also shows the count growing
+        // while the plan is still open.
+        var source = new FakeFileSystemSource();
+        for (var i = 0; i < 300; i++)
+        {
+            source.AddFile($"docs/file-{i:d3}.bin", Deterministic(10, (byte)i));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var reporter = new RecordingReporter();
+
+        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+            .PublishAsync(Job(source), CancellationToken.None);
+        Assert.HasCount(300, published.Files);
+
+        var reports = reporter.Reports;
+        Assert.Contains(
+            report => report.TotalFiles is null && report.State == JobState.Scanning && report.FilesSeen > 0,
+            reports,
+            "the counting pass must report its running tally before the plan is fixed");
+
+        var final = reports[^1];
+        Assert.AreEqual(300L, final.TotalFiles);
+        Assert.AreEqual(3_000L, final.TotalBytes);
+        Assert.AreEqual(300L, final.FilesDone);
+
+        // Once fixed, the plan never wavers: every report after the first
+        // carrying totals carries the same totals.
+        var planned = reports.SkipWhile(report => report.TotalFiles is null).ToList();
+        Assert.IsNotEmpty(planned);
+        Assert.IsTrue(
+            planned.All(report => report.TotalFiles == 300L && report.TotalBytes == 3_000L),
+            "the counted plan must be identical on every report that carries it");
+    }
+
+    [TestMethod]
+    public async Task TreePublication_ARuleExcludedFile_IsAbsentFromThePlan()
+    {
+        // The count applies the run's own rules — a plan that counted files
+        // the capture then skips would leave the meter finishing at 60%.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/keep.bin", Deterministic(100, 5));
+        source.AddFile("docs/skip.tmp", Deterministic(50, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var reporter = new RecordingReporter();
+
+        var job = Job(source) with { ExcludeRules = ["*.tmp"] };
+        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+            .PublishAsync(job, CancellationToken.None);
+
+        Assert.ContainsSingle(published.Files);
+        var final = reporter.Reports[^1];
+        Assert.AreEqual(1L, final.TotalFiles);
+        Assert.AreEqual(100L, final.TotalBytes);
+    }
+
+    /// <summary>Keeps every report, in order — the feed the console would see.</summary>
+    private sealed class RecordingReporter : IJobProgressReporter
+    {
+        private readonly List<JobProgress> _reports = [];
+
+        public IReadOnlyList<JobProgress> Reports
+        {
+            get
+            {
+                lock (_reports)
+                {
+                    return [.. _reports];
+                }
+            }
+        }
+
+        public void Report(JobProgress progress)
+        {
+            lock (_reports)
+            {
+                _reports.Add(progress);
+            }
+        }
+    }
+
     /// <summary>
     /// Delegates to a real source and throws where told: from the probe
-    /// (before anything is durable) or from the scan after its last event
-    /// (mid-capture, the intent already published).
+    /// (before anything is durable) or from the capture's scan after its
+    /// last event (mid-capture, the intent already published). The counting
+    /// pass walks first and is allowed to finish — the mid-capture case
+    /// needs a plan to exist and the intent to be durable before the fault.
     /// </summary>
     private sealed class FaultInjectingSource(
         IFileSystemSource inner, Exception? probeFailure = null, Exception? midScanFailure = null) : IFileSystemSource
     {
+        private int _scans;
+
         public SourceFilesystemInfo Probe(string rootPath) =>
             probeFailure is null ? inner.Probe(rootPath) : throw probeFailure;
 
@@ -809,12 +908,13 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         public async IAsyncEnumerable<ScanEvent> ScanAsync(
             string rootPath, ScanOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            var walk = Interlocked.Increment(ref _scans);
             await foreach (var scanEvent in inner.ScanAsync(rootPath, options, cancellationToken).ConfigureAwait(false))
             {
                 yield return scanEvent;
             }
 
-            if (midScanFailure is not null)
+            if (midScanFailure is not null && walk > 1)
             {
                 throw midScanFailure;
             }

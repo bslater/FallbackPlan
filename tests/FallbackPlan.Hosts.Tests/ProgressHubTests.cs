@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -9,10 +10,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// <remarks>
 /// A C# <c>async IAsyncEnumerable</c> iterator runs none of its body until the
 /// first <c>MoveNextAsync</c>, so a subscription registered inside one does not
-/// exist while the caller merely holds the enumerable. Everything reported in
-/// that window goes to nobody, and nothing replays it. These tests pin the
-/// boundary directly rather than through a job, so they say what the rule is
-/// and cannot go quiet under load the way a timing-dependent test can.
+/// exist while the caller merely holds the enumerable. Events reported in that
+/// window go to nobody as a stream — a subscriber joining later gets exactly
+/// one thing per live job, its latest snapshot, never the missed sequence.
+/// These tests pin the boundary directly rather than through a job, so they
+/// say what the rule is and cannot go quiet under load the way a
+/// timing-dependent test can.
 /// </remarks>
 [TestClass]
 public sealed class ProgressHubTests : IDisposable
@@ -43,22 +46,77 @@ public sealed class ProgressHubTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Watch_EventsReportedBeforeTheCall_DeliversNoneOfThem()
+    public async Task Watch_EventsReportedBeforeTheCall_ReplaysOnlyTheLatestSnapshotOfTheJob()
     {
         var hub = new ProgressHub();
 
-        // The other half of the boundary, and deliberate: there is no replay.
-        // Progress is a live courtesy to a UI, and durable answers come from
-        // status, which is derived from durable state (10 §3.1).
+        // The other half of the boundary: there is no historical backlog. A
+        // console arriving mid-run needs the job's CURRENT numbers to render
+        // a meter at once — but never the sequence it missed; durable answers
+        // still come from status, which is derived from durable state
+        // (10 §3.1). Two reports before the call, one snapshot delivered.
         hub.Report(Progress("job-1", JobState.Scanning));
-
-        var events = hub.WatchAsync(_timeout.Token);
         hub.Report(Progress("job-1", JobState.Packing));
 
-        await using var enumerator = events.GetAsyncEnumerator(_timeout.Token);
+        var events = hub.WatchAsync(_timeout.Token);
+        hub.Complete();
 
-        Assert.IsTrue(await enumerator.MoveNextAsync());
-        Assert.AreEqual(JobState.Packing, enumerator.Current.Progress.State);
+        var delivered = new List<JobProgressEvent>();
+        await foreach (var progressEvent in events)
+        {
+            delivered.Add(progressEvent);
+        }
+
+        var replayed = Assert.ContainsSingle(delivered);
+        Assert.AreEqual(JobState.Packing, replayed.Progress.State);
+    }
+
+    [TestMethod]
+    public async Task Watch_ASubscriberArrivingMidRun_ReceivesTheLatestSnapshotPerLiveJob()
+    {
+        var hub = new ProgressHub();
+
+        hub.Report(Progress("job-1", JobState.Scanning));
+        hub.Report(Progress("job-1", JobState.Uploading));
+        hub.Report(Progress("job-2", JobState.Scanning));
+
+        var events = hub.WatchAsync(_timeout.Token);
+        hub.Complete();
+
+        var replayed = new Dictionary<string, JobState>();
+        await foreach (var progressEvent in events)
+        {
+            replayed[progressEvent.Progress.JobId] = progressEvent.Progress.State;
+        }
+
+        Assert.HasCount(2, replayed);
+        Assert.AreEqual(JobState.Uploading, replayed["job-1"]);
+        Assert.AreEqual(JobState.Scanning, replayed["job-2"]);
+    }
+
+    [TestMethod]
+    public async Task Watch_AJobThatSettled_IsNotReplayed()
+    {
+        var hub = new ProgressHub();
+
+        // A settled job's story belongs to the journal, not the live feed: a
+        // console connecting after the run would otherwise render a finished
+        // job as live until the next poll corrected it.
+        hub.Report(Progress("job-1", JobState.Packing));
+        hub.Report(Progress("job-1", JobState.Complete));
+        hub.Report(Progress("job-2", JobState.Packing));
+
+        var events = hub.WatchAsync(_timeout.Token);
+        hub.Complete();
+
+        var delivered = new List<JobProgressEvent>();
+        await foreach (var progressEvent in events)
+        {
+            delivered.Add(progressEvent);
+        }
+
+        var replayed = Assert.ContainsSingle(delivered);
+        Assert.AreEqual("job-2", replayed.Progress.JobId);
     }
 
     [TestMethod]

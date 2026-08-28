@@ -38,12 +38,30 @@ internal sealed class FakeService : IFallbackPlanService
         return RespondAsync?.Invoke(command, cancellationToken) ?? ValueTask.FromResult(Respond(command));
     }
 
+    /// <summary>Set when the transport begins enumerating a watch, if a test cares.</summary>
+    public TaskCompletionSource? WatchStarted { get; set; }
+
+    /// <summary>
+    /// Set when the transport lets go of a watch enumeration — cancellation
+    /// or disposal alike. The lifecycle tests hang on this: a dead client
+    /// whose watch is never released is exactly the leak they pin against.
+    /// </summary>
+    public TaskCompletionSource? WatchEnded { get; set; }
+
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var progress in _progress.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        WatchStarted?.TrySetResult();
+        try
         {
-            yield return progress;
+            await foreach (var progress in _progress.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return progress;
+            }
+        }
+        finally
+        {
+            WatchEnded?.TrySetResult();
         }
     }
 

@@ -1,5 +1,6 @@
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.TestSupport;
 using Microsoft.Extensions.Logging;
 
@@ -131,6 +132,41 @@ public sealed class AbandonedCommandTests : IDisposable
         {
             // See above.
         }
+    }
+
+    [TestMethod]
+    public async Task ClientDisconnectsMidWatch_ReleasesTheSubscription()
+    {
+        // The watch path's twin of the command tests above: a browser tab or
+        // console that goes away must release its progress subscription NOW,
+        // not on the next event's failed write — an idle service produces no
+        // next event, so a write-failure-only reaping keeps a dead watcher
+        // registered indefinitely and the service cannot tell "nobody is
+        // watching" from "watcher not yet written to".
+        var service = new FakeService
+        {
+            WatchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            WatchEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+
+        await using var listener = LocalServiceListener.Start(service, _state);
+        var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
+
+        // Open the watch and prove it is live: one event makes the round trip.
+        var progressEvents = client.WatchAsync(Timeout);
+        await using (var enumerator = progressEvents.GetAsyncEnumerator(Timeout))
+        {
+            await service.WatchStarted.Task.WaitAsync(Timeout);
+            service.Emit(new JobProgress("job-1", JobState.Scanning, 1, 0, 0, 0, 0, 0));
+            Assert.IsTrue(await enumerator.MoveNextAsync());
+        }
+
+        // Disposing the enumerator closed the watch connection — the client
+        // hung up. No further event is ever emitted, so only the transport
+        // noticing the hang-up can end the service-side enumeration.
+        await client.DisposeAsync();
+
+        await service.WatchEnded.Task.WaitAsync(Timeout);
     }
 
     public void Dispose()

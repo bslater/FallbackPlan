@@ -224,6 +224,45 @@ public sealed partial class PublicationOrchestrator
 
         var options = job.ScanOptions with { Rules = rules };
 
+        var reporter = new PublicationProgress(_progress, job.SnapshotId);
+        reporter.Enter(JobState.Scanning);
+
+        // The plan, before any byte moves (FR-SVC-006): one counting walk
+        // under the same compiled rules the capture judges by, so the total
+        // and the capture cannot disagree about what is in scope. Leaves
+        // only — a scan failure yields no leaf here and a failure there, so
+        // a client clamps rather than divides by a lie. The walk reads no
+        // content and runs before the write intent, so the declared job
+        // duration covers archiving, not counting; the pause gate is
+        // honoured so a preemptor need not wait for the count. The metadata
+        // matrix is switched off — rules don't consult it, and every
+        // per-entry syscall skipped is counting time saved.
+        long plannedFiles = 0;
+        long plannedBytes = 0;
+        var countingOptions = options with
+        {
+            CaptureExtendedAttributes = false,
+            CaptureAlternateStreams = false,
+            CaptureSecurityDescriptors = false,
+        };
+        await foreach (var counted in MultiRootScan
+            .ScanAsync(job.Source, job.Roots, countingOptions, cancellationToken).ConfigureAwait(false))
+        {
+            if (job.PauseGate is { } countingGate)
+            {
+                await countingGate.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (counted is ScanEvent.Leaf leaf)
+            {
+                plannedFiles++;
+                plannedBytes += leaf.Entry.Length;
+                reporter.Counting(plannedFiles);
+            }
+        }
+
+        reporter.PlanFixed(plannedFiles, plannedBytes);
+
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
@@ -320,9 +359,6 @@ public sealed partial class PublicationOrchestrator
             // A pipeline that announces `Scanning` and then says nothing for
             // ten hours is the failure the 10 section 3 state machine exists
             // to prevent.
-            var reporter = new PublicationProgress(_progress, job.SnapshotId);
-            reporter.Enter(JobState.Scanning);
-
             await foreach (var scanEvent in MultiRootScan
                 .ScanAsync(job.Source, job.Roots, options, cancellationToken).ConfigureAwait(false))
             {
@@ -1186,41 +1222,88 @@ public sealed partial class PublicationOrchestrator
     /// </remarks>
     private sealed class PublicationProgress(IJobProgressReporter? reporter, ReadOnlyMemory<byte> snapshotId)
     {
+        // The feed is a courtesy to a UI, not a ledger: reports coalesce to
+        // one per interval — whichever of the two trips first — with state
+        // transitions always emitted, so the terminal numbers a transition
+        // carries are exact even when per-file reports were skipped. The
+        // interval exists because the per-file version of this took the
+        // hub's lock for every scanned file of every run, watched or not.
+        private const int EmitEveryFiles = 64;
+        private static readonly TimeSpan EmitEvery = TimeSpan.FromMilliseconds(100);
+
         private readonly string _jobId = Convert.ToHexString(snapshotId.Span).ToLowerInvariant();
+        private long _folded;
+        private long _reused;
+        private long _seen;
+        private long _stored;
+        private long? _totalFiles;
+        private long? _totalBytes;
+        private long _lastEmittedFiles;
+        private long _lastEmittedAt;
+        private JobState _lastState = (JobState)(-1);
 
-        public void Enter(JobState state) => Emit(state, [], 0);
+        public void Enter(JobState state) => Emit(state, files: 0, failures: 0, force: state != _lastState);
 
-        public void Observe(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures) =>
-            Emit(state, files, failures);
+        /// <summary>The counting pass's running tally, before the plan is fixed.</summary>
+        public void Counting(long counted) => Emit(JobState.Scanning, counted, failures: 0, force: false);
 
-        private void Emit(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures)
+        /// <summary>
+        /// Fixes the plan: every report from here on carries the counted
+        /// totals, and the meters downstream gain their denominator.
+        /// </summary>
+        public void PlanFixed(long totalFiles, long totalBytes)
+        {
+            _totalFiles = totalFiles;
+            _totalBytes = totalBytes;
+            Emit(JobState.Scanning, totalFiles, failures: 0, force: true);
+        }
+
+        public void Observe(JobState state, List<PublishedFileVersion> files, int failures)
+        {
+            // Incremental on purpose: the list is append-only, so folding
+            // only the entries added since the last call keeps a whole run's
+            // aggregation O(n) where re-walking the list per file was O(n²).
+            for (var index = (int)_folded; index < files.Count; index++)
+            {
+                var file = files[index];
+                if (file.Reused)
+                {
+                    _reused++;
+                }
+
+                if (file.Archive is { } archive)
+                {
+                    _seen += archive.LogicalLength;
+                    foreach (var blob in archive.Blobs)
+                    {
+                        _stored += blob.Length;
+                    }
+                }
+            }
+
+            _folded = files.Count;
+            Emit(state, files.Count, failures, force: state != _lastState);
+        }
+
+        private void Emit(JobState state, long files, int failures, bool force)
         {
             if (reporter is null)
             {
                 return;
             }
 
-            long reused = 0;
-            long seen = 0;
-            long stored = 0;
-            foreach (var file in files)
+            if (!force
+                && files - _lastEmittedFiles < EmitEveryFiles
+                && Stopwatch.GetElapsedTime(_lastEmittedAt) < EmitEvery)
             {
-                if (file.Reused)
-                {
-                    reused++;
-                }
-
-                if (file.Archive is { } archive)
-                {
-                    seen += archive.LogicalLength;
-                    foreach (var blob in archive.Blobs)
-                    {
-                        stored += blob.Length;
-                    }
-                }
+                return;
             }
 
-            reporter.Report(new JobProgress(_jobId, state, files.Count, files.Count, reused, failures, seen, stored));
+            _lastState = state;
+            _lastEmittedFiles = files;
+            _lastEmittedAt = Stopwatch.GetTimestamp();
+            reporter.Report(new JobProgress(
+                _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes));
         }
     }
 }

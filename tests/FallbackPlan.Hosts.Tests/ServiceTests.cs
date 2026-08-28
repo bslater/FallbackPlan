@@ -59,6 +59,48 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Backup_CommandedByAClient_ReportsTheCountedPlanOnItsProgress()
+    {
+        // FR-SVC-006's determinate half over a live service: the run counts
+        // its work first, so the terminal report's plan equals what was
+        // actually processed and a client could have divided honestly the
+        // whole way.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "counted");
+        _harness.WriteSourceFile("deep/more.txt", "also counted");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        JobProgress? final = null;
+
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    if (progress.Progress.State is JobState.Complete or JobState.CompletedWithFailures)
+                    {
+                        final = progress.Progress;
+                        return;
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token));
+        await watching;
+
+        Assert.IsNotNull(final);
+        Assert.AreEqual(2L, final.TotalFiles, "the plan counts exactly the files the run processes");
+        Assert.AreEqual(final.FilesDone, final.TotalFiles, "a clean run finishes having processed its whole plan");
+        Assert.IsNotNull(final.TotalBytes);
+    }
+
+    [TestMethod]
     public async Task Backup_CommandedByAClient_RunsAndReportsStatesBeyondScanning()
     {
         await _harness.CreateRepositoryAsync();

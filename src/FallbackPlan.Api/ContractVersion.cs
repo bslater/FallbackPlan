@@ -114,8 +114,22 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// pair is still owed its seed, so a console can render "awaiting full
     /// backup" instead of a bare "behind". Additive with defaults — a
     /// pre-1.19 client simply does not see the fields.
+    /// 1.20 puts the counted plan on the progress stream (FR-SVC-006's
+    /// determinate half): a backup first counts what it will process, and
+    /// every progress report then carries total_files and total_bytes — the
+    /// denominator a client divides by for a percentage and a time estimate.
+    /// Null until the count completes and from producers that never count
+    /// (the single-stream path, verification sweeps, pre-1.20 services), so
+    /// additive with defaults: a client seeing null falls back to the
+    /// indeterminate meter it always had. The watch frame also gains the
+    /// client's session token: a watch takes its own connection with its own
+    /// authentication gate, and without the session every watch on an
+    /// installation with accounts was anonymous — answered with an empty
+    /// stream, so no progress ever reached a signed-in console. Additive the
+    /// same way: a pre-1.20 service ignores the field, a pre-1.20 client
+    /// keeps its anonymous watch.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 19);
+    public static ContractVersion Current { get; } = new(1, 20);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

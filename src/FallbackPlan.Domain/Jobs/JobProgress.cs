@@ -22,12 +22,23 @@ namespace FallbackPlan.Domain.Jobs;
 /// </remarks>
 /// <param name="JobId">The job this observation belongs to.</param>
 /// <param name="State">The latest stage entered.</param>
-/// <param name="FilesSeen">Files the scanner has produced.</param>
-/// <param name="FilesDone">Files fully archived.</param>
-/// <param name="FilesReused">Files whose content was reused unchanged.</param>
+/// <param name="FilesSeen">
+/// Files the run has discovered so far: the counting pass's running tally
+/// while it walks, the processed count once archiving is under way.
+/// </param>
+/// <param name="FilesDone">Files fully processed — captured and reused alike.</param>
+/// <param name="FilesReused">Files whose content was reused unchanged (a subset of <paramref name="FilesDone"/>).</param>
 /// <param name="FilesFailed">Files that could not be captured.</param>
 /// <param name="BytesSeen">Logical bytes presented to segmentation.</param>
 /// <param name="BytesStored">Bytes actually written after reuse and compression.</param>
+/// <param name="TotalFiles">
+/// The run's plan: how many files it will process, fixed by the counting
+/// pass before archiving begins. Null until the count completes, and for
+/// producers that never count — the single-stream path, verification
+/// sweeps, services predating contract 1.20. A client derives % complete
+/// and a time estimate only when this is present.
+/// </param>
+/// <param name="TotalBytes">The planned files' logical bytes, on the same terms.</param>
 public sealed record JobProgress(
     string JobId,
     JobState State,
@@ -36,7 +47,9 @@ public sealed record JobProgress(
     long FilesReused,
     long FilesFailed,
     long BytesSeen,
-    long BytesStored);
+    long BytesStored,
+    long? TotalFiles = null,
+    long? TotalBytes = null);
 
 /// <summary>
 /// Where a running job reports progress. Distinct from

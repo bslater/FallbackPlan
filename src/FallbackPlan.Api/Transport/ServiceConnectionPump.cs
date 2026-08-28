@@ -173,10 +173,44 @@ public static class ServiceConnectionPump
                         break;
                     }
 
-                    case WatchFrame:
+                    case WatchFrame watch:
+                    {
                         Log.WatchOpened(logger);
-                        await StreamProgressAsync(stream, service, cancellationToken).ConfigureAwait(false);
+
+                        // This connection's gate has seen no session — the
+                        // watch took a fresh connection — so the frame's
+                        // session is presented to it first (contract 1.20).
+                        // A refusal is not an error: the gate then answers
+                        // the anonymous empty stream it always answered.
+                        if (watch.Session is { } session)
+                        {
+                            _ = await service.ExecuteAsync(new ResumeSessionCommand(session), connection.Token)
+                                .ConfigureAwait(false);
+                        }
+
+                        // A watch is one-way from here — the client sends
+                        // nothing after the WatchFrame — so a read armed
+                        // behind the stream resolves only when the client
+                        // hangs up, and that is the moment the subscription
+                        // must end. Without it, a dead watcher was reaped
+                        // only by the NEXT event's failed write; an idle
+                        // service produces no next event, so the stale
+                        // subscription lingered and the service could not
+                        // tell "nobody is watching" from "not yet written
+                        // to".
+                        readAhead = ReadBehindAsync(stream, connection, cancellationToken);
+                        try
+                        {
+                            await StreamProgressAsync(stream, service, connection.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (
+                            connection.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                        {
+                            // The client hung up; ending the stream is the point.
+                        }
+
                         return;
+                    }
 
                     default:
                         return;
