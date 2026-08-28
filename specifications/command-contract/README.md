@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.19
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.20
 
 ---
 
@@ -45,7 +45,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.19 — 48 commands. One line each; parameters, results
+The register as of 1.20 — 48 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -99,3 +99,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.17 | The backup pool's ordering: optional priority on set and destination descriptors, null-preserving on upsert; first-backup-on-save and gained-destination seeding beside it ([ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md)) |
 | 1.18 | `retire_staging`: a migrated direct-ship set's staging archive deleted only by this explicit verb, refused while anything it holds has not reached a destination ([ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)) |
 | 1.19 | The full-backup facts on the status matrix: each destination row says when its baseline completed and whether the pair is owed its seed — additive with defaults, invisible to a pre-1.19 client ([ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md) §§5–6) |
+| 1.20 | The counted plan on the progress stream: a backup counts its work before archiving and every progress report then carries `total_files` and `total_bytes` — null until the count completes and from producers that never count, so additive with defaults; a pre-1.20 client keeps its indeterminate meter. The watch frame also carries the client's session token, so a signed-in console's event stream is authenticated — before this, every watch on an installation with accounts was answered with an empty stream ([ADR-0048](../../docs/adr/0048-determinate-backup-progress.md)) |

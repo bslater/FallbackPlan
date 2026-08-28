@@ -62,6 +62,7 @@ const S = {
   snapshots: [],            // SnapshotDescriptor[]
   jobs: [],                 // JobDescriptor[]
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
+  eta: new Map(),           // jobId -> smoothed completion-rate tracking (trackEta)
   view: "overview",
   snapshotFilter: "",
   destinations: [],         // DestinationDescriptor[]
@@ -386,8 +387,11 @@ function connectEvents() {
   eventSource.onmessage = event => {
     const { progress } = JSON.parse(event.data);
     if (!progress) return;
+    if (SETTLED.has(progress.state)) S.eta.delete(progress.jobId);
+    else trackEta(progress);
     S.progress.set(progress.jobId, progress);
     if (S.view === "jobs") scheduleJobsRender();
+    if (S.view === "overview") scheduleOverviewRender();
   };
   // The console's answer when the session it was handed is dead: stop
   // streaming, show sign-in, and do not redial with the same dead token.
@@ -401,11 +405,70 @@ function disconnectEvents() {
   eventSource = null;
 }
 
+// The stream follows the tab (and the pollers, which already pause on
+// hidden): a backgrounded console must not hold a service watch — and
+// therefore a hub subscription — that nobody is reading.
+function applyVisibility() {
+  if (document.hidden) {
+    disconnectEvents();
+    return;
+  }
+  if (!S.signInRequired && !S.setupRequired) connectEvents();
+  refreshAll();
+}
+
+// A smoothed files-per-second rate per job, fed by every progress event.
+// File rate rather than byte rate on purpose: bytesSeen counts archived
+// content only, so on a mostly-unchanged run a byte rate against the
+// planned bytes would promise hours for a backup that reuses its way to
+// done in seconds.
+function trackEta(progress) {
+  const now = performance.now();
+  const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
+  const track = S.eta.get(progress.jobId);
+  if (!track) {
+    S.eta.set(progress.jobId, { t0: now, t: now, handled, rate: 0 });
+    return;
+  }
+  const dt = (now - track.t) / 1000;
+  if (dt <= 0 || handled < track.handled) return;
+  const instant = (handled - track.handled) / dt;
+  // Exponential smoothing over a ~30s window, weighted by the gap between
+  // events so a burst of reports does not dominate the average.
+  const alpha = 1 - Math.exp(-dt / 30);
+  track.rate = track.rate === 0 ? instant : track.rate + alpha * (instant - track.rate);
+  track.t = now;
+  track.handled = handled;
+}
+
+// The remaining-time estimate for one job's progress, or "" when the plan
+// (totalFiles) is absent. Held back until the rate has settled: an estimate
+// from the first two events is a random number with a unit.
+function jobEta(progress) {
+  const total = progress?.totalFiles;
+  if (total == null) return "";
+  const track = S.eta.get(progress.jobId);
+  if (!track || performance.now() - track.t0 < 5000 || !(track.rate > 0)) return "estimating…";
+  const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
+  const seconds = Math.max(0, total - handled) / track.rate;
+  if (seconds < 5) return "almost done";
+  if (seconds < 90) return `~${Math.round(seconds)}s left`;
+  if (seconds < 5400) return `~${Math.round(seconds / 60)} min left`;
+  return `~${(seconds / 3600).toFixed(1)}h left`;
+}
+
 let jobsRenderQueued = false;
 function scheduleJobsRender() {
   if (jobsRenderQueued) return;
   jobsRenderQueued = true;
   requestAnimationFrame(() => { jobsRenderQueued = false; renderJobs(); });
+}
+
+let overviewRenderQueued = false;
+function scheduleOverviewRender() {
+  if (overviewRenderQueued) return;
+  overviewRenderQueued = true;
+  requestAnimationFrame(() => { overviewRenderQueued = false; renderOverview(); });
 }
 
 /* ---------------------------------------------------------------- views */
@@ -455,6 +518,12 @@ function renderOverview() {
     <h2>Overview</h2>
     <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.</p>
     <div class="grid cols-2">${sets.map(renderSetCard).join("")}</div>`;
+
+  // The CSP forbids inline style attributes, so mark widths are set from
+  // script — same as the jobs view.
+  for (const bar of el.querySelectorAll(".meter > i")) {
+    bar.style.width = (bar.dataset.w ?? 0) + "%";
+  }
 }
 
 function renderSetCard(set) {
@@ -462,7 +531,25 @@ function renderSetCard(set) {
   const config = S.sets.find(s => s.name === set.setName);
   // The service refuses a second run per set anyway (it answers with the
   // active job); disabling here just says so before the click.
-  const running = !!config && S.jobs.some(j => j.backupSetId === config.id && !SETTLED.has(j.state));
+  const liveJob = config ? S.jobs.find(j => j.backupSetId === config.id && !SETTLED.has(j.state)) : null;
+  const running = !!liveJob;
+
+  // The live run's meter, right on the overview: plan-divided when the
+  // counted plan has arrived (contract 1.20), indeterminate while counting.
+  const lp = liveJob ? S.progress.get(liveJob.id) : null;
+  const lpTotal = lp?.totalFiles;
+  const lpHandled = (lp?.filesDone ?? 0) + (lp?.filesFailed ?? 0);
+  const lpRatio = lpTotal > 0 ? Math.min(100, Math.round(lpHandled / lpTotal * 100)) : 0;
+  const lpEta = lp ? jobEta(lp) : "";
+  const liveRow = liveJob ? `
+    <div class="set-live">
+      <div class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></div>
+      <span class="detail">${!lp
+        ? "Backup starting…"
+        : lpTotal == null
+          ? (lp.state === "Scanning" ? `Counting files… ${fmtCount(lp.filesSeen)} found` : "Backing up…")
+          : `${fmtCount(lpHandled)} of ${fmtCount(lpTotal)} files · ${lpRatio}%${lpEta ? " · " + esc(lpEta) : ""}`}</span>
+    </div>` : "";
   const verification = set.status.verification
     ? `<span class="chip" title="Verification coverage and age — never a bare tick">
          ${Math.round(set.status.verification.coverage * 100)}% verified ${esc(rel(set.status.verification.verifiedAtUnixMilliseconds))}
@@ -499,6 +586,7 @@ function renderSetCard(set) {
        ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}</p>
     ${destinations}
     ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    ${liveRow}
     <div class="actions-row">
       <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}"
         ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>⛊ Back up now</button>
@@ -588,10 +676,16 @@ function renderLiveJob(job) {
   // higher-priority run".
   const paused = job.state === "Paused";
   const meta = JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
-  const seen = progress?.filesSeen ?? 0;
-  const handled = (progress?.filesDone ?? 0) + (progress?.filesReused ?? 0) + (progress?.filesFailed ?? 0);
-  const ratio = seen > 0 ? Math.min(100, Math.round(handled / seen * 100)) : 0;
-  const scanning = !paused && (!progress || progress.state === "Scanning" || seen === 0);
+  // The denominator is the run's counted plan (contract 1.20). Reused files
+  // are a subset of done, so handled is done plus failed — never reused
+  // added on top. Failed files left the plan's path, so the clamp keeps an
+  // over-delivering run at 100 rather than beyond it.
+  const total = progress?.totalFiles;
+  const handled = (progress?.filesDone ?? 0) + (progress?.filesFailed ?? 0);
+  const ratio = total > 0 ? Math.min(100, Math.round(handled / total * 100)) : 0;
+  const counting = !paused && progress?.state === "Scanning" && total == null;
+  const scanning = !paused && (!progress || total == null);
+  const eta = progress ? jobEta(progress) : "";
 
   return `<div class="card job-live">
     <h3>${esc(setName(job.backupSetId))} ${badge(meta, meta.label)}</h3>
@@ -599,7 +693,12 @@ function renderLiveJob(job) {
     ${paused ? `<p class="sub">${esc(job.detail || "Suspended for a higher-priority run — it resumes when a pool slot frees.")}</p>` : ""}
     <div class="meter ${scanning ? "indeterminate" : ""}"><i data-w="${ratio}"></i></div>
     ${progress ? `<div class="job-stats">
-        <span><b>${fmtCount(handled)}</b> of <b>${fmtCount(seen)}</b> files seen</span>
+        ${counting
+          ? `<span>Counting files… <b>${fmtCount(progress.filesSeen)}</b> found</span>`
+          : total != null
+            ? `<span><b>${fmtCount(handled)}</b> of <b>${fmtCount(total)}</b> files · <b>${ratio}%</b></span>`
+            : `<span><b>${fmtCount(handled)}</b> file(s) so far</span>`}
+        ${eta ? `<span>${esc(eta)}</span>` : ""}
         <span><b>${fmtCount(progress.filesReused)}</b> unchanged</span>
         ${progress.filesFailed ? `<span><b>${fmtCount(progress.filesFailed)}</b> failed</span>` : ""}
         <span><b>${fmtBytes(progress.bytesStored)}</b> written of <b>${fmtBytes(progress.bytesSeen)}</b> read</span>
@@ -4073,7 +4172,7 @@ function boot() {
   setInterval(() => { if (!document.hidden && !signedOut()) { refreshSets(); refreshSnapshots(); } }, 30000);
   setInterval(() => { if (!document.hidden && signedOut()) refreshDesc(); }, 30000);
   setInterval(() => { if (!S.connected) renderConn(); }, 10000); // keep the age fresh
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
+  document.addEventListener("visibilitychange", applyVisibility);
 }
 
 /* ---------------------------------------------------------------- entry */

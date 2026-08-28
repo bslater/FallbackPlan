@@ -49,7 +49,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. **Forty-two of the forty-seven are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0047 as their slices were built, through to the direct-to-destination pair 0046/0047.
+Status per record. **Forty-three of the forty-eight are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0048 as their slices were built, through the direct-to-destination pair 0046/0047 to the determinate-progress record 0048.
 
 **Five remain `Proposed`, each for a stated reason rather than by neglect:** 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture).
 
@@ -108,6 +108,7 @@ Status per record. **Forty-two of the forty-seven are Accepted.** Among them: 00
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session |
 | [0046](adr/0046-direct-to-destination-publication.md) | Direct-to-destination publication: the ship sink, no staging archive |
 | [0047](adr/0047-backup-pool-and-priorities.md) | The backup pool: concurrency, priorities, preemption, a pass that never waits |
+| [0048](adr/0048-determinate-backup-progress.md) | Determinate backup progress: a counted plan, a replayed snapshot, a stream that idles |
 
 Template: [0000](adr/0000-template.md)
 

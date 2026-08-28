@@ -138,6 +138,19 @@ and then says nothing for ten hours is the failure this state machine was
 specified to prevent, so a state that is never emitted is a state that is not
 implemented.
 
+Since [ADR-0048](../adr/0048-determinate-backup-progress.md), a backup's
+reports also carry the run's **counted plan**: the publication walks the
+source once, under the capture's own rules, before archiving begins, and
+every report thereafter states `total_files` and `total_bytes` (contract
+1.20) — the fixed denominator a client divides for a percentage and a time
+estimate. The counting tally is itself reported while the walk runs, so the
+determinate meter costs no silent stretch; the totals are null from
+producers that never count (the single-stream path, sweeps) and a client
+seeing null falls back to an indeterminate meter. The progress hub replays
+each live job's latest report to a subscriber arriving mid-run — never the
+missed sequence, nothing for settled jobs — and a watcher that disconnects
+releases its subscription immediately.
+
 **A console watching several machines** ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §8)
 aggregates only by derivation: a machine's summary is computed from its per-set,
 per-destination detail, the detail stays reachable, and no roll-up invents a

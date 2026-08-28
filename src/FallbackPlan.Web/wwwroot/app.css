@@ -362,6 +362,12 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus, .btn:focus
   width: 30% !important;
   animation: slide 1.4s ease-in-out infinite alternate;
 }
+
+/* The overview card's live-run row: the meter shares the line with its
+   caption instead of owning a block of its own. */
+.set-live { display: flex; align-items: center; gap: 10px; margin: 10px 0 2px; }
+.set-live .meter { flex: 1; margin: 0; }
+.set-live .detail { white-space: nowrap; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }

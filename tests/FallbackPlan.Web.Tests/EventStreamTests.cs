@@ -53,6 +53,39 @@ public sealed class EventStreamTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ProgressCarryingThePlan_PutsTheTotalsOnTheStream()
+    {
+        // Contract 1.20's counted plan, camelCased for the page: totalFiles
+        // and totalBytes are what let the meter divide honestly and the ETA
+        // exist at all.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Emit(new JobProgress(
+            "job-9", JobState.Packing, 120, 120, 40, 0, 4096, 2048, TotalFiles: 500, TotalBytes: 1_000_000));
+
+        using var response = await harness.Http.GetAsync(
+            new Uri("/api/events?token=" + harness.Auth.Token, UriKind.Relative),
+            HttpCompletionOption.ResponseHeadersRead,
+            _timeout.Token);
+
+        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(_timeout.Token));
+        string? dataLine = null;
+        while (await reader.ReadLineAsync(_timeout.Token) is { } line)
+        {
+            if (line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                dataLine = line["data: ".Length..];
+                break;
+            }
+        }
+
+        Assert.IsNotNull(dataLine, "No data frame arrived before the stream ended.");
+        using var body = JsonDocument.Parse(dataLine);
+        var progress = body.RootElement.GetProperty("progress");
+        Assert.AreEqual(500, progress.GetProperty("totalFiles").GetInt64());
+        Assert.AreEqual(1_000_000, progress.GetProperty("totalBytes").GetInt64());
+    }
+
+    [TestMethod]
     public async Task EventStream_WithoutAToken_IsRefusedUnauthorized()
     {
         await using var harness = await ConsoleHarness.StartAsync();
