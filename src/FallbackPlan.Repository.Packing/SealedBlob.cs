@@ -65,11 +65,16 @@ public sealed class SealedBlob : IAsyncDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // FileShare.Delete matters on Windows: the multi-destination fan-out
+        // opens several of these concurrently, and when one upload's failure
+        // unwinds into this blob's dispose, the delete must not turn the
+        // surviving readers' handles into sharing violations — a deleted
+        // file's open handles keep reading to their end.
         return ValueTask.FromResult<Stream>(new FileStream(
             _spoolPath,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.Read | FileShare.Delete,
             bufferSize: 64 * 1024,
             useAsync: true));
     }

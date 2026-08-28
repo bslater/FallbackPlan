@@ -14,6 +14,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FallbackPlan.Repository.Tests" />
+  </ItemGroup>
+
   <!-- The logging abstraction only: ILogger, NullLogger and the
        [LoggerMessage] source generator. Providers and sinks are the host's,
        and a canary in DependencyRuleTests keeps them there (ADR-0043). -->

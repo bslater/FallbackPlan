@@ -63,6 +63,9 @@ the pass was serial; a pass now ticks during long captures and during
 transfers (the pass no longer awaits its fan-out inline), so the rule is
 enforced explicitly — a set whose most recent journal row is unsettled and
 still active in the queue is reported `already-running`, never double-queued.
+The enforcement sits inside the enqueue itself, so a manual trigger and the
+save-time first backup obey the same rule as the pass (ADR-0047
+Amendment 3).
 "Nothing queues" still holds for *schedule-owed* runs, but no longer
 describes every capture: **saving a new set queues its first backup at
 once**, and a set gaining a destination queues that destination's seed

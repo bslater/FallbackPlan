@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
@@ -10,6 +11,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -26,7 +28,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
     private static readonly byte[] DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)];
 
-    private PublicationOrchestrator CreateOrchestrator(IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy) =>
+    private PublicationOrchestrator CreateOrchestrator(
+        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, ILogger? logger = null) =>
         new(
             SmallBlobPolicy,
             Repo,
@@ -37,7 +40,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
-            observer: null);
+            observer: null,
+            logger: logger);
 
     private static SnapshotJob Job(FakeFileSystemSource source) => new()
     {
@@ -733,5 +737,91 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsNull(legacyDecoded.SourceFilesystem.MaxPathBytes);
         Assert.IsNull(legacyDecoded.SourceFilesystem.MaxComponentBytes);
         Assert.IsNull(legacyDecoded.SourceFilesystem.ReservedNames);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFailureBeforeTheWriteIntent_ReportsNoCompletedStep()
+    {
+        // The failure log names the last COMPLETED step, and it is what a
+        // person debugs from — a crash in the pre-intent window (the spool
+        // hygiene sweep, the probe, the rule check) must not be reported as
+        // "after step PublishIntent" when no intent was ever published.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/alpha.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var logger = new RecordingLogger();
+
+        var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
+        var job = Job(source) with
+        {
+            Source = new FaultInjectingSource(source, probeFailure: new IOException("the volume vanished before the probe")),
+        };
+        await Assert.ThrowsExactlyAsync<IOException>(
+            async () => await orchestrator.PublishAsync(job, CancellationToken.None));
+
+        var failure = Assert.ContainsSingle(logger.Records.Where(record => record.EventId == 2003).ToList());
+        Assert.AreEqual(PublicationStep.Preparing, failure.Value("Step"));
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFailureDuringTheCapture_ReportsTheIntentAsTheLastCompletedStep()
+    {
+        // Steps 2–4 interleave by design, so a mid-capture failure's last
+        // completed step is the intent — and the tree path must actually
+        // record it: before this pin it never did, and every capture failure
+        // wore the initializer's label whether the intent had happened or not.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/alpha.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var logger = new RecordingLogger();
+
+        var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
+        var job = Job(source) with
+        {
+            Source = new FaultInjectingSource(source, midScanFailure: new IOException("the disk died mid-walk")),
+        };
+        await Assert.ThrowsExactlyAsync<IOException>(
+            async () => await orchestrator.PublishAsync(job, CancellationToken.None));
+
+        var failure = Assert.ContainsSingle(logger.Records.Where(record => record.EventId == 2003).ToList());
+        Assert.AreEqual(PublicationStep.PublishIntent, failure.Value("Step"));
+    }
+
+    /// <summary>
+    /// Delegates to a real source and throws where told: from the probe
+    /// (before anything is durable) or from the scan after its last event
+    /// (mid-capture, the intent already published).
+    /// </summary>
+    private sealed class FaultInjectingSource(
+        IFileSystemSource inner, Exception? probeFailure = null, Exception? midScanFailure = null) : IFileSystemSource
+    {
+        public SourceFilesystemInfo Probe(string rootPath) =>
+            probeFailure is null ? inner.Probe(rootPath) : throw probeFailure;
+
+        public RevalidationProbe? Revalidate(ScanEntry entry) => inner.Revalidate(entry);
+
+        public async IAsyncEnumerable<ScanEvent> ScanAsync(
+            string rootPath, ScanOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await foreach (var scanEvent in inner.ScanAsync(rootPath, options, cancellationToken).ConfigureAwait(false))
+            {
+                yield return scanEvent;
+            }
+
+            if (midScanFailure is not null)
+            {
+                throw midScanFailure;
+            }
+        }
+
+        public Stream OpenRead(ScanEntry entry) => inner.OpenRead(entry);
+
+        public Stream OpenAlternateStream(ScanEntry entry, string streamName) => inner.OpenAlternateStream(entry, streamName);
     }
 }

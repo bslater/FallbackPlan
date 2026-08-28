@@ -55,6 +55,12 @@ incrementals until it holds a full copy.
    also honours the queue's refusal instead of silently orphaning its
    completion — unreachable while job identities are fresh GUIDs, and a hang
    waiting to happen the day that changes.
+
+   > **Amended 2026-08 (Amendment 3):** the pass's check was the rule's only
+   > enforcement, and the pass is not the only door — the manual trigger and
+   > rule 5's first-backup-on-save called `Scheduler.Enqueue` unguarded, so
+   > two runs of one set could share a spool directory. The check now lives
+   > inside `Enqueue` itself, atomically, and every caller inherits it.
 3. **The writer lane is a pool.** `max_concurrent_backups` (configuration
    schema 5; 1..5, absent means 2) sets how many writer-lane workers the
    queue spawns. Safe by construction: per-set archives, sequences, spools
@@ -202,6 +208,56 @@ is guarded by the job still running, and the supervisor removes paused and
 running state under one lock), and a dequeued writer id absent from the
 running table is logged (event 3759) rather than silently discarded.
 
+## Amendment 3 — One run per set enforced at the enqueue, not the pass (2026-08)
+
+A field report on Windows delivered the counterexample to Decision 3's "safe
+by construction": a manual web-console trigger, clicked on a set whose
+auto-queued first backup (Decision 5) was still in flight, produced a second
+concurrent run of the **same** set. The disjointness argument holds only
+*across* sets — two runs of one set share one spool directory and one writer
+sequence. The second run's crash-hygiene sweep then deleted the first run's
+live metadata spool (held `FileShare.None`, deliberately sidecar-less), which
+on Windows is a sharing violation — `IOException: the process cannot access
+the file … because it is being used by another process`, the publication
+failed, no backup — and where the delete wins the timing, silent destruction
+of the other run's in-flight spool. Worse and quieter: each run reads the
+other's live sequence allocations as a previous run's crash leftovers and
+publishes void deltas for numbers the other run is about to use.
+
+The flaw was structural: Decision 2 placed the one-run-per-set check in the
+scheduled pass, but the pass is one of three doors. The manual trigger
+(`run_backup`, console and CLI alike) and Decision 5's first-backup-on-save
+both called `Scheduler.Enqueue` directly, and `Enqueue` checked nothing.
+
+1. **The check moved inside `Scheduler.Enqueue`.** Under a per-runtime gate
+   held across the journal check, the journal begin and the queue insert —
+   one atomic step, so two triggers arriving together cannot both pass — a
+   set whose latest journal row is unsettled and still active in the queue
+   gets no new job: the caller's completion answers `already-running`,
+   naming the active job. Every door inherits the rule; the pass's own
+   pre-check remains as a courtesy that produces its per-set outcome row
+   without the call.
+2. **A refused trigger attaches, it does not error.** The manual command
+   still answers `job_accepted` — with the active run's identity — so a
+   client that triggers an already-running set ends up watching the run
+   that exists. The console additionally disables a set's backup buttons
+   while the set has a live job, saying why.
+3. **Two hardenings on the same trail** (found tracing the failure, real
+   independent of it): `BlobWriter.AbandonAsync` set its closed flag before
+   the durable flush, so a flush failure during an unwind leaked the
+   `FileShare.None` spool handle for the life of the process — every later
+   resume read then reproduced the same sharing violation; the flush is now
+   best-effort and the handle release unconditional. And the tree
+   publication path never recorded its steps until after the whole capture
+   loop, so every failure — including pre-intent ones — logged "after step
+   PublishIntent"; the failure log now reports `Preparing` before the
+   intent is durable and the intent as the last completed step during the
+   interleaved capture.
+
+Pinned by `Hosts.Tests/BackupConcurrencyTests` (the trigger-while-queued,
+upsert-race and concurrent-hammer cases) and the abandon/step-reporting
+cases in `Repository.Tests`.
+
 ## Status history
 
 | Date | Status | Note |
@@ -211,3 +267,4 @@ running table is logged (event 3759) rather than silently discarded.
 | 2026-08 | Built (Amendment 1) | True suspend/resume under priority pressure: the pause gate through the capture pipeline's scan loop, park-frees-the-slot scheduling with resume-before-equal-work pickup, worst-first single-victim preemption, the live Paused journal state (console and CLI both treat it as in-flight), the max-pause self-cancel, and shutdown degrading a parked run to the ordinary cancelled → re-run path |
 | 2026-08 | Built (surfaces) | Contract 1.19 puts the rules' full-backup facts on the status matrix — each destination row says when its baseline completed and whether the pair is owed its seed — and the console's overview renders them as a Full backup column ("awaiting seed" against a bare "behind"); a paused run stays a live jobs card that says why it is suspended |
 | 2026-08 | Built (Amendment 2) | Escalating worst-first preemption past an unresponsive victim (`JobScheduler`), generation-stamped max-pause expiry with the `ServiceOptions.MaxPauseOverride` knob, pause/resume emitted on the progress stream with counts held (`PauseGate` observers through `BackupRunner`), the explicit terminal summary, and the park/complete race closed — pinned by `Hosts.Tests/JobSchedulerPreemptionTests` across multi-worker pools |
+| 2026-08 | Built (Amendment 3) | One run per set enforced atomically inside `Scheduler.Enqueue` (the `ServiceRuntime` enqueue gate), a coalescing `run_backup` answer, the console's live-job button state, `BlobWriter.AbandonAsync` releasing the spool handle when the flush fails, and honest step reporting (`PublicationStep.Preparing`) — pinned by `Hosts.Tests/BackupConcurrencyTests` and the abandon/step cases in `Repository.Tests` |

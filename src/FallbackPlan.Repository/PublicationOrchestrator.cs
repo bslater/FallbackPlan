@@ -29,6 +29,14 @@ public interface IIntentScope
 /// <summary>The nine steps of the canonical publication order (specification 08 §10).</summary>
 public enum PublicationStep
 {
+    /// <summary>
+    /// 0 — before the first step: nothing is durable yet. Not a step of the
+    /// order; the value a failure log carries when a publication died in the
+    /// preparation window — the spool hygiene sweep, the source probe, the
+    /// rule check — with no intent published.
+    /// </summary>
+    Preparing = 0,
+
     /// <summary>1 — the write intent is durable.</summary>
     PublishIntent = 1,
 
@@ -204,7 +212,9 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
-        _lastStep = PublicationStep.PublishIntent;
+        // Preparing until the intent is durable: a failure in the pre-intent
+        // window (the hygiene sweep, the void deltas) completed no step.
+        _lastStep = PublicationStep.Preparing;
 
         try
         {

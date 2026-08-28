@@ -158,12 +158,14 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
-        // The last step to complete, so a throw can name where the publication
-        // got to. Held on the instance rather than threaded through: one
+        // The last step to COMPLETE, so a throw can name where the publication
+        // got to — Preparing until the intent is actually durable, or a
+        // failure in the pre-intent window would wear a step that never
+        // happened. Held on the instance rather than threaded through: one
         // publication at a time runs against one of these — a set's archive
         // opens once, and the writer pool never gives two workers the same
         // set (ADR-0029 §1, ADR-0047).
-        _lastStep = PublicationStep.PublishIntent;
+        _lastStep = PublicationStep.Preparing;
 
         try
         {
@@ -252,6 +254,11 @@ public sealed partial class PublicationOrchestrator
         using var scope = new ExtensionIntentScope(
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
+
+        // Recorded here and not again until after the capture loop: steps
+        // 2–4 interleave below, so the intent stays the last step a
+        // mid-capture failure can truthfully claim completed.
+        RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
         var archiver = new FileArchiver(
             _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,

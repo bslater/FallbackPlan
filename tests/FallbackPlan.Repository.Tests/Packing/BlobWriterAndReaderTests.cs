@@ -285,6 +285,64 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         Assert.AreNotEqual(sealedFirst.Digest, sealedSecond.Digest);
     }
 
+    [TestMethod]
+    public async Task BlobWriter_AbandonWhoseDurableFlushFails_StillReleasesTheSpoolHandle()
+    {
+        // Abandon is the unwind path — it runs while a failure is already
+        // propagating, and its own doc promises it never replaces that
+        // failure. A flush that throws (disk full, device gone) must not
+        // leave the FileShare.None spool handle open for the life of the
+        // process: the next run's resume walk reads this very file, and on
+        // Windows a leaked handle turns every later backup into "the process
+        // cannot access the file because it is being used by another process".
+        Directory.CreateDirectory(SpoolDirectory);
+        var spoolPath = Path.Combine(SpoolDirectory, "blob-abandon-flush-fault.spool");
+        var spool = new FlushFaultingFileStream(spoolPath);
+        var salt = new byte[BlobKeyDeriver.BlobSaltLength];
+        var writer = new BlobWriter(
+            new BlobEnvelope(
+                FormatLimits.FormatVersion, BlobClass.Data, KeyGeneration.Zero,
+                BlobId.FromWriterCounter(Writer, 42), salt, 42, Writer),
+            BlobWriteProfile.LocalDefault,
+            EncryptionProfile.Aes256GcmV1,
+            Repo,
+            ClassKey.ToArray(),
+            spoolPath,
+            spool,
+            pinned: null);
+
+        await writer.AbandonAsync();
+
+        Assert.IsTrue(spool.DisposedCleanly, "the spool handle must be released even when the durable flush fails");
+        Assert.IsTrue(File.Exists(spoolPath), "abandon leaves the spool on disk for the next session's resume walk");
+    }
+
+    /// <summary>
+    /// A spool stream whose durable flush fails — the fault a full disk or a
+    /// yanked volume injects exactly when a session is already unwinding.
+    /// </summary>
+    private sealed class FlushFaultingFileStream(string path)
+        : FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+    {
+        public bool DisposedCleanly { get; private set; }
+
+        public override void Flush(bool flushToDisk)
+        {
+            if (flushToDisk)
+            {
+                throw new IOException("simulated durable-flush failure");
+            }
+
+            base.Flush(flushToDisk);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            DisposedCleanly = true;
+            await base.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

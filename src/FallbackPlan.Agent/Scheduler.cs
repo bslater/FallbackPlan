@@ -101,7 +101,9 @@ public static class Scheduler
             // while the pass was serial — it never looked again before its
             // own captures finished. A pass that ticks during long captures
             // (ADR-0029 Amendment 4) needs the rule stated, or every tick
-            // would queue another run behind a slow one.
+            // would queue another run behind a slow one. Enqueue enforces
+            // the same rule for every caller; checking here first keeps the
+            // per-set outcome row and skips the call.
             var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
             if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
             {
@@ -361,57 +363,78 @@ public static class Scheduler
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
 
-        var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var completion = new TaskCompletionSource<BackupOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // The run's suspension point (ADR-0047 Amendment 1): when a higher-priority
-        // job needs the pool's last slot, the scheduler parks this run at a
-        // file boundary and the journal says so — Paused on the way down,
-        // back to Publishing on the way up. The stamps are wall-clock
-        // because they record when the suspension actually happened, not
-        // when the pass that queued the run began.
-        var gate = new PauseGate(
-            onParked: () => runtime.Jobs.Transition(
-                job.Id, JobState.Paused, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                "suspended for a higher-priority run"),
-            onResumed: () => runtime.Jobs.Transition(
-                job.Id, JobState.Publishing, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                "resumed"));
-
-        var accepted = runtime.Queue.Enqueue(new QueuedJob(
-            job.Id,
-            JobLane.Writer,
-            userInitiated,
-            $"backup {set.Name}",
-            async cancellationToken =>
-            {
-                try
-                {
-                    completion.SetResult(
-                        await BackupRunner.RunAsync(runtime, set, job.Id, now, full, gate, cancellationToken)
-                            .ConfigureAwait(false));
-                }
-                catch (Exception exception)
-                {
-                    completion.SetException(exception);
-                    throw;
-                }
-            },
-            Priority: set.Priority ?? 0,
-            PauseGate: gate));
-
-        if (!accepted)
+        lock (runtime.BackupEnqueueGate)
         {
-            // Unreachable while job identities are fresh GUIDs — but a refusal
-            // that silently orphaned the completion would hang whoever awaits
-            // it, forever, the day that ever changes. The journal row is
-            // closed for the same reason: a Pending row nothing runs is a
-            // stuck job in every listing.
-            runtime.Jobs.Transition(
-                job.Id, JobState.Cancelled, (ulong)now.ToUnixTimeMilliseconds(),
-                "refused by the queue: a job with this identity is already active");
-            completion.SetResult(new BackupOutcome(
-                set.Name, "already-running", $"job {job.Id} is already queued or running"));
+            // One run per set at a time (ADR-0027 §1), enforced at the one
+            // door every trigger funnels through — the pass, the manual
+            // command, the upsert's first backup. The pass's own pre-check
+            // is a courtesy that avoids the call; this is the guarantee. It
+            // matters because two runs of one set share a spool directory
+            // and a writer sequence, whose invariants assume a single
+            // session (ADR-0047 Amendment 3). The IsActive clause keeps an
+            // unsettled journal row a previous process left behind from
+            // blocking the set forever: only a job the live queue still
+            // knows counts as running.
+            var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
+            if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
+            {
+                return Task.FromResult(new BackupOutcome(
+                    set.Name, "already-running", $"job {latest.Id} is still queued or running"));
+            }
+
+            var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
+
+            // The run's suspension point (ADR-0047 Amendment 1): when a higher-priority
+            // job needs the pool's last slot, the scheduler parks this run at a
+            // file boundary and the journal says so — Paused on the way down,
+            // back to Publishing on the way up. The stamps are wall-clock
+            // because they record when the suspension actually happened, not
+            // when the pass that queued the run began.
+            var gate = new PauseGate(
+                onParked: () => runtime.Jobs.Transition(
+                    job.Id, JobState.Paused, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    "suspended for a higher-priority run"),
+                onResumed: () => runtime.Jobs.Transition(
+                    job.Id, JobState.Publishing, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    "resumed"));
+
+            var accepted = runtime.Queue.Enqueue(new QueuedJob(
+                job.Id,
+                JobLane.Writer,
+                userInitiated,
+                $"backup {set.Name}",
+                async cancellationToken =>
+                {
+                    try
+                    {
+                        completion.SetResult(
+                            await BackupRunner.RunAsync(runtime, set, job.Id, now, full, gate, cancellationToken)
+                                .ConfigureAwait(false));
+                    }
+                    catch (Exception exception)
+                    {
+                        completion.SetException(exception);
+                        throw;
+                    }
+                },
+                Priority: set.Priority ?? 0,
+                PauseGate: gate));
+
+            if (!accepted)
+            {
+                // Unreachable while job identities are fresh GUIDs — but a refusal
+                // that silently orphaned the completion would hang whoever awaits
+                // it, forever, the day that ever changes. The journal row is
+                // closed for the same reason: a Pending row nothing runs is a
+                // stuck job in every listing.
+                runtime.Jobs.Transition(
+                    job.Id, JobState.Cancelled, (ulong)now.ToUnixTimeMilliseconds(),
+                    "refused by the queue: a job with this identity is already active");
+                completion.SetResult(new BackupOutcome(
+                    set.Name, "already-running", $"job {job.Id} is already queued or running"));
+            }
         }
 
         return completion.Task;

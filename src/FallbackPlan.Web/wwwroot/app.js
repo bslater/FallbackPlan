@@ -324,6 +324,8 @@ async function refreshJobs() {
   count.hidden = live === 0;
   count.textContent = live;
   if (S.view === "jobs") renderJobs();
+  // The overview's per-set backup buttons follow the live-job set.
+  if (S.view === "overview") renderOverview();
 }
 
 async function refreshSnapshots() {
@@ -458,6 +460,9 @@ function renderOverview() {
 function renderSetCard(set) {
   const meta = PROTECTION[set.status.state] ?? { cls: "", icon: "?", label: set.status.state, blurb: "" };
   const config = S.sets.find(s => s.name === set.setName);
+  // The service refuses a second run per set anyway (it answers with the
+  // active job); disabling here just says so before the click.
+  const running = !!config && S.jobs.some(j => j.backupSetId === config.id && !SETTLED.has(j.state));
   const verification = set.status.verification
     ? `<span class="chip" title="Verification coverage and age — never a bare tick">
          ${Math.round(set.status.verification.coverage * 100)}% verified ${esc(rel(set.status.verification.verifiedAtUnixMilliseconds))}
@@ -495,10 +500,12 @@ function renderSetCard(set) {
     ${destinations}
     ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     <div class="actions-row">
-      <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}">⛊ Back up now</button>
+      <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}"
+        ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>⛊ Back up now</button>
       <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
       <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
-      <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}">Full…</button>
+      <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}"
+        ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>Full…</button>
     </div>
   </div>`;
 }

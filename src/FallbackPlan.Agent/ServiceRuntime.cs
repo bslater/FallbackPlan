@@ -194,6 +194,16 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>What is running and what is waiting.</summary>
     public JobScheduler Queue { get; }
 
+    /// <summary>
+    /// Serialises backup enqueues (ADR-0027 §1 via ADR-0047 Amendment 3):
+    /// the already-running check, the journal begin and the queue insert
+    /// must be one atomic step, or two triggers arriving together — a
+    /// manual click racing the upsert's first backup, two clicks, a click
+    /// racing the pass — both pass the check and the set runs twice over
+    /// one spool directory.
+    /// </summary>
+    internal object BackupEnqueueGate { get; } = new();
+
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
 

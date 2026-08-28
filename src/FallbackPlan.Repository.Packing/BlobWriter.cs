@@ -65,7 +65,11 @@ public sealed class BlobWriter : IAsyncDisposable
     private bool _abandoned;
     private bool _spoolClosed;
 
-    private BlobWriter(
+    // Internal, not private: the abandon-path tests need to hand in a spool
+    // stream whose durable flush fails, and a real FileStream cannot be made
+    // to fail on cue. Product code constructs writers only through Create,
+    // CreateSealed and TryResume, which own the spool open flags.
+    internal BlobWriter(
         BlobEnvelope envelope,
         BlobWriteProfile profile,
         EncryptionProfile encryptionProfile,
@@ -344,9 +348,10 @@ public sealed class BlobWriter : IAsyncDisposable
     /// <para>
     /// The walk takes the lexicographically first checkpoint in the
     /// directory, which is safe only because one session owns the directory
-    /// at a time — the writer role serialises processes (ADR-0028 §2) and
-    /// every set owns its own spool directory, so the writer pool's workers
-    /// never meet in one (ADR-0047).
+    /// at a time — the writer role serialises processes (ADR-0028 §2), and
+    /// within the service the backup enqueue gate serialises runs per set
+    /// (ADR-0047 Amendment 3), so the writer pool's workers never meet in
+    /// one set's spool directory.
     /// Nothing here enforces that ownership; a second concurrent session
     /// over one spool directory is a caller bug.
     /// </para>
@@ -753,9 +758,33 @@ public sealed class BlobWriter : IAsyncDisposable
 
         if (!_spoolClosed)
         {
-            _spoolClosed = true;
-            _spool.Flush(flushToDisk: true);
-            await _spool.DisposeAsync().ConfigureAwait(false);
+            // The flush is best-effort: abandon runs while a failure is
+            // already unwinding, and the resume walk authenticates whatever
+            // reached the disk, restarting on doubt (05 §6.2) — but the
+            // handle release is not optional. A spool left open under
+            // FileShare.None turns every later run's resume read into a
+            // sharing violation for the life of the process.
+            try
+            {
+                _spool.Flush(flushToDisk: true);
+            }
+            catch (IOException)
+            {
+                // Whatever did not reach the disk is the resume walk's to judge.
+            }
+            finally
+            {
+                _spoolClosed = true;
+                try
+                {
+                    await _spool.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    // The close-time flush can fail for the same reasons; the
+                    // stream still closes its handle in its own unwind.
+                }
+            }
         }
     }
 
