@@ -157,6 +157,90 @@ public sealed class ProgressHubTests : IDisposable
         Assert.AreEqual(JobState.Publishing, firstEvents.Current.Progress.State);
     }
 
+    [TestMethod]
+    public async Task Watch_AWatcherThatNeverReads_DropsOldestAndNeverBlocksTheReporter()
+    {
+        var hub = new ProgressHub();
+
+        // The hub's core promise, from its own doc comment: a watcher that
+        // stops reading must not be able to stall the engine. 400 reports
+        // into a 256-slot queue that nobody drains — every Report must
+        // return (a blocking write would hang this loop and fail the test
+        // by timeout), and what the late reader then sees is the bounded
+        // tail with the missed front visible as a sequence gap.
+        var events = hub.WatchAsync(_timeout.Token);
+        for (var i = 0; i < 400; i++)
+        {
+            hub.Report(Progress("job-1", JobState.Packing));
+        }
+
+        hub.Complete();
+
+        var delivered = new List<JobProgressEvent>();
+        await foreach (var progressEvent in events)
+        {
+            delivered.Add(progressEvent);
+        }
+
+        Assert.IsNotEmpty(delivered);
+        Assert.IsTrue(delivered.Count <= 256, $"the queue is bounded at 256; {delivered.Count} arrived");
+        Assert.IsTrue(delivered[0].Sequence > 1, "drop-oldest: the earliest events must be gone");
+        Assert.AreEqual(400, delivered[^1].Sequence, "the newest event survives the drops");
+        for (var i = 1; i < delivered.Count; i++)
+        {
+            Assert.IsTrue(
+                delivered[i].Sequence > delivered[i - 1].Sequence,
+                "what remains is in order — the gap is at the front, never a shuffle");
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_SubscribingWhileReportsLand_SeesStrictlyIncreasingSequencesWithNoDuplicates()
+    {
+        var hub = new ProgressHub();
+
+        // The replay is written into a new subscription under the same lock
+        // that numbers and fans out reports, so a subscriber joining
+        // mid-stream can never see its replayed snapshot again as a live
+        // event, or two events out of order. Hammered rather than argued:
+        // reports land from a background task while watchers join.
+        using var reporting = new CancellationTokenSource();
+        var reporter = Task.Run(
+            () =>
+            {
+                while (!reporting.IsCancellationRequested)
+                {
+                    hub.Report(Progress("job-1", JobState.Packing));
+                }
+            },
+            _timeout.Token);
+
+        var watchers = new List<IAsyncEnumerable<JobProgressEvent>>();
+        for (var i = 0; i < 4; i++)
+        {
+            watchers.Add(hub.WatchAsync(_timeout.Token));
+            await Task.Delay(10, _timeout.Token);
+        }
+
+        await reporting.CancelAsync();
+        await reporter;
+        hub.Complete();
+
+        foreach (var watcher in watchers)
+        {
+            long last = 0;
+            await foreach (var progressEvent in watcher)
+            {
+                Assert.IsTrue(
+                    progressEvent.Sequence > last,
+                    $"sequence {progressEvent.Sequence} after {last}: a duplicate or reorder crossed the replay boundary");
+                last = progressEvent.Sequence;
+            }
+
+            Assert.IsTrue(last > 0, "every watcher must have received something");
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose() => _timeout.Dispose();
 }

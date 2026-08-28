@@ -13,13 +13,28 @@ namespace FallbackPlan.Web.Tests;
 /// </summary>
 internal sealed class FakeServiceClient : IFallbackPlanClient
 {
-    private readonly Channel<JobProgressEvent> _progress = Channel.CreateUnbounded<JobProgressEvent>();
+    // Fan-out, like the real hub: every watch gets its own channel and
+    // every Emit reaches all of them. A single shared channel would SPLIT
+    // events between two concurrent watches — misrepresenting the real
+    // architecture, where each browser's SSE request holds its own upstream
+    // watch and each watch receives everything. Events emitted before a
+    // watch opens are buffered for the first subscriber (the pre-existing
+    // convenience the single-watch tests lean on).
+    private readonly List<Channel<JobProgressEvent>> _watches = [];
+    private readonly Queue<JobProgressEvent> _beforeAnyWatch = [];
+    private readonly Lock _gate = new();
 
     private long _sequence;
 
     public List<ServiceCommand> Received { get; } = [];
 
     public Func<ServiceCommand, ServiceResult> Respond { get; set; } = _ => new AcknowledgedResult();
+
+    /// <summary>Counts watches the host has begun, if a test cares.</summary>
+    public int WatchesOpened { get; private set; }
+
+    /// <summary>Counts watches the host has let go — cancellation or disposal alike.</summary>
+    public int WatchesEnded { get; private set; }
 
     public ContractVersion ServiceContractVersion => ContractVersion.Current;
 
@@ -36,14 +51,52 @@ internal sealed class FakeServiceClient : IFallbackPlanClient
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var progress in _progress.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        var channel = Channel.CreateUnbounded<JobProgressEvent>();
+        lock (_gate)
         {
-            yield return progress;
+            WatchesOpened++;
+            while (_beforeAnyWatch.Count > 0)
+            {
+                channel.Writer.TryWrite(_beforeAnyWatch.Dequeue());
+            }
+
+            _watches.Add(channel);
+        }
+
+        try
+        {
+            await foreach (var progress in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return progress;
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _watches.Remove(channel);
+                WatchesEnded++;
+            }
         }
     }
 
-    public void Emit(FallbackPlan.Domain.Jobs.JobProgress progress) =>
-        _progress.Writer.TryWrite(new JobProgressEvent(Interlocked.Increment(ref _sequence), progress));
+    public void Emit(FallbackPlan.Domain.Jobs.JobProgress progress)
+    {
+        lock (_gate)
+        {
+            var published = new JobProgressEvent(Interlocked.Increment(ref _sequence), progress);
+            if (_watches.Count == 0)
+            {
+                _beforeAnyWatch.Enqueue(published);
+                return;
+            }
+
+            foreach (var watch in _watches)
+            {
+                watch.Writer.TryWrite(published);
+            }
+        }
+    }
 
     /// <summary>
     /// A no-op: the web host disposes a client after every exchange, and the

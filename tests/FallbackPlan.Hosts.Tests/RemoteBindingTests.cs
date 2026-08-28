@@ -169,6 +169,61 @@ public sealed class RemoteBindingTests : IDisposable
             await File.ReadAllTextAsync(Path.Combine(restored.OutputDirectory, "notes.txt"), _timeout.Token));
     }
 
+    [TestMethod]
+    public async Task RemoteWatch_ByAPairedConsole_StreamsProgress()
+    {
+        // The remote watch path — its own connection, its own full peer
+        // handshake — driven over a real TCP+TLS socket for the first time:
+        // FR-SVC-005's progress half. The service reports through its hub;
+        // the paired console's watch receives it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        using var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
+        serviceGrants.Pin(new PeerGrant(
+            _console.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+        var consoleGrants = PeerGrantStore.Open(Path.Combine(_harness.WorkPath, "console"));
+        consoleGrants.Pin(new PeerGrant(
+            serviceKeypair.Identity, "service", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+
+        await using var remote = RemoteServiceListener.Start(
+            serviceKeypair, serviceGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test");
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.On(remote.Endpoint.ToString()));
+        remote.Bind(handler);
+
+        await using var console = await Cli.RemoteServiceClient.ConnectAsync(
+            remote.Endpoint.Address.ToString(), remote.Endpoint.Port,
+            _console, consoleGrants, serviceKeypair.Identity, "console", _timeout.Token);
+
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
+        var events = console.WatchAsync(stopping.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progressEvent in events)
+                {
+                    return progressEvent;
+                }
+
+                return null;
+            },
+            stopping.Token);
+
+        while (!watching.IsCompleted)
+        {
+            runtime.Progress.Report(new Domain.Jobs.JobProgress(
+                "job-remote", Domain.Jobs.JobState.Packing, 7, 3, 1, 0, 1024, 512));
+            await Task.Delay(50, stopping.Token);
+        }
+
+        var received = await watching;
+        Assert.IsNotNull(received, "the paired console's watch must stream the service's progress");
+        Assert.AreEqual("job-remote", received.Progress.JobId);
+        await stopping.CancelAsync();
+    }
+
     private async Task ThrowIfSessionOpensAsync(
         PeerTlsConnection connection, PeerGrantStore consoleGrants, PeerIdentity serviceIdentity)
     {

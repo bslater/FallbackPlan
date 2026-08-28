@@ -86,6 +86,103 @@ public sealed class EventStreamTests : IDisposable
     }
 
     [TestMethod]
+    public async Task TheBrowserGoingAway_ClosesTheUpstreamWatch()
+    {
+        // The web host holds one service watch per browser stream, torn down
+        // by RequestAborted when the browser leaves. The code threads the
+        // token; this is the test that proves the chain actually fires —
+        // without it, an abandoned tab would hold a live hub subscription
+        // and the service could not tell "nobody is watching".
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Emit(new JobProgress("job-4", JobState.Reading, 1, 0, 0, 0, 10, 5));
+
+        var response = await harness.Http.GetAsync(
+            new Uri("/api/events?token=" + harness.Auth.Token, UriKind.Relative),
+            HttpCompletionOption.ResponseHeadersRead,
+            _timeout.Token);
+
+        // Prove the stream is genuinely live before hanging up.
+        var reader = new StreamReader(await response.Content.ReadAsStreamAsync(_timeout.Token));
+        while (await reader.ReadLineAsync(_timeout.Token) is { } line)
+        {
+            if (line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        Assert.AreEqual(1, harness.Clients.Client.WatchesOpened);
+
+        // The browser goes away.
+        reader.Dispose();
+        response.Dispose();
+
+        while (harness.Clients.Client.WatchesEnded == 0)
+        {
+            await Task.Delay(10, _timeout.Token);
+        }
+    }
+
+    [TestMethod]
+    public async Task TwoEventStreams_EachReceivesTheEvents()
+    {
+        // Two browsers, two SSE requests, two independent upstream watches —
+        // one emitted event reaches BOTH streams, not either-or.
+        await using var harness = await ConsoleHarness.StartAsync();
+
+        async Task<(HttpResponseMessage Response, StreamReader Reader)> OpenAsync()
+        {
+            var response = await harness.Http.GetAsync(
+                new Uri("/api/events?token=" + harness.Auth.Token, UriKind.Relative),
+                HttpCompletionOption.ResponseHeadersRead,
+                _timeout.Token);
+            return (response, new StreamReader(await response.Content.ReadAsStreamAsync(_timeout.Token)));
+        }
+
+        var first = await OpenAsync();
+        var second = await OpenAsync();
+
+        // Both upstream watches registered before the emit, so neither
+        // stream's event can have been the buffered-before-any-watch one.
+        while (harness.Clients.Client.WatchesOpened < 2)
+        {
+            await Task.Delay(10, _timeout.Token);
+        }
+
+        harness.Clients.Client.Emit(new JobProgress("job-5", JobState.Packing, 2, 1, 0, 0, 20, 10));
+
+        async Task<string?> FirstDataLineAsync(StreamReader reader)
+        {
+            while (await reader.ReadLineAsync(_timeout.Token) is { } line)
+            {
+                if (line.StartsWith("data: ", StringComparison.Ordinal))
+                {
+                    return line;
+                }
+            }
+
+            return null;
+        }
+
+        var firstLine = await FirstDataLineAsync(first.Reader);
+        var secondLine = await FirstDataLineAsync(second.Reader);
+        Assert.IsNotNull(firstLine);
+        Assert.IsNotNull(secondLine);
+        Assert.Contains("job-5", firstLine, StringComparison.Ordinal);
+        Assert.Contains("job-5", secondLine, StringComparison.Ordinal);
+
+        first.Reader.Dispose();
+        first.Response.Dispose();
+        second.Reader.Dispose();
+        second.Response.Dispose();
+
+        while (harness.Clients.Client.WatchesEnded < 2)
+        {
+            await Task.Delay(10, _timeout.Token);
+        }
+    }
+
+    [TestMethod]
     public async Task EventStream_WithoutAToken_IsRefusedUnauthorized()
     {
         await using var harness = await ConsoleHarness.StartAsync();

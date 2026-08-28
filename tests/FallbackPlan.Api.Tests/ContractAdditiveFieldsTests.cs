@@ -5,13 +5,15 @@ using FallbackPlan.Domain.Status;
 namespace FallbackPlan.Api.Tests;
 
 /// <summary>
-/// The additive fields of contracts 1.17 and 1.19 (ADR-0047), proven on the
-/// bytes: the priorities on the two configuration descriptors, and the
-/// full-backup facts on the status matrix. Additive means two promises at
-/// once — a new service's fields survive the trip to a new client, and an OLD
-/// service's frames, which never mention them, read as the stated defaults
-/// rather than failing to parse. Establishes the wire half of FR-SVC-013 and
-/// FR-DEST-014's status surface.
+/// The additive fields of contracts 1.17, 1.19 and 1.20 (ADR-0047,
+/// ADR-0048), proven on the bytes: the priorities on the two configuration
+/// descriptors, the full-backup facts on the status matrix, and the counted
+/// plan plus the session-carrying watch on the progress surface. Additive
+/// means two promises at once — a new service's fields survive the trip to
+/// a new client, and an OLD service's frames, which never mention them,
+/// read as the stated defaults rather than failing to parse. Establishes
+/// the wire half of FR-SVC-013, FR-DEST-014's status surface, and
+/// FR-SVC-006's plan.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -158,5 +160,50 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
             """,
             FrameCodec.SerializerOptions)!;
         Assert.IsNull(destination.Priority);
+    }
+
+    [TestMethod]
+    public void TheCountedPlan_WireNamesAndPre120Defaults()
+    {
+        // Contract 1.20's progress fields, on the bytes. The old-frame JSON
+        // is the modern one with the additions stripped, so the fixture
+        // cannot drift from the real serialization.
+        var modern = JsonSerializer.Serialize(
+            new FallbackPlan.Domain.Jobs.JobProgress(
+                "job-1", FallbackPlan.Domain.Jobs.JobState.Packing, 10, 4, 1, 0, 4096, 2048,
+                TotalFiles: 500, TotalBytes: 1_000_000),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"total_files\":500", modern, StringComparison.Ordinal);
+        Assert.Contains("\"total_bytes\":1000000", modern, StringComparison.Ordinal);
+
+        var old = modern
+            .Replace(",\"total_files\":500", "", StringComparison.Ordinal)
+            .Replace(",\"total_bytes\":1000000", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var parsed = JsonSerializer.Deserialize<FallbackPlan.Domain.Jobs.JobProgress>(
+            old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(parsed.TotalFiles);
+        Assert.IsNull(parsed.TotalBytes);
+        Assert.AreEqual(10, parsed.FilesSeen);
+    }
+
+    [TestMethod]
+    public void TheSessionCarryingWatch_WireNameAndPre120Default()
+    {
+        // The watch frame's session (contract 1.20): named on the bytes,
+        // and a pre-1.20 frame that never mentions it reads as null — the
+        // anonymous watch every earlier client sent.
+        var modern = JsonSerializer.Serialize<WireFrame>(new WatchFrame("abc123"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"session\":\"abc123\"", modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(",\"session\":\"abc123\"", "", StringComparison.Ordinal)
+            .Replace("\"session\":\"abc123\",", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var frame = JsonSerializer.Deserialize<WireFrame>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<WatchFrame>(frame, out var watch);
+        Assert.IsNull(watch.Session);
     }
 }
