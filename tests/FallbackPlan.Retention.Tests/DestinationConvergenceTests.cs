@@ -166,6 +166,125 @@ public sealed class DestinationConvergenceTests : IDisposable
         CollectionAssert.DoesNotContain(held, "blobs/data/bb/dropped");
     }
 
+    [TestMethod]
+    public async Task Converge_ASparedKey_SurvivesTheDropHalfAndIsCounted()
+    {
+        // The spare is the drop half's second veto (FR-GC-009's direct-ship
+        // shape): a key the destination's own policy drops but a sibling is
+        // still owed must stay, because under direct-ship it may be the last
+        // copy anywhere.
+        var source = new LocalFileSystemObjectStore(Path.Combine(_root, "spare-source"));
+        var destination = new LocalFileSystemObjectStore(Path.Combine(_root, "spare-destination"));
+
+        await PlantAsync(source, "repository-format");
+        await PlantAsync(source, "blobs/data/aa/kept");
+        await PlantAsync(source, "blobs/data/bb/spared");
+        await PlantAsync(source, "blobs/data/cc/dropped");
+        await PlantAsync(destination, "repository-format");
+        await PlantAsync(destination, "blobs/data/aa/kept");
+        await PlantAsync(destination, "blobs/data/bb/spared");
+        await PlantAsync(destination, "blobs/data/cc/dropped");
+
+        static bool Keeps(string key) =>
+            !key.StartsWith("blobs/", StringComparison.Ordinal) || key is "blobs/data/aa/kept";
+        static bool Spares(string key) => key is "blobs/data/bb/spared";
+
+        var outcome = await StoreToStoreCopier.ConvergeAsync(
+            source, destination, Keeps, CancellationToken.None, spares: Spares);
+
+        Assert.AreEqual(1, outcome.Deleted);
+        Assert.AreEqual(1, outcome.Spared);
+        var held = await ListAsync(destination, "blobs/");
+        CollectionAssert.Contains(held, "blobs/data/aa/kept");
+        CollectionAssert.Contains(held, "blobs/data/bb/spared");
+        CollectionAssert.DoesNotContain(held, "blobs/data/cc/dropped");
+    }
+
+    [TestMethod]
+    public async Task ComputeSpares_ASiblingOwedSnapshots_SparesTheirClosureAndReleasesTheHeld()
+    {
+        // Three snapshots; the sync ledger proves "wide" received only the
+        // first. Whatever any destination's own keep-set says, the second and
+        // third are still owed to wide — their closure is spared — while the
+        // first, provably delivered, earns no spare.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+        await BackUpAsync(day1.AddDays(2));
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        using var staging = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
+        var oldestFirst = survey.Snapshots.OrderBy(entry => entry.Fact.PublicationSequence).ToList();
+        Assert.HasCount(3, oldestFirst);
+
+        var spares = await DestinationConvergence.ComputeSparesAsync(
+            store, staging, SpareDestinations(),
+            setPolicy: null,
+            name => SyncedThrough(name, name == "wide"
+                ? oldestFirst[0].Fact.PublicationSequence
+                : oldestFirst[^1].Fact.PublicationSequence),
+            (ulong)day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+
+        Assert.IsNotNull(spares, "an owed sibling must produce a spare filter");
+        Assert.IsFalse(spares(oldestFirst[0].StoreKey.Value), "a delivered snapshot earns no spare");
+        Assert.IsTrue(spares(oldestFirst[1].StoreKey.Value));
+        Assert.IsTrue(spares(oldestFirst[2].StoreKey.Value));
+
+        // The owed snapshots' data travels with them: at least one blob is
+        // under the spare, or the record would survive without its bytes.
+        var blobs = await ListAsync(store, "blobs/");
+        Assert.IsTrue(blobs.Any(key => spares(key)), "the owed closure must cover blobs, not just snapshot records");
+    }
+
+    [TestMethod]
+    public async Task ComputeSpares_EveryDestinationCurrent_SparesNothing()
+    {
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        using var staging = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
+        var newest = survey.Snapshots.Max(entry => entry.Fact.PublicationSequence);
+
+        var spares = await DestinationConvergence.ComputeSparesAsync(
+            store, staging, SpareDestinations(),
+            setPolicy: null,
+            name => SyncedThrough(name, newest),
+            (ulong)day1.AddDays(1).AddHours(1).ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+
+        Assert.IsNull(spares, "nothing is owed, so nothing is spared — the steady state stays exact");
+    }
+
+    private static List<SetDestinationReference> SpareDestinations() =>
+    [
+        new SetDestinationReference { Ref = "wide" },
+        new SetDestinationReference
+        {
+            Ref = "narrow",
+            Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+        },
+    ];
+
+    private static DestinationSyncRecord SyncedThrough(string name, ulong sequence) => new()
+    {
+        SetId = SetId,
+        Destination = name,
+        State = DestinationSyncState.InSync,
+        LastAttemptAt = 1,
+        LastSuccessAt = 1,
+        SyncedSequence = sequence,
+    };
+
     private static async Task PlantAsync(LocalFileSystemObjectStore store, string key)
     {
         var put = await store.PutAsync(

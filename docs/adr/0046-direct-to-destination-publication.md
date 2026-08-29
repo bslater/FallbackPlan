@@ -152,6 +152,43 @@ per destination; staging sets behave exactly as before.
   the source N times and packages N times — the owner's requirement is
   package once, ship N ways.
 
+## Amendment 1 (2026-08) — the converge spare: no replica drops what a sibling is still owed
+
+The default flip surfaced a gap the staging shape never had. Per-destination
+convergence computes each destination's keep-set from **policy alone**
+(ADR-0034 §4), and under staging that was safe: the replication gate holds a
+snapshot's expiry from *staging* until every entitled destination provably
+holds it (FR-GC-009), so a replica trimmed too eagerly is re-seedable from
+the copy the gate protected. Direct-ship removed that copy. With the
+destinations as the only holders, a set whose destinations carry
+**asymmetric retention** could lose history outright: a snapshot inside a
+wide destination's keep-set but past a narrow sibling's window, captured
+while the wide destination was offline, exists only at the narrow one — and
+the narrow one's next converge, judging by its own policy, deleted the last
+copy of history the wide sibling was still owed.
+
+The fix applies the gate's own comparison to the converge's drop half. Before
+any direct-ship destination's converge may delete, the closure of every
+snapshot some declared destination's effective keep-set wants but the sync
+ledger cannot show it received (publication sequence against synced sequence
+— the gate's arithmetic, one shared keep-set computation so the two can
+never disagree) is **spared**: dropped by policy, held anyway, counted and
+logged as a choice rather than a refused delete. The spare releases by
+itself — once the laggard's ledger covers the snapshot it is no longer owed,
+and the next pass converges every destination back to exactly its keep-set.
+Disk is the cheaper failure, exactly as the gate says; an operator sees the
+cost in the converge's spare count while an offline sibling is the reason a
+replica holds more than its policy keeps.
+
+Two stated bounds. The spare reads the ledger's synced sequence — a record
+of what a completed sync covered, not a per-object proof of possession; the
+read-back verification pass remains what turns holdings into proof
+(FR-VER-001), and a sync that could stamp coverage from a partial union
+listing is a separate hardening, tracked apart. And a laggard that never
+returns pins its owed closure at every sibling indefinitely — the same
+deliberate trade FR-GC-009 makes for expiry, visible as the destination's
+standing `behind`/`unavailable` state rather than a new mechanism.
+
 ## Status history
 
 | Date | Status | Note |
@@ -163,3 +200,4 @@ per destination; staging sets behave exactly as before.
 | 2026-08 | Built (console retirement) | The staging-retirable notice carries the act it announces: a Retire staging button on the notice opens a typed confirmation and invokes retire_staging, refusals surfacing verbatim — and the threat model records what leaving the staging copy means (the source device no longer holds a whole-archive replica; capture now depends on a reachable destination) |
 | 2026-08 | Built (hardened) | The scenario sweep's correctness round: a behind destination is excluded from run scope like a baseline-less one (metadata without closure must not mint an in-sync row; migrating sets excepted while staging remains the union's promise), run scope is released on completion so reads resolve freshly, `CompleteRun` records outcomes on failure too, seeding is per-destination under the drop rule, the capacity floor applies to sink writes (FR-DEST-010), a pair owed its seed is recorded behind — never a counted failure that starves its own catch-up — and the 04 §5.1 kill matrix runs through a two-destination sink in `Hosts.Tests/DirectShipFaultSweepTests`, every put-death healing to sibling convergence. The direct-ship edges stopped assuming staging exists: the console's restore gate scans the metadata stores, write-only provisioning routes by the set's shape, and delete-set names what actually remains |
 | 2026-08 | Built (operable, default for local paths) | The gate discharged (Decision 7's amendment): `direct_ship` on the contract (1.23) with null-preserve semantics, offered by the console's set editor with the trade stated; a direct-ship set must reference a local-path destination (a peer-only one used to save cleanly and refuse every capture); a shape change is refused mid-run, evicts the cached archive handle so migration happens at the next open in the same process, and queues the seeding catch-up at once. The retention-with-trimming drill (`Hosts.Tests/DirectShipRetentionTests`) ran the full tombstone/grace/sweep cycle against a destination-resident archive and caught the deleting half short — sweep deletes stopped at the metadata store, destinations never shrank, and the union listing resurrected every swept object — fixed by fanning sink deletes destinations-first, metadata-last, policy-safe under the replication gate. New local-path sets are born direct-ship; the peer write adapter remains the stated tail |
+| 2026-08 | Amended (converge spare) | Amendment 1: per-destination convergence gained the gate's owed-sibling veto — a narrow override's trim spares the closure of every snapshot a sibling destination has not provably received, releasing once delivered. `Hosts.Tests/DirectShipConvergeSpareTests` proves the middle snapshot's last copy survives an offline wide sibling and restores from that sibling alone after catch-up; before the spare, the drill's converge deleted it |

@@ -554,13 +554,31 @@ public static class FanOut
                 Protocol.VerificationChallenge.MaximumLength, cancellationToken)
                 .ConfigureAwait(false);
 
+            // The converge spare (FR-GC-009's direct-ship shape): under
+            // direct-ship the replicas are the only holders, so before this
+            // destination's policy may drop anything, the closure of every
+            // snapshot a sibling is still owed is set aside — a narrow
+            // override must not delete the last copy of history a wide
+            // sibling has not received yet. A staging set needs none of
+            // this: the gate holds the staging copy until every entitled
+            // destination provably has its own (FR-GC-009), so a trimmed
+            // replica is re-seedable from staging.
+            Func<string, bool>? spares = null;
+            if (keeps is not null && archive.ShipSink is not null)
+            {
+                spares = await Retention.DestinationConvergence.ComputeSparesAsync(
+                    archive.Store, archive.Repository, set.Destinations, set.Retention,
+                    name => ledger.Find(set.Id, name), nowMs, cancellationToken).ConfigureAwait(false);
+            }
+
             long copied;
             long alreadyHeld;
             if (keeps is not null)
             {
                 var converged = await StoreToStoreCopier.ConvergeAsync(
                     archive.Store, replica, keeps, cancellationToken,
-                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
+                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                    spares).ConfigureAwait(false);
                 copied = converged.Copied;
                 alreadyHeld = converged.AlreadyHeld;
             }

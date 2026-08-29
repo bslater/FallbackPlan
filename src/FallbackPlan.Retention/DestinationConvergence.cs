@@ -125,4 +125,140 @@ public static class DestinationConvergence
         policy is not null
         && (policy.KeepDaily is not null || policy.KeepWeekly is not null
             || policy.KeepMonthly is not null || policy.MinGenerations is not null);
+
+    /// <summary>
+    /// Each destination's keep-set under its effective policy (override, else
+    /// the set's), over one shared list of facts — the per-destination
+    /// keep-awareness both the replication gate (FR-GC-010) and the converge
+    /// spare rest on, computed one way so they cannot disagree. Null marks a
+    /// destination with no rules in force: it keeps everything.
+    /// </summary>
+    /// <param name="facts">The surveyed snapshots, as the planner sees them.</param>
+    /// <param name="destinations">The set's declared destination references, overrides included.</param>
+    /// <param name="setPolicy">The set's policy — the fallback for a reference without an override.</param>
+    /// <param name="now">The clock the policy windows evaluate against.</param>
+    /// <returns>Kept snapshot ids per destination name; null value means keeps-all.</returns>
+    public static Dictionary<string, HashSet<string>?> KeepSetsByDestination(
+        IReadOnlyList<SnapshotFact> facts,
+        IReadOnlyList<SetDestinationReference> destinations,
+        RetentionConfiguration? setPolicy,
+        DateTimeOffset now)
+    {
+        ThrowHelper.ThrowIfNull(facts);
+        ThrowHelper.ThrowIfNull(destinations);
+
+        // Indexer assignment, not ToDictionary: a duplicated reference —
+        // impossible through validated configuration, but callers are
+        // reachable directly — must not escape the command surface as a raw
+        // ArgumentException (NFR-PORT-004).
+        var keptByDestination = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
+        foreach (var reference in destinations)
+        {
+            var effective = reference.Retention ?? setPolicy;
+            keptByDestination[reference.Ref] = !HasRules(effective)
+                ? null
+                : RetentionPlanner.Select(facts, effective!, now)
+                    .Keep.Select(keep => keep.Snapshot.SnapshotId)
+                    .ToHashSet(StringComparer.Ordinal);
+        }
+
+        return keptByDestination;
+    }
+
+    /// <summary>
+    /// The converge spare (FR-GC-009's direct-ship shape): the closure of
+    /// every snapshot some declared destination's own keep-set wants but the
+    /// sync ledger cannot prove it received. While that is true of any
+    /// sibling, no destination's converge may drop those objects — under
+    /// direct-ship (ADR-0046) the replicas are the only holders, so a
+    /// policy-narrow sibling trimming them would delete the last copy of
+    /// history another destination is entitled to. The spare releases by
+    /// itself: once the laggard's synced sequence covers a snapshot it is no
+    /// longer owed, and the next pass converges everyone back to exactly
+    /// their keep-sets. Disk is the cheaper failure, as the gate says.
+    /// </summary>
+    /// <param name="store">The archive's store — under direct-ship, the ship sink's union view.</param>
+    /// <param name="repository">The opened archive.</param>
+    /// <param name="destinations">The set's declared destination references, overrides included.</param>
+    /// <param name="setPolicy">The set's policy — the fallback for a reference without an override.</param>
+    /// <param name="recordFor">The sync-ledger row for a destination, or null when never attempted.</param>
+    /// <param name="nowUnixMilliseconds">The clock the policy windows evaluate against.</param>
+    /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <returns>
+    /// The spare filter, or null when every destination provably holds every
+    /// snapshot its policy keeps — the common case, costing nothing. A survey
+    /// or walk that cannot be trusted answers spare-everything, because a
+    /// drop decision built on a damaged graph would delete objects it merely
+    /// could not see.
+    /// </returns>
+    public static async ValueTask<Func<string, bool>?> ComputeSparesAsync(
+        IObjectStore store,
+        OpenedRepository repository,
+        IReadOnlyList<SetDestinationReference> destinations,
+        RetentionConfiguration? setPolicy,
+        Func<string, DestinationSyncRecord?> recordFor,
+        ulong nowUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(repository);
+        ThrowHelper.ThrowIfNull(destinations);
+        ThrowHelper.ThrowIfNull(recordFor);
+
+        var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
+        if (survey.Undecodable.Count > 0)
+        {
+            return _ => true;
+        }
+
+        var now = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds);
+        var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
+        var keptByDestination = KeepSetsByDestination(facts, destinations, setPolicy, now);
+
+        // The gate's own comparison — publication sequence against synced
+        // sequence, proof over record of sending (FR-GC-009) — applied to
+        // every snapshot rather than an expire-set: what it holds is what is
+        // owed. A destination that has never synced owes everything, which is
+        // exactly the conservatism a fresh ledger deserves.
+        var owed = ReplicationGate.Apply(
+            facts,
+            [.. destinations.Select(reference => reference.Ref)],
+            recordFor,
+            keptBy: (name, snapshot) =>
+                keptByDestination.GetValueOrDefault(name) is not { } kept || kept.Contains(snapshot.SnapshotId),
+            deferralDays: null,
+            nowUnixMilliseconds).Held;
+
+        if (owed.Count == 0)
+        {
+            return null;
+        }
+
+        var owedIds = owed.Select(held => held.Snapshot.SnapshotId).ToHashSet(StringComparer.Ordinal);
+        var owedSnapshots = survey.Snapshots
+            .Where(snapshot => owedIds.Contains(snapshot.Fact.SnapshotId))
+            .ToList();
+
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, owedSnapshots, cancellationToken)
+            .ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            return _ => true;
+        }
+
+        var sparedSnapshotKeys = owedSnapshots.Select(snapshot => snapshot.StoreKey.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var sparedBlobKeys = reader.Blobs
+            .Where(blob => blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+            .Select(blob => blob.StoreKey.Value)
+            .Concat(reader.SkippedBlobs.Select(skipped => skipped.Key.Value))
+            .ToHashSet(StringComparer.Ordinal);
+
+        return key =>
+            key.StartsWith("blobs/", StringComparison.Ordinal) ? sparedBlobKeys.Contains(key)
+            : key.StartsWith("snapshots/", StringComparison.Ordinal) && sparedSnapshotKeys.Contains(key);
+    }
 }

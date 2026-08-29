@@ -44,4 +44,14 @@ internal static partial class Log
             + "{AlreadyHeld} already present, {Deleted} deleted")]
     internal static partial void ReplicationComplete(
         ILogger logger, string destination, string pass, long copied, long alreadyHeld, long deleted);
+
+    // Information, not warning: the spare is retention working as specified
+    // (FR-GC-009's direct-ship shape), and the count is how an operator sees
+    // an offline sibling costing this replica disk before wondering why the
+    // destination holds more than its policy keeps.
+    [LoggerMessage(
+        EventId = 3004, Level = LogLevel.Information,
+        Message = "Converging {Destination} spared {Spared} object(s) its policy dropped: "
+            + "a sibling destination has not yet received the snapshots they belong to")]
+    internal static partial void ConvergeSpared(ILogger logger, string destination, long spared);
 }

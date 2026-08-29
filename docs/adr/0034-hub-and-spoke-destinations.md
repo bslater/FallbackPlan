@@ -128,6 +128,14 @@ below what it promised to keep). Retention must still never outrun replication:
 an object leaves staging only once every configured destination holds it or the
 deferral bound of ADR-0011 Amendment 2 has been raised as a warning.
 
+> **Direct-ship note (2026-08).** For a set with no staging archive
+> ([ADR-0046](0046-direct-to-destination-publication.md)), the hub-planned
+> deletion at one destination gained a second veto: the closure of any
+> snapshot a sibling destination is still owed is **spared** from the drop,
+> because the replicas are the only holders and a narrow override trimming
+> them would delete the last copy of history a wide sibling has not received
+> — see ADR-0046 Amendment 1.
+
 ### 5. Destinations are named configuration, referenced by sets
 
 Destinations are declared once, at the top level of the client configuration,

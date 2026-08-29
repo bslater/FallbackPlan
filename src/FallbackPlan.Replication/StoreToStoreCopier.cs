@@ -18,7 +18,8 @@ public sealed record CopyOutcome(long Copied, long AlreadyHeld)
 /// <param name="Copied">Objects the destination lacked and its policy keeps.</param>
 /// <param name="AlreadyHeld">Objects the destination already held and keeps.</param>
 /// <param name="Deleted">Objects the destination held and its policy no longer keeps.</param>
-public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted);
+/// <param name="Spared">Objects the policy dropped but a sibling is still owed — held for now (FR-GC-009).</param>
+public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted, long Spared = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -171,6 +172,14 @@ public static class StoreToStoreCopier
     /// <param name="cancellationToken">Stops the pass; a re-run converges from the destination's inventory.</param>
     /// <param name="destinationName">The destination's configured name, for the log alone.</param>
     /// <param name="logger">Where the pass reports itself.</param>
+    /// <param name="spares">
+    /// The drop half's second veto, or null when nothing is owed: a key this
+    /// destination's policy drops but a sibling destination is still owed
+    /// stays put, because under direct-ship (ADR-0046) the replicas are the
+    /// only holders and this may be the last copy (FR-GC-009). Never
+    /// consulted by the push half — a spare is held where it already is, not
+    /// propagated.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
         IObjectStore source,
@@ -178,7 +187,8 @@ public static class StoreToStoreCopier
         Func<string, bool> keeps,
         CancellationToken cancellationToken,
         string? destinationName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<string, bool>? spares = null)
     {
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
@@ -260,6 +270,7 @@ public static class StoreToStoreCopier
         // before anything it references, so the replica is lagging-but-valid
         // at every interruption point, exactly as the push half guarantees.
         var deleted = 0L;
+        var spared = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
             foreach (var key in held)
@@ -271,6 +282,15 @@ public static class StoreToStoreCopier
                 if (!InPhase(key, phase) || keeps(key) || !sourceKeys.Contains(key)
                     || key is "repository-format" || key.StartsWith("keys/", StringComparison.Ordinal))
                 {
+                    continue;
+                }
+
+                // The spare: dropped by this destination's policy, still owed
+                // to a sibling. Counted apart from the refused deletes because
+                // it is a choice, not a store answering no.
+                if (spares?.Invoke(key) ?? false)
+                {
+                    spared++;
                     continue;
                 }
 
@@ -289,9 +309,14 @@ public static class StoreToStoreCopier
             }
         }
 
+        if (spared > 0)
+        {
+            Log.ConvergeSpared(log, name, spared);
+        }
+
         Log.ReplicationComplete(log, name, "converge", copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted);
+        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared);
     }
 
     private static bool StagingOnly(string key) =>
