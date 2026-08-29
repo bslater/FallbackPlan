@@ -316,7 +316,13 @@ public sealed record CancelJobCommand(string JobId) : ServiceCommand;
 
 /// <summary>Lists jobs, most recent last.</summary>
 /// <param name="ActiveOnly">Whether to omit finished jobs.</param>
-public sealed record ListJobsCommand(bool ActiveOnly) : ServiceCommand;
+/// <param name="Limit">
+/// Keep only the newest this-many rows (contract 1.22). Null keeps the
+/// pre-1.22 meaning — everything — but the journal grows for the life of the
+/// installation and <see cref="Transport.FrameCodec.MaximumFrameBytes"/> caps
+/// a reply, so a history view should bound its ask.
+/// </param>
+public sealed record ListJobsCommand(bool ActiveOnly, int? Limit = null) : ServiceCommand;
 
 /// <summary>Lists committed snapshots.</summary>
 public sealed record ListSnapshotsCommand : ServiceCommand;

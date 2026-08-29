@@ -82,7 +82,7 @@ public static class BackupRunner
             var detail = missing.Count == 1
                 ? $"root '{missing[0]}' does not exist"
                 : $"roots do not exist: '{string.Join("', '", missing)}'";
-            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail);
+            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", detail);
         }
@@ -199,7 +199,8 @@ public static class BackupRunner
                 outcome,
                 nowMs,
                 detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
-                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
+                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
+                stats: StatsOf(progress.Latest));
             progress.Enter(outcome);
             runCommitted = true;
 
@@ -217,20 +218,20 @@ public static class BackupRunner
             // sequences it had allocated stayed pending, which is correct: the
             // next publication discharges them as void deltas, exactly as it
             // would after a crash.
-            jobs.Transition(jobId, JobState.Cancelled, nowMs, "cancelled by request");
+            jobs.Transition(jobId, JobState.Cancelled, nowMs, "cancelled by request", stats: StatsOf(progress.Latest));
             progress.Enter(JobState.Cancelled);
             return new BackupOutcome(set.Name, "cancelled", "cancelled by request");
         }
         catch (ArgumentException exception)
         {
             // Invalid rules or configuration: a human must fix it (10 §3).
-            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
@@ -239,7 +240,7 @@ public static class BackupRunner
             // The set's archive refused to open — damage, or a passphrase
             // that no longer matches. Retrying cannot fix either; a human can
             // (10 §3).
-            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
@@ -263,6 +264,8 @@ public static class BackupRunner
     {
         private JobProgress _latest = new(jobId, JobState.Pending, 0, 0, 0, 0, 0, 0);
 
+        public JobProgress Latest => _latest;
+
         public JobState LastState => _latest.State;
 
         public void Report(JobProgress progress)
@@ -273,4 +276,22 @@ public static class BackupRunner
 
         public void Enter(JobState state) => Report(_latest with { State = state });
     }
+
+    /// <summary>
+    /// The terminal numbers for the journal row (ADR-0050): the run's last
+    /// progress report, which the hub is about to forget. Recorded at every
+    /// terminal transition — for a failed or cancelled run no snapshot
+    /// exists, so this is the only record of how far it got.
+    /// </summary>
+    private static JobRunStats StatsOf(JobProgress latest) => new()
+    {
+        FilesSeen = latest.FilesSeen,
+        FilesDone = latest.FilesDone,
+        FilesReused = latest.FilesReused,
+        FilesFailed = latest.FilesFailed,
+        BytesSeen = latest.BytesSeen,
+        BytesStored = latest.BytesStored,
+        TotalFiles = latest.TotalFiles,
+        TotalBytes = latest.TotalBytes,
+    };
 }

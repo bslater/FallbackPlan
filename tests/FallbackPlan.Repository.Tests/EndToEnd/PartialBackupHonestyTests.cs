@@ -171,6 +171,51 @@ public sealed class PartialBackupHonestyTests : IDisposable
     }
 
     /// <summary>
+    /// A clean run's journal row keeps its numbers (ADR-0050): the counts a
+    /// live progress stream forgets at settle are the summary a person asks
+    /// for later, and the detail string alone cannot answer "how many bytes".
+    /// </summary>
+    [TestMethod]
+    public async Task ABackupThatReadEverything_RecordsItsRunStatisticsOnTheJournalRow()
+    {
+        await CreateRepositoryAsync();
+        WriteConfiguration();
+
+        await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+
+        var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
+        Assert.IsNotNull(job.Stats, "the terminal numbers were not persisted — nothing can summarise this run later");
+        Assert.AreEqual(1, job.Stats.FilesDone, "one readable file was captured");
+        Assert.AreEqual(0, job.Stats.FilesFailed);
+        Assert.AreEqual(1, job.Stats.TotalFiles, "the counting pre-pass fixed the plan at one file");
+        Assert.IsTrue(job.Stats.BytesSeen > 0, "the file's bytes were read, so the row must say so");
+    }
+
+    /// <summary>
+    /// The partial run is where the block earns its place: the terminal detail
+    /// is "partial: N failure(s)" — no file counts at all — so without the
+    /// stats a partial backup's shape is simply gone.
+    /// </summary>
+    [TestMethod]
+    [UnprivilegedPlatformCondition(TestPlatforms.Posix, "denial is expressed with chmod")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task ABackupThatCouldNotReadAFile_RecordsTheCountsItsDetailOmits()
+    {
+        await CreateRepositoryAsync();
+        WriteConfiguration();
+        WriteUnreadableFile("denied.txt");
+
+        await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+
+        var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
+        Assert.AreEqual(JobState.CompletedWithFailures, job.State);
+        Assert.IsNotNull(job.Stats);
+        Assert.AreEqual(1, job.Stats.FilesFailed, "the unreadable file is a counted failure on the row itself");
+        Assert.AreEqual(1, job.Stats.FilesDone, "the readable file was still captured, and the row says so");
+    }
+
+    /// <summary>
     /// The structured form of the same question, and the one that should be
     /// answering it: a job state that says a backup was partial, so a script
     /// or a console can act on it without reading English.

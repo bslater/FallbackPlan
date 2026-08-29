@@ -254,6 +254,12 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(JobState.Cancelled, job.State);
         Assert.AreEqual("cancelled by request", job.Detail);
 
+        // A cancelled run's numbers survive on the row (ADR-0050). No
+        // snapshot exists for this run, so the journal is the only record of
+        // how far it got — the one case where losing the terminal progress
+        // loses everything.
+        Assert.IsNotNull(job.FilesSeen, "the cancelled run's terminal progress was not recorded");
+
         // A second cancel finds no active job to stop, and says so.
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token), out var error);
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);

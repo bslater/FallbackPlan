@@ -190,6 +190,63 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheJobRowsRunStats_WireNamesAndPre122Defaults()
+    {
+        // Contract 1.22: the run's terminal numbers ride the job row. The
+        // old frame is the modern one with the additions stripped, so the
+        // fixture cannot drift from the real serialization.
+        var modern = JsonSerializer.Serialize(
+            new JobDescriptor(
+                "job-1", new string('a', 32), FallbackPlan.Domain.Jobs.JobState.Complete, 1_000, 2_000,
+                SnapshotId: new string('e', 64), Detail: "120 file(s), 100 unchanged",
+                FilesSeen: 120, FilesDone: 118, FilesReused: 100, FilesFailed: 2,
+                BytesSeen: 4_096_000, BytesStored: 512_000,
+                TotalFiles: 120, TotalBytes: 4_096_000),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"files_done\":118", modern, StringComparison.Ordinal);
+        Assert.Contains("\"files_reused\":100", modern, StringComparison.Ordinal);
+        Assert.Contains("\"files_failed\":2", modern, StringComparison.Ordinal);
+        Assert.Contains("\"bytes_stored\":512000", modern, StringComparison.Ordinal);
+        Assert.Contains("\"total_files\":120", modern, StringComparison.Ordinal);
+
+        var old = modern
+            .Replace(",\"files_seen\":120", "", StringComparison.Ordinal)
+            .Replace(",\"files_done\":118", "", StringComparison.Ordinal)
+            .Replace(",\"files_reused\":100", "", StringComparison.Ordinal)
+            .Replace(",\"files_failed\":2", "", StringComparison.Ordinal)
+            .Replace(",\"bytes_seen\":4096000", "", StringComparison.Ordinal)
+            .Replace(",\"bytes_stored\":512000", "", StringComparison.Ordinal)
+            .Replace(",\"total_files\":120", "", StringComparison.Ordinal)
+            .Replace(",\"total_bytes\":4096000", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var parsed = JsonSerializer.Deserialize<JobDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(parsed.FilesDone);
+        Assert.IsNull(parsed.BytesStored);
+        Assert.IsNull(parsed.TotalFiles);
+        Assert.AreEqual("job-1", parsed.Id);
+    }
+
+    [TestMethod]
+    public void ListJobsLimit_WireNameAndPre122Default()
+    {
+        // Contract 1.22: `list_jobs` takes an optional bound, because the
+        // journal grows for the life of the installation and FrameCodec caps
+        // a frame at 8 MiB. Null keeps the old ask-for-everything meaning, so
+        // an old client's frame — which never mentions the field — is
+        // unchanged in behaviour.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new ListJobsCommand(ActiveOnly: false, Limit: 200), FrameCodec.SerializerOptions);
+        Assert.Contains("\"limit\":200", modern, StringComparison.Ordinal);
+
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(
+            """{ "command": "list_jobs", "active_only": false }""", FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<ListJobsCommand>(parsed, out var command);
+        Assert.IsNull(command.Limit);
+    }
+
+    [TestMethod]
     public void TheSessionCarryingWatch_WireNameAndPre120Default()
     {
         // The watch frame's session (contract 1.20): named on the bytes,

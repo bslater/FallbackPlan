@@ -49,6 +49,48 @@ internal sealed class TolerantJobStateConverter : JsonConverter<JobState>
     }
 }
 
+/// <summary>
+/// A run's terminal numbers, kept on its journal row (ADR-0050). The live
+/// progress stream drops them the moment a job settles — a finished job must
+/// not replay as live — and for a failed or cancelled run no snapshot exists,
+/// so this block is the only durable record of how far the run got. Additive:
+/// a row written before it existed reads back with none.
+/// </summary>
+public sealed record JobRunStats
+{
+    /// <summary>Files the run saw — the counting tally, then the walk.</summary>
+    [JsonPropertyName("files_seen")]
+    public long FilesSeen { get; init; }
+
+    /// <summary>Files captured, the reused ones included.</summary>
+    [JsonPropertyName("files_done")]
+    public long FilesDone { get; init; }
+
+    /// <summary>Of the done files, how many re-emitted their prior version unchanged.</summary>
+    [JsonPropertyName("files_reused")]
+    public long FilesReused { get; init; }
+
+    /// <summary>Files the run could not read; the error manifest names them.</summary>
+    [JsonPropertyName("files_failed")]
+    public long FilesFailed { get; init; }
+
+    /// <summary>Logical bytes the run read.</summary>
+    [JsonPropertyName("bytes_seen")]
+    public long BytesSeen { get; init; }
+
+    /// <summary>Bytes newly stored, after reuse and compression.</summary>
+    [JsonPropertyName("bytes_stored")]
+    public long BytesStored { get; init; }
+
+    /// <summary>The counted plan (ADR-0048), when the run fixed one.</summary>
+    [JsonPropertyName("total_files")]
+    public long? TotalFiles { get; init; }
+
+    /// <summary>The counted plan's bytes, when the run fixed one.</summary>
+    [JsonPropertyName("total_bytes")]
+    public long? TotalBytes { get; init; }
+}
+
 /// <summary>One job's durable record.</summary>
 public sealed record JobRecord
 {
@@ -72,6 +114,9 @@ public sealed record JobRecord
 
     [JsonPropertyName("detail")]
     public string? Detail { get; init; }
+
+    [JsonPropertyName("stats")]
+    public JobRunStats? Stats { get; init; }
 }
 
 /// <summary>
@@ -177,7 +222,8 @@ public sealed class JobStateStore
 
     /// <summary>Transitions a job and persists — every transition durable and idempotent (10 §3).</summary>
     public JobRecord Transition(
-        string jobId, JobState state, ulong nowUnixMilliseconds, string? detail = null, string? snapshotId = null)
+        string jobId, JobState state, ulong nowUnixMilliseconds, string? detail = null, string? snapshotId = null,
+        JobRunStats? stats = null)
     {
         // The lookup, the replacement and the write are one operation. Split
         // them and two transitions interleave: both read, both write, and the
@@ -196,6 +242,7 @@ public sealed class JobStateStore
                 UpdatedAt = nowUnixMilliseconds,
                 Detail = detail ?? _jobs[index].Detail,
                 SnapshotId = snapshotId ?? _jobs[index].SnapshotId,
+                Stats = stats ?? _jobs[index].Stats,
             };
 
             _jobs[index] = updated;

@@ -1838,9 +1838,19 @@ public sealed partial class ServiceCommandHandler(
             jobs = jobs.Where(job => runtime.Queue.IsActive(job.Id));
         }
 
+        if (command.Limit is { } limit && limit > 0)
+        {
+            // The newest rows, in the same oldest-first order the unbounded
+            // form documents — a history view wants the recent past, not the
+            // installation's first week.
+            jobs = jobs.TakeLast(limit);
+        }
+
         return new JobsResult(
             [.. jobs.Select(job => new JobDescriptor(
-                job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail))]);
+                job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail,
+                job.Stats?.FilesSeen, job.Stats?.FilesDone, job.Stats?.FilesReused, job.Stats?.FilesFailed,
+                job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes))]);
     }
 
     private async ValueTask<ServiceResult> ListSnapshotsAsync(CancellationToken cancellationToken)

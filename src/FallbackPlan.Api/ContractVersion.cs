@@ -133,8 +133,23 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// setup and under --once. The acknowledgement is flushed before the
     /// teardown, and the restart signs every session out (the FR-USR-003
     /// contract, unchanged).
+    /// 1.22 is the completed-run record and its drill-down (ADR-0050),
+    /// plus the carried behind-reason (ADR-0027 §4). The job
+    /// row gains the run's terminal numbers — files_seen/done/reused/failed,
+    /// bytes_seen/stored, total_files/total_bytes — all nullable with null
+    /// defaults, so an old service's rows and a pre-1.22 journal's rows read
+    /// as "not recorded", never as zeroes. list_jobs gains an optional limit
+    /// (null keeps the ask-for-everything meaning; the journal outgrows a
+    /// frame eventually). Two new read verbs serve the details on demand:
+    /// job_changes (the run's snapshot against its predecessor — exact
+    /// counts, bounded samples) and job_failures (the error manifest's
+    /// paths and typed reasons). And the status matrix stops summarising the
+    /// most common degradation away: destination rows gain a machine cause
+    /// (reason) beside the prose, and the set row gains last_completed_at —
+    /// the operand the behind-demotion compares against — both additive with
+    /// null defaults.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 21);
+    public static ContractVersion Current { get; } = new(1, 22);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

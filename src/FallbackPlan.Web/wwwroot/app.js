@@ -320,7 +320,9 @@ async function refreshSets() {
 }
 
 async function refreshJobs() {
-  const result = await api({ command: "list_jobs", activeOnly: false }).catch(() => null);
+  // Bounded ask (contract 1.22): the journal grows for the life of the
+  // installation, and one frame cannot carry it forever.
+  const result = await api({ command: "list_jobs", activeOnly: false, limit: 200 }).catch(() => null);
   if (!result || result.result !== "jobs") return;
   S.jobs = result.jobs;
   const live = S.jobs.filter(j => !SETTLED.has(j.state)).length;
@@ -697,7 +699,7 @@ function renderJobs() {
         <div class="table-wrap"><table class="data">
           <thead><tr><th>Started</th><th>Set</th><th>Outcome</th><th>Snapshot</th><th>Detail</th></tr></thead>
           <tbody>${settled.map(j => `
-            <tr>
+            <tr class="rowlink" data-action-row="job-details" data-job="${esc(j.id)}">
               <td>${esc(fmtWhen(j.startedAt))}</td>
               <td>${esc(setName(j.backupSetId))}</td>
               <td>${badge(JOBSTATE[j.state] ?? { cls: "", label: j.state }, (JOBSTATE[j.state] ?? { label: j.state }).label)}</td>
@@ -1083,6 +1085,47 @@ function comparisonReport(result) {
     summary: `${baseline}${buckets.length === 0 ? " — nothing else changed" : ""}${failures}`,
     detail,
   };
+}
+
+/* ----- the completed-job report (ADR-0050) ----- */
+
+function jobReport(job, snapshot) {
+  const lines = [];
+
+  // Duration from the row's own two timestamps — started, and the terminal
+  // transition that settled it.
+  const tookMs = Math.max(0, (job.updatedAt ?? 0) - (job.startedAt ?? 0));
+  const took = tookMs >= 3_600_000 ? `${(tookMs / 3_600_000).toFixed(1)}h`
+    : tookMs >= 60_000 ? `${Math.round(tookMs / 60_000)}m`
+    : `${Math.max(1, Math.round(tookMs / 1000))}s`;
+  lines.push(`took ${took}`);
+
+  if (job.filesDone == null && job.filesSeen == null) {
+    // A row from before the run record existed (pre-1.22): only its detail
+    // line survives, so say that rather than rendering invented zeroes.
+    lines.push(job.detail ?? "no run record survives for this job");
+    lines.push("(this run predates the per-run record; newer runs carry their numbers)");
+  } else {
+    const total = job.totalFiles != null ? ` of ${fmtCount(job.totalFiles)} planned` : "";
+    lines.push(`${fmtCount(job.filesDone)} file(s) captured${total}`);
+    lines.push(`${fmtCount(job.filesReused)} unchanged (re-used without re-reading their bytes)`);
+    if ((job.filesFailed ?? 0) > 0) lines.push(`${fmtCount(job.filesFailed)} unreadable — see Failures`);
+    lines.push(`${fmtBytes(job.bytesSeen ?? 0)} read · ${fmtBytes(job.bytesStored ?? 0)} newly stored`);
+  }
+
+  if (snapshot) {
+    lines.push("");
+    lines.push(`snapshot ${snapshot.snapshotId.slice(0, 16)}… · ${fmtCount(snapshot.files)} file(s) · ${snapshot.captureStatus === 2 ? "partial capture" : "complete capture"}`);
+    for (const line of snapshot.destinations ?? []) lines.push(`  ${line}`);
+  } else if (job.snapshotId) {
+    lines.push("");
+    lines.push(`snapshot ${job.snapshotId.slice(0, 16)}…`);
+  } else {
+    lines.push("");
+    lines.push("no snapshot was committed by this run");
+  }
+
+  return lines;
 }
 
 // Step two of the material-edit save (ADR-0038): the editor stays in the
@@ -2112,6 +2155,24 @@ const actions = {
         [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
         "Compared with the last backup — a dry scan; nothing was captured.");
     });
+  },
+
+  "job-details"(el) {
+    const job = S.jobs.find(j => j.id === el.dataset.job);
+    if (!job) return;
+    // The summary is a join of the row's own record with its committed
+    // snapshot (S.snapshots carries capture facts and the per-destination
+    // vocabulary) — no new ask; the details are one click deeper.
+    const snapshot = job.snapshotId ? S.snapshots.find(s => s.snapshotId === job.snapshotId) : null;
+    const state = JOBSTATE[job.state] ?? { cls: "", label: job.state };
+    openDialog(`
+      <h3>${esc(setName(job.backupSetId))} — ${esc(state.label)}</h3>
+      <p class="dlg-sub">Started ${esc(fmtWhen(job.startedAt))} · what this run did, from its own record.</p>
+      <pre class="report">${esc(jobReport(job, snapshot).join("\n"))}</pre>
+      <div class="dlg-actions">
+        ${job.snapshotId ? `<button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}">Browse snapshot</button>` : ""}
+        <button type="button" class="btn primary" data-action="close-dialog">Close</button>
+      </div>`);
   },
 
   "backup-full"(el) {

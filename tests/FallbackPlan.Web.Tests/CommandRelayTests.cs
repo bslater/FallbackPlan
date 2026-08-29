@@ -62,6 +62,38 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task JobRunStats_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.22's job-row stats ride the same generic relay: the
+        // console never enumerates result fields, so the new numbers reach
+        // the page camelCased with no server change.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new JobsResult(
+        [
+            new JobDescriptor(
+                "job-1", new string('a', 32), JobState.Complete, 1_000, 2_000,
+                SnapshotId: new string('e', 64), Detail: "120 file(s), 100 unchanged",
+                FilesSeen: 120, FilesDone: 118, FilesReused: 100, FilesFailed: 2,
+                BytesSeen: 4_096_000, BytesStored: 512_000,
+                TotalFiles: 120, TotalBytes: 4_096_000),
+        ]);
+
+        using var request = harness.Command("""{"command":"list_jobs","activeOnly":false,"limit":200}""");
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var received = Assert.ContainsSingle(harness.Clients.Client.Received);
+        Assert.IsInstanceOfType<ListJobsCommand>(received, out var list);
+        Assert.AreEqual(200, list.Limit);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var job = body.RootElement.GetProperty("jobs")[0];
+        Assert.AreEqual(118, job.GetProperty("filesDone").GetInt64());
+        Assert.AreEqual(512_000, job.GetProperty("bytesStored").GetInt64());
+        Assert.AreEqual(120, job.GetProperty("totalFiles").GetInt64());
+    }
+
+    [TestMethod]
     public async Task RestoreSourceVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.11's guided-restore verbs ride the same generic relay

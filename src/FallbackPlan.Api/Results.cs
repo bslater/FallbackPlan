@@ -344,6 +344,14 @@ public sealed record JobAcceptedResult(string JobId) : ServiceResult;
 /// <param name="UpdatedAt">When it last transitioned, Unix milliseconds.</param>
 /// <param name="SnapshotId">The snapshot it committed, when it did.</param>
 /// <param name="Detail">What the service wants the user to know.</param>
+/// <param name="FilesSeen">Files the run saw. Contract 1.22; null from an older service or a pre-1.22 row.</param>
+/// <param name="FilesDone">Files captured, reused ones included. Contract 1.22.</param>
+/// <param name="FilesReused">Of the done files, how many were unchanged. Contract 1.22.</param>
+/// <param name="FilesFailed">Files the run could not read. Contract 1.22.</param>
+/// <param name="BytesSeen">Logical bytes read. Contract 1.22.</param>
+/// <param name="BytesStored">Bytes newly stored after reuse and compression. Contract 1.22.</param>
+/// <param name="TotalFiles">The counted plan, when the run fixed one (ADR-0048). Contract 1.22.</param>
+/// <param name="TotalBytes">The counted plan's bytes. Contract 1.22.</param>
 public sealed record JobDescriptor(
     string Id,
     string BackupSetId,
@@ -351,7 +359,15 @@ public sealed record JobDescriptor(
     ulong StartedAt,
     ulong UpdatedAt,
     string? SnapshotId,
-    string? Detail);
+    string? Detail,
+    long? FilesSeen = null,
+    long? FilesDone = null,
+    long? FilesReused = null,
+    long? FilesFailed = null,
+    long? BytesSeen = null,
+    long? BytesStored = null,
+    long? TotalFiles = null,
+    long? TotalBytes = null);
 
 /// <summary>The known jobs.</summary>
 /// <param name="Jobs">The jobs, oldest first.</param>

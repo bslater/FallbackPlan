@@ -1047,6 +1047,112 @@ public static class CliApplication
             }));
         }
 
+        // ---------------------------------------------------------------- jobs
+
+        {
+            var jobArgument = new Argument<string?>("job")
+            {
+                Description = "A job id from the listing; omit for the history.",
+                Arity = ArgumentArity.ZeroOrOne,
+            };
+            var limitOption = new Option<int>("--limit")
+            {
+                Description = "Newest history rows to show (default 50).",
+                DefaultValueFactory = _ => 50,
+            };
+            var command = WithRemoteCapableSession(new Command("jobs",
+                "The job journal: what each backup run did. Lists the history, or reports one run by id. " +
+                "Needs a running service — the journal is written by it, so there is no direct-mode reading " +
+                "of somebody else's live state. With --connect, asks the remote service."));
+            command.Arguments.Add(jobArgument);
+            command.Options.Add(limitOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var jobId = parse.GetValue(jobArgument);
+
+                int Render(JobsResult result)
+                {
+                    if (jobId is null)
+                    {
+                        if (result.Jobs.Count == 0)
+                        {
+                            output.WriteLine("no jobs recorded yet.");
+                            return 0;
+                        }
+
+                        foreach (var job in result.Jobs.Reverse())
+                        {
+                            var started = DateTimeOffset.FromUnixTimeMilliseconds((long)job.StartedAt)
+                                .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{job.Id}  {started}  {job.State,-21}  {job.Detail}"));
+                        }
+
+                        return 0;
+                    }
+
+                    if (result.Jobs.FirstOrDefault(job => job.Id == jobId) is not { } row)
+                    {
+                        throw new CliFailureException($"No job '{jobId}' is in the journal. `jobs` lists the ids.");
+                    }
+
+                    // The run's report, in the direct-mode backup report's
+                    // voice. A row from before the run record existed
+                    // (pre-1.22) has no numbers — say so rather than
+                    // printing invented zeroes.
+                    var report = new List<string>
+                    {
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"state          {row.State}"),
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"started        {DateTimeOffset.FromUnixTimeMilliseconds((long)row.StartedAt):yyyy-MM-dd HH:mm:ss}"),
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"took           {TimeSpan.FromMilliseconds(Math.Max(0, (double)(row.UpdatedAt - row.StartedAt))):hh\\:mm\\:ss}"),
+                    };
+
+                    if (row.FilesDone is not null || row.FilesSeen is not null)
+                    {
+                        var planned = row.TotalFiles is { } totalFiles
+                            ? string.Create(CultureInfo.InvariantCulture, $" of {totalFiles} planned")
+                            : string.Empty;
+                        report.Add(string.Create(CultureInfo.InvariantCulture,
+                            $"files          {row.FilesDone ?? 0}{planned} ({row.FilesReused ?? 0} unchanged, {row.FilesFailed ?? 0} failed)"));
+                        report.Add(string.Create(CultureInfo.InvariantCulture,
+                            $"bytes          {row.BytesSeen ?? 0} read, {row.BytesStored ?? 0} newly stored"));
+                    }
+                    else
+                    {
+                        report.Add("record         this run predates the per-run record; only its detail survives");
+                    }
+
+                    report.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"snapshot       {row.SnapshotId ?? "none committed"}"));
+                    report.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"detail         {row.Detail}"));
+                    foreach (var line in report)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return 0;
+                }
+
+                // A named job may be older than any sensible page, so the
+                // by-id form asks unbounded; the listing asks for its page.
+                var ask = new ListJobsCommand(ActiveOnly: false, Limit: jobId is null ? parse.GetValue(limitOption) : null);
+
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    return Render(await QueryRemoteAsync<JobsResult>(target, ask, cancellationToken).ConfigureAwait(false));
+                }
+
+                return Render(await QueryLocalServiceAsync<JobsResult>(
+                    parse.GetValue(stateOption), ask, cancellationToken).ConfigureAwait(false));
+            }));
+        }
+
         // ------------------------------------------------------------------ ls
 
         {
