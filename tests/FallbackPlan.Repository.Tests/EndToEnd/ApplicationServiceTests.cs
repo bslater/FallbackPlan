@@ -301,13 +301,15 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
-    public void BackupSetStatus_ABehindDestination_NamesWhyInItsWarning()
+    public void BackupSetStatus_TheCatchUpWindow_KeepsItsBadgeAndNamesTheHeldCopy()
     {
-        // The demotion's reason travels end to end (ADR-0027 §4): a
-        // destination read as behind because a backup completed after its
-        // last sync must say so in the set's warning — "'local' is behind."
-        // full stop was the console's whole story for the most common,
-        // self-healing degradation.
+        // ADR-0050's amendment: a destination behind only because a newer
+        // backup awaits its next sync pass still holds the previous backup —
+        // present and restorable — so resilience did not drop the moment a
+        // run succeeded. The badge keeps what the held copy earns; the
+        // warning names the laggard and the heal. "Degraded" minutes after
+        // a successful backup told users to distrust a backup that had just
+        // worked.
         var demoted = DestinationStatus.Describe(
             "local",
             new DestinationConfiguration
@@ -332,12 +334,118 @@ public sealed class ApplicationServiceTests : IDisposable
 
         var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [demoted] });
 
-        Assert.AreEqual(ProtectionState.Degraded, status.State);
+        // Distinct devices → same-machine, an on-domain copy: Captured, the
+        // tier it earned yesterday — never Degraded for the window itself.
+        Assert.AreEqual(ProtectionState.Captured, status.State);
         Assert.Contains(
-            warning => warning.Contains("'local' is behind:", StringComparison.Ordinal)
+            warning => warning.Contains("'local' holds the previous backup", StringComparison.Ordinal)
                 && warning.Contains("catches up", StringComparison.Ordinal),
             status.Warnings,
-            "the behind warning must carry its cause, not summarise it away");
+            "the window must be named as the self-healing replication it is");
+    }
+
+    /// <summary>A catching-up row that once fully converged — the held-copy shape.</summary>
+    private static DestinationStatusInput CatchingUp(
+        string name = "vault", FailureDomain domain = FailureDomain.Independent) =>
+        Destination(name, DestinationSyncState.Behind, domain) with
+        {
+            Cause = SyncCause.CatchingUp,
+            LastSuccessAt = 1_000,
+            Detail = "a backup completed after this destination's last sync — it catches up on the next sync pass",
+        };
+
+    [TestMethod]
+    public void BackupSetStatus_ACatchingUpOffDomainDestination_KeepsTheProtectionItsHeldCopyEarns()
+    {
+        var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [CatchingUp()] });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
+        Assert.Contains(
+            warning => warning.Contains("holds the previous backup", StringComparison.Ordinal),
+            status.Warnings);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ACatchingUpOnDomainDestination_StaysCapturedNotDegraded()
+    {
+        var status = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [CatchingUp(domain: FailureDomain.SameMachine)] });
+
+        Assert.AreEqual(ProtectionState.Captured, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_VerifiedWaitsOutTheCatchUpWindow()
+    {
+        // The held copy earns exactly what it earned yesterday — but never
+        // `verified`, whose proof may not cover the run now replicating.
+        // Verified returns the moment the row is in sync again.
+        var proven = CatchingUp() with
+        {
+            SyncedSequence = 42,
+            VerifiedAt = 6_000,
+            VerifiedSequence = 42,
+            VerifiedObjects = 4,
+            VerifiedPopulation = 12,
+        };
+
+        var during = StatusDeriver.Derive(HealthyInputs() with { Destinations = [proven] });
+        Assert.AreEqual(ProtectionState.Protected, during.State);
+
+        var after = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [proven with { Sync = DestinationSyncState.InSync, Cause = SyncCause.None }],
+        });
+        Assert.AreEqual(ProtectionState.Verified, after.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ACatchingUpDestinationDoesNotMaskAFailingOne()
+    {
+        // An ON-domain held copy cannot outrank a real fault: the failing
+        // row still degrades the set. (An OFF-domain in-sync or held copy
+        // protecting even while another destination lags is the roll-up the
+        // ladder has always made.)
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                CatchingUp(domain: FailureDomain.SameMachine),
+                Destination("usb", DestinationSyncState.Failed, FailureDomain.SameMachine),
+            ],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_TheOtherNotInSyncCauses_StillDegrade()
+    {
+        foreach (var row in new[]
+        {
+            CatchingUp() with { Cause = SyncCause.Reported, Detail = "the ledger's own words" },
+            CatchingUp() with { Cause = SyncCause.NeverSynced, LastSuccessAt = null },
+            CatchingUp() with { Cause = SyncCause.AwaitingSeed, LastSuccessAt = null },
+        })
+        {
+            var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [row] });
+            Assert.AreEqual(
+                ProtectionState.Degraded, status.State,
+                $"a behind row with cause {row.Cause} is a real gap, not a held copy");
+        }
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ACatchingUpRowThatNeverSucceeded_EarnsNothing()
+    {
+        // The recorded success is the load-bearing guard: a row that never
+        // converged holds nothing, whatever its cause claims.
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations = [CatchingUp() with { LastSuccessAt = null }],
+        });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
     }
 
     [TestMethod]

@@ -40,6 +40,8 @@ The status vocabulary is normative, because collapsing any two of these is how a
 
 `awaiting seed` and `behind` are not merged either: "has not yet received its first full copy" and "has fallen behind on copies it held" call for different patience and different alarm. The console renders the former as its own chip for exactly this reason.
 
+`behind` inside the post-backup catch-up window is not `degraded` either ([ADR-0050](../adr/0050-completed-run-record-and-drill-down.md)'s amendment): what the destination holds is the previous backup, present and restorable, so the set keeps the badge that copy earns while the row still reads behind and says why (`catching-up`, rendered as a `syncing` chip). `degraded` stays what its definition says — a fault, not the minute a successful backup itself opens.
+
 `captured` and `protected` are likewise never merged. A repository sitting on the same disk as the source is a real safeguard against deleting a file by mistake and no safeguard at all against the disk failing — and the most common consumer configuration produces exactly that state. Reporting it as `protected` would be the false-confidence failure this project names as a major risk ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)).
 
 ### 1.2 Honest degradation

@@ -112,6 +112,20 @@ public static class DestinationStatus
             detail = "never synced — no sync has been attempted for this destination yet";
         }
 
+        if (sync == DestinationSyncState.InSync && record is { NeedsFull: true })
+        {
+            // A pair owed its seeding full holds nothing restorable yet: its
+            // fresh ledger row defaults to InSync as an artefact of the blank
+            // row (ADR-0047 §5). Checked BEFORE the catch-up comparison —
+            // a NeedsFull row has no success stamp, so under a set with a
+            // completed backup the comparison below also matches it, and an
+            // owed seed labelled "catching up" would read as held protection
+            // under the derivation's amendment when the pair holds nothing.
+            sync = DestinationSyncState.Behind;
+            cause = SyncCause.AwaitingSeed;
+            detail ??= "owed its full backup — incrementals skip this destination until the seed lands";
+        }
+
         if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompletedAt)
         {
             // In sync as of an older snapshot: the staging archive moved on.
@@ -122,18 +136,6 @@ public static class DestinationStatus
             sync = DestinationSyncState.Behind;
             cause = SyncCause.CatchingUp;
             detail = "a backup completed after this destination's last sync — it catches up on the next sync pass";
-        }
-
-        if (sync == DestinationSyncState.InSync && record is { NeedsFull: true })
-        {
-            // A pair owed its seeding full holds nothing restorable yet: its
-            // fresh ledger row defaults to InSync as an artefact of the blank
-            // row, and the completed-backup demotion above cannot catch it —
-            // a brand-new pair has no success to be older than anything
-            // (ADR-0047 §5).
-            sync = DestinationSyncState.Behind;
-            cause = SyncCause.AwaitingSeed;
-            detail ??= "owed its full backup — incrementals skip this destination until the seed lands";
         }
 
         if (cause == SyncCause.None && detail is not null)
@@ -296,6 +298,16 @@ public sealed record DestinationStatusInput
     /// catch-up window from a reported fault without parsing prose.
     /// </summary>
     public SyncCause Cause { get; init; }
+
+    /// <summary>
+    /// Whether this row is behind only because a newer backup awaits its
+    /// next sync pass while the previously delivered backup is still held —
+    /// the self-healing window a successful run itself opens (ADR-0050
+    /// amendment). The recorded success is the load-bearing guard: a row
+    /// that never converged holds nothing, whatever its cause claims.
+    /// </summary>
+    public bool HoldsPreviousBackup =>
+        Sync == DestinationSyncState.Behind && Cause == SyncCause.CatchingUp && LastSuccessAt is not null;
 
     /// <summary>
     /// The highest publication sequence the last successful sync delivered —
@@ -471,6 +483,10 @@ public static class StatusDeriver
         // The matrix, one row per destination — the truth every roll-up is
         // computed from, never invented beside (ADR-0028 §8).
         var protectedByAny = false;
+
+        // "In sync" here includes a held previous backup during the catch-up
+        // window: the independent destination IS in sync with the backup it
+        // holds, which is precisely the claim the roll-up makes.
         var independentInSync = false;
         var capturedOnlyByAny = false;
         var supportedButNotInSync = false;
@@ -557,6 +573,35 @@ public static class StatusDeriver
                     // A stated incapacity, never a failure (FR-DEST-005) —
                     // but no protection comes from it either.
                     warnings.Add($"'{destination.Name}' is not served yet: {destination.Detail ?? "kind not supported"}.");
+                    break;
+
+                // The catch-up window keeps the badge (ADR-0050 amendment):
+                // a destination behind only because a newer backup awaits its
+                // next sync pass still holds the previous backup — present
+                // and restorable — so the set keeps exactly the tier that
+                // held copy earned yesterday. Never a `verifiedBy` candidate:
+                // the proof may not cover the run now replicating; Verified
+                // returns with in-sync. No time bound, deliberately — a sync
+                // attempt that fails reports itself (RecordFailure writes the
+                // ledger, the next poll reads a fault and degrades), the
+                // catch-up predicate never backs off, this derivation takes
+                // no clock, and LastAttemptAt moves only at attempt
+                // completion, so any bound would false-alarm midway through
+                // a long legitimate replication. Every other cause — a
+                // reported fault, a never-synced pair, an owed seed — and
+                // every harder state still degrades below.
+                case DestinationSyncState.Behind when destination.HoldsPreviousBackup
+                    && destination.Domain >= FailureDomain.SameSite:
+                    protectedByAny = true;
+                    independentInSync |= destination.Domain == FailureDomain.Independent;
+                    warnings.Add(
+                        $"'{destination.Name}' holds the previous backup; the newest is still replicating — it catches up on the next sync pass.");
+                    break;
+
+                case DestinationSyncState.Behind when destination.HoldsPreviousBackup:
+                    capturedOnlyByAny = true;
+                    warnings.Add(
+                        $"'{destination.Name}' holds the previous backup; the newest is still replicating — it catches up on the next sync pass.");
                     break;
 
                 default:

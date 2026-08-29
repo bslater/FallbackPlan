@@ -599,7 +599,12 @@ function renderSetCard(set) {
     return pb - pa || a.name.localeCompare(b.name);
   });
   const destinations = ordered.length ? `<div class="dest-stack">${ordered.map(d => {
-    const ds = DEST_STATE[d.state] ?? { cls: "", icon: "?" };
+    // The catch-up window is activity, not alarm (ADR-0050 amendment): the
+    // chip keys off the wire reason — rendering the service's answer, never
+    // re-deriving (ADR-0028 §8). Any other behind keeps the warn chip.
+    const ds = d.reason === "catching-up"
+      ? { cls: "accent", icon: "↻", label: "syncing" }
+      : DEST_STATE[d.state] ?? { cls: "", icon: "?" };
     // The ledger's two full-backup facts (contract 1.19): a pair owed
     // its seed says so — "behind" alone under-describes a destination
     // incrementals will skip until its full backup lands.
@@ -613,7 +618,7 @@ function renderSetCard(set) {
     return `<details class="dest" data-dest="${esc(key)}" ${S.openDests.has(key) ? "open" : ""}>
       <summary>
         <b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
-        ${badge(ds, d.state)}
+        ${badge(ds, ds.label ?? d.state)}
         ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
         ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}
       </summary>

@@ -141,6 +141,20 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheCatchingUpChip_ReadsAsActivityNotAlarm()
+    {
+        var card = FunctionBody(AppJs(), "renderSetCard");
+
+        // The chip choice keys off the wire reason — rendering the service's
+        // answer, never re-deriving (ADR-0028 §8). Any other behind keeps
+        // the warn chip.
+        Assert.Contains("d.reason === \"catching-up\"", card, StringComparison.Ordinal);
+        Assert.Contains("syncing", card, StringComparison.Ordinal,
+            "the catch-up window is activity in progress, not an alarm");
+        Assert.Contains("accent", card, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheOverviewDestinations_StackVerticallyInShipOrder()
     {
         var card = FunctionBody(AppJs(), "renderSetCard");

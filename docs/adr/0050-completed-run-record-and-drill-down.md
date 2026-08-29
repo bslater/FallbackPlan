@@ -108,6 +108,38 @@ neither operand of the comparison was on the wire. ADR-0027 §4's own
    self-healing transient the next sync pass clears unaided (ADR-0035
    §8's warning semantics), not a fault.
 
+### Amendment (2026-08): the held copy keeps its word
+
+Carrying the reason was necessary and not sufficient: the badge itself
+still read **Degraded** through the catch-up window, and that word tells a
+user their backups can no longer be trusted — minutes after a run
+succeeded. The derivation now recognises the window for what it is. A
+destination behind with cause `catching-up` **and a recorded success**
+still holds the previously delivered backup, present and restorable, so it
+contributes exactly the protection that held copy earns: off-domain →
+`Protected`, on-domain → `Captured`, with the warning "holds the previous
+backup; the newest is still replicating — it catches up on the next sync
+pass." It is never a `verified` candidate during the window — the proof
+may not cover the run now replicating; `Verified` returns with in-sync.
+Every other cause (`reported`, `never-synced`, `awaiting-seed`), every
+harder state (`unavailable`, `failed`), and a bare behind with no stated
+cause still degrade the set.
+
+No time bound on the window, deliberately: a sync attempt that fails
+reports itself (the ledger's failure write turns the next poll's cause
+into `reported` → Degraded), the catch-up predicate never backs off, the
+derivation takes no clock (the clock enters once, for verification age),
+and the attempt stamp moves only at completion — any bound would
+false-alarm midway through a long legitimate replication.
+
+Two fixes ride the amendment: `Describe` now checks the owed seed
+**before** the completed-backup comparison (a `NeedsFull` row has no
+success stamp, so the comparison also matched it, and an owed seed
+labelled `catching-up` would have read as held protection when the pair
+holds nothing restorable); and the console's destination chip renders
+`catching-up` as **syncing** — activity, not alarm — keyed off the wire
+reason, never re-derived.
+
 6. **The live feed names the file being processed.** `JobProgress` gains
    `current_file` (additive), stamped by the publication's coalesced
    emitter from the newest folded file — a sample of the walk, not a
@@ -139,9 +171,10 @@ neither operand of the comparison was on the wire. ADR-0027 §4's own
 - The two drill-down verbs hold the reader lane while they run; the
   failure read loads blob footers (the restore-grade cost) — accepted, it
   is an on-demand operator ask, not a poll.
-- A set with one lagging destination still reads Degraded between a
-  commit and the next sync pass — by design (never-merge, arch 10 §1.1) —
-  but now says why and that it heals unaided.
+- A set inside the post-backup catch-up window keeps the badge its held
+  copies earn (Captured/Protected — see the amendment above); Degraded
+  remains every reported fault, unreachable or failing destination,
+  never-synced pair and owed seed, per arch 10 §1.1's own definition.
 
 ## Alternatives considered
 
@@ -167,4 +200,5 @@ neither operand of the comparison was on the wire. ADR-0027 §4's own
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Written from the 2026-08 field asks: the completed-job drill-down and the unexplained Degraded flip |
+| 2026-08 | Amended | The catch-up window keeps the badge: a held previous backup still earns Captured/Protected, owed seeds classify as awaiting-seed even under a completed set, and the console chip reads syncing — pinned by `Repository.Tests/ApplicationServiceTests`, `Application.Tests/DestinationStatusTests`, `Web.Tests/ConsoleProgressScriptTests` |
 | 2026-08 | Built | The run record at every terminal site (`JobStateStore`, `BackupRunner`), the drill-down pair and bounded `list_jobs` (contract 1.22, `ServiceCommandHandler`), the decoder bound (`ErrorManifestCodec`), the carried behind-reason (`StatusModel`), the current-file feed (`SnapshotPublication`), the console's clickable history with its report and detail dialogs and the destination reason line, and the CLI `jobs` verb — pinned by `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Repository.Tests/PartialBackupHonestyTests`, `Repository.Tests/SnapshotPublicationTests`, `Repository.Tests/ManifestCodecTests`, `Hosts.Tests/JobDrilldownTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Web.Tests/CommandRelayTests` and `Cli.Tests/JobsVerbTests` |

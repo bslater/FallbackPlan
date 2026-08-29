@@ -226,6 +226,13 @@ carried, not summarised away.
 > ([ADR-0035 §8](0035-destination-fitness.md)'s warning semantics), never a
 > bare "behind".
 
+> **Amended again by ADR-0050's 2026-08 amendment.** "Behind" for the
+> catch-up window alone no longer degrades the set: the destination holds
+> the previous backup, so the badge keeps the protection that copy earns
+> while the warning and the wire reason still name the laggard. Degraded
+> remains every reported fault, unreachable or failing destination,
+> never-synced pair and owed seed.
+
 A destination kind the schema accepts but the
 runtime cannot serve yet reports as exactly that — a stated incapacity, not a
 failure. The never-merge rules hold at the same single derivation site, which

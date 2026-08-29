@@ -104,6 +104,23 @@ public sealed class DestinationStatusTests
     }
 
     [TestMethod]
+    public void Describe_APairOwedItsSeed_UnderACompletedSet_ReadsAwaitingSeedNotCatchingUp()
+    {
+        // A NeedsFull row has no success stamp, so under a set with a
+        // completed backup the catch-up comparison also matches it — and an
+        // owed seed labelled "catching up" would read as held protection
+        // under ADR-0050's amendment, when the pair holds nothing restorable.
+        // The seed question outranks the catch-up story.
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot,
+            Row(DestinationSyncState.InSync) with { NeedsFull = true },
+            lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
+        Assert.AreEqual(SyncCause.AwaitingSeed, input.Cause);
+    }
+
+    [TestMethod]
     public void Describe_AShipReportedReason_KeepsTheLedgersOwnWords()
     {
         // RecordBehind writes a stated reason (the owed seed, the missed
