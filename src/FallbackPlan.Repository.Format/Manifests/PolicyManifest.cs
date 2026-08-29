@@ -379,7 +379,12 @@ public static class ErrorManifestCodec
                         break;
                     case 2:
                         var value = reader.ReadUInt16();
-                        if (value is < 1 or > 7)
+
+                        // 1..8 — specification 06 §8.1 assigns eight reasons,
+                        // and 8 (name not representable) is one this encoder
+                        // itself writes: a bound of 7 made every snapshot
+                        // carrying such a refusal unreadable on the way back.
+                        if (value is < 1 or > 8)
                         {
                             throw new ManifestValidationException(Strings.FormatErrorManifestCodec_FailureReasonUnassigned(value));
                         }

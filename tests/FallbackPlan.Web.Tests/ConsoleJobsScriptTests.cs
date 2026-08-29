@@ -99,4 +99,45 @@ public sealed class ConsoleJobsScriptTests
         Assert.Contains("data-action=\"browse\"", details, StringComparison.Ordinal,
             "the full contents are one click away through the existing snapshot browser");
     }
+
+    [TestMethod]
+    public void TheJobDetailsDialog_OffersTheOnDemandDetails()
+    {
+        var details = ActionBody(AppJs(), "job-details");
+
+        Assert.Contains("data-action=\"job-changes\"", details, StringComparison.Ordinal,
+            "what the run changed is one click deeper — the service diffs it on demand");
+        Assert.Contains("data-action=\"job-failures\"", details, StringComparison.Ordinal,
+            "what the run could not read is one click deeper — the error manifest names it");
+    }
+
+    [TestMethod]
+    public void TheJobChangesAction_SendsTheVerb_AndRendersTheBuckets()
+    {
+        var script = AppJs();
+        var action = ActionBody(script, "job-changes");
+
+        Assert.Contains("job_changes", action, StringComparison.Ordinal);
+        Assert.Contains("jobChangesReport", action, StringComparison.Ordinal);
+
+        var report = FunctionBody(script, "jobChangesReport");
+        foreach (var bucket in new[] { "new", "changed", "removed" })
+        {
+            Assert.Contains($"result.{bucket}", report, StringComparison.Ordinal,
+                $"the report no longer renders the '{bucket}' bucket");
+        }
+
+        Assert.Contains("… and", report, StringComparison.Ordinal,
+            "counts are exact while samples are bounded — the report must say when it is showing a sample");
+    }
+
+    [TestMethod]
+    public void TheJobFailuresAction_SendsTheVerb_AndNamesReasons()
+    {
+        var action = ActionBody(AppJs(), "job-failures");
+
+        Assert.Contains("job_failures", action, StringComparison.Ordinal);
+        Assert.Contains("reason", action, StringComparison.Ordinal,
+            "each failure carries its typed reason beside the path");
+    }
 }

@@ -22,7 +22,21 @@ public sealed class JobsVerbTests : IDisposable
 
         Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("--limit", result.All, StringComparison.Ordinal);
+        Assert.Contains("--changes", result.All, StringComparison.Ordinal);
+        Assert.Contains("--failures", result.All, StringComparison.Ordinal);
         Assert.Contains("running service", result.All, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public async Task Jobs_DetailFlagsWithoutAJobId_RefuseNamingTheArgument()
+    {
+        // --changes and --failures describe one run; asking for them across
+        // the whole history is not a thing — the refusal names the missing
+        // job id rather than silently ignoring the flag.
+        var result = await CliHarness.RunRawAsync("jobs", "--changes", "--state", _cli.WorkPath);
+
+        Assert.AreNotEqual(0, result.ExitCode);
+        Assert.Contains("job", result.All, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]

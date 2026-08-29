@@ -88,6 +88,14 @@ public sealed partial class ServiceCommandHandler(
                     $"rescan {preview.SetName ?? "(default set)"}",
                     token => PreviewSetChangesAsync(preview, token),
                     cancellationToken).ConfigureAwait(false),
+                JobChangesCommand jobChanges => await OnReaderLaneAsync(
+                    $"job changes {jobChanges.JobId}",
+                    token => JobChangesAsync(jobChanges, token),
+                    cancellationToken).ConfigureAwait(false),
+                JobFailuresCommand jobFailures => await OnReaderLaneAsync(
+                    $"job failures {jobFailures.JobId}",
+                    token => JobFailuresAsync(jobFailures, token),
+                    cancellationToken).ConfigureAwait(false),
                 RetentionCommand retention => await OnWriterLaneAsync(
                     retention.Apply ? "retention apply" : "retention plan",
                     token => RetentionAsync(retention, token),
@@ -1852,6 +1860,265 @@ public sealed partial class ServiceCommandHandler(
                 job.Stats?.FilesSeen, job.Stats?.FilesDone, job.Stats?.FilesReused, job.Stats?.FilesFailed,
                 job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes))]);
     }
+
+    /// <summary>The failure listing's default and ceiling (ADR-0050): counts stay exact; the listing is bounded well under the frame cap.</summary>
+    private const int DefaultFailureSampleLimit = 100;
+
+    private const int MaxFailureSampleLimit = 1000;
+
+    /// <summary>
+    /// Resolves a drill-down ask to its journal row and the archive holding
+    /// its snapshot. Every refusal is stated: an unknown job, a run that
+    /// committed nothing, an archive no set owns any more.
+    /// </summary>
+    private async ValueTask<(JobRecord? Job, byte[]? SnapshotId, RestoreContext? Context, ServiceError? Error)>
+        ResolveJobSnapshotAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var job = runtime.Jobs.Jobs.FirstOrDefault(row => row.Id == jobId);
+        if (job is null)
+        {
+            return (null, null, null, new ServiceError(
+                ServiceErrorReason.NotFound, $"No job '{jobId}' is in the journal."));
+        }
+
+        if (job.SnapshotId is null)
+        {
+            return (job, null, null, new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Job '{jobId}' committed no snapshot — a {job.State} run has nothing in the repository to report."));
+        }
+
+        byte[] snapshotId;
+        try
+        {
+            snapshotId = Convert.FromHexString(job.SnapshotId);
+        }
+        catch (FormatException)
+        {
+            return (job, null, null, new ServiceError(
+                ServiceErrorReason.NotFound, $"Job '{jobId}' names '{job.SnapshotId}', which is not a snapshot identifier."));
+        }
+
+        var (context, _) = await ResolveRestoreContextAsync(
+            sourceId: null, snapshotId, job.SnapshotId, cancellationToken).ConfigureAwait(false);
+        return context is null
+            ? (job, snapshotId, null, new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No archive holds snapshot '{job.SnapshotId}' — its set may have been deleted since the run."))
+            : (job, snapshotId, context, null);
+    }
+
+    private string SetNameOf(string backupSetId) =>
+        runtime.Configuration.BackupSets.FirstOrDefault(set => set.Id == backupSetId)?.Name ?? backupSetId;
+
+    /// <summary>An exact count with a bounded, first-encountered sample — the SetChangeScan shape.</summary>
+    private sealed class DiffBucket(int limit)
+    {
+        private readonly List<string> _sample = [];
+
+        public long Count { get; private set; }
+
+        public void Add(string path)
+        {
+            Count++;
+            if (_sample.Count < limit)
+            {
+                _sample.Add(path);
+            }
+        }
+
+        public ChangeBucketDescriptor Describe() => new(Count, _sample);
+    }
+
+    /// <summary>
+    /// The run diff (ADR-0050): the committed snapshot against the set's
+    /// previous one, entirely from the catalogue — equal recorded object ids
+    /// are the exact "unchanged" (the ListDirectory badges' own rule), so
+    /// this agrees with the browser by construction. Reader lane: it walks
+    /// two whole leaf listings.
+    /// </summary>
+    private async ValueTask<ServiceResult> JobChangesAsync(JobChangesCommand command, CancellationToken cancellationToken)
+    {
+        var (job, snapshotId, context, error) = await ResolveJobSnapshotAsync(command.JobId, cancellationToken)
+            .ConfigureAwait(false);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var sampleLimit = Math.Clamp(
+            command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
+
+        using var catalogue = context!.OpenCatalogue();
+        var rows = catalogue.EnumerateSnapshots();
+        var current = rows.FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId!));
+        if (current is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"The catalogue no longer knows snapshot '{job!.SnapshotId}'.");
+        }
+
+        // The predecessor is the next same-set row after this one —
+        // EnumerateSnapshots is newest first, and this is the same derivation
+        // the snapshot browser's change badges use.
+        var previous = rows
+            .SkipWhile(row => !row.SnapshotId.Span.SequenceEqual(snapshotId!))
+            .Skip(1)
+            .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(current.BackupSetId.Span));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        long unchanged = 0;
+        var added = new DiffBucket(sampleLimit);
+        var changed = new DiffBucket(sampleLimit);
+        var removed = new DiffBucket(sampleLimit);
+
+        var after = catalogue.EnumerateLeaves(snapshotId!);
+        if (previous is null)
+        {
+            foreach (var entry in after)
+            {
+                added.Add(entry.Path);
+            }
+        }
+        else
+        {
+            var before = catalogue.EnumerateLeaves(previous.SnapshotId.Span)
+                .ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+
+            foreach (var entry in after)
+            {
+                if (!before.Remove(entry.Path, out var prior))
+                {
+                    added.Add(entry.Path);
+                }
+                else if (prior.ObjectId == entry.ObjectId)
+                {
+                    unchanged++;
+                }
+                else
+                {
+                    changed.Add(entry.Path);
+                }
+            }
+
+            // What was not claimed by the run's own listing is what the
+            // predecessor alone held.
+            foreach (var path in before.Keys.Order(StringComparer.Ordinal))
+            {
+                removed.Add(path);
+            }
+        }
+
+        return new JobChangesResult(
+            SetNameOf(job!.BackupSetId),
+            job.SnapshotId!,
+            previous is null ? null : Convert.ToHexStringLower(previous.SnapshotId.Span),
+            previous?.CapturedAt,
+            unchanged,
+            added.Describe(),
+            changed.Describe(),
+            removed.Describe(),
+            sampleLimit);
+    }
+
+    /// <summary>
+    /// The failure listing (ADR-0050): the snapshot's error manifest read
+    /// back on demand — path, typed reason, and the scanner's own words.
+    /// Paths flow to any authenticated caller, the list_directory precedent;
+    /// the raw name bytes stay in the manifest and the rendering substitutes
+    /// where they have no faithful decoding. Reader lane: it opens the
+    /// repository's blob footers to reach two records.
+    /// </summary>
+    private async ValueTask<ServiceResult> JobFailuresAsync(JobFailuresCommand command, CancellationToken cancellationToken)
+    {
+        var (job, snapshotId, context, error) = await ResolveJobSnapshotAsync(command.JobId, cancellationToken)
+            .ConfigureAwait(false);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var sampleLimit = Math.Clamp(
+            command.SampleLimit ?? DefaultFailureSampleLimit, 1, MaxFailureSampleLimit);
+        var setName = SetNameOf(job!.BackupSetId);
+
+        Domain.Identifiers.ObjectId recordId;
+        using (var catalogue = context!.OpenCatalogue())
+        {
+            var current = catalogue.EnumerateSnapshots()
+                .FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId!));
+            if (current is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound, $"The catalogue no longer knows snapshot '{job.SnapshotId}'.");
+            }
+
+            recordId = current.ObjectId;
+        }
+
+        using var reader = new RepositoryReader(context.RepositoryId, context.Keys, context.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var manifestRead = await reader.ReadSegmentAsync(recordId, cancellationToken).ConfigureAwait(false);
+        if (manifestRead.Outcome != Repository.Packing.RecordReadOutcome.Ok || manifestRead.Plaintext is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Snapshot '{job.SnapshotId}' would not read back ({manifestRead.Outcome}) — run `check`.");
+        }
+
+        try
+        {
+            var decoded = Repository.Format.Manifests.SnapshotManifestCodec.Decode(manifestRead.Plaintext);
+            if (decoded.Manifest.ErrorManifest is not { } errorManifestId)
+            {
+                return new JobFailuresResult(setName, job.SnapshotId!, Failures: 0, [], sampleLimit);
+            }
+
+            var errorRead = await reader.ReadSegmentAsync(errorManifestId, cancellationToken).ConfigureAwait(false);
+            if (errorRead.Outcome != Repository.Packing.RecordReadOutcome.Ok || errorRead.Plaintext is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed,
+                    $"The error manifest of snapshot '{job.SnapshotId}' would not read back ({errorRead.Outcome}) — run `check`.");
+            }
+
+            var manifest = Repository.Format.Manifests.ErrorManifestCodec.Decode(errorRead.Plaintext);
+            return new JobFailuresResult(
+                setName,
+                job.SnapshotId!,
+                manifest.Failures.Count,
+                [.. manifest.Failures.Take(sampleLimit).Select(failure => new CaptureFailureDescriptor(
+                    string.Join('/', failure.PathComponents.Select(component =>
+                        System.Text.Encoding.UTF8.GetString(component.Span))),
+                    FailureReasonLabel(failure.Reason),
+                    failure.Detail))],
+                sampleLimit);
+        }
+        catch (FormatException exception)
+        {
+            // Includes ManifestValidationException: damage is reported, never
+            // rethrown across the wire as a stack trace.
+            return new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Snapshot '{job.SnapshotId}' carries a manifest that does not validate: {exception.Message}");
+        }
+    }
+
+    /// <summary>The documented kebab vocabulary for <see cref="CaptureFailureDescriptor.Reason"/>.</summary>
+    private static string FailureReasonLabel(CaptureFailureReason reason) => reason switch
+    {
+        CaptureFailureReason.Permission => "permission",
+        CaptureFailureReason.NotFound => "not-found",
+        CaptureFailureReason.IoError => "io-error",
+        CaptureFailureReason.ChangedDuringRead => "changed-during-read",
+        CaptureFailureReason.UnsupportedType => "unsupported-type",
+        CaptureFailureReason.TooLarge => "too-large",
+        CaptureFailureReason.ExcludedByLimit => "excluded-by-limit",
+        CaptureFailureReason.NameNotRepresentable => "name-not-representable",
+        _ => reason.ToString().ToLowerInvariant(),
+    };
 
     private async ValueTask<ServiceResult> ListSnapshotsAsync(CancellationToken cancellationToken)
     {

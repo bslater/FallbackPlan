@@ -29,6 +29,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunBackupCommand), "run_backup")]
 [JsonDerivedType(typeof(CancelJobCommand), "cancel_job")]
 [JsonDerivedType(typeof(ListJobsCommand), "list_jobs")]
+[JsonDerivedType(typeof(JobChangesCommand), "job_changes")]
+[JsonDerivedType(typeof(JobFailuresCommand), "job_failures")]
 [JsonDerivedType(typeof(ListSnapshotsCommand), "list_snapshots")]
 [JsonDerivedType(typeof(ListDirectoryCommand), "list_directory")]
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
@@ -323,6 +325,25 @@ public sealed record CancelJobCommand(string JobId) : ServiceCommand;
 /// a reply, so a history view should bound its ask.
 /// </param>
 public sealed record ListJobsCommand(bool ActiveOnly, int? Limit = null) : ServiceCommand;
+
+/// <summary>
+/// What a completed run changed, against its predecessor (contract 1.22,
+/// ADR-0050): the committed snapshot diffed with the set's previous one in
+/// the catalogue — exact counts, bounded samples. Refused for a run that
+/// committed no snapshot: a failed or cancelled run has nothing to diff.
+/// </summary>
+/// <param name="JobId">The journal row whose run is asked about.</param>
+/// <param name="SampleLimit">Paths per bucket; clamped by the service.</param>
+public sealed record JobChangesCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
+
+/// <summary>
+/// What a completed run could not capture (contract 1.22, ADR-0050): the
+/// snapshot's error manifest read back — each failure's path, typed reason
+/// and the scanner's own words. A clean run answers zero.
+/// </summary>
+/// <param name="JobId">The journal row whose run is asked about.</param>
+/// <param name="SampleLimit">Failures listed; clamped by the service.</param>
+public sealed record JobFailuresCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
 
 /// <summary>Lists committed snapshots.</summary>
 public sealed record ListSnapshotsCommand : ServiceCommand;

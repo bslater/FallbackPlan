@@ -94,6 +94,48 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task JobDetailVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.22's drill-down pair rides the same generic relay.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            JobChangesCommand => new JobChangesResult(
+                "docs", new string('e', 64), BaselineSnapshotId: new string('b', 64),
+                BaselineCapturedAt: 5_000, Unchanged: 90,
+                New: new ChangeBucketDescriptor(3, ["fresh.txt"]),
+                Changed: new ChangeBucketDescriptor(2, ["edited.txt"]),
+                Removed: new ChangeBucketDescriptor(1, ["gone.txt"]),
+                SampleLimit: 20),
+            _ => new JobFailuresResult(
+                "docs", new string('e', 64), Failures: 1,
+                [new CaptureFailureDescriptor("home/locked.db", "permission", "Access denied.")],
+                SampleLimit: 100),
+        };
+
+        using var changesRequest = harness.Command("""{"command":"job_changes","jobId":"job-1"}""");
+        using var changesResponse = await harness.Http.SendAsync(changesRequest);
+        Assert.AreEqual(HttpStatusCode.OK, changesResponse.StatusCode);
+        using (var body = JsonDocument.Parse(await changesResponse.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("job_changes", body.RootElement.GetProperty("result").GetString());
+            Assert.AreEqual(3, body.RootElement.GetProperty("new").GetProperty("count").GetInt64());
+            Assert.AreEqual(90, body.RootElement.GetProperty("unchanged").GetInt64());
+        }
+
+        using var failuresRequest = harness.Command("""{"command":"job_failures","jobId":"job-1"}""");
+        using var failuresResponse = await harness.Http.SendAsync(failuresRequest);
+        Assert.AreEqual(HttpStatusCode.OK, failuresResponse.StatusCode);
+        using (var body = JsonDocument.Parse(await failuresResponse.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("job_failures", body.RootElement.GetProperty("result").GetString());
+            var failure = body.RootElement.GetProperty("sample")[0];
+            Assert.AreEqual("permission", failure.GetProperty("reason").GetString());
+            Assert.AreEqual("home/locked.db", failure.GetProperty("path").GetString());
+        }
+    }
+
+    [TestMethod]
     public async Task RestoreSourceVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.11's guided-restore verbs ride the same generic relay

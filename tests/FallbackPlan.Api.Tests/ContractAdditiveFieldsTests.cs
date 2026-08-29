@@ -247,6 +247,67 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public async Task TheDrillDownVerbs_RoundTripAcrossALocalConnection()
+    {
+        // Contract 1.22's two read verbs: the run diff and the failure
+        // listing, typed end to end.
+        var service = new FakeService
+        {
+            Respond = command => command switch
+            {
+                JobChangesCommand changes => new JobChangesResult(
+                    "docs", new string('e', 64), BaselineSnapshotId: new string('b', 64),
+                    BaselineCapturedAt: 5_000, Unchanged: 90,
+                    New: new ChangeBucketDescriptor(3, ["fresh.txt"]),
+                    Changed: new ChangeBucketDescriptor(2, ["edited.txt"]),
+                    Removed: new ChangeBucketDescriptor(1, ["gone.txt"]),
+                    SampleLimit: changes.SampleLimit ?? 20),
+                _ => new JobFailuresResult(
+                    "docs", new string('e', 64), Failures: 2,
+                    [new CaptureFailureDescriptor("home/locked.db", "permission", "Access denied.")],
+                    SampleLimit: 100),
+            },
+        };
+        await using var listener = LocalServiceListener.Start(service, _state);
+        await using var client = await LocalServiceClient.ConnectAsync(_state, "test", _timeout.Token);
+
+        var diff = await client.ExecuteAsync(new JobChangesCommand("job-1", SampleLimit: 5), _timeout.Token);
+        Assert.IsInstanceOfType<JobChangesResult>(diff, out var changes);
+        Assert.AreEqual(90L, changes.Unchanged);
+        Assert.AreEqual(3L, changes.New.Count);
+        Assert.AreEqual(5, changes.SampleLimit);
+
+        var failures = await client.ExecuteAsync(new JobFailuresCommand("job-1"), _timeout.Token);
+        Assert.IsInstanceOfType<JobFailuresResult>(failures, out var listing);
+        Assert.AreEqual(2L, listing.Failures);
+        Assert.AreEqual("permission", Assert.ContainsSingle(listing.Sample).Reason);
+    }
+
+    [TestMethod]
+    public void TheDrillDownVerbs_WireNamesAreThePublishedOnes()
+    {
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new JobChangesCommand("job-1", SampleLimit: 5), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"job_changes\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"sample_limit\":5", command, StringComparison.Ordinal);
+
+        var result = JsonSerializer.Serialize<ServiceResult>(
+            new JobChangesResult(
+                "docs", new string('e', 64), null, null, 0,
+                new ChangeBucketDescriptor(0, []), new ChangeBucketDescriptor(0, []),
+                new ChangeBucketDescriptor(0, []), SampleLimit: 20),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"job_changes\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"baseline_snapshot_id\":null", result, StringComparison.Ordinal);
+
+        var failures = JsonSerializer.Serialize<ServiceResult>(
+            new JobFailuresResult("docs", new string('e', 64), 0, [], SampleLimit: 100),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"job_failures\"", failures, StringComparison.Ordinal);
+        Assert.Contains("\"sample_limit\":100", failures, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheSessionCarryingWatch_WireNameAndPre120Default()
     {
         // The watch frame's session (contract 1.20): named on the bytes,

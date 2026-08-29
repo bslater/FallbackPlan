@@ -1089,6 +1089,28 @@ function comparisonReport(result) {
 
 /* ----- the completed-job report (ADR-0050) ----- */
 
+function jobChangesReport(result) {
+  // The comparisonReport idiom over the run diff's coarser buckets: counts
+  // are exact, samples bounded, and the report says when it shows a sample.
+  const buckets = [
+    ["new", result.new], ["changed", result.changed], ["removed", result.removed],
+  ].filter(([, bucket]) => bucket.count > 0);
+
+  const baseline = result.baselineSnapshotId
+    ? `vs the previous backup: ${fmtCount(result.unchanged)} unchanged`
+    : "the set's first backup — everything is new";
+  const detail = buckets.map(([label, bucket]) => {
+    const more = bucket.count > bucket.sample.length
+      ? `\n  … and ${fmtCount(bucket.count - bucket.sample.length)} more` : "";
+    return `${fmtCount(bucket.count)} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
+  }).join("\n");
+
+  return {
+    summary: `${baseline}${buckets.length === 0 ? " — nothing else changed" : ""}`,
+    detail,
+  };
+}
+
 function jobReport(job, snapshot) {
   const lines = [];
 
@@ -2170,9 +2192,42 @@ const actions = {
       <p class="dlg-sub">Started ${esc(fmtWhen(job.startedAt))} · what this run did, from its own record.</p>
       <pre class="report">${esc(jobReport(job, snapshot).join("\n"))}</pre>
       <div class="dlg-actions">
-        ${job.snapshotId ? `<button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}">Browse snapshot</button>` : ""}
+        ${job.snapshotId ? `
+          <button type="button" class="btn" data-action="job-changes" data-job="${esc(job.id)}">What changed</button>
+          <button type="button" class="btn" data-action="job-failures" data-job="${esc(job.id)}">Failures</button>
+          <button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}">Browse snapshot</button>` : ""}
         <button type="button" class="btn primary" data-action="close-dialog">Close</button>
       </div>`);
+  },
+
+  async "job-changes"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "job_changes", jobId: el.dataset.job },
+        { errToast: "The service could not diff this run" });
+      if (result?.result !== "job_changes") return;
+      const report = jobChangesReport(result);
+      reportDialog(`What this run changed under '${result.setName}'`,
+        [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
+        "Against the set's previous snapshot, from the repository's own record.");
+    });
+  },
+
+  async "job-failures"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "job_failures", jobId: el.dataset.job },
+        { errToast: "The service could not read the failure record" });
+      if (result?.result !== "job_failures") return;
+      const lines = result.failures === 0
+        ? ["nothing failed — every file the run saw was captured"]
+        : result.sample.map(f => `${f.path}\n  ${f.reason} — ${f.detail}`);
+      const more = result.failures > result.sample.length
+        ? [`… and ${result.failures - result.sample.length} more`] : [];
+      reportDialog(`Failures of this run under '${result.setName}'`,
+        [`${result.failures} failure(s)`, "", ...lines, ...more],
+        "From the snapshot's error manifest — each path with its typed reason.");
+    });
   },
 
   "backup-full"(el) {

@@ -42,6 +42,8 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(BackupSetsResult), "backup_sets")]
 [JsonDerivedType(typeof(JobAcceptedResult), "job_accepted")]
 [JsonDerivedType(typeof(JobsResult), "jobs")]
+[JsonDerivedType(typeof(JobChangesResult), "job_changes")]
+[JsonDerivedType(typeof(JobFailuresResult), "job_failures")]
 [JsonDerivedType(typeof(SnapshotsResult), "snapshots")]
 [JsonDerivedType(typeof(DirectoryResult), "directory")]
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
@@ -372,6 +374,72 @@ public sealed record JobDescriptor(
 /// <summary>The known jobs.</summary>
 /// <param name="Jobs">The jobs, oldest first.</param>
 public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResult;
+
+/// <summary>
+/// What a run changed against its predecessor (contract 1.22, ADR-0050),
+/// from the catalogue alone. Deliberately coarser than
+/// <see cref="SetChangePreviewResult"/>'s live-scan buckets, and each
+/// coarsening is a stated limit of after-the-fact comparison:
+/// <c>Changed</c> does not split content from metadata-only (equal object
+/// ids are the exact "unchanged"; telling the two changes apart needs
+/// manifest reads), there is no <c>Moved</c> (file identity is a scan-time
+/// local fact, null in a rebuilt catalogue), and <c>Removed</c> does not
+/// split deleted-from-disk from no-longer-included (that needs both runs'
+/// rules re-evaluated). Counts are exact; samples are bounded.
+/// </summary>
+/// <param name="SetName">The set the run belonged to.</param>
+/// <param name="SnapshotId">The run's committed snapshot.</param>
+/// <param name="BaselineSnapshotId">The predecessor compared against; null for a first backup — everything reads new.</param>
+/// <param name="BaselineCapturedAt">When the predecessor was captured, Unix milliseconds.</param>
+/// <param name="Unchanged">Files whose recorded object is identical in both.</param>
+/// <param name="New">Files only the run's snapshot holds.</param>
+/// <param name="Changed">Files present in both under different recorded objects.</param>
+/// <param name="Removed">Files only the predecessor holds.</param>
+/// <param name="SampleLimit">The applied per-bucket cap, echoed.</param>
+public sealed record JobChangesResult(
+    string SetName,
+    string SnapshotId,
+    string? BaselineSnapshotId,
+    ulong? BaselineCapturedAt,
+    long Unchanged,
+    ChangeBucketDescriptor New,
+    ChangeBucketDescriptor Changed,
+    ChangeBucketDescriptor Removed,
+    int SampleLimit) : ServiceResult;
+
+/// <summary>
+/// One capture failure from a snapshot's error manifest, as a client shows
+/// it. The path is UTF-8 with replacement characters where the recorded name
+/// bytes have no faithful decoding — display truth; the raw bytes stay in
+/// the manifest.
+/// </summary>
+/// <param name="Path">The failed entry's path within its root.</param>
+/// <param name="Reason">
+/// The typed reason, kebab-cased: <c>permission</c>, <c>not-found</c>,
+/// <c>io-error</c>, <c>changed-during-read</c>, <c>unsupported-type</c>,
+/// <c>too-large</c>, <c>excluded-by-limit</c>, <c>name-not-representable</c>.
+/// </param>
+/// <param name="Detail">The scanner's own words.</param>
+public sealed record CaptureFailureDescriptor(string Path, string Reason, string Detail);
+
+/// <summary>
+/// What a run could not capture (contract 1.22, ADR-0050): the error
+/// manifest read back on demand. The count is exact; the listing is bounded
+/// — 1000 failures at the spec's worst-case path lengths would still be far
+/// under the 8 MiB frame, but a manifest may hold a million, and "send me
+/// everything" is not a thing this verb offers.
+/// </summary>
+/// <param name="SetName">The set the run belonged to.</param>
+/// <param name="SnapshotId">The run's committed snapshot.</param>
+/// <param name="Failures">The exact failure count; zero for a clean run.</param>
+/// <param name="Sample">The first failures, up to <paramref name="SampleLimit"/>.</param>
+/// <param name="SampleLimit">The applied cap, echoed.</param>
+public sealed record JobFailuresResult(
+    string SetName,
+    string SnapshotId,
+    long Failures,
+    IReadOnlyList<CaptureFailureDescriptor> Sample,
+    int SampleLimit) : ServiceResult;
 
 /// <summary>One committed snapshot.</summary>
 /// <param name="SnapshotId">The snapshot's hex identity.</param>

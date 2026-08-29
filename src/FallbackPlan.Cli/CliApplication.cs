@@ -1060,16 +1060,98 @@ public static class CliApplication
                 Description = "Newest history rows to show (default 50).",
                 DefaultValueFactory = _ => 50,
             };
+            var changesOption = new Option<bool>("--changes")
+            {
+                Description = "With a job id: what the run changed against the set's previous snapshot.",
+            };
+            var failuresOption = new Option<bool>("--failures")
+            {
+                Description = "With a job id: the run's capture failures — each path with its typed reason.",
+            };
             var command = WithRemoteCapableSession(new Command("jobs",
                 "The job journal: what each backup run did. Lists the history, or reports one run by id. " +
                 "Needs a running service — the journal is written by it, so there is no direct-mode reading " +
                 "of somebody else's live state. With --connect, asks the remote service."));
             command.Arguments.Add(jobArgument);
             command.Options.Add(limitOption);
+            command.Options.Add(changesOption);
+            command.Options.Add(failuresOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
                 var jobId = parse.GetValue(jobArgument);
+                var wantChanges = parse.GetValue(changesOption);
+                var wantFailures = parse.GetValue(failuresOption);
+                if ((wantChanges || wantFailures) && jobId is null)
+                {
+                    throw new CliFailureException(
+                        "--changes and --failures describe one run: name the job id (see `jobs` for the listing).");
+                }
+
+                if (wantChanges || wantFailures)
+                {
+                    async Task<TResult> AskAsync<TResult>(ServiceCommand detailCommand)
+                        where TResult : ServiceResult
+                    {
+                        if (ResolveRemote(parse, direct: false) is { } target)
+                        {
+                            error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                            return await QueryRemoteAsync<TResult>(target, detailCommand, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        return await QueryLocalServiceAsync<TResult>(
+                            parse.GetValue(stateOption), detailCommand, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (wantChanges)
+                    {
+                        var changes = await AskAsync<JobChangesResult>(new JobChangesCommand(jobId!)).ConfigureAwait(false);
+                        output.WriteLine(changes.BaselineSnapshotId is null
+                            ? "the set's first backup — everything is new"
+                            : string.Create(CultureInfo.InvariantCulture,
+                                $"vs {changes.BaselineSnapshotId}: {changes.Unchanged} unchanged"));
+                        foreach (var (label, bucket) in new[]
+                            { ("new", changes.New), ("changed", changes.Changed), ("removed", changes.Removed) })
+                        {
+                            if (bucket.Count == 0)
+                            {
+                                continue;
+                            }
+
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{bucket.Count} {label}"));
+                            foreach (var path in bucket.Sample)
+                            {
+                                output.WriteLine($"  {path}");
+                            }
+
+                            if (bucket.Count > bucket.Sample.Count)
+                            {
+                                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                    $"  … and {bucket.Count - bucket.Sample.Count} more"));
+                            }
+                        }
+                    }
+
+                    if (wantFailures)
+                    {
+                        var failures = await AskAsync<JobFailuresResult>(new JobFailuresCommand(jobId!)).ConfigureAwait(false);
+                        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{failures.Failures} failure(s)"));
+                        foreach (var failure in failures.Sample)
+                        {
+                            output.WriteLine($"  {failure.Path}");
+                            output.WriteLine($"    {failure.Reason} — {failure.Detail}");
+                        }
+
+                        if (failures.Failures > failures.Sample.Count)
+                        {
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"  … and {failures.Failures - failures.Sample.Count} more"));
+                        }
+                    }
+
+                    return 0;
+                }
 
                 int Render(JobsResult result)
                 {

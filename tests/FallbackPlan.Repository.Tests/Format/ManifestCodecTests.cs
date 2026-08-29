@@ -405,4 +405,27 @@ public sealed class ManifestCodecTests
         Assert.AreEqual(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
         Assert.AreEqual(2, decoded.Failures[0].PathComponents.Count);
     }
+
+    /// <summary>
+    /// Specification 06 assigns reason 8 — a filename with no faithful
+    /// repository encoding is refused, never substituted — and the encoder
+    /// writes it unchecked. A decoder that rejects 8 as unassigned makes
+    /// every snapshot carrying such a refusal unreadable at exactly the
+    /// moment somebody asks what failed.
+    /// </summary>
+    [TestMethod]
+    public void ErrorManifest_ReasonNameNotRepresentable_RoundTrips()
+    {
+        var manifest = new ErrorManifest(
+        [
+            new CaptureFailure(
+                ["home"u8.ToArray(), new byte[] { 0xEF, 0xBF, 0xBD }],
+                CaptureFailureReason.NameNotRepresentable,
+                "the name does not survive conversion in both directions"),
+        ]);
+
+        var decoded = ErrorManifestCodec.Decode(ErrorManifestCodec.Encode(manifest));
+
+        Assert.AreEqual(CaptureFailureReason.NameNotRepresentable, Assert.ContainsSingle(decoded.Failures).Reason);
+    }
 }
