@@ -592,6 +592,60 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
+    public async Task UpsertBackupSet_ANewSetWithALocalPathDestination_IsBornDirectShip()
+    {
+        // The default flips (ADR-0046's own "done"): a new set whose
+        // destinations include a local path ships straight to them —
+        // staging is the explicit opt-out, no local copy of the data by
+        // default. Null from the client means "the default", and existing
+        // sets never change shape without an explicit value.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        _harness.WriteSourceFile("docs/report.txt", "born shipping");
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('b', 32), "media", _harness.SourceRoot, null, [], [], ["vault-a"])),
+            Timeout));
+
+        var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"))
+            .FindSet("media");
+        Assert.IsNotNull(saved);
+        Assert.IsTrue(saved.DirectShip, "a new local-path set must be born direct-ship");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ANewPeerOnlySet_StaysStagingWithoutRefusal()
+    {
+        // The sink does not serve peers yet, so a peer-only set defaults to
+        // the staging shape it can actually run — saved cleanly, never
+        // refused for a default the client did not choose.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        _harness.WriteSourceFile("docs/report.txt", "peer-bound");
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('8', 32), "friend", "peer", null,
+                "mgr7e7euwdpfkggmp4astkz5ia", "friend.example:9443")),
+            Timeout));
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('c', 32), "outbound", _harness.SourceRoot, null, [], [], ["friend"])),
+            Timeout));
+
+        var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"))
+            .FindSet("outbound");
+        Assert.IsNotNull(saved);
+        Assert.IsFalse(saved.DirectShip, "a peer-only set cannot ship directly yet and must default to staging");
+    }
+
+    [TestMethod]
     public async Task UpsertBackupSet_DirectShipWithoutALocalPathDestination_IsRefusedByName()
     {
         // A peer-only direct-ship set used to save cleanly and then refuse

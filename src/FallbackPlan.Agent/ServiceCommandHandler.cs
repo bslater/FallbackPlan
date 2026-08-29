@@ -1223,8 +1223,14 @@ public sealed partial class ServiceCommandHandler(
 
         // The storage shape (ADR-0046, contract 1.23): null preserves — a
         // pre-1.23 client cannot see the field and must not convert a set —
-        // an explicit value sets it.
-        var directShip = command.Set.DirectShip ?? existing?.DirectShip ?? false;
+        // an explicit value sets it, and a NEW set defaults to the shape it
+        // can actually run: direct-ship when a local-path destination is
+        // referenced (staging is the explicit opt-in from here on), staging
+        // when only kinds the sink does not serve yet are.
+        var directShip = command.Set.DirectShip
+            ?? existing?.DirectShip
+            ?? command.Set.Destinations.Any(name =>
+                configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath);
         if (directShip && !command.Set.Destinations.Any(name =>
                 configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath))
         {

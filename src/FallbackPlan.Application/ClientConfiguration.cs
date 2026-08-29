@@ -84,12 +84,13 @@ public sealed record BackupSetConfiguration
     /// <summary>
     /// Whether this set publishes straight into its destinations with no
     /// staging archive (ADR-0046): blobs ship to every in-scope destination,
-    /// the agent keeps metadata only. Default false while the read paths
-    /// (restore, retention, verification) finish moving destination-side —
-    /// the migration record flips it and retires the flag.
+    /// the agent keeps metadata only. The property default stays false — an
+    /// old file that omits the flag keeps meaning staging — but the command
+    /// boundary births a new local-path set direct-ship, and a file this
+    /// build writes states the flag explicitly rather than leaning on
+    /// omission, so every configuration says what it means.
     /// </summary>
     [JsonPropertyName("direct_ship")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DirectShip { get; init; }
 
     /// <summary>

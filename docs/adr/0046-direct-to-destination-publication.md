@@ -89,6 +89,26 @@ blob key), the rename-manifest optimisation, and collision read-backs.
    flag flips to the default — and retires — with the destination-side read
    paths and the migration record.
 
+   > **Amended (2026-08): the gate is discharged for local-path sets.** The
+   > read paths, the migration record and the retention-with-trimming drill
+   > have all landed, so the flag reached the contract (`direct_ship` on the
+   > set descriptor, 1.23 — null preserves, an explicit value sets) and the
+   > console's set editor. A **new set referencing a local-path destination
+   > is born direct-ship**; staging is the explicit opt-out, and a peer-only
+   > set stays staging until the peer write adapter lands (the one remaining
+   > tail). A shape change is refused while a run is live, takes effect
+   > in-process (the archive handle is evicted, so the next open migrates —
+   > no service restart), and queues the seeding catch-up immediately, since
+   > a flipped set's next capture refuses until a destination holds its
+   > history. The drill also caught and fixed the deleting half: the sink
+   > used to stop sweep deletes at the metadata store, so destinations never
+   > shrank under retention and the union listing resurrected every swept
+   > object into the next survey. The sink now fans a delete to the
+   > destinations first and the metadata store last — policy-safe because
+   > the replication gate already holds expiry until every entitled
+   > destination's keep-set has dropped the snapshot (FR-GC-010) — with the
+   > staging fallback never touched (retire_staging is its one deleter).
+
 ## Consequences
 
 **Positive** — a saved set's content lands at its destinations directly;
@@ -142,3 +162,4 @@ per destination; staging sets behave exactly as before.
 | 2026-08 | Built (migration) | A staging set flagged direct_ship migrates at first open: metadata copies into the metadata store, the staging archive stays as a read-only seed source the sink consults last (so reuse and restores of unseeded history keep working), a standing notice says retirement awaits, and the pass keeps syncing while staging remains — the catch-up through the sink is what carries history outward. Contract 1.18's retire_staging deletes staging only when every non-lifecycle object it holds is present in the union of the destinations, refusing by count otherwise; retirement resolves the notice, and history then restores from the destinations alone. FanOut and the staging machinery stay in the codebase for unflagged sets until the default flips |
 | 2026-08 | Built (console retirement) | The staging-retirable notice carries the act it announces: a Retire staging button on the notice opens a typed confirmation and invokes retire_staging, refusals surfacing verbatim — and the threat model records what leaving the staging copy means (the source device no longer holds a whole-archive replica; capture now depends on a reachable destination) |
 | 2026-08 | Built (hardened) | The scenario sweep's correctness round: a behind destination is excluded from run scope like a baseline-less one (metadata without closure must not mint an in-sync row; migrating sets excepted while staging remains the union's promise), run scope is released on completion so reads resolve freshly, `CompleteRun` records outcomes on failure too, seeding is per-destination under the drop rule, the capacity floor applies to sink writes (FR-DEST-010), a pair owed its seed is recorded behind — never a counted failure that starves its own catch-up — and the 04 §5.1 kill matrix runs through a two-destination sink in `Hosts.Tests/DirectShipFaultSweepTests`, every put-death healing to sibling convergence. The direct-ship edges stopped assuming staging exists: the console's restore gate scans the metadata stores, write-only provisioning routes by the set's shape, and delete-set names what actually remains |
+| 2026-08 | Built (operable, default for local paths) | The gate discharged (Decision 7's amendment): `direct_ship` on the contract (1.23) with null-preserve semantics, offered by the console's set editor with the trade stated; a direct-ship set must reference a local-path destination (a peer-only one used to save cleanly and refuse every capture); a shape change is refused mid-run, evicts the cached archive handle so migration happens at the next open in the same process, and queues the seeding catch-up at once. The retention-with-trimming drill (`Hosts.Tests/DirectShipRetentionTests`) ran the full tombstone/grace/sweep cycle against a destination-resident archive and caught the deleting half short — sweep deletes stopped at the metadata store, destinations never shrank, and the union listing resurrected every swept object — fixed by fanning sink deletes destinations-first, metadata-last, policy-safe under the replication gate. New local-path sets are born direct-ship; the peer write adapter remains the stated tail |

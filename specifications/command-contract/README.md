@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.22
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.23
 
 ---
 
@@ -45,7 +45,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.22 — 51 commands. One line each; parameters, results
+The register as of 1.23 — 51 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -58,7 +58,11 @@ setup/kit/sign-in state), `provision_installation` + `confirm_recovery_kit`
 `delete_backup_set`, `list_destinations` / `upsert_destination` /
 `delete_destination`, `browse_folders`, `validate_set_draft`,
 `preview_set_changes`, `export_configuration` (ADR-0037/0038/0040). Since
-1.17 a new set's upsert answers with its queued first backup.
+1.17 a new set's upsert answers with its queued first backup; since 1.23
+the set descriptor carries `direct_ship` (null preserves — a pre-1.23
+client cannot convert a set; an explicit value sets the storage shape,
+refused mid-run and without a local-path destination, and a new local-path
+set defaults to direct-ship).
 
 **Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
 1.22 with the run's terminal numbers on each row and an optional newest-N
@@ -106,3 +110,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.20 | The counted plan on the progress stream: a backup counts its work before archiving and every progress report then carries `total_files` and `total_bytes` — null until the count completes and from producers that never count, so additive with defaults; a pre-1.20 client keeps its indeterminate meter. The watch frame also carries the client's session token, so a signed-in console's event stream is authenticated — before this, every watch on an installation with accounts was answered with an empty stream ([ADR-0048](../../docs/adr/0048-determinate-backup-progress.md)) |
 | 1.21 | `restart_service`: an in-process recycle of the running service — Owner-only, local callers only, refused before setup and under `--once`; the acknowledgement is flushed before teardown and the restart signs every session out ([ADR-0049](../../docs/adr/0049-service-lifecycle-hygiene.md)) |
 | 1.22 | The completed-run record and drill-down: the job row carries the run's terminal numbers (nullable, additive — a pre-1.22 row reads "not recorded", never zero) and `list_jobs` takes an optional newest-N bound; `job_changes` and `job_failures` answer one run's diff and failure listing from the repository with exact counts and bounded samples; the progress stream names the `current_file` being processed; and the status matrix carries each demotion's `reason` plus the set's `last_completed_at` — all additive with null defaults ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)) |
+| 1.23 | The storage shape surfaced (ADR-0046): `direct_ship` on the set descriptor with null-preserve semantics; a direct-ship set must reference a local-path destination, a shape change is refused while a run is live and takes effect in-process with its seeding catch-up queued at once, and a new local-path set defaults to direct-ship |

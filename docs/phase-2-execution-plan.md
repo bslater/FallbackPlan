@@ -225,14 +225,15 @@ The next round starts here. Everything below is in priority order, and each item
 says what "done" looks like so it does not have to be re-derived.
 
 **The lead item is the direct-to-destination tail
-([ADR-0046](adr/0046-direct-to-destination-publication.md)).** The write path,
-the read paths, the migration, retirement, and the kill sweep are built and
-held by tests; what stands between the `direct_ship` flag and being the
-default is the peer write adapter (a declared peer is a stated `NotSupported`
-in the ledger today), a retention-with-trimming drill over aged direct-ship
-snapshots, and the flip itself. Done looks like: a set shipping to a peer
-destination through the sink, a trim proven destination-side, and new sets
-defaulting to direct-ship with staging the explicit opt-in.
+([ADR-0046](adr/0046-direct-to-destination-publication.md)).** Mostly
+discharged: the trimming drill has run destination-side
+(`Hosts.Tests/DirectShipRetentionTests` — and fixed the sink's deleting
+half), the flag rides the contract (1.23) and the console, and new
+local-path sets are born direct-ship with staging the explicit opt-out.
+What remains is the peer write adapter (a declared peer is a stated
+`NotSupported` in the ledger today; peer-only sets default to staging until
+it lands). Done looks like: a set shipping to a peer destination through
+the sink, and the staging machinery retiring behind it.
 
 F1 is done and off this list, and it has now been measured — what it decided is
 recorded under Wave F above, what it bought in

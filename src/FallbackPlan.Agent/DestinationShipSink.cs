@@ -527,14 +527,38 @@ public sealed class DestinationShipSink : IObjectStore
     public async ValueTask<DeleteResult> DeleteAsync(
         ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
     {
-        // Retention against direct-ship destinations is per-destination
-        // convergence (ADR-0046's next slice); nothing on the capture path
-        // deletes, and a blanket delete through the sink would be one policy
-        // pretending to be every destination's.
-        var result = IsBlobKey(key.Value)
-            ? new DeleteResult(DeleteOutcome.NotFound)
-            : await _metadata.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
-        return result;
+        // A delete reaching the sink is already per-destination-policy-safe:
+        // the replication gate holds a snapshot's expiry until every entitled
+        // destination's own keep-set has dropped it (FR-GC-010), so what the
+        // sweep condemns is condemned for every holder. It used to stop at
+        // the metadata store — "convergence's job" — but nothing converged:
+        // destinations never shrank under retention, and the union listing
+        // resurrected every swept object into the next survey, condemned
+        // again for ever (the ADR-0046 trimming drill's finding).
+        //
+        // Destinations go first, the metadata store last: interrupted midway,
+        // the metadata plane still lists the object, the next pass
+        // re-condemns, and the delete converges. The reverse order is the
+        // stranding this replaces. An unreachable destination keeps its copy
+        // for now — re-listed through the union, it is re-condemned on the
+        // next pass once the destination returns. The staging fallback is
+        // never touched: it is a read-only seed, and retire_staging is its
+        // one deleter (ADR-0046).
+        var deleted = false;
+        foreach (var shipment in ReadOrder())
+        {
+            var outcome = await shipment.Store.DeleteAsync(key, conditions, cancellationToken)
+                .ConfigureAwait(false);
+            deleted |= outcome.Outcome == DeleteOutcome.Deleted;
+        }
+
+        if (!IsBlobKey(key.Value))
+        {
+            var metadata = await _metadata.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
+            deleted |= metadata.Outcome == DeleteOutcome.Deleted;
+        }
+
+        return new DeleteResult(deleted ? DeleteOutcome.Deleted : DeleteOutcome.NotFound);
     }
 
     /// <summary>The destinations a read may consult: every configured, reachable local path, priority first.</summary>

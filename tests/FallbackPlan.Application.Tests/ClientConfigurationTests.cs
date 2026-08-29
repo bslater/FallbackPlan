@@ -83,6 +83,26 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    public void Save_WritesTheStorageShapeExplicitly()
+    {
+        // With the default now context-dependent at the command boundary
+        // (a new local-path set is born direct-ship, ADR-0046), a written
+        // configuration must state each set's shape rather than lean on
+        // omission — an omitted flag in an old file keeps meaning staging,
+        // and a file this build writes says what it means.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("vault")],
+            BackupSets = [Set("docs", Ref("vault"))],
+        }.Save(ConfigPath);
+
+        Assert.Contains(
+            "\"direct_ship\": false", File.ReadAllText(ConfigPath), StringComparison.Ordinal,
+            "the shape must be written even at its default — omission is a pre-1.23 file's dialect");
+    }
+
+    [TestMethod]
     public void Validate_ConcurrencyOutsideOneToFive_IsRefused()
     {
         foreach (var invalid in new[] { 0, 6, -1 })

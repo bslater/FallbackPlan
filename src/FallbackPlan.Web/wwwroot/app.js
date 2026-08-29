@@ -2678,7 +2678,7 @@ function openSetEditor(set) {
       local archive first and copy outward after — a local buffer at the cost of a second copy on this
       machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
       until you retire it from the notice.</p>
-      <label class="mini"><input type="checkbox" id="set-direct-ship" ${set?.directShip ? "checked" : ""}>
+      <label class="mini"><input type="checkbox" id="set-direct-ship" ${(set ? set.directShip : true) ? "checked" : ""}>
         ship straight to destinations</label>
     </div>
 
