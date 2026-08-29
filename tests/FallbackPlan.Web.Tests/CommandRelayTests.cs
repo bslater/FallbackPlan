@@ -94,6 +94,26 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task TheDirectShipFlag_RidesTheUpsertThroughTheRelay()
+    {
+        // Contract 1.23's storage shape reaches the service typed.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new AcknowledgedResult();
+
+        using var request = harness.Command("""
+            {"command":"upsert_backup_set","set":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"docs",
+             "root":"/src","schedule":null,"includeRules":[],"excludeRules":[],"destinations":["vault"],
+             "directShip":true}}
+            """);
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var received = Assert.ContainsSingle(harness.Clients.Client.Received);
+        Assert.IsInstanceOfType<UpsertBackupSetCommand>(received, out var upsert);
+        Assert.IsTrue(upsert.Set.DirectShip);
+    }
+
+    [TestMethod]
     public async Task JobDetailVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.22's drill-down pair rides the same generic relay.

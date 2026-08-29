@@ -348,7 +348,7 @@ public sealed partial class ServiceCommandHandler(
     private async ValueTask<ServiceResult> DispatchAsync(ServiceCommand command, CancellationToken cancellationToken) => command switch
     {
         ListBackupSetsCommand => ListBackupSets(),
-        UpsertBackupSetCommand upsert => UpsertBackupSet(upsert),
+        UpsertBackupSetCommand upsert => await UpsertBackupSetAsync(upsert, cancellationToken).ConfigureAwait(false),
         DeleteBackupSetCommand deleteSet => DeleteBackupSet(deleteSet),
         RetireStagingCommand retireStaging =>
             await RetireStagingAsync(retireStaging, cancellationToken).ConfigureAwait(false),
@@ -1179,9 +1179,11 @@ public sealed partial class ServiceCommandHandler(
                 ToPolicyDescriptor(set.Retention),
                 ToOverrideDescriptors(set.Destinations),
                 [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
-                set.Priority))]);
+                set.Priority,
+                set.DirectShip))]);
 
-    private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
+    private async ValueTask<ServiceResult> UpsertBackupSetAsync(
+        UpsertBackupSetCommand command, CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;
 
@@ -1219,6 +1221,36 @@ public sealed partial class ServiceCommandHandler(
         var existing = configuration.BackupSets
             .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
 
+        // The storage shape (ADR-0046, contract 1.23): null preserves — a
+        // pre-1.23 client cannot see the field and must not convert a set —
+        // an explicit value sets it.
+        var directShip = command.Set.DirectShip ?? existing?.DirectShip ?? false;
+        if (directShip && !command.Set.Destinations.Any(name =>
+                configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "A direct-ship set needs at least one local-path destination — "
+                + "direct-ship serves local-path destinations; peer shipping follows (ADR-0046).");
+        }
+
+        // Changing the shape re-homes the set's repository: the archive
+        // handle is swapped out beneath whoever holds it, so a live run must
+        // finish or be cancelled first — the delete-set rule, applied to the
+        // one edit with the same blast radius.
+        var shapeChanged = existing is not null && existing.DirectShip != directShip;
+        if (shapeChanged)
+        {
+            var lastJob = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == existing!.Id);
+            if (lastJob is not null && !JobStateStore.HasSettled(lastJob.State) && runtime.Queue.IsActive(lastJob.Id))
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"Backup set '{existing!.Name}' has a run in progress — the storage shape cannot change "
+                    + "under a live run. Cancel it or let it finish, then save again.");
+            }
+        }
+
         // The 1↔N transitions change the rule coordinate system (ADR-0040):
         // growing past one root prefixes the old root's anchored rules with
         // its new label; shrinking back strips the survivor's. Only rules the
@@ -1239,12 +1271,7 @@ public sealed partial class ServiceCommandHandler(
             // Null preserves (a pre-1.17 client cannot see the field); zero
             // is the explicit default a 1.17 client may set back.
             Priority = command.Set.Priority ?? existing?.Priority,
-            // The contract does not carry the flag at all yet (ADR-0046 §7:
-            // the console must not offer it while restore paths mature), so
-            // an upsert must preserve it unconditionally — dropping it here
-            // silently converted a direct-ship set back to staging mode and
-            // the next open minted a fresh repository over the orphaned one.
-            DirectShip = existing?.DirectShip ?? false,
+            DirectShip = directShip,
             Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
             {
                 Ref = name,
@@ -1301,8 +1328,27 @@ public sealed partial class ServiceCommandHandler(
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        if (shapeChanged)
+        {
+            // The cached handle still speaks the old shape; evicted, the next
+            // open reads the flag fresh — and a staging set flipped on
+            // migrates there and then, in this process, no restart needed.
+            await runtime.EvictArchiveAsync(replacement.Id, cancellationToken).ConfigureAwait(false);
+        }
+
         var now = DateTimeOffset.Now;
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
+
+        if (shapeChanged && directShip)
+        {
+            // Seed at once rather than at the next scheduler pass: a flipped
+            // set's next capture refuses until a destination holds its full
+            // history (the sink's scope rule), and a person who just flipped
+            // will press "Back up now" before any pass has run. The gained-
+            // destination path queues its seed immediately for the same
+            // reason (ADR-0047).
+            FanOut.EnqueueAll(runtime, replacement, now, userInitiated: true);
+        }
 
         if (existing is null)
         {

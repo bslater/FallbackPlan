@@ -55,6 +55,23 @@ public sealed class ConsoleAdminScriptTests
     }
 
     [TestMethod]
+    public void TheSetEditor_OffersTheStorageShape()
+    {
+        // Contract 1.23: direct-ship stops being a config-file secret. The
+        // editor states the trade honestly and the payload carries the
+        // explicit choice — null never leaves this editor, because an
+        // explicit editor must not depend on preserve-by-omission.
+        var script = AppJs();
+        var editor = FunctionBody(script, "openSetEditor");
+
+        Assert.Contains("set-direct-ship", editor, StringComparison.Ordinal,
+            "the storage shape is no longer editable anywhere a user can find");
+        Assert.Contains("no local staging copy", editor, StringComparison.Ordinal);
+        Assert.Contains("directShip:", script, StringComparison.Ordinal,
+            "the upsert payload no longer carries the choice");
+    }
+
+    [TestMethod]
     public void TheRestartControl_IsOnMaintenanceForTheOwnerAlone()
     {
         var maintenance = FunctionBody(AppJs(), "renderMaintenance");

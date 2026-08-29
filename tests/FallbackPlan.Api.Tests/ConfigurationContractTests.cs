@@ -33,11 +33,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheRunRecordAndItsDrillDown_AreRecordedAtOneTwentyTwo()
+    public void ContractVersion_TheDirectShipSurface_IsRecordedAtOneTwentyThree()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.22", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.23", ContractVersion.Current.ToString());
     }
 
     [TestMethod]

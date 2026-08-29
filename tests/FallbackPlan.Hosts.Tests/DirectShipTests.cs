@@ -532,6 +532,137 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
+    public async Task UpsertBackupSet_FlippingDirectShipOn_MigratesOnTheNextOpenWithoutARestart()
+    {
+        // The flag reaches the contract (1.23): flipping it from the console
+        // must take effect in THIS process. The archive handle cache used to
+        // swallow the flip until a manual service restart — the silent trap
+        // that made "edit config.json and bounce the service" the only
+        // working ceremony.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        var configurationPath = Path.Combine(_harness.StateDirectory, "config.json");
+        var staged = ClientConfiguration.Load(configurationPath);
+        (staged with
+        {
+            BackupSets = [.. staged.BackupSets.Select(set => set with { DirectShip = false })],
+        }).Save(configurationPath);
+        _harness.WriteSourceFile("docs/history.txt", "the staged era");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+        Assert.IsTrue(
+            File.Exists(Path.Combine(_harness.ArchivesRoot, set.Id, "repository-format")),
+            "the unflagged set must have staged — the fixture proves the wrong mode otherwise");
+
+        // A shape flip is not a material edit (roots and rules unchanged),
+        // so the reply is the plain acknowledgement.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["vault-a"], DirectShip: true)),
+            Timeout));
+
+        // The flip queues the seed itself — a person who just flipped will
+        // press "Back up now" before any scheduler pass, and a capture
+        // refuses until a destination holds the history. Seeding done, the
+        // very next run — same process — ships directly.
+        await WaitForAsync(
+            () => runtime.DestinationSync.Find(set.Id, "vault-a")?.BaselineCompletedAt is not null, Timeout);
+
+        _harness.WriteSourceFile("docs/second.txt", "the direct era");
+        var flipped = runtime.Configuration.BackupSets.Single();
+        var second = await Scheduler.Enqueue(runtime, flipped, DateTimeOffset.Now.AddMinutes(5), userInitiated: true)
+            .WaitAsync(Timeout);
+        Assert.AreEqual("ran", second.Outcome, second.Detail);
+
+        Assert.IsTrue(
+            File.Exists(Path.Combine(MetadataRoot, "repository-format")),
+            "the metadata store was not created — the flip did not take effect in-process");
+        Assert.IsTrue(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key == $"staging-retirable:{set.Id}"),
+            "migration must leave the standing retirement notice");
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(VaultA));
+        Assert.IsTrue(
+            Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories).Length >= 1,
+            "the flipped set's run did not ship to the destination");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_DirectShipWithoutALocalPathDestination_IsRefusedByName()
+    {
+        // A peer-only direct-ship set used to save cleanly and then refuse
+        // every capture (the sink serves local-path kinds; peer shipping
+        // follows, ADR-0046). The configuration boundary is where that dies.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('7', 32), "friend", "peer", null,
+                "mgr7e7euwdpfkggmp4astkz5ia", "friend.example:9443")),
+            Timeout));
+
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["friend"], DirectShip: true)),
+            Timeout), out var refused);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
+        Assert.Contains("local-path", refused.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_FlippingTheShapeMidRun_IsRefusedUntilTheRunSettles()
+    {
+        // Changing the storage shape swaps the set's archive out from under
+        // it; a live run must finish or be cancelled first — the delete-set
+        // rule, applied to the one edit that re-homes the repository.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"docs/bulk-{i:d2}.bin", RandomText(seed: i, length: 1_000_000));
+        }
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), Timeout), out var accepted);
+        await WaitForAsync(() => runtime.Queue.IsActive(accepted.JobId), Timeout);
+
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["vault-a"], DirectShip: false)),
+            Timeout), out var refused);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("run", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), Timeout));
+        await WaitForAsync(() => !runtime.Queue.IsActive(accepted.JobId), Timeout);
+    }
+
+    private static string RandomText(int seed, int length)
+    {
+        var random = new Random(seed);
+        var buffer = new char[length];
+        for (var i = 0; i < length; i++)
+        {
+            buffer[i] = (char)('a' + random.Next(26));
+        }
+
+        return new string(buffer);
+    }
+
+    [TestMethod]
     public async Task DirectShipSink_AShortPrefix_StillAnswersMetadataBesideTheBlobUnion()
     {
         // The router must not let a prefix that merely SHARES letters with

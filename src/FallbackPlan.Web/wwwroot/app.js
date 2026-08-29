@@ -2670,6 +2670,18 @@ function openSetEditor(set) {
       <label class="mini">priority <input type="text" id="set-priority" class="num" value="${set?.priority ?? ""}"></label>
     </div>
 
+    <div class="editor-section">
+      <label class="field">Storage shape</label>
+      <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
+      reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
+      local-path destination, and a backup waits when none is reachable. Unticked, backups stage into a
+      local archive first and copy outward after — a local buffer at the cost of a second copy on this
+      machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
+      until you retire it from the notice.</p>
+      <label class="mini"><input type="checkbox" id="set-direct-ship" ${set?.directShip ? "checked" : ""}>
+        ship straight to destinations</label>
+    </div>
+
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="set-save">${E.isNew ? "Create set" : "Save changes"}</button>
@@ -3259,6 +3271,10 @@ Object.assign(actions, {
       retention,           // all-null clears; values set — always explicit from this editor
       destinationRetention: overrides,
       priority,
+      // Always explicit from this editor (contract 1.23): null is the
+      // preserve-by-omission a pre-1.23 client sends, and an editor that
+      // shows the checkbox must say what it shows.
+      directShip: document.getElementById("set-direct-ship")?.checked ?? false,
     };
 
     // A material edit — the roots or the rules — changes what future backups

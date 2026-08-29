@@ -149,6 +149,16 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// upsert, null preserves what the set already has — what a pre-1.17 client
 /// always sends.
 /// </param>
+/// <param name="DirectShip">
+/// The set's storage shape (ADR-0046, contract 1.23): true publishes
+/// straight into the destinations with no staging archive; false stages
+/// locally and fans out after. On an upsert, null preserves what the set
+/// already has — what every pre-1.23 client sends, so an old console
+/// cannot silently convert a set. Changing it re-homes the set's
+/// repository: refused while a run is live, and a staging set flipped on
+/// migrates at its next open with staging kept as a read-only seed until
+/// the explicit retire_staging.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -160,7 +170,8 @@ public sealed record BackupSetDescriptor(
     RetentionPolicyDescriptor? Retention = null,
     IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
     IReadOnlyList<BackupRootDescriptor>? Roots = null,
-    int? Priority = null);
+    int? Priority = null,
+    bool? DirectShip = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it

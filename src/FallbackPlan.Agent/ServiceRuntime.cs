@@ -797,6 +797,32 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Closes and forgets a set's open archive handle so the next open reads
+    /// the configuration fresh — the storage-shape flip's seam (ADR-0046,
+    /// contract 1.23): a flagged staging set migrates at that next open, in
+    /// this process, no restart. The caller must have ensured no run holds
+    /// the handle; the command boundary refuses the flip while one is live.
+    /// </summary>
+    /// <param name="setId">The set whose handle to evict; absent is a no-op.</param>
+    /// <param name="cancellationToken">Cancels waiting for the archive gate.</param>
+    /// <returns>A task that completes once the handle is closed and forgotten.</returns>
+    public async ValueTask EvictArchiveAsync(string setId, CancellationToken cancellationToken)
+    {
+        await _archivesGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_archives.Remove(setId, out var open))
+            {
+                open.Dispose();
+            }
+        }
+        finally
+        {
+            _archivesGate.Release();
+        }
+    }
+
     /// <summary>Stops the service and releases the writer role.</summary>
     /// <returns>A task that completes when everything is closed.</returns>
     public async ValueTask DisposeAsync()

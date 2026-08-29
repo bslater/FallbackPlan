@@ -308,6 +308,26 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheDirectShipFlag_WireNameAndPre123Default()
+    {
+        // Contract 1.23: the set descriptor carries the storage shape. Null
+        // preserves — the semantics every field this surface adds shares —
+        // so a pre-1.23 client's upsert cannot silently convert a set.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('a', 32), "docs", "/src", null, [], [], ["vault"], DirectShip: true)),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"direct_ship\":true", modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(",\"direct_ship\":true", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpsertBackupSetCommand>(parsed, out var command);
+        Assert.IsNull(command.Set.DirectShip);
+    }
+
+    [TestMethod]
     public void TheBehindReason_WireNamesAndPre122Defaults()
     {
         // Contract 1.22: the status matrix carries the machine cause beside

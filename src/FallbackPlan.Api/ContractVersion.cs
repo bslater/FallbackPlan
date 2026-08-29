@@ -151,8 +151,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// (reason) beside the prose, and the set row gains last_completed_at —
     /// the operand the behind-demotion compares against — both additive with
     /// null defaults.
+    /// 1.23 surfaces the storage shape (ADR-0046): the set descriptor
+    /// gains direct_ship — null preserves, the semantics every additive
+    /// field on this surface shares, so a pre-1.23 client's upsert cannot
+    /// silently convert a set between staging and direct-ship. An explicit
+    /// value sets it: a direct-ship set must reference at least one
+    /// local-path destination (the sink does not serve peers yet), the
+    /// change is refused while the set has a live run, and a staging set
+    /// flipped on migrates at its next open in the same process — no
+    /// service restart — with staging retained as a read-only seed source
+    /// until retire_staging.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 22);
+    public static ContractVersion Current { get; } = new(1, 23);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>
