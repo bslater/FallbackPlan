@@ -65,6 +65,8 @@ const S = {
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
   eta: new Map(),           // jobId -> smoothed completion-rate tracking (trackEta)
   openDests: new Set(),     // "set|destination" boxes the person expanded on the overview
+  openSets: new Set(),      // set rows the person expanded on the overview
+  setsSeeded: false,        // whether the one-set default-open has been applied once
   view: "overview",
   snapshotFilter: "",
   destinations: [],         // DestinationDescriptor[]
@@ -537,10 +539,17 @@ function renderOverview() {
     return;
   }
 
+  // A lone set opens itself once — a fresh page with a single collapsed
+  // row reads empty. Only once: a row the person then closes stays closed.
+  if (!S.setsSeeded) {
+    if (sets.length === 1) S.openSets.add(sets[0].setName);
+    S.setsSeeded = true;
+  }
+
   el.innerHTML = `
     <h2>Overview</h2>
     <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.</p>
-    <div class="grid cols-2">${sets.map(renderSetCard).join("")}</div>`;
+    <div class="set-stack">${sets.map(renderSetCard).join("")}</div>`;
 
   // The CSP forbids inline style attributes, so mark widths are set from
   // script — same as the jobs view.
@@ -549,11 +558,18 @@ function renderOverview() {
   }
 
   // The overview re-renders on every status poll and progress event; a box
-  // the person opened must not snap shut under them.
+  // the person opened must not snap shut under them — set rows and the
+  // destination boxes inside them alike.
   for (const box of el.querySelectorAll("details.dest")) {
     box.addEventListener("toggle", () => {
       if (box.open) S.openDests.add(box.dataset.dest);
       else S.openDests.delete(box.dataset.dest);
+    });
+  }
+  for (const row of el.querySelectorAll("details.set")) {
+    row.addEventListener("toggle", () => {
+      if (row.open) S.openSets.add(row.dataset.set);
+      else S.openSets.delete(row.dataset.set);
     });
   }
 }
@@ -635,22 +651,33 @@ function renderSetCard(set) {
     </details>`;
   }).join("")}</div>` : `<p class="sub">No destinations declared for this set.</p>`;
 
-  return `<div class="card">
-    <h3>${esc(set.setName)} ${badge(meta, meta.label)} ${verification}</h3>
-    <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${esc(meta.blurb)}
-       ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}</p>
-    ${destinations}
-    ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-    ${liveRow}
-    <div class="actions-row">
-      <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}"
-        ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>⛊ Back up now</button>
-      <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
-      <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
-      <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}"
-        ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>Full…</button>
+  // The destinations' collapse pattern, one level up: the summary line is
+  // the glance — name, earned status, and a slim meter while a run is live —
+  // and everything else waits behind the expand. Open state is remembered
+  // across the frequent overview re-renders, like the boxes inside.
+  return `<details class="set" data-set="${esc(set.setName)}" ${S.openSets.has(set.setName) ? "open" : ""}>
+    <summary>
+      <b>${esc(set.setName)}</b>
+      ${badge(meta, meta.label)}
+      ${liveJob ? `<span class="set-live-mini"><span class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></span><span class="detail">${lpTotal > 0 ? lpRatio + "%" : "backing up"}</span></span>` : ""}
+    </summary>
+    <div class="set-body">
+      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${esc(meta.blurb)}
+         ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}
+         ${verification}</p>
+      ${destinations}
+      ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${liveRow}
+      <div class="actions-row">
+        <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}"
+          ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>⛊ Back up now</button>
+        <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
+        <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
+        <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}"
+          ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>Full…</button>
+      </div>
     </div>
-  </div>`;
+  </details>`;
 }
 
 /* ----- snapshots ----- */

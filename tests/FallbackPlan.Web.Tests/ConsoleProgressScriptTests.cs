@@ -168,6 +168,52 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheOverviewSets_StackVerticallyAndCollapse()
+    {
+        var script = AppJs();
+        var overview = FunctionBody(script, "renderOverview");
+        var card = FunctionBody(script, "renderSetCard");
+
+        // The destinations' own pattern, one level up: sets are a single
+        // vertical stack of collapsible rows, not a grid of always-open
+        // cards — a collapsed stack reads name and status at a glance.
+        Assert.Contains("set-stack", overview, StringComparison.Ordinal,
+            "sets stack vertically, full width");
+        Assert.DoesNotContain("cols-2", overview, StringComparison.Ordinal,
+            "the two-column card grid is gone from the overview");
+        Assert.Contains("details class=\"set\"", card, StringComparison.Ordinal,
+            "each set is a collapsible row");
+        Assert.Contains("S.openSets", card, StringComparison.Ordinal,
+            "an opened set must survive the overview's frequent re-renders");
+    }
+
+    [TestMethod]
+    public void TheCollapsedSetSummary_CarriesNameStatusAndLiveProgressOnly()
+    {
+        // Sliced from the set-level row's own template — the destination
+        // boxes earlier in the function have summaries of their own.
+        var card = FunctionBody(AppJs(), "renderSetCard");
+        var row = card[card.IndexOf("details class=\"set\"", StringComparison.Ordinal)..];
+        var summary = row[row.IndexOf("<summary>", StringComparison.Ordinal)
+            ..row.IndexOf("</summary>", StringComparison.Ordinal)];
+        var body = row[row.IndexOf("</summary>", StringComparison.Ordinal)..];
+
+        // Clean by construction: the summary line is the set's name, its
+        // protection badge, and — while a run is live — a slim meter.
+        // Everything else (roots, destinations, warnings, actions) waits
+        // behind the expand.
+        Assert.Contains("badge(meta", summary, StringComparison.Ordinal,
+            "the collapsed row must still show the protection status");
+        Assert.Contains("set-live-mini", summary, StringComparison.Ordinal,
+            "a running backup shows on the collapsed row as a slim meter");
+        Assert.DoesNotContain("actions-row", summary, StringComparison.Ordinal,
+            "buttons belong to the expanded body, not the glance line");
+        Assert.Contains("actions-row", body, StringComparison.Ordinal);
+        Assert.Contains("${destinations}", body, StringComparison.Ordinal,
+            "expanding a set is what reveals the per-destination stack");
+    }
+
+    [TestMethod]
     public void TheEventStream_SleepsWhileTheTabIsHidden()
     {
         // A hidden tab's pollers already pause; the SSE stream must pause
