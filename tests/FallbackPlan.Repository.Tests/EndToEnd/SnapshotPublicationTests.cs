@@ -840,6 +840,32 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task TreePublication_AnIncludeRule_NarrowsThePlanLikeTheCapture()
+    {
+        // The plan must apply the run's WHOLE rule set. The counting walk
+        // used to apply exclusions only — inclusion is enforced in the
+        // publisher — so a set with include rules over-counted its plan and
+        // the meter finished early at a fraction of 100%.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/keep.bin", Deterministic(100, 5));
+        source.AddFile("music/skip.bin", Deterministic(50, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var reporter = new RecordingReporter();
+
+        var job = Job(source) with { IncludeRules = ["docs/**"] };
+        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+            .PublishAsync(job, CancellationToken.None);
+
+        Assert.ContainsSingle(published.Files);
+        var final = reporter.Reports[^1];
+        Assert.AreEqual(1L, final.TotalFiles);
+        Assert.AreEqual(100L, final.TotalBytes);
+    }
+
+    [TestMethod]
     public async Task TreePublication_TheFeed_NamesTheFileCurrentlyBeingProcessed()
     {
         // The path on the wire (contract 1.22): an operator staring at a

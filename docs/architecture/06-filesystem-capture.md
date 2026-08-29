@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §10 · **Resolves:** [M3](../review/2026-08-architecture-review.md#m3--cross-platform-metadata-semantics-are-named-but-never-resolved)
 
-**Built:** Yes, except the no-follow handle-relative traversal §4.1 owes — see [implementation status](../implementation-status.md).
+**Built:** Yes — the no-follow handle-relative traversal §4.1 owed has since landed (names open relative to a directory descriptor, `O_NOFOLLOW`, stat re-taken from the descriptor) — see [implementation status](../implementation-status.md).
 
 ---
 

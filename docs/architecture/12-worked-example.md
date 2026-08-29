@@ -10,17 +10,21 @@
 >
 > That constraint is deliberate. Principle 6 in [`00-overview.md`](00-overview.md#3-core-principles) rejects monolithic sources of truth, and a walkthrough that redefined rules would quietly become a second one. If you are tempted to copy a normative statement into this file, link to it instead.
 >
-> **Scope note (2026-08):** this walkthrough follows a **staging set** — the
-> default shape, where publication lands in the set's staging archive and
-> fan-out carries it to destinations. A **direct-ship set**
-> ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) diverges at
-> three points: stage 3c's verify-on-reuse becomes a destination presence
-> probe under `device` trust ([03 §5.2](03-crypto.md#52-the-domains)); stage
-> 4's upload writes one sealed spool file to *every* in-scope destination
-> through the ship sink, and refuses before a byte moves if none is
-> reachable; and "what done means" has no local replica — the snapshot is
-> committed at the destinations, which are the only copies. The order of
-> steps is identical; only where the bytes land changes.
+> **Scope note (2026-08, amended):** a set has one of two **storage
+> shapes**, and since [ADR-0046](../adr/0046-direct-to-destination-publication.md)'s
+> amendment a new set referencing a local-path destination is born
+> **direct-ship** — publication writes straight into every in-scope
+> destination as it runs, and the agent keeps only metadata. The older
+> **staging** shape (publication lands in a local staging archive; fan-out
+> carries it outward afterwards) remains for existing unmigrated sets and
+> for peer-only sets until the sink serves peers. The pipeline below is
+> identical in both shapes; they diverge at exactly three points, each
+> called out in place: stage 3c's verify-on-reuse becomes a destination
+> presence probe under `device` trust ([03 §5.2](03-crypto.md#52-the-domains));
+> stage 4's upload writes one sealed spool file to *every* in-scope
+> destination through the ship sink, and stage 0 refuses before a byte
+> moves if none is reachable; and stage 10 — where the bytes end up and
+> what "done" means — differs per shape.
 
 
 Everything else in this set describes one concern at a time. This describes one *file* at a time, which is the view you need before any of the rest is legible.
@@ -29,16 +33,32 @@ Everything else in this set describes one concern at a time. This describes one 
 
 `~/Documents/accounts.sqlite` — 3,670,016 bytes (3.5 MiB), on its **second** backup. Since the last snapshot the user recorded a transaction, which rewrote one page in the middle of the file without changing its length.
 
-Defaults throughout: `fixed-v1` at 1 MiB, 128 MiB object-store blobs, Zstandard, AES-256-GCM, `repository` dedup trust domain.
+Defaults throughout, as the service actually configures a run (`CapturePolicy.Default`): `fixed-v1` at 1 MiB (`cdc-v1` is specified and benchmark-gated, not yet selectable per set), 64 MiB-target / 256 MiB-max blobs, Zstandard, AES-256-GCM. The dedup trust domain is `repository` for a staging set; a **direct-ship or write-only set runs `device`** — verify-on-reuse through the sink would pay a destination round trip per reuse.
 
 Two choices in that setup are deliberate:
 
 - **Second backup, not first.** The first backup is the trivial case where everything is new. The second is where the engine does the thing it exists to do — write 1 MiB for a 3.5 MiB file.
 - **SQLite, not a document.** A `.docx` or `.odt` is a recompressed zip container, so a one-character edit changes nearly every byte. That would illustrate the `fixed-v1` weakness ([§3.2](02-repository-format.md#32-why-fixed-size-is-the-v1-default)) without illustrating the reuse mechanism. An in-place page rewrite illustrates both, because it is the case fixed-size segmentation handles *well*.
 
-The stages below are numbered to match the publication order in [`04-concurrency-and-publication.md` §5](04-concurrency-and-publication.md#5-publication-order) exactly. Steps 2 and 3 expand into the capture algorithm from [`02-repository-format.md` §3.4](02-repository-format.md#34-capture-algorithm).
+The stages below are numbered to match the publication order in [`04-concurrency-and-publication.md` §5](04-concurrency-and-publication.md#5-publication-order) exactly, with a stage 0 (what the service does before the pipeline starts) and a stage 10 (delivery) around them. Steps 2 and 3 expand into the capture algorithm from [`02-repository-format.md` §3.4](02-repository-format.md#34-capture-algorithm).
 
 ---
+
+## 0 · The run starts
+
+Before the engine sees a byte, the service (`BackupRunner`) does five things, in order:
+
+**Journal and roots.** The job's journal row transitions to `Scanning` — every transition durable, so a stop at any instant leaves an honest record ([10 §3](10-observability.md#3-job-state-machine)). Every configured root must exist or the run refuses as recoverable before anything else: capturing with a whole labelled subtree silently missing would make everything under it read "deleted" ([ADR-0040](../adr/0040-multi-root-backup-sets.md)).
+
+**The archive, by shape.** The set's `direct_ship` flag decides what the pipeline writes to. A staging set opens its local staging archive. A direct-ship set opens its **metadata store** (`<state>/sets/<setId>/` — descriptor, keys, journal, index, snapshots; never file content) wrapped in the **ship sink**, and the sink resolves the run's write scope *before a byte moves*: every declared, defect-free, reachable local-path destination that holds the set's baseline. A destination that missed a run or awaits its seeding full backup is skipped as `behind` — its catch-up, not this run, brings it current — and if **nothing** is in scope the run refuses as a stated recoverable failure rather than fabricating protection ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §3–4, FR-DEST-015).
+
+**The baseline.** An incremental takes the set's newest catalogue snapshot as the prior; a **full** run takes none, making the snapshot both parentless and reuse-free by construction.
+
+**The rules, compiled once.** Include and exclude rules (rules-v1, [06 §7.1 in the format spec](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1)) compile against the source's case sensitivity; an invalid rule refuses the run permanently — a human must fix it, retrying cannot.
+
+**The counting pre-pass** ([ADR-0048](../adr/0048-determinate-backup-progress.md)). One metadata-only walk of the roots, under the full rule set, counts the files and bytes the capture will process and fixes the run's **plan** — the denominator every later progress report carries, so a console divides honestly. It reads no content, runs before the write intent (the declared job duration covers archiving, not counting), and honours the pause gate.
+
+**How enumeration works**, here and in the capture walk alike ([06 §1–2](06-filesystem-capture.md#1-scanner)): each directory's children are listed and sorted by **raw name bytes** — the deterministic order tree manifests require — and visited depth-first. Several roots walk as one tree under their labels, roots ordered the same way. Opens are handle-relative with `O_NOFOLLOW` where the platform allows, and the stat is re-taken from the opened descriptor, so the object classified is the object read; **symlinks are never followed** — they are captured as links. Exclusion rules prune subtrees *during* the walk; include rules are applied per file by the publisher (a source describes what exists; it never decides what happens to it). A file that cannot be read — permission, vanished mid-walk, an I/O error, a name with no faithful repository encoding — becomes a typed entry in the **error manifest** (stage 7), never a failed backup.
 
 ## 1 · Publish the write intent
 
@@ -60,15 +80,21 @@ It works only because **blob identifiers are writer-allocated rather than conten
 
 → [`04-concurrency-and-publication.md` §4](04-concurrency-and-publication.md#4-write-intent)
 
-## 2 · Scan, and find the previous version
+## 2 · Scan, and decide what kind of change this is
 
-The scanner streams the directory tree, capturing stable file identity — `FileId` on Windows, `(device, inode)` on Unix — alongside size and timestamps, and looks up the prior file-version manifest in the local catalogue.
+The scanner streams the directory tree (the enumeration rules of stage 0), capturing stable file identity — `FileId` on Windows, `(device, inode)` on Unix — alongside size and timestamps. For each file the publisher looks up the prior version in the local catalogue: **by path first, then by identity** — identity is what makes a renamed file recognisable as the same file rather than a delete plus a create.
 
-Identity rather than path is what makes a renamed file recognisable as the same file rather than a delete plus a create.
+The decision is three-way, not two-way:
 
-Here size and mtime have both changed, so the file will be read. **Had they matched the prior version, the payload would never be read at all** — that fast path is what keeps an incremental scan proportional to what changed (NFR-PERF-003).
+- **Reused verbatim** — same path, content unchanged (kind, size, mtime *and* identity all present and equal against the prior row) and metadata digest unchanged. The prior manifest's object identifier is re-emitted **verbatim** into the new tree, and the payload is never opened. This fast path is what keeps an incremental proportional to what changed (NFR-PERF-003) — and equal object identifiers are why the snapshot browser can later call the file "same" *exactly*, not heuristically.
+- **Inherited** — the bytes are unchanged but the name or metadata moved (a rename, a `chmod`). The prior manifest is fetched and exactly four fields are rewritten — name, name normalisation, metadata (from the live entry), parent-version reference — while every segment reference, the whole-file hash and the rest carry over. Still no content read ([06 §4.3](06-filesystem-capture.md#43-unchanged-bytes-are-not-an-unchanged-file)).
+- **Captured** — anything else. The file is read through stages 3–4, with a bounded read/revalidate loop if it changes mid-read, and an identity swap under a name is recorded rather than re-read (the substituted object is the truth of this walk).
 
-→ [`06-filesystem-capture.md` §1](06-filesystem-capture.md#1-scanner)
+Here size and mtime have both changed on the same identity: **captured**.
+
+A caution the comparison encodes: a prior row missing any of the facts — a rebuilt catalogue holds no identities, an old row no metadata digest — counts as *changed*, never as *unchanged*. The short-circuit disables itself rather than weakening.
+
+→ [`06-filesystem-capture.md` §1, §4](06-filesystem-capture.md#1-scanner)
 
 ## 3 · Segment, hash, compare, compress, encrypt, pack
 
@@ -99,20 +125,18 @@ SHA-256 rather than the faster BLAKE3 because the standalone recovery tool must 
 
 ### 3c · Decide what actually needs storing
 
-Positional comparison against the prior version first:
+Each segment's content identifier yields its keyed **object identifier**, and that gets the reuse question — a catalogue lookup guarded by the **dedup trust gate**:
 
 ```text
-seg 0   content-id 9a4f…   ==  prior seg 0   → reuse
-seg 1   content-id c17b…   ==  prior seg 1   → reuse
-seg 2   content-id 55e8…   !=  prior seg 2   → CHANGED
-seg 3   content-id 2d90…   ==  prior seg 3   → reuse
+seg 0   object-id 8b02…   catalogue hit, this writer's own record   → reuse
+seg 1   object-id d4c7…   catalogue hit, this writer's own record   → reuse
+seg 2   object-id 3e91…   catalogue miss                            → STORE
+seg 3   object-id 6f15…   catalogue hit, this writer's own record   → reuse
 ```
 
-Segment 2 then gets a repository-wide lookup keyed on `(content identifier, segmentation profile, dedup trust domain, writer attribution)`. Assume it misses — genuinely new bytes.
+The gate's order matters. A catalogue hit is first checked against the store itself — a memoized **blob presence probe**, because a catalogue row can outlive the object it describes (for a direct-ship set this probe asks the destinations, which is what keeps dedupe honest with no local content). Then attribution: **a record this device wrote is reused free in every domain** — which is why a single-writer repository, like this one, performs zero verification reads and the whole comparison above costs three index lookups. Only a hit on *another* writer's record consults the domain: `device` refuses it, `repository` (the staging default) fetches, decrypts and confirms the content identifier before referencing it — skipping that check is how a member with a faulty hashing path silently corrupts another device's backup, detectable only at restore, when the source is gone.
 
 **Only segment 2 continues through the pipeline.** 1 MiB written for a 3.5 MiB file. Reuse costs nothing at all: the new manifest simply names the same object identifiers for segments 0, 1 and 3.
-
-Had the lookup *hit* on a segment written by another device, the default `repository` domain would fetch it, decrypt it, and confirm its content identifier before referencing it. Skipping that check is how a member with a faulty hashing path silently corrupts another device's backup — detectable only at restore, when the source is gone.
 
 → [`03-crypto.md` §5](03-crypto.md#5-deduplication-trust-domains), [ADR-0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md)
 
@@ -233,15 +257,25 @@ The write intent is retired and an audit record written. The blobs it covered ar
 
 ## 9 · Mark the job complete
 
+The catalogue is projected — blobs, the applied delta, the snapshot row, every tree path, and each new file version with the identity and metadata digest the *next* incremental's stage 2 compares against. A cache write, never a correctness step: a lost catalogue rebuilds from the repository. The journal row settles with its **run record** ([ADR-0050](../adr/0050-completed-run-record-and-drill-down.md)) — files seen, done, reused and failed, bytes read and stored, the counted plan — and the error manifest's failures stay readable on demand (`job_failures`), so a completed job can always say what it did.
+
+## 10 · Delivery — where the bytes end up
+
+**Direct-ship (the default for local-path sets)**: delivery already happened. Every put in stages 4–7 fanned to each in-scope destination as it was made — highest priority first, the rest concurrently — so the run's completion *is* the destinations holding it, and the sync ledger records each destination's success with the run's own timestamp: no window in which a status poll can read "behind". A destination that was offline or dropped mid-run is named in the ledger and healed by **catch-up**: the same fan-out machinery, copying through the sink, which reads each object from whichever sibling holds it.
+
+**Staging**: the snapshot committed to the local staging archive, and fan-out now carries it outward as a separate scheduler phase — per destination, retention-converged, with every outcome (success, address defect, missing directory, failure) recorded in the per-`(set, destination)` sync ledger that the status matrix reads. Between the commit and that pass, a destination that held the previous backup reads `behind (catching-up)` while the set **keeps the badge its held copy earns** — the self-healing window is named, never dressed as degradation ([ADR-0050](../adr/0050-completed-run-record-and-drill-down.md)'s amendment).
+
+→ [`09-replication-and-peers.md` §4.1](09-replication-and-peers.md#41-the-direct-write-path), [ADR-0046](../adr/0046-direct-to-destination-publication.md), [ADR-0034](../adr/0034-hub-and-spoke-destinations.md)
+
 ---
 
 ## What "done" actually means
 
-The snapshot is now **committed to the local replica** — every object it references is durable *there*. Commit is a per-replica property, always achievable, and it is what makes a replica independently restorable.
+For a staging set the snapshot is now **committed to the local replica** — every object it references is durable *there*. Commit is a per-replica property, always achievable, and it is what makes a replica independently restorable. For a **direct-ship set there is no local replica**: the snapshot is committed at each destination that completed the run — the only copies — and stage 0's refusal governs the case where none could.
 
-Replication to a peer or a cloud store is **separate state**, tracked per `(snapshot, destination)`. A peer that has been switched off for a fortnight delays policy compliance; it does not block the backup, and it does not stop the next incremental from having a recent version to compare against.
+Replication to a further peer or a cloud store is **separate state**, tracked per `(snapshot, destination)`. A peer that has been switched off for a fortnight delays policy compliance; it does not block the backup, and it does not stop the next incremental from having a recent version to compare against.
 
-And the status will **not** say `protected` if the local repository sits on the same disk as `~/Documents`. That is `captured`. `protected` requires a replica in a different failure domain — because a copy that dies with the original was never a backup.
+And the status will **not** say `protected` if the only copy sits on the same disk as `~/Documents`. That is `captured`. `protected` requires a replica in a different failure domain — because a copy that dies with the original was never a backup.
 
 → [`04-concurrency-and-publication.md` §6](04-concurrency-and-publication.md#6-commit-versus-replication), [`§6.4`](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain), [ADR-0018](../adr/0018-replica-failure-domains.md)
 

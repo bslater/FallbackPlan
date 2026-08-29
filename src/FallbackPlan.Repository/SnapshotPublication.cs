@@ -229,14 +229,18 @@ public sealed partial class PublicationOrchestrator
 
         // The plan, before any byte moves (FR-SVC-006): one counting walk
         // under the same compiled rules the capture judges by, so the total
-        // and the capture cannot disagree about what is in scope. Leaves
-        // only — a scan failure yields no leaf here and a failure there, so
-        // a client clamps rather than divides by a lie. The walk reads no
-        // content and runs before the write intent, so the declared job
-        // duration covers archiving, not counting; the pause gate is
-        // honoured so a preemptor need not wait for the count. The metadata
-        // matrix is switched off — rules don't consult it, and every
-        // per-entry syscall skipped is counting time saved.
+        // and the capture cannot disagree about what is in scope. The walk
+        // prunes exclusions; the include half is applied per leaf below,
+        // mirroring the capture loop's own split — counting exclusions only
+        // over-counted a set with include rules, and its meter finished at
+        // a fraction of 100%. Leaves only — a scan failure yields no leaf
+        // here and a failure there, so a client clamps rather than divides
+        // by a lie. The walk reads no content and runs before the write
+        // intent, so the declared job duration covers archiving, not
+        // counting; the pause gate is honoured so a preemptor need not wait
+        // for the count. The metadata matrix is switched off — rules don't
+        // consult it, and every per-entry syscall skipped is counting time
+        // saved.
         long plannedFiles = 0;
         long plannedBytes = 0;
         var countingOptions = options with
@@ -253,7 +257,8 @@ public sealed partial class PublicationOrchestrator
                 await countingGate.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (counted is ScanEvent.Leaf leaf)
+            if (counted is ScanEvent.Leaf leaf
+                && (rules is null || rules.IsCaptured(leaf.Entry.RelativePath.Normalize(NormalizationForm.FormC))))
             {
                 plannedFiles++;
                 plannedBytes += leaf.Entry.Length;
