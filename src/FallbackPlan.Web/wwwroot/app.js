@@ -715,6 +715,23 @@ function renderJobs() {
   }
 }
 
+function truncateMiddle(path, max) {
+  // The middle gives way first: the top folder survives at the front, the
+  // parent folder and the file name survive at the back — the two things
+  // that identify what is being processed. The full path rides the title.
+  if (!path || path.length <= max) return path ?? "";
+  const sep = path.includes("\\") ? "\\" : "/";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  const name = parts[parts.length - 1] ?? path;
+  const parent = parts.length > 1 ? parts[parts.length - 2] : "";
+  const head = parts.length > 2 ? parts[0] : "";
+  const tail = parent && parts.length > 2 ? `${parent}${sep}${name}` : name;
+  const framed = head ? `${head}${sep}…${sep}${tail}` : `…${sep}${tail}`;
+  if (framed.length <= max) return framed;
+  // Even the frame is too long: keep the end of the path, where the name is.
+  return "…" + path.slice(-(max - 1));
+}
+
 function renderLiveJob(job) {
   const progress = S.progress.get(job.id);
   // The journal outranks the progress stream for Paused (ADR-0047
@@ -739,6 +756,9 @@ function renderLiveJob(job) {
     <h3>${esc(setName(job.backupSetId))} ${badge(meta, meta.label)}</h3>
     <p class="sub">Job <span class="mono">${esc(job.id)}</span> · started ${esc(rel(job.startedAt))}</p>
     ${paused ? `<p class="sub">${esc(job.detail || "Suspended for a higher-priority run — it resumes when a pool slot frees.")}</p>` : ""}
+    ${!paused && progress?.currentFile
+      ? `<p class="sub mono job-file" title="${esc(progress.currentFile)}">${esc(truncateMiddle(progress.currentFile, 72))}</p>`
+      : ""}
     <div class="meter ${scanning ? "indeterminate" : ""}"><i data-w="${ratio}"></i></div>
     ${progress ? `<div class="job-stats">
         ${counting

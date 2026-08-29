@@ -840,6 +840,34 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task TreePublication_TheFeed_NamesTheFileCurrentlyBeingProcessed()
+    {
+        // The path on the wire (contract 1.22): an operator staring at a
+        // seventeen-hour meter wants to know WHAT is slow, and progress
+        // travels only to authenticated watchers. 300 files cross the
+        // coalescing interval, so mid-run reports exist to carry it.
+        var source = new FakeFileSystemSource();
+        for (var i = 0; i < 300; i++)
+        {
+            source.AddFile($"docs/file-{i:d3}.bin", Deterministic(10, (byte)i));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = new KeyHierarchy(MasterKey);
+        var reporter = new RecordingReporter();
+
+        await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+            .PublishAsync(Job(source), CancellationToken.None);
+
+        Assert.Contains(
+            report => report.CurrentFile is not null
+                && report.CurrentFile.StartsWith("docs/file-", StringComparison.Ordinal),
+            reporter.Reports,
+            "no report named the file being processed — the feed carries counts alone");
+    }
+
+    [TestMethod]
     public async Task TreePublication_ARuleExcludedFile_IsAbsentFromThePlan()
     {
         // The count applies the run's own rules — a plan that counted files

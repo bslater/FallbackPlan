@@ -308,6 +308,28 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheCurrentFile_WireNameAndPre122Default()
+    {
+        // Contract 1.22: the live feed names the file being processed. A
+        // pre-1.22 frame that never mentions it reads as null — the
+        // counts-only feed every earlier client sent.
+        var modern = JsonSerializer.Serialize(
+            new FallbackPlan.Domain.Jobs.JobProgress(
+                "job-1", FallbackPlan.Domain.Jobs.JobState.Publishing, 10, 4, 1, 0, 4096, 2048,
+                TotalFiles: 500, TotalBytes: 1_000_000, CurrentFile: "docs/photos/img-001.jpg"),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"current_file\":\"docs/photos/img-001.jpg\"", modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(",\"current_file\":\"docs/photos/img-001.jpg\"", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var parsed = JsonSerializer.Deserialize<FallbackPlan.Domain.Jobs.JobProgress>(
+            old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(parsed.CurrentFile);
+    }
+
+    [TestMethod]
     public void TheSessionCarryingWatch_WireNameAndPre120Default()
     {
         // The watch frame's session (contract 1.20): named on the bytes,

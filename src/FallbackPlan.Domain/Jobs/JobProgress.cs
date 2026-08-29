@@ -9,9 +9,13 @@ namespace FallbackPlan.Domain.Jobs;
 /// job identity because it travels to an authenticated local caller or a paired
 /// remote client and is shown to the person whose data it is, while the
 /// OpenTelemetry instruments keep their closed four-attribute allowlist
-/// (ADR-0027 §3, NFR-PRIV-002). And it is <b>not a path feed</b>: counts only,
-/// no filename, no path, no object identifier — so the privacy question that
-/// forced the telemetry allowlist never has to be re-litigated here.
+/// (ADR-0027 §3, NFR-PRIV-002). And it is <b>not a diagnostics record</b>:
+/// nothing here reaches a log or leaves the machine unauthenticated. Since
+/// contract 1.22 it names the one path being processed
+/// (<paramref name="CurrentFile"/>, ADR-0050) — the watch stream has been
+/// session-gated since 1.20, so the audience is exactly the authenticated
+/// callers <c>list_directory</c> already shows every path to; everything
+/// else stays counts.
 /// </para>
 /// <para>
 /// <see cref="State"/> is the latest stage the job has entered, not a claim
@@ -39,6 +43,12 @@ namespace FallbackPlan.Domain.Jobs;
 /// and a time estimate only when this is present.
 /// </param>
 /// <param name="TotalBytes">The planned files' logical bytes, on the same terms.</param>
+/// <param name="CurrentFile">
+/// The file the run is processing, as its most recent report knew it —
+/// source-relative, best-effort, coalesced with the rest of the feed. Null
+/// from producers that do not name one (contract pre-1.22, the counting
+/// pass, verification sweeps).
+/// </param>
 public sealed record JobProgress(
     string JobId,
     JobState State,
@@ -49,7 +59,8 @@ public sealed record JobProgress(
     long BytesSeen,
     long BytesStored,
     long? TotalFiles = null,
-    long? TotalBytes = null);
+    long? TotalBytes = null,
+    string? CurrentFile = null);
 
 /// <summary>
 /// Where a running job reports progress. Distinct from

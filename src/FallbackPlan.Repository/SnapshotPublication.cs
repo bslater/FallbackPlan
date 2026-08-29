@@ -1215,10 +1215,11 @@ public sealed partial class PublicationOrchestrator
     /// Turns the publication's own knowledge into progress a client can watch.
     /// </summary>
     /// <remarks>
-    /// Counts only — files and bytes, never a path or a filename. Progress
-    /// travels to an authenticated caller and may carry job identity for that
-    /// reason (ADR-0029 section 5), but nothing here needs to name a file, so
-    /// nothing here does.
+    /// Counts and, since contract 1.22, the one path being processed
+    /// (ADR-0050): progress travels only to authenticated callers — the same
+    /// audience directory listings show every path to — and an operator
+    /// staring at a long meter wants to know WHAT is slow. The path rides
+    /// the coalesced feed, so it is a sample of the walk, not a ledger of it.
     /// </remarks>
     private sealed class PublicationProgress(IJobProgressReporter? reporter, ReadOnlyMemory<byte> snapshotId)
     {
@@ -1241,6 +1242,7 @@ public sealed partial class PublicationOrchestrator
         private long _lastEmittedFiles;
         private long _lastEmittedAt;
         private JobState _lastState = (JobState)(-1);
+        private string? _currentFile;
 
         public void Enter(JobState state) => Emit(state, files: 0, failures: 0, force: state != _lastState);
 
@@ -1282,6 +1284,11 @@ public sealed partial class PublicationOrchestrator
             }
 
             _folded = files.Count;
+            if (files.Count > 0)
+            {
+                _currentFile = files[^1].RelativePath;
+            }
+
             Emit(state, files.Count, failures, force: state != _lastState);
         }
 
@@ -1303,7 +1310,8 @@ public sealed partial class PublicationOrchestrator
             _lastEmittedFiles = files;
             _lastEmittedAt = Stopwatch.GetTimestamp();
             reporter.Report(new JobProgress(
-                _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes));
+                _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes,
+                _currentFile));
         }
     }
 }

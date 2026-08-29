@@ -143,7 +143,10 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// frame eventually). Two new read verbs serve the details on demand:
     /// job_changes (the run's snapshot against its predecessor — exact
     /// counts, bounded samples) and job_failures (the error manifest's
-    /// paths and typed reasons). And the status matrix stops summarising the
+    /// paths and typed reasons). The live feed gains current_file — the one
+    /// path being processed, to exactly the authenticated audience
+    /// list_directory already shows every path to; null from older
+    /// services. And the status matrix stops summarising the
     /// most common degradation away: destination rows gain a machine cause
     /// (reason) beside the prose, and the set row gains last_completed_at —
     /// the operand the behind-demotion compares against — both additive with

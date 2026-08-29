@@ -389,6 +389,9 @@ details.dest[open] > summary::before { content: "▾"; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* The file being processed: one line, already middle-truncated in script —
+   the CSS clamp only catches narrow windows the character budget missed. */
+.job-file { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; font-size: 12px; }
 .job-stats b { color: var(--text); font-weight: 650; }
 
 /* ---------- notices ---------- */

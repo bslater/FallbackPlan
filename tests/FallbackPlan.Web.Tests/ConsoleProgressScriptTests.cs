@@ -66,6 +66,23 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheCurrentFile_IsShownOnTheCard_TruncatedInTheMiddle()
+    {
+        var script = AppJs();
+        var card = FunctionBody(script, "renderLiveJob");
+
+        Assert.Contains("currentFile", card, StringComparison.Ordinal,
+            "the card no longer names the file being processed (contract 1.22)");
+        Assert.Contains("truncateMiddle(", card, StringComparison.Ordinal,
+            "a long path is truncated in the middle — the volume and the leaf survive, the middle gives way");
+
+        var truncate = FunctionBody(script, "truncateMiddle");
+        Assert.Contains("…", truncate, StringComparison.Ordinal);
+        Assert.Contains("title=", card, StringComparison.Ordinal,
+            "the full path stays reachable — hover shows what the truncation hid");
+    }
+
+    [TestMethod]
     public void TheCountingPhase_IsNamedWhileThePlanIsStillOpen()
     {
         // Before the totals land the run is walking the source to count it;
