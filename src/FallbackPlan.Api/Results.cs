@@ -637,6 +637,13 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// destination waiting on its seed, skipped by incrementals until it
 /// holds one. Contract 1.19.
 /// </param>
+/// <param name="Reason">
+/// The machine cause behind a not-in-sync state (contract 1.22, ADR-0027
+/// §4): <c>catching-up</c> (a backup completed after the last sync; the
+/// next pass heals it unaided), <c>awaiting-seed</c>, <c>never-synced</c>,
+/// or <c>reported</c> (<paramref name="Detail"/> carries the ledger's own
+/// words). Null on a healthy row and from older services.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -646,18 +653,27 @@ public sealed record DestinationStatusDescriptor(
     string FailureDomain,
     string Verification,
     ulong? BaselineCompletedAt = null,
-    bool NeedsFull = false);
+    bool NeedsFull = false,
+    string? Reason = null);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>
 /// <param name="Status">The derived status — computed from the matrix, never beside it (ADR-0028 §8).</param>
 /// <param name="NextRun">When the schedule next fires, ISO-8601, or null for manual-only.</param>
+/// <param name="LastCompletedAt">
+/// When the set's last committed backup settled, Unix milliseconds — the
+/// operand every destination's catch-up demotion compares against, so a
+/// client can render "behind the backup that finished at …" without
+/// re-deriving anything (contract 1.22). Null when no run has committed,
+/// and from older services.
+/// </param>
 /// <param name="Destinations">The matrix rows, in declaration order.</param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
     string? NextRun,
-    IReadOnlyList<DestinationStatusDescriptor> Destinations);
+    IReadOnlyList<DestinationStatusDescriptor> Destinations,
+    ulong? LastCompletedAt = null);
 
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from

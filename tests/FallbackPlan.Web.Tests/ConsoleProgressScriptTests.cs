@@ -125,6 +125,22 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheDestinationReason_IsRenderedWithItsTimestamps()
+    {
+        var card = FunctionBody(AppJs(), "renderSetCard");
+
+        // The service carries the cause (contract 1.22); the console renders
+        // its words and, for the self-healing catch-up window, the two
+        // timestamps the demotion compared — presentation only, never a
+        // re-derivation (ADR-0028 §8).
+        Assert.Contains("d.reason", card, StringComparison.Ordinal,
+            "the destination row no longer renders the machine cause");
+        Assert.Contains("catching-up", card, StringComparison.Ordinal);
+        Assert.Contains("set.lastCompletedAt", card, StringComparison.Ordinal,
+            "the catch-up note names the backup the destination is behind");
+    }
+
+    [TestMethod]
     public void TheOverviewDestinations_StackVerticallyInShipOrder()
     {
         var card = FunctionBody(AppJs(), "renderSetCard");

@@ -1,8 +1,8 @@
 namespace FallbackPlan.Cli.Tests;
 
 /// <summary>
-/// The <c>jobs</c> verb (ADR-0050): the job journal from the command line —
-/// the history list, and one run's report by id.
+/// The <c>jobs</c> verb (FR-SVC-018; ADR-0050): the job journal from the
+/// command line — the history list, and one run's report by id.
 /// </summary>
 /// <remarks>
 /// Like <c>logs</c>, it is a read verb with no local fallback: the journal

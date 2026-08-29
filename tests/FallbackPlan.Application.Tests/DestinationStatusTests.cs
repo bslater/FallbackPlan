@@ -8,7 +8,8 @@ namespace FallbackPlan.Application.Tests;
 /// backup are combined into what the status derivation consumes. It exists so
 /// the service handler and the console cannot answer the same question
 /// differently — they had already drifted into deriving the failure domain and
-/// the in-sync-but-behind demotion twice each.
+/// the in-sync-but-behind demotion twice each. Since ADR-0050 it is also where
+/// every demotion states its cause (FR-DEST-004's carried reason).
 /// </summary>
 [TestClass]
 public sealed class DestinationStatusTests
@@ -59,6 +60,75 @@ public sealed class DestinationStatusTests
             lastCompletedAt: 5_000, Now, DistinctDevice);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
+    }
+
+    [TestMethod]
+    public void Describe_TheDemotedRow_CarriesTheCatchUpCauseAndDetail()
+    {
+        // ADR-0027 §4: "the per-destination reason carried, not summarised
+        // away". This demotion was the one origin of `behind` with no reason
+        // at all — the ledger's LastError is nulled by every success, so the
+        // console rendered "'local' is behind." full stop, minutes after a
+        // successful backup, and nobody could see that the state was a
+        // self-healing catch-up window rather than a fault.
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
+            lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
+        Assert.AreEqual(SyncCause.CatchingUp, input.Cause);
+        Assert.IsNotNull(input.Detail, "the demotion must say why, or the warning renders a bare state");
+        Assert.Contains("catches up", input.Detail, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_APairOwedItsSeed_SaysSoInTheDetail()
+    {
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot,
+            Row(DestinationSyncState.InSync) with { NeedsFull = true },
+            lastCompletedAt: 0, Now, DistinctDevice);
+
+        Assert.AreEqual(SyncCause.AwaitingSeed, input.Cause);
+        Assert.Contains("full backup", input.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_NeverAttempted_SaysNoSyncHasEverRun()
+    {
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(SyncCause.NeverSynced, input.Cause);
+        Assert.Contains("never", input.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_AShipReportedReason_KeepsTheLedgersOwnWords()
+    {
+        // RecordBehind writes a stated reason (the owed seed, the missed
+        // run); those words are the truth and must not be paraphrased here.
+        var record = Row(DestinationSyncState.Behind) with
+        {
+            LastError = "this destination missed a run and holds an incomplete history; catch-up brings it current first",
+        };
+
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(SyncCause.Reported, input.Cause);
+        Assert.AreEqual(record.LastError, input.Detail);
+    }
+
+    [TestMethod]
+    public void Describe_InSyncAndCurrent_CarriesNoCause()
+    {
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 5_000),
+            lastCompletedAt: 5_000, Now, DistinctDevice);
+
+        Assert.AreEqual(SyncCause.None, input.Cause);
+        Assert.IsNull(input.Detail, "a healthy row must not invent a complaint");
     }
 
     [TestMethod]

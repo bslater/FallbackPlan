@@ -95,14 +95,33 @@ public static class DestinationStatus
                 Sync = DestinationSyncState.Failed,
                 Domain = FailureDomain.SameVolume,
                 Detail = "no longer declared",
+                Cause = SyncCause.Reported,
             };
         }
 
+        // Every demotion states its cause (ADR-0027 §4: "the per-destination
+        // reason carried, not summarised away"). The ledger's own words win
+        // where it wrote any; the demotions below are decided here, so only
+        // here can they be explained.
         var sync = record?.State ?? DestinationSyncState.Behind;
+        var cause = SyncCause.None;
+        var detail = record?.LastError;
+        if (record is null)
+        {
+            cause = SyncCause.NeverSynced;
+            detail = "never synced — no sync has been attempted for this destination yet";
+        }
+
         if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompletedAt)
         {
             // In sync as of an older snapshot: the staging archive moved on.
+            // The one origin of `behind` that used to carry no reason at all
+            // — LastError is nulled by every success — so minutes after a
+            // successful backup the console read "behind." full stop, for a
+            // state that heals unaided on the next sync pass.
             sync = DestinationSyncState.Behind;
+            cause = SyncCause.CatchingUp;
+            detail = "a backup completed after this destination's last sync — it catches up on the next sync pass";
         }
 
         if (sync == DestinationSyncState.InSync && record is { NeedsFull: true })
@@ -113,6 +132,13 @@ public static class DestinationStatus
             // a brand-new pair has no success to be older than anything
             // (ADR-0047 §5).
             sync = DestinationSyncState.Behind;
+            cause = SyncCause.AwaitingSeed;
+            detail ??= "owed its full backup — incrementals skip this destination until the seed lands";
+        }
+
+        if (cause == SyncCause.None && detail is not null)
+        {
+            cause = SyncCause.Reported;
         }
 
         return new DestinationStatusInput
@@ -123,7 +149,8 @@ public static class DestinationStatus
             Domain = DomainOf(declared, setRoots, deviceIdOf),
             RequiresVerification = declared.RequiresVerification,
             LastSuccessAt = record?.LastSuccessAt,
-            Detail = record?.LastError,
+            Detail = detail,
+            Cause = cause,
             SyncedSequence = record?.SyncedSequence ?? 0,
             VerifiedAt = record?.VerifiedAt,
             VerifiedSequence = record?.VerifiedSequence ?? 0,
@@ -197,6 +224,33 @@ public static class DestinationStatus
 }
 
 /// <summary>
+/// Why a destination row is not in sync (ADR-0050; contract 1.22's
+/// <c>reason</c>): the machine cause beside the prose, decided in
+/// <see cref="DestinationStatus.Describe"/> — the one place the demotions
+/// happen, so the one place they can be explained.
+/// </summary>
+public enum SyncCause
+{
+    /// <summary>Nothing to explain — the row is in sync, or no cause is known.</summary>
+    None = 0,
+
+    /// <summary>
+    /// A backup completed after this destination's last sync; the next sync
+    /// pass heals it unaided. The self-healing window, not a fault.
+    /// </summary>
+    CatchingUp = 1,
+
+    /// <summary>The destination is owed its seeding full backup (ADR-0047 §5).</summary>
+    AwaitingSeed = 2,
+
+    /// <summary>No sync has ever been attempted for this pair.</summary>
+    NeverSynced = 3,
+
+    /// <summary>The ledger recorded its own reason; <see cref="DestinationStatusInput.Detail"/> carries those words.</summary>
+    Reported = 4,
+}
+
+/// <summary>
 /// One destination's observed facts, as the derivation consumes them
 /// (ADR-0027 amendment): plain values gathered by the host — the sync ledger
 /// supplies the state, the platform supplies the failure-domain comparison,
@@ -229,8 +283,19 @@ public sealed record DestinationStatusInput
     /// <summary>When this pair last synced, Unix milliseconds; null when never.</summary>
     public ulong? LastSuccessAt { get; init; }
 
-    /// <summary>What the last failure said, for the warning to repeat verbatim.</summary>
+    /// <summary>
+    /// Why the row is not simply in sync, for the warning to repeat verbatim
+    /// (ADR-0027 §4): the ledger's own failure words, or the demotion's
+    /// stated cause. Null on a healthy row — a state that needs no excuse.
+    /// </summary>
     public string? Detail { get; init; }
+
+    /// <summary>
+    /// The machine form of <see cref="Detail"/> (contract 1.22): which kind
+    /// of not-in-sync this is, so a client can distinguish the self-healing
+    /// catch-up window from a reported fault without parsing prose.
+    /// </summary>
+    public SyncCause Cause { get; init; }
 
     /// <summary>
     /// The highest publication sequence the last successful sync delivered —

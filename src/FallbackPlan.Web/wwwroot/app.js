@@ -623,6 +623,9 @@ function renderSetCard(set) {
         <div><span class="detail">Possession</span><span>${esc(d.verification)}</span></div>
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
+        ${d.reason === "catching-up" && set.lastCompletedAt
+          ? `<div class="dest-note detail">last backup finished ${esc(fmtWhen(set.lastCompletedAt))}; this destination last synced ${esc(rel(d.lastSuccessAt))} — heals on the next sync pass</div>`
+          : ""}
       </div>
     </details>`;
   }).join("")}</div>` : `<p class="sub">No destinations declared for this set.</p>`;

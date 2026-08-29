@@ -212,7 +212,21 @@ set's staging archive. `Protected` requires at least one destination outside
 the source's failure domain **in sync** — staging never counts
 ([ADR-0018 Amendment 1](0018-replica-failure-domains.md)). Every destination
 behind, unreachable or refusing is `Degraded`, with the per-destination reason
-carried, not summarised away. A destination kind the schema accepts but the
+carried, not summarised away.
+
+> **Amended by [ADR-0050](0050-completed-run-record-and-drill-down.md)
+> (2026-08).** The reason clause was unmet on the most common `behind` of
+> all: the demotion the derivation itself decides — a destination whose last
+> sync predates the set's last completed backup — carried no reason, because
+> the ledger's error text is nulled by every success. Since ADR-0050 every
+> such demotion states its cause in the row's detail (so the existing
+> warning template carries it to every client), and contract 1.22 adds the
+> machine cause code plus the compared `last_completed_at` operand to the
+> wire. The catch-up window is named as the self-healing transient it is
+> ([ADR-0035 §8](0035-destination-fitness.md)'s warning semantics), never a
+> bare "behind".
+
+A destination kind the schema accepts but the
 runtime cannot serve yet reports as exactly that — a stated incapacity, not a
 failure. The never-merge rules hold at the same single derivation site, which
 is the point of having one: the matrix is the truth and every roll-up is

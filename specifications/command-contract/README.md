@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.21
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.22
 
 ---
 
@@ -45,7 +45,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.21 — 49 commands. One line each; parameters, results
+The register as of 1.22 — 51 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -60,9 +60,13 @@ setup/kit/sign-in state), `provision_installation` + `confirm_recovery_kit`
 `preview_set_changes`, `export_configuration` (ADR-0037/0038/0040). Since
 1.17 a new set's upsert answers with its queued first backup.
 
-**Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs`,
-`get_status` (the per-set, per-destination matrix — since 1.19 with each
-destination's baseline facts).
+**Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
+1.22 with the run's terminal numbers on each row and an optional newest-N
+bound), `job_changes` / `job_failures` (since 1.22 — one run's diff against
+its predecessor and its capture failures, read from the repository on
+demand), `get_status` (the per-set, per-destination matrix — since 1.19
+with each destination's baseline facts, since 1.22 with each demotion's
+machine cause and the set's `last_completed_at`).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
@@ -101,3 +105,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.19 | The full-backup facts on the status matrix: each destination row says when its baseline completed and whether the pair is owed its seed — additive with defaults, invisible to a pre-1.19 client ([ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md) §§5–6) |
 | 1.20 | The counted plan on the progress stream: a backup counts its work before archiving and every progress report then carries `total_files` and `total_bytes` — null until the count completes and from producers that never count, so additive with defaults; a pre-1.20 client keeps its indeterminate meter. The watch frame also carries the client's session token, so a signed-in console's event stream is authenticated — before this, every watch on an installation with accounts was answered with an empty stream ([ADR-0048](../../docs/adr/0048-determinate-backup-progress.md)) |
 | 1.21 | `restart_service`: an in-process recycle of the running service — Owner-only, local callers only, refused before setup and under `--once`; the acknowledgement is flushed before teardown and the restart signs every session out ([ADR-0049](../../docs/adr/0049-service-lifecycle-hygiene.md)) |
+| 1.22 | The completed-run record and drill-down: the job row carries the run's terminal numbers (nullable, additive — a pre-1.22 row reads "not recorded", never zero) and `list_jobs` takes an optional newest-N bound; `job_changes` and `job_failures` answer one run's diff and failure listing from the repository with exact counts and bounded samples; the progress stream names the `current_file` being processed; and the status matrix carries each demotion's `reason` plus the set's `last_completed_at` — all additive with null defaults ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)) |

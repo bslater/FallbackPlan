@@ -133,8 +133,8 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// setup and under --once. The acknowledgement is flushed before the
     /// teardown, and the restart signs every session out (the FR-USR-003
     /// contract, unchanged).
-    /// 1.22 is the completed-run record and its drill-down (ADR-0050),
-    /// plus the carried behind-reason (ADR-0027 §4). The job
+    /// 1.22 is the completed-run record and its drill-down (ADR-0050,
+    /// FR-SVC-018), plus the carried behind-reason (ADR-0027 §4). The job
     /// row gains the run's terminal numbers — files_seen/done/reused/failed,
     /// bytes_seen/stored, total_files/total_bytes — all nullable with null
     /// defaults, so an old service's rows and a pre-1.22 journal's rows read

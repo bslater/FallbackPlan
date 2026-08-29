@@ -1,10 +1,10 @@
 namespace FallbackPlan.Web.Tests;
 
 /// <summary>
-/// The completed-job drill-down on the Jobs view (ADR-0050), pinned
-/// structurally: history rows open a report, the report summarises the run
-/// from the row's own stats joined to its snapshot, and the details —
-/// what changed, what failed — are asked of the service on demand.
+/// The completed-job drill-down on the Jobs view (FR-SVC-018; ADR-0050),
+/// pinned structurally: history rows open a report, the report summarises
+/// the run from the row's own stats joined to its snapshot, and the details
+/// — what changed, what failed — are asked of the service on demand.
 /// </summary>
 [TestClass]
 public sealed class ConsoleJobsScriptTests

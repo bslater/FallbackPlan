@@ -301,6 +301,46 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_ABehindDestination_NamesWhyInItsWarning()
+    {
+        // The demotion's reason travels end to end (ADR-0027 §4): a
+        // destination read as behind because a backup completed after its
+        // last sync must say so in the set's warning — "'local' is behind."
+        // full stop was the console's whole story for the most common,
+        // self-healing degradation.
+        var demoted = DestinationStatus.Describe(
+            "local",
+            new DestinationConfiguration
+            {
+                Id = new string('9', 32),
+                Name = "local",
+                Kind = DestinationKind.LocalPath,
+                Path = "/mnt/local",
+            },
+            ["/home/someone/documents"],
+            new DestinationSyncRecord
+            {
+                SetId = new string('a', 32),
+                Destination = "local",
+                State = DestinationSyncState.InSync,
+                LastAttemptAt = 1_000,
+                LastSuccessAt = 1_000,
+            },
+            lastCompletedAt: 5_000,
+            nowUnixMilliseconds: 10_000,
+            deviceIdOf: path => (ulong)path.Length);
+
+        var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [demoted] });
+
+        Assert.AreEqual(ProtectionState.Degraded, status.State);
+        Assert.Contains(
+            warning => warning.Contains("'local' is behind:", StringComparison.Ordinal)
+                && warning.Contains("catches up", StringComparison.Ordinal),
+            status.Warnings,
+            "the behind warning must carry its cause, not summarise it away");
+    }
+
+    [TestMethod]
     public void BackupSetStatus_ProtectionRestingOnSameSiteAlone_SaysSo()
     {
         // Honest about the residue (ADR-0018): a same-site copy answers the

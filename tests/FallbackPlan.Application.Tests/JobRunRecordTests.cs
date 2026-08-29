@@ -9,6 +9,7 @@ namespace FallbackPlan.Application.Tests;
 /// is the only place a run's shape can survive: how many files it did, reused
 /// and failed, and how many bytes it read and stored. The block is additive:
 /// a row written before it existed reads back with none, never as an error.
+/// Establishes the journal half of FR-SVC-018.
 /// </summary>
 [TestClass]
 public sealed class JobRunRecordTests

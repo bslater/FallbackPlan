@@ -2342,7 +2342,7 @@ public sealed partial class ServiceCommandHandler(
                 findings = catalogue.Findings().Count;
             }
 
-            var (inputs, rows) = DescribeDestinations(configuration, set);
+            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
@@ -2359,7 +2359,9 @@ public sealed partial class ServiceCommandHandler(
                 nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now).ToString("u");
             }
 
-            sets.Add(new BackupSetStatusDescriptor(set.Name, status, nextRun, rows));
+            sets.Add(new BackupSetStatusDescriptor(
+                set.Name, status, nextRun, rows,
+                LastCompletedAt: lastCompleted == 0 ? null : lastCompleted));
         }
 
         return new StatusResult(
@@ -2371,7 +2373,7 @@ public sealed partial class ServiceCommandHandler(
     /// One set's destination matrix, twice over: the derivation's inputs and
     /// the client's rows, built together so they cannot disagree.
     /// </summary>
-    private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows)
+    private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows, ulong LastCompleted)
         DescribeDestinations(ClientConfiguration configuration, BackupSetConfiguration set)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
@@ -2393,11 +2395,22 @@ public sealed partial class ServiceCommandHandler(
                 input.LastSuccessAt, input.Detail, StatusDeriver.DomainLabel(input.Domain),
                 StatusDeriver.VerificationLabel(input),
                 BaselineCompletedAt: ledger?.BaselineCompletedAt,
-                NeedsFull: ledger?.NeedsFull ?? false));
+                NeedsFull: ledger?.NeedsFull ?? false,
+                Reason: ReasonLabel(input.Cause)));
         }
 
-        return (inputs, rows);
+        return (inputs, rows, lastCompleted);
     }
+
+    /// <summary>The documented kebab vocabulary for <see cref="DestinationStatusDescriptor.Reason"/>; null when there is nothing to explain.</summary>
+    private static string? ReasonLabel(SyncCause cause) => cause switch
+    {
+        SyncCause.CatchingUp => "catching-up",
+        SyncCause.AwaitingSeed => "awaiting-seed",
+        SyncCause.NeverSynced => "never-synced",
+        SyncCause.Reported => "reported",
+        _ => null,
+    };
 
     /// <summary>
     /// The volume a path sits on, or null when the platform will not say —

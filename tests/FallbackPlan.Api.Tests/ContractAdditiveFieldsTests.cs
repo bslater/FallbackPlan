@@ -308,6 +308,56 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheBehindReason_WireNamesAndPre122Defaults()
+    {
+        // Contract 1.22: the status matrix carries the machine cause beside
+        // the prose, and the set row carries the demotion's operand — the
+        // last completed backup the destination is compared against.
+        var json = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult(
+                "hub",
+                [
+                    new BackupSetStatusDescriptor(
+                        "docs", new BackupSetStatus(ProtectionState.Degraded, null, []), NextRun: null,
+                        [
+                            new DestinationStatusDescriptor(
+                                "local", "local-path", "behind", LastSuccessAt: 1_000, Detail: "a backup completed after this destination's last sync",
+                                "same-machine", "unproven", Reason: "catching-up"),
+                        ],
+                        LastCompletedAt: 5_000),
+                ],
+                ObservedAt: 10_000,
+                Notices: []),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"reason\":\"catching-up\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"last_completed_at\":5000", json, StringComparison.Ordinal);
+
+        // A pre-1.22 frame that never mentions either parses to null.
+        var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(
+            """
+            { "name": "vault", "kind": "local-path", "state": "behind",
+              "last_success_at": 9000, "detail": null,
+              "failure_domain": "same-machine", "verification": "unproven" }
+            """,
+            FrameCodec.SerializerOptions)!;
+        Assert.IsNull(row.Reason);
+
+        // The set row's old frame is the modern one with the addition
+        // stripped, so the fixture cannot drift from the real serialization.
+        var modernSet = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Degraded, null, []), NextRun: null, [],
+                LastCompletedAt: 5_000),
+            FrameCodec.SerializerOptions);
+        var oldSet = modernSet.Replace(",\"last_completed_at\":5000", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modernSet, oldSet, "the strip must have removed the field, or the old frame proves nothing");
+
+        var set = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(oldSet, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(set.LastCompletedAt);
+    }
+
+    [TestMethod]
     public void TheCurrentFile_WireNameAndPre122Default()
     {
         // Contract 1.22: the live feed names the file being processed. A

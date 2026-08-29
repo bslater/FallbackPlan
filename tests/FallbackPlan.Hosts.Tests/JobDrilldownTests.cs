@@ -9,10 +9,11 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// The completed-job drill-down (ADR-0050): a settled run can be asked what
-/// it did. The summary rides the job row itself; the details — what changed
-/// against the previous snapshot, and which files failed and why — are read
-/// from the repository on demand, so they survive the sacrificial journal.
+/// The completed-job drill-down (FR-SVC-018; ADR-0050): a settled run can be
+/// asked what it did. The summary rides the job row itself; the details —
+/// what changed against the previous snapshot, and which files failed and
+/// why — are read from the repository on demand, so they survive the
+/// sacrificial journal.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
