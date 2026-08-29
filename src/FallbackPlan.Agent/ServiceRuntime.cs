@@ -144,7 +144,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// the pool's width must never be the reason a service refuses to start,
     /// and the load path re-validates loudly everywhere else.
     /// </summary>
-    private static int ConfiguredBackupPoolWidth(ServiceOptions options)
+    // Internal, not private: the host's startup configuration record
+    // (ADR-0049) reports the same width the queue was built with.
+    internal static int ConfiguredBackupPoolWidth(ServiceOptions options)
     {
         if (options.MaxConcurrentBackupsOverride is { } width)
         {
@@ -430,6 +432,24 @@ public sealed class ServiceRuntime : IAsyncDisposable
         {
             var state = LocalState.LoadOrCreate(options.StateDirectory);
             var jobs = JobStateStore.Open(options.StateDirectory);
+            var notices = NoticeStore.Open(options.StateDirectory, Logger(options, typeof(NoticeStore)));
+
+            // The journal's own crash leftovers (ADR-0049): rows a previous
+            // process left mid-run would otherwise claim to be running for
+            // ever — the queue that owned them died with that process. Safe
+            // exactly here, because the writer role acquired above means no
+            // other live process owns any of them. Not silent: somebody's
+            // 3 a.m. run was interrupted, and that is a notice at breakfast.
+            var nowMs = (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            var settled = jobs.SettleUnfinished(
+                nowMs, "interrupted — the service stopped while this run was live; it retries on the next pass");
+            if (settled.Count > 0)
+            {
+                notices.Raise(
+                    "jobs-interrupted",
+                    $"{settled.Count} backup run(s) were interrupted by a service stop and will retry on the next pass.",
+                    nowMs);
+            }
 
             // Crash leftovers: per-source catalogue caches are worthless
             // without their (gone) handles, and a failed purge is only noise.
@@ -449,8 +469,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 new ServiceRuntime(options, writerRole, passphrase?.Clone(), state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
-                    Notices = NoticeStore.Open(
-                        options.StateDirectory, Logger(options, typeof(NoticeStore))),
+                    Notices = notices,
                 });
         }
         catch

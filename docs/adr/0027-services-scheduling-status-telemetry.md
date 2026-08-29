@@ -131,6 +131,12 @@ backup and rebuilds the anchor. It is therefore durable-local-state
 *adjacent* but its own file, so corruption or deletion of job history
 can never touch device identity.
 
+> **Amended 2026-08 ([ADR-0049](0049-service-lifecycle-hygiene.md)):** the
+> journal is reconciled at every service start — a row left unsettled by a
+> stop, a kill, or a faulted run is landed on `FailedRecoverable` with a
+> notice raised, so no row ever claims to run in a process that is not
+> running it.
+
 `FailedRecoverable` and `FailedPermanent` stay separate states end to
 end (10 §3): the first is retried by the Agent on the next pass, the
 second is surfaced and never silently retried.

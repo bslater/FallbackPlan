@@ -194,6 +194,41 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void JobJournal_UnfinishedRowsAtReopen_AreSettledByTheSweep()
+    {
+        // The journal is durable and the queue is not: a row a dead process
+        // left at Publishing loads back claiming to run in a process that is
+        // not running it. The sweep is what makes the reopened journal
+        // honest — settled rows untouched, unfinished ones landed on
+        // FailedRecoverable, the state the scheduler retries (10 §3), which
+        // is not IsCommitted and so anchors nothing.
+        var store = JobStateStore.Open(_stateDirectory);
+        var finished = store.Begin("set-1", 1_000);
+        store.Transition(finished.Id, JobState.Complete, 1_100, snapshotId: "aa");
+        var interrupted = store.Begin("set-1", 2_000);
+        store.Transition(interrupted.Id, JobState.Publishing, 2_100);
+        var queued = store.Begin("set-2", 3_000);
+
+        var reloaded = JobStateStore.Open(_stateDirectory);
+        var settled = reloaded.SettleUnfinished(4_000, "interrupted — the service stopped while this run was live");
+
+        Assert.HasCount(2, settled);
+        Assert.Contains(record => record.Id == interrupted.Id, settled);
+        Assert.Contains(record => record.Id == queued.Id, settled);
+
+        var rows = JobStateStore.Open(_stateDirectory).Jobs;
+        Assert.AreEqual(JobState.Complete, rows.Single(row => row.Id == finished.Id).State);
+        var landed = rows.Single(row => row.Id == interrupted.Id);
+        Assert.AreEqual(JobState.FailedRecoverable, landed.State);
+        Assert.AreEqual(4_000ul, landed.UpdatedAt);
+        Assert.Contains("interrupted", landed.Detail ?? string.Empty, StringComparison.Ordinal);
+        Assert.AreEqual(JobState.FailedRecoverable, rows.Single(row => row.Id == queued.Id).State);
+
+        // The sweep must not fake a backup: the anchor is still the real run.
+        Assert.AreEqual(finished.Id, JobStateStore.Open(_stateDirectory).LastCompleted("set-1")!.Id);
+    }
+
+    [TestMethod]
     public void JobJournal_TheFileIsCorrupt_IsSetAsideRatherThanFailingTheRun()
     {
         File.WriteAllText(Path.Combine(_stateDirectory, "jobs.json"), "{ not json");

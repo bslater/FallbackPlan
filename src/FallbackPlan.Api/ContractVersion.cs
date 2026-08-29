@@ -128,8 +128,13 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// stream, so no progress ever reached a signed-in console. Additive the
     /// same way: a pre-1.20 service ignores the field, a pre-1.20 client
     /// keeps its anonymous watch.
+    /// 1.21 adds restart_service (ADR-0049): an in-process recycle of the
+    /// running service — Owner-only, local callers only, refused before
+    /// setup and under --once. The acknowledgement is flushed before the
+    /// teardown, and the restart signs every session out (the FR-USR-003
+    /// contract, unchanged).
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 20);
+    public static ContractVersion Current { get; } = new(1, 21);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

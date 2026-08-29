@@ -62,6 +62,36 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AgentHost_AtStart_RecordsTheEffectiveConfigurationItOperatesAgainst()
+    {
+        // FR-SVC-010's startup record: what the service RESOLVED, not what
+        // was typed — the directories with their provenance, the operating
+        // posture, and each set — so a diagnostic log alone can reconstruct
+        // what the service was operating against.
+        _harness.WriteConfiguration("every 1h");
+        var logs = Path.Combine(_harness.StateDirectory, "logs");
+
+        var result = await RunAsync(
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--once");
+        Assert.AreNotEqual(1, result.ExitCode, result.Error);
+
+        var file = Path.Combine(logs, "fallbackplan-current.log");
+        for (var attempt = 0; attempt < 100 && !File.Exists(file); attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        var log = await File.ReadAllTextAsync(file);
+        Assert.Contains(_harness.StateDirectory, log, StringComparison.Ordinal);
+        Assert.Contains(_harness.ArchivesRoot, log, StringComparison.Ordinal);
+        Assert.Contains("named by flag", log, StringComparison.Ordinal);
+        Assert.Contains("backup pool", log, StringComparison.Ordinal);
+        Assert.Contains("docs", log, StringComparison.Ordinal);
+        Assert.Contains("every 1h", log, StringComparison.Ordinal);
+        Assert.Contains("vault", log, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task AgentHost_ALogLevelNobodyRecognises_IsRefusedNamingTheOnesThatExist()
     {
         // Refused rather than ignored: silently falling back to Information

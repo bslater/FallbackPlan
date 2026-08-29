@@ -1486,6 +1486,52 @@ public static class CliApplication
                 output.WriteLine(who is null ? "signed out" : $"signed out {who}");
                 return 0;
             }));
+
+            // `restart` — the Owner's in-place recycle of the running service
+            // (ADR-0049; contract 1.21). No direct-mode equivalent for the
+            // same reason as `logs`: only a running service can restart.
+            var restartState = new Option<string>("--state")
+            {
+                Description = "The service's state directory.",
+                Required = true,
+            };
+            var restart = new Command(
+                "restart",
+                "Ask the running service to restart in place. Owner-only, and the restart signs every "
+                + "session out — this one included.");
+            restart.Options.Add(restartState);
+            root.Subcommands.Add(restart);
+
+            restart.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(restartState)!;
+                var cache = new SessionCache(state);
+                var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                await using (client.ConfigureAwait(false))
+                {
+                    await cache.PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                    switch (await client
+                        .ExecuteAsync(new RestartServiceCommand(), cancellationToken).ConfigureAwait(false))
+                    {
+                        case AcknowledgedResult:
+                            // The session dies with the old runtime by design
+                            // (FR-USR-003); forgetting it here saves the next
+                            // verb a refusal.
+                            cache.Clear();
+                            output.WriteLine(
+                                "restart commanded — the service is recycling in place. This session ended "
+                                + "with it; `fallbackplan login` again once the service is back.");
+                            return 0;
+
+                        case ServiceError refusal:
+                            throw new CliFailureException(refusal.Message);
+
+                        case var answered:
+                            throw new CliFailureException(
+                                $"the service answered with {answered.GetType().Name}.");
+                    }
+                }
+            }));
         }
         {
             // Not a session verb: pairing needs no repository or passphrase,

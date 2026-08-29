@@ -14,7 +14,16 @@ Two things ADR-0028 already settled make this a small piece of work rather than 
 
 ## Decision
 
-**Translate every manager's stop onto the existing cancellation, and add nothing else to the run loop.** `ServiceProcessHost` is the one entry the process calls. On a console or under systemd/launchd it registers `Console.CancelKeyPress` (SIGINT, as before) *and* `PosixSignalRegistration` for `SIGTERM` — the signal systemd and launchd send — both routed to the same `CancellationTokenSource.Cancel()`. There is no new shutdown path: the manager's stop and an operator's Ctrl+C converge on the code that already unwinds cleanly.
+**Translate every manager's stop onto the existing cancellation, and add nothing else to the run loop.**
+
+> **Amended 2026-08 ([ADR-0049](0049-service-lifecycle-hygiene.md)):** the
+> run loop gained exactly one thing since: an outer recycle iteration for
+> the Owner's `restart_service`, which tears the runtime down and starts it
+> again **in the same process** — chosen precisely because the units this
+> record generates give a process exit three different restart behaviours
+> on three platforms, and this record forbids the agent realigning them.
+
+ `ServiceProcessHost` is the one entry the process calls. On a console or under systemd/launchd it registers `Console.CancelKeyPress` (SIGINT, as before) *and* `PosixSignalRegistration` for `SIGTERM` — the signal systemd and launchd send — both routed to the same `CancellationTokenSource.Cancel()`. There is no new shutdown path: the manager's stop and an operator's Ctrl+C converge on the code that already unwinds cleanly.
 
 **On Windows, bridge the Service Control Manager with `ServiceBase`, not the Generic Host.** `WindowsServiceHost` is a `System.ServiceProcess.ServiceBase` subclass: the SCM starts the process, `OnStart` launches the agent on the cancellation token, and the SCM's stop cancels it and waits for the writer lock to release before the process exits. The process detects that the SCM (rather than a console) started it and hands off; otherwise it takes the signal path above. We did **not** adopt `Microsoft.Extensions.Hosting` and its `UseWindowsService()`/`UseSystemd()`. The agent is a hand-rolled console app by consistent choice across this solution, and pulling in the Generic Host to attach one lifetime would be a large architectural change to gain machinery — readiness, restart, logging — that this service either does not need or already has by another means.
 

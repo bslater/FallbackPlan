@@ -30,7 +30,8 @@ namespace FallbackPlan.Agent;
 /// </para>
 /// </remarks>
 public sealed partial class ServiceCommandHandler(
-    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local)
+    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local,
+    Action? requestRestart = null)
     : IFallbackPlanService
 {
     /// <summary>Where the caller on this session came from.</summary>
@@ -42,6 +43,13 @@ public sealed partial class ServiceCommandHandler(
     /// builds one handler per listener over the same runtime. Defaulting to
     /// <see cref="CallerScope.Local"/> keeps every one-shot verb and every
     /// test that constructs a handler directly meaning what it meant before.
+    /// <para>
+    /// <c>requestRestart</c> is the host's recycle signal (ADR-0049): the
+    /// run loop hands it in so restart_service can ask the process to tear
+    /// the runtime down and start it again. Null — one-shot verbs, --once,
+    /// tests — means there is no host to recycle, and the verb refuses with
+    /// that reason.
+    /// </para>
     /// </remarks>
     private CallerScope Scope => scope;
 
@@ -368,10 +376,39 @@ public sealed partial class ServiceCommandHandler(
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
+        RestartServiceCommand => RestartService(),
 
         // The read paths are handled before this dispatch, on the reader lane.
         _ => new ServiceError(ServiceErrorReason.InvalidArgument, $"Unknown command '{command.GetType().Name}'."),
     };
+
+    private ServiceResult RestartService()
+    {
+        // A paired console must not cut a machine it cannot see (ADR-0028
+        // §6) — and this verb would sever the very connection carrying its
+        // own refusal.
+        if (Scope == CallerScope.Remote)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "Restarting the service is a local decision — a paired console may watch this service "
+                + "but not cut it off from the machine that owns it (ADR-0028 §6).");
+        }
+
+        if (requestRestart is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "This service has no host to recycle it — a --once run, or a directly hosted handler. "
+                + "Restart the process the way it was started.");
+        }
+
+        // Acknowledge FIRST: the reply must reach the wire before the host
+        // tears the listener down under it. The signal only sets the host's
+        // flag; the actual teardown starts after this answer is flushed.
+        requestRestart();
+        return new AcknowledgedResult();
+    }
 
     /// <summary>Parses a verify level, or says what the vocabulary is.</summary>
     private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
@@ -1766,12 +1803,32 @@ public sealed partial class ServiceCommandHandler(
         _ => record.State.ToString(),
     };
 
-    private ServiceResult CancelJob(CancelJobCommand command) =>
-        runtime.Queue.Cancel(command.JobId)
-            ? new AcknowledgedResult()
-            : new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"No job '{command.JobId}' is queued or running. A finished job cannot be cancelled.");
+    private ServiceResult CancelJob(CancelJobCommand command)
+    {
+        if (runtime.Queue.Cancel(command.JobId))
+        {
+            return new AcknowledgedResult();
+        }
+
+        // A journal row the queue no longer knows is a run that is not
+        // running — a fault outside the runner's catch list orphans one on a
+        // live service (ADR-0049). Cancel is the operator's remedy for the
+        // stuck card it renders, so it settles the record rather than
+        // refusing into a dead end.
+        var orphan = runtime.Jobs.Jobs.FirstOrDefault(job => job.Id == command.JobId);
+        if (orphan is not null && !Application.JobStateStore.HasSettled(orphan.State))
+        {
+            runtime.Jobs.Transition(
+                orphan.Id, Domain.Jobs.JobState.Cancelled,
+                (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                "cancelled by request — the run was no longer live");
+            return new AcknowledgedResult();
+        }
+
+        return new ServiceError(
+            ServiceErrorReason.NotFound,
+            $"No job '{command.JobId}' is queued or running. A finished job cannot be cancelled.");
+    }
 
     private JobsResult ListJobs(ListJobsCommand command)
     {

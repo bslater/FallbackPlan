@@ -70,6 +70,17 @@ public sealed class SessionVerbTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Restart_WithNoServiceListening_SaysSoRatherThanPretending()
+    {
+        // Like login: only a running service can restart, so "no service" is
+        // the honest answer rather than a reason to do anything here.
+        var result = await CliHarness.RunRawAsync("restart", "--state", _harness.StatePath);
+
+        Assert.AreNotEqual(0, result.ExitCode);
+        Assert.Contains("running service", result.All, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
     public void SessionCache_OnDisk_IsOwnerOnlyAndCarriesOnlyTheToken()
     {
         var cache = new SessionCache(_harness.StatePath);

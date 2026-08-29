@@ -32,8 +32,13 @@ public sealed partial class ServiceCommandHandler
 
         // A set with work in flight is not deletable out from under it: the
         // job would finish against configuration that no longer names it.
-        var running = runtime.Jobs.Jobs.FirstOrDefault(job =>
-            string.Equals(job.BackupSetId, set.Id, StringComparison.Ordinal) && !HasSettled(job.State));
+        // The same rule as the enqueue guard (ADR-0047 Amendment 3):
+        // unsettled AND still in the queue — an orphaned journal row must
+        // not wedge a deletion behind a cancel that would refuse it.
+        var running = runtime.Jobs.Jobs.LastOrDefault(job =>
+            string.Equals(job.BackupSetId, set.Id, StringComparison.Ordinal)
+            && !HasSettled(job.State)
+            && runtime.Queue.IsActive(job.Id));
         if (running is not null)
         {
             return new ServiceError(

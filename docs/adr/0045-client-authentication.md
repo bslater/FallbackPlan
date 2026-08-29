@@ -138,6 +138,11 @@ Every account has equal rights over backup, restore and configuration. What the
 owner has is a floor: **it cannot be deleted and cannot be locked out**, and
 initially only the owner may create or remove accounts.
 
+> **Amended 2026-08 ([ADR-0049](0049-service-lifecycle-hygiene.md)):**
+> restarting the service joined account management as the owner's second
+> exclusive privilege — a restart interrupts every run and signs everybody
+> out, which is not an operator's call to make.
+
 The role field exists from the first release even though there is only one
 role's worth of behaviour, so that per-account rights later are a value change
 rather than a file-format migration. A stored account written today reads

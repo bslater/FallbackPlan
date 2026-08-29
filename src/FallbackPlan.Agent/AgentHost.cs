@@ -168,6 +168,7 @@ public static class AgentHost
         // path somebody typed is left to the verb, which reports what is
         // missing rather than inventing it.
         var archivesWereExplicit = archivesRoot is not null;
+        var stateWasExplicit = stateDirectory is not null;
         try
         {
             if (archivesRoot is null)
@@ -829,8 +830,46 @@ public static class AgentHost
 
         try
         {
+        // The recycle loop (ADR-0049): restart_service asks the host to tear
+        // the runtime down and start it again in the same process — the same
+        // outcome on every platform, whatever the service manager's restart
+        // policy would make of an exit. Each iteration owns its own lifetime
+        // token; only the operator's restart re-enters the loop, and the
+        // caller's cancellation still means stop.
+        while (true)
+        {
+            var restartRequested = false;
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            void RequestRestart()
+            {
+                restartRequested = true;
+
+                // The acknowledgement must reach the wire before the
+                // listener dies under it; the grace period is what lets the
+                // pump flush the reply it is writing right now. Deliberately
+                // no token: this delay must run even as the lifetime it is
+                // about to cancel winds down.
+                _ = Task.Run(
+                    async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None)
+                            .ConfigureAwait(false);
+                        try
+                        {
+                            await lifetime.CancelAsync().ConfigureAwait(false);
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // The iteration already ended for another reason.
+                        }
+                    },
+                    CancellationToken.None);
+            }
+
+            try
+            {
             using var passphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
-            await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
+            await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, lifetime.Token)
                 .ConfigureAwait(false);
 
             // The remote binding, when enabled, is opened before the command
@@ -865,7 +904,12 @@ public static class AgentHost
                 // only whether the remote binding is on; a verb that must be
                 // refused to a remote console needs to know that THIS caller
                 // is remote (ADR-0044 §5).
-                var localHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Local);
+                // The local handler carries the recycle signal; the remote one
+                // deliberately does not — restart is refused to remote scope
+                // by name, and a null callback is defence in depth behind
+                // that refusal. --once has no host loop to re-enter.
+                var localHandler = new ServiceCommandHandler(
+                    runtime, bindingState, CallerScope.Local, once ? null : RequestRestart);
                 var remoteHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote);
 
                 // One account store and one session registry for the whole
@@ -895,6 +939,43 @@ public static class AgentHost
                 // foreground run is somebody waiting to see it start.
                 var hostLog = logging.Factory.CreateLogger(typeof(AgentHost).FullName!);
                 Log.LocalBindingUp(hostLog);
+
+                // The startup configuration record (FR-SVC-010; ADR-0049):
+                // what was RESOLVED, provenance included — the first thing a
+                // diagnostics read needs is what this service was actually
+                // operating against. Formatted into locals inside the guard:
+                // CA1873 is right that argument expressions are evaluated
+                // whether or not anybody is listening.
+                if (hostLog.IsEnabled(LogLevel.Information))
+                {
+                    var stateProvenance = Provenance(
+                        stateWasExplicit, Api.InstallationDefaults.StateVariable, stateDirectory);
+                    var archivesProvenance = Provenance(
+                        archivesWereExplicit, Api.InstallationDefaults.ArchivesVariable, archivesRoot!);
+                    var poolWidth = ServiceRuntime.ConfiguredBackupPoolWidth(options);
+                    var remoteBound = remoteListener is null ? "off" : remoteListener.Endpoint.ToString();
+                    var passphrasePosture = passphraseValue is null
+                        ? "none in the environment (write-only posture, ADR-0042)"
+                        : "held for this run";
+
+                    Log.StartupLocations(hostLog, stateDirectory, stateProvenance, archivesRoot!, archivesProvenance);
+                    Log.StartupPosture(hostLog, pollSeconds, poolWidth, remoteBound, passphrasePosture);
+                    foreach (var set in runtime.Configuration.BackupSets)
+                    {
+                        var schedule = set.Schedule ?? "manual-only";
+                        var priority = set.Priority?.ToString(CultureInfo.InvariantCulture) ?? "none";
+                        Log.StartupSet(
+                            hostLog, set.Name, set.Roots.Count, schedule,
+                            set.Destinations.Count, set.DirectShip, priority);
+                    }
+
+                    foreach (var declared in runtime.Configuration.Destinations)
+                    {
+                        var kind = declared.Kind.ToString();
+                        var domain = declared.FailureDomain?.ToString() ?? "unstated";
+                        Log.StartupDestination(hostLog, declared.Name, kind, domain);
+                    }
+                }
                 if (remoteListener is not null)
                 {
                     var boundTo = remoteListener.Endpoint.ToString();
@@ -913,9 +994,9 @@ public static class AgentHost
                 }
 
             var failed = 0;
-            while (!cancellationToken.IsCancellationRequested)
+            while (!lifetime.IsCancellationRequested)
             {
-                var result = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, cancellationToken)
+                var result = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token)
                     .ConfigureAwait(false);
 
                 foreach (var set in result.Sets)
@@ -930,7 +1011,7 @@ public static class AgentHost
                     // --once means once, whole: the transfer phases the
                     // service would leave running are awaited, because the
                     // runtime — and every queued job — is torn down on return.
-                    await result.Transfers.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await result.Transfers.WaitAsync(lifetime.Token).ConfigureAwait(false);
                     return failed == 0 ? 0 : 2;
                 }
 
@@ -939,9 +1020,13 @@ public static class AgentHost
                 // doing, so due-ness keeps being evaluated during an
                 // hours-long copy. The stable per-pair job identities keep
                 // un-awaited passes from piling transfers up.
-                await Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(pollSeconds), lifetime.Token).ConfigureAwait(false);
             }
 
+            // A cancelled lifetime never returns here quietly: the throw is
+            // what routes a restart back into the recycle loop and a real
+            // stop out to the clean-shutdown catch below.
+            lifetime.Token.ThrowIfCancellationRequested();
             return failed == 0 ? 0 : 2;
             }
             finally
@@ -953,6 +1038,14 @@ public static class AgentHost
 
                 peerKeypair?.Dispose();
             }
+            }
+            catch (OperationCanceledException) when (restartRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // The teardown above ran whole — listeners, runtime, writer
+                // role — so the next iteration reacquires cleanly.
+                output.WriteLine($"{DateTimeOffset.Now:u}  restarting at an operator's request");
+            }
+        }
         }
         catch (OperationCanceledException)
         {
@@ -986,6 +1079,28 @@ public static class AgentHost
             error.WriteLine($"error: {exception.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// How a directory was chosen (FR-SVC-016's precedence), for the startup
+    /// configuration record: the flag, the environment variable, or which
+    /// default the resolution landed on.
+    /// </summary>
+    private static string Provenance(bool explicitFlag, string environmentVariable, string resolved)
+    {
+        if (explicitFlag)
+        {
+            return "named by flag";
+        }
+
+        if (Environment.GetEnvironmentVariable(environmentVariable) is { Length: > 0 })
+        {
+            return $"from {environmentVariable}";
+        }
+
+        return resolved.StartsWith(Api.InstallationDefaults.MachineRoot, StringComparison.Ordinal)
+            ? "machine-wide default"
+            : "profile fallback";
     }
 
     /// <summary>

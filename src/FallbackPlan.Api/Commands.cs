@@ -57,7 +57,24 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(CreateUserCommand), "create_user")]
 [JsonDerivedType(typeof(DeleteUserCommand), "delete_user")]
 [JsonDerivedType(typeof(ChangePasswordCommand), "change_password")]
+[JsonDerivedType(typeof(RestartServiceCommand), "restart_service")]
 public abstract record ServiceCommand;
+
+/// <summary>
+/// Restarts the service in place (contract 1.21; ADR-0049): the host tears
+/// the runtime down — listeners, queue, archives, the writer role — and
+/// starts it again in the same process, so the outcome is identical on
+/// every platform whatever the service manager's restart policy says.
+/// </summary>
+/// <remarks>
+/// Owner-only (the second such privilege after account management,
+/// ADR-0045), local callers only (a paired console must not cut a machine
+/// it cannot see, ADR-0028 §6), and refused before setup. The reply is
+/// flushed before teardown begins; everything that lives in service memory
+/// — sessions above all — dies with the old runtime, which is the
+/// documented FR-USR-003 contract: a restart signs everybody out.
+/// </remarks>
+public sealed record RestartServiceCommand : ServiceCommand;
 
 /// <summary>
 /// Authenticates a person and mints a session (FR-USR-001, FR-USR-003;

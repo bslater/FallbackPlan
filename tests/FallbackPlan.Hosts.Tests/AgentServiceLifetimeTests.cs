@@ -52,6 +52,54 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         second.WaitForExit(TimeSpan.FromSeconds(30));
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix,
+        "the apphost harness reads the agent's stdout line protocol; kept beside the SIGTERM test")]
+    public async Task Run_CommandedToRestart_RecyclesInPlaceWithoutExiting()
+    {
+        // The restart is an in-process recycle (ADR-0049): the same process
+        // tears its runtime down — listeners, queue, writer role — and
+        // starts it again, so the behaviour is identical whatever the
+        // platform's service manager would do about an exit. Proven on the
+        // shipped apphost: one process, two "listening on" lines, and a
+        // command answered after the second.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteConfiguration("every 1h");
+
+        using var agent = StartAgentRun();
+        await WaitForListeningAsync(agent);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await using (var client = await Api.Transport.LocalServiceClient.ConnectAsync(
+            _harness.StateDirectory, "lifetime-test", timeout.Token))
+        {
+            // A fresh installation has no accounts: create the owner through
+            // the bootstrap window, sign in, and restart as the owner.
+            Assert.IsNotInstanceOfType<Api.ServiceError>(
+                await client.ExecuteAsync(new Api.CreateUserCommand("ben", "A-good-passw0rd9"), timeout.Token));
+            Assert.IsInstanceOfType<Api.SessionResult>(
+                await client.ExecuteAsync(new Api.LoginCommand("ben", "A-good-passw0rd9"), timeout.Token));
+            Assert.IsInstanceOfType<Api.AcknowledgedResult>(
+                await client.ExecuteAsync(new Api.RestartServiceCommand(), timeout.Token));
+        }
+
+        // The same process listens again — never having exited in between.
+        await WaitForListeningAsync(agent);
+        Assert.IsFalse(agent.HasExited, "a restart recycles in place; the process must not exit");
+
+        // And it answers: the recycled service is a working service.
+        await using (var reconnected = await Api.Transport.LocalServiceClient.ConnectAsync(
+            _harness.StateDirectory, "lifetime-test", timeout.Token))
+        {
+            Assert.IsInstanceOfType<Api.ServiceDescriptionResult>(
+                await reconnected.ExecuteAsync(new Api.DescribeServiceCommand(), timeout.Token));
+        }
+
+        _ = kill(agent.Id, Sigterm);
+        agent.WaitForExit(TimeSpan.FromSeconds(30));
+    }
+
     private Process StartAgentRun()
     {
         var fileName = OperatingSystem.IsWindows() ? "FallbackPlan.Agent.exe" : "FallbackPlan.Agent";

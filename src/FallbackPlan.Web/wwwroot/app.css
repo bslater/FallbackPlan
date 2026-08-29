@@ -368,6 +368,24 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus, .btn:focus
 .set-live { display: flex; align-items: center; gap: 10px; margin: 10px 0 2px; }
 .set-live .meter { flex: 1; margin: 0; }
 .set-live .detail { white-space: nowrap; }
+
+/* The overview's destinations: vertically stacked collapsible boxes in
+   ship order, vitals on the summary line so a collapsed stack still reads. */
+.dest-stack { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; }
+details.dest { border: 1px solid var(--border); border-radius: 8px; padding: 0; }
+details.dest > summary {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; cursor: pointer; list-style: none;
+}
+details.dest > summary::-webkit-details-marker { display: none; }
+details.dest > summary::before { content: "▸"; opacity: 0.6; }
+details.dest[open] > summary::before { content: "▾"; }
+.dest-body {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px;
+  padding: 2px 12px 10px 30px;
+}
+.dest-body > div { display: contents; }
+.dest-body .dest-note { grid-column: 1 / -1; display: block; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }

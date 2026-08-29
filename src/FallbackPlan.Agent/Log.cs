@@ -116,6 +116,36 @@ internal static partial class Log
         Message = "Service listening on the local binding")]
     internal static partial void LocalBindingUp(ILogger logger);
 
+    // The startup configuration record (FR-SVC-010; ADR-0049): what the
+    // service RESOLVED to operate against, not what was typed — provenance
+    // included — so a diagnostic log alone can reconstruct its posture.
+    // Paths are honest here and redacted where records leave the machine
+    // (ADR-0043's rendering boundary), and no line carries a secret: the
+    // passphrase appears only as a posture word.
+    [LoggerMessage(
+        EventId = 3760, Level = LogLevel.Information,
+        Message = "Operating against state {StateDirectory} ({StateProvenance}) and archives {ArchivesRoot} ({ArchivesProvenance})")]
+    internal static partial void StartupLocations(
+        ILogger logger, string stateDirectory, string stateProvenance, string archivesRoot, string archivesProvenance);
+
+    [LoggerMessage(
+        EventId = 3761, Level = LogLevel.Information,
+        Message = "Posture: poll {PollSeconds}s, backup pool {PoolWidth}, remote binding {RemoteBinding}, passphrase {PassphrasePosture}")]
+    internal static partial void StartupPosture(
+        ILogger logger, int pollSeconds, int poolWidth, string remoteBinding, string passphrasePosture);
+
+    [LoggerMessage(
+        EventId = 3762, Level = LogLevel.Information,
+        Message = "Set '{Set}': {Roots} root(s), schedule {Schedule}, {Destinations} destination(s), direct-ship {DirectShip}, priority {Priority}")]
+    internal static partial void StartupSet(
+        ILogger logger, string set, int roots, string schedule, int destinations, bool directShip, string priority);
+
+    [LoggerMessage(
+        EventId = 3763, Level = LogLevel.Information,
+        Message = "Destination '{Destination}': kind {Kind}, failure domain {Domain}")]
+    internal static partial void StartupDestination(
+        ILogger logger, string destination, string kind, string domain);
+
     [LoggerMessage(
         EventId = 3731, Level = LogLevel.Information,
         Message = "Remote binding listening on {Endpoint} as {Fingerprint}")]

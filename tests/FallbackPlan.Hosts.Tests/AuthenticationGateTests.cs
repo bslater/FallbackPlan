@@ -351,6 +351,46 @@ public sealed class AuthenticationGateTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestartService_IsTheOwnersAlone()
+    {
+        // The second Owner-only privilege after account management
+        // (ADR-0049): a restart interrupts everyone's runs and signs
+        // everybody out, so an operator may not command it.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var refused = (ServiceError)await operatorConnection.ExecuteAsync(
+            new RestartServiceCommand(), CancellationToken.None);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("owner", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        // The owner's restart passes the gate to the inner service.
+        var before = _inner.Executed;
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await owner.ExecuteAsync(new RestartServiceCommand(), CancellationToken.None));
+        Assert.AreEqual(before + 1, _inner.Executed, "the owner's restart must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task RestartService_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
+    {
+        // The bootstrap window admits exactly the verbs that create the
+        // first account — an unset-up installation is not restartable by
+        // whoever can reach the socket.
+        var refused = (ServiceError)await Connect().ExecuteAsync(
+            new RestartServiceCommand(), CancellationToken.None);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.AreEqual(0, _inner.Executed, "the inner service was never reached");
+    }
+
+    [TestMethod]
     public async Task DeletingTheOwner_IsRefusedThroughTheContractToo()
     {
         GiveTheInstallationAnOwner();

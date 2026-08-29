@@ -48,6 +48,7 @@ const gateEl = document.getElementById("gate");
 const S = {
   connected: null,          // null until first answer; then true/false
   signedInUser: null,       // whose session this browser is presenting, per describe_service
+  signedInRole: null,       // Owner | Operator, per describe_service — gates the admin controls
   signInRequired: false,    // whether the sign-in screen stands in place of the views
   everRefused: false,       // whether a command has been refused for want of a session
   diagnostics: null,        // DiagnosticsResult, or null before the first read
@@ -63,6 +64,7 @@ const S = {
   jobs: [],                 // JobDescriptor[]
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
   eta: new Map(),           // jobId -> smoothed completion-rate tracking (trackEta)
+  openDests: new Set(),     // "set|destination" boxes the person expanded on the overview
   view: "overview",
   snapshotFilter: "",
   destinations: [],         // DestinationDescriptor[]
@@ -238,6 +240,7 @@ async function api(command, { signal } = {}) {
 function sessionExpired() {
   rememberSession(null);
   S.signedInUser = null;
+  S.signedInRole = null;
   S.everRefused = true;
   S.signInRequired = true;
   disconnectEvents();
@@ -347,6 +350,7 @@ async function refreshDesc() {
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
     S.setupState = result.setupState ?? null;
     S.signedInUser = result.signedInUser ?? null;
+    S.signedInRole = result.signedInRole ?? null;
 
     // Signing in is asked for when the installation has accounts and this
     // browser is not acting as one of them. users_required is the other side
@@ -427,7 +431,7 @@ function trackEta(progress) {
   const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
   const track = S.eta.get(progress.jobId);
   if (!track) {
-    S.eta.set(progress.jobId, { t0: now, t: now, handled, rate: 0 });
+    S.eta.set(progress.jobId, { t0: now, t: now, handled, rate: 0, bytes: progress.bytesSeen ?? 0, byteRate: 0 });
     return;
   }
   const dt = (now - track.t) / 1000;
@@ -437,8 +441,25 @@ function trackEta(progress) {
   // events so a burst of reports does not dominate the average.
   const alpha = 1 - Math.exp(-dt / 30);
   track.rate = track.rate === 0 ? instant : track.rate + alpha * (instant - track.rate);
+  // The byte throughput, same smoothing: logical bytes read (bytesSeen),
+  // because that is what "how fast is it chewing the source" means.
+  const bytes = progress.bytesSeen ?? 0;
+  const instantBytes = bytes >= (track.bytes ?? 0) ? (bytes - (track.bytes ?? 0)) / dt : 0;
+  track.byteRate = (track.byteRate ?? 0) === 0 ? instantBytes : track.byteRate + alpha * (instantBytes - track.byteRate);
+  track.bytes = bytes;
   track.t = now;
   track.handled = handled;
+}
+
+// The live throughput for one job's card: bytes/s while content moves,
+// files/s when a reuse-heavy run reads next to nothing, "" until the rate
+// has settled enough to mean something.
+function jobRate(progress) {
+  const track = S.eta.get(progress.jobId);
+  if (!track || performance.now() - track.t0 < 5000) return "";
+  if (track.byteRate > 1024) return `${fmtBytes(track.byteRate)}/s`;
+  if (track.rate > 0) return `${fmtCount(Math.round(track.rate))} files/s`;
+  return "";
 }
 
 // The remaining-time estimate for one job's progress, or "" when the plan
@@ -524,6 +545,15 @@ function renderOverview() {
   for (const bar of el.querySelectorAll(".meter > i")) {
     bar.style.width = (bar.dataset.w ?? 0) + "%";
   }
+
+  // The overview re-renders on every status poll and progress event; a box
+  // the person opened must not snap shut under them.
+  for (const box of el.querySelectorAll("details.dest")) {
+    box.addEventListener("toggle", () => {
+      if (box.open) S.openDests.add(box.dataset.dest);
+      else S.openDests.delete(box.dataset.dest);
+    });
+  }
 }
 
 function renderSetCard(set) {
@@ -556,29 +586,44 @@ function renderSetCard(set) {
        </span>`
     : "";
 
-  const destinations = set.destinations?.length ? `
-    <div class="table-wrap"><table class="data">
-      <thead><tr><th>Destination</th><th>State</th><th>Full backup</th><th>Failure domain</th><th>Possession</th><th>Last sync</th></tr></thead>
-      <tbody>${set.destinations.map(d => {
-        const ds = DEST_STATE[d.state] ?? { cls: "", icon: "?" };
-        // The ledger's two full-backup facts (contract 1.19): a pair owed
-        // its seed says so — "behind" alone under-describes a destination
-        // incrementals will skip until its full backup lands.
-        const baseline = d.needsFull
-          ? badge({ cls: "warn", icon: "◐" }, "awaiting seed")
-          : d.baselineCompletedAt
-            ? `<span class="detail" title="First held a full backup ${esc(fmtWhen(d.baselineCompletedAt))}">✓ since ${esc(rel(d.baselineCompletedAt))}</span>`
-            : `<span class="detail">never</span>`;
-        return `<tr>
-          <td><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>${d.detail ? `<div class="detail">${esc(d.detail)}</div>` : ""}</td>
-          <td>${badge(ds, d.state)}</td>
-          <td>${baseline}</td>
-          <td>${esc(d.failureDomain)}</td>
-          <td class="detail">${esc(d.verification)}</td>
-          <td class="detail">${esc(rel(d.lastSuccessAt))}</td>
-        </tr>`;
-      }).join("")}</tbody>
-    </table></div>` : `<p class="sub">No destinations declared for this set.</p>`;
+  // Vertically stacked, collapsible, in the order backups ship (ADR-0047:
+  // higher priority first, ties by name) — the vitals live on the summary
+  // line, so a collapsed stack still reads at a glance. Open state is
+  // remembered across the frequent overview re-renders.
+  const destPriority = name => S.destinations.find(dd => dd.name === name)?.priority ?? null;
+  const ordered = [...(set.destinations ?? [])].sort((a, b) => {
+    const pa = destPriority(a.name) ?? Number.NEGATIVE_INFINITY;
+    const pb = destPriority(b.name) ?? Number.NEGATIVE_INFINITY;
+    return pb - pa || a.name.localeCompare(b.name);
+  });
+  const destinations = ordered.length ? `<div class="dest-stack">${ordered.map(d => {
+    const ds = DEST_STATE[d.state] ?? { cls: "", icon: "?" };
+    // The ledger's two full-backup facts (contract 1.19): a pair owed
+    // its seed says so — "behind" alone under-describes a destination
+    // incrementals will skip until its full backup lands.
+    const baseline = d.needsFull
+      ? badge({ cls: "warn", icon: "◐" }, "awaiting seed")
+      : d.baselineCompletedAt
+        ? `<span class="detail" title="First held a full backup ${esc(fmtWhen(d.baselineCompletedAt))}">✓ since ${esc(rel(d.baselineCompletedAt))}</span>`
+        : `<span class="detail">never</span>`;
+    const key = `${set.setName}|${d.name}`;
+    const pr = destPriority(d.name);
+    return `<details class="dest" data-dest="${esc(key)}" ${S.openDests.has(key) ? "open" : ""}>
+      <summary>
+        <b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
+        ${badge(ds, d.state)}
+        ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
+        ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}
+      </summary>
+      <div class="dest-body">
+        <div><span class="detail">Full backup</span><span>${baseline}</span></div>
+        <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
+        <div><span class="detail">Possession</span><span>${esc(d.verification)}</span></div>
+        <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
+        ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
+      </div>
+    </details>`;
+  }).join("")}</div>` : `<p class="sub">No destinations declared for this set.</p>`;
 
   return `<div class="card">
     <h3>${esc(set.setName)} ${badge(meta, meta.label)} ${verification}</h3>
@@ -686,6 +731,7 @@ function renderLiveJob(job) {
   const counting = !paused && progress?.state === "Scanning" && total == null;
   const scanning = !paused && (!progress || total == null);
   const eta = progress ? jobEta(progress) : "";
+  const rate = progress ? jobRate(progress) : "";
 
   return `<div class="card job-live">
     <h3>${esc(setName(job.backupSetId))} ${badge(meta, meta.label)}</h3>
@@ -699,6 +745,7 @@ function renderLiveJob(job) {
             ? `<span><b>${fmtCount(handled)}</b> of <b>${fmtCount(total)}</b> files · <b>${ratio}%</b></span>`
             : `<span><b>${fmtCount(handled)}</b> file(s) so far</span>`}
         ${eta ? `<span>${esc(eta)}</span>` : ""}
+        ${rate ? `<span><b>${esc(rate)}</b></span>` : ""}
         <span><b>${fmtCount(progress.filesReused)}</b> unchanged</span>
         ${progress.filesFailed ? `<span><b>${fmtCount(progress.filesFailed)}</b> failed</span>` : ""}
         <span><b>${fmtBytes(progress.bytesStored)}</b> written of <b>${fmtBytes(progress.bytesSeen)}</b> read</span>
@@ -928,7 +975,12 @@ function renderMaintenance() {
             <tr><td>Remote binding</td><td>${S.desc.remoteBindingEnabled ? badge({ cls: "accent", icon: "◉" }, "enabled") : badge({ cls: "", icon: "○" }, "off (default)")}</td></tr>
             <tr><td>Active jobs</td><td>${fmtCount(S.desc.activeJobs)}</td></tr>
           </tbody></table></div>` : `<p class="sub">Waiting for the service to describe itself…</p>`}
-        <div class="actions-row"><button type="button" class="btn small" data-action="show-config">View configuration</button></div>
+        <div class="actions-row">
+          <button type="button" class="btn small" data-action="show-config">View configuration</button>
+          ${S.signedInRole === "Owner"
+            ? `<button type="button" class="btn small danger" data-action="restart-service">↻ Restart service</button>`
+            : ""}
+        </div>
       </div>
 
       <div class="card">
@@ -1264,6 +1316,7 @@ async function signOut() {
 
   rememberSession(null);
   S.signedInUser = null;
+  S.signedInRole = null;
   S.signInRequired = true;
   disconnectEvents();
   renderSignIn();
@@ -2084,6 +2137,36 @@ const actions = {
         toast("ok", `Full backup of '${el.dataset.set}' queued as job ${result.jobId}.`);
         refreshJobs();
         location.hash = "#jobs";
+      }
+    });
+  },
+
+  "restart-service"() {
+    openDialog(`
+      <h3>Restart the service</h3>
+      <p class="dlg-sub">The service tears itself down and starts again in the same process (ADR-0049). Running
+      backups are interrupted — they are resume-safe and retry on the next pass — and everyone is signed out,
+      this browser included. The page reconnects on its own once the service is back.</p>
+      <label class="field" for="confirm-word">Type <b>restart</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="restart" data-enables="restart-service-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="restart-service-go" data-action="restart-service-go" disabled>Restart service</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "restart-service-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run({ command: "restart_service" }, { errToast: "Restart refused" });
+      if (result?.result === "acknowledged") {
+        closeDialog();
+        toast("ok", "Restart commanded — the service is recycling; sign in again when it returns.");
+        // The restart signs everybody out by design (FR-USR-003): drop this
+        // browser's dead session now rather than discovering it refusal by
+        // refusal while the pollers reconnect.
+        sessionExpired();
       }
     });
   },

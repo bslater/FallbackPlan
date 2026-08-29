@@ -226,6 +226,59 @@ public sealed class JobStateStore
     public static bool IsCommitted(JobState state) =>
         state is JobState.Complete or JobState.CompletedWithFailures;
 
+    /// <summary>Whether a state is terminal — the run is over, however it went.</summary>
+    public static bool HasSettled(JobState state) => state is
+        JobState.Complete
+        or JobState.CompletedWithFailures
+        or JobState.Cancelled
+        or JobState.FailedRecoverable
+        or JobState.FailedPermanent;
+
+    /// <summary>
+    /// Settles every unfinished row and persists once — the reconciliation a
+    /// starting service runs while it alone holds the writer role
+    /// (ADR-0049): the journal is durable and the queue is not, so a row a
+    /// dead or faulted process left mid-run would otherwise claim to be
+    /// running for ever. Lands on <see cref="JobState.FailedRecoverable"/> —
+    /// the state the scheduler retries (10 §3), and not
+    /// <see cref="IsCommitted"/>, so no schedule anchor is invented for a
+    /// backup that never finished.
+    /// </summary>
+    /// <param name="nowUnixMilliseconds">The stamp the settled rows carry.</param>
+    /// <param name="detail">What to tell the operator on each settled row.</param>
+    /// <returns>The rows that were settled, empty when the journal was already honest.</returns>
+    public IReadOnlyList<JobRecord> SettleUnfinished(ulong nowUnixMilliseconds, string detail)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(detail);
+
+        lock (_gate)
+        {
+            var settled = new List<JobRecord>();
+            for (var index = 0; index < _jobs.Count; index++)
+            {
+                if (HasSettled(_jobs[index].State))
+                {
+                    continue;
+                }
+
+                _jobs[index] = _jobs[index] with
+                {
+                    State = JobState.FailedRecoverable,
+                    UpdatedAt = nowUnixMilliseconds,
+                    Detail = detail,
+                };
+                settled.Add(_jobs[index]);
+            }
+
+            if (settled.Count > 0)
+            {
+                Save();
+            }
+
+            return settled;
+        }
+    }
+
     /// <summary>
     /// The schedule anchor for a set, in the operator's wall-clock frame —
     /// what <see cref="Schedule.IsDue"/> and <see cref="Schedule.NextRun"/>

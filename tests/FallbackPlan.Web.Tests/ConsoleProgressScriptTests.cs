@@ -95,6 +95,32 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheThroughput_IsDerivedAndShownOnTheJobsCard()
+    {
+        var script = AppJs();
+        var rate = FunctionBody(script, "jobRate");
+
+        Assert.Contains("byteRate", rate, StringComparison.Ordinal,
+            "throughput is bytes-per-second while content moves");
+        Assert.Contains("files/s", rate, StringComparison.Ordinal,
+            "a reuse-heavy run moves no bytes; files-per-second is its honest rate");
+        Assert.Contains("jobRate(", FunctionBody(script, "renderLiveJob"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheOverviewDestinations_StackVerticallyInShipOrder()
+    {
+        var card = FunctionBody(AppJs(), "renderSetCard");
+
+        Assert.Contains("details class=\"dest\"", card, StringComparison.Ordinal,
+            "destinations are vertically stacked collapsible boxes, not a horizontal table");
+        Assert.Contains("destPriority", card, StringComparison.Ordinal,
+            "the stack orders by priority — the order backups ship (ADR-0047)");
+        Assert.Contains("S.openDests", card, StringComparison.Ordinal,
+            "an opened box must survive the overview's frequent re-renders");
+    }
+
+    [TestMethod]
     public void TheEventStream_SleepsWhileTheTabIsHidden()
     {
         // A hidden tab's pollers already pause; the SSE stream must pause

@@ -119,6 +119,14 @@ public sealed class AuthenticatingService : IFallbackPlanService
             {
                 return await ManageAsync(command, session, cancellationToken).ConfigureAwait(false);
             }
+
+            // The second Owner-only privilege after account management
+            // (ADR-0049): a restart interrupts everyone's runs and signs
+            // everybody out, which is not an operator's call to make.
+            if (command is RestartServiceCommand && !_users.MayManageAccounts(session.User))
+            {
+                return NotTheOwner("restart the service");
+            }
         }
         else if (command is ListUsersCommand or CreateUserCommand or DeleteUserCommand or ChangePasswordCommand)
         {
@@ -128,6 +136,16 @@ public sealed class AuthenticatingService : IFallbackPlanService
             // pairing (ADR-0045 §1) — this is not an unguarded door, it is the
             // only door through which the first account can arrive.
             return await ManageAsync(command, session: null, cancellationToken).ConfigureAwait(false);
+        }
+        else if (command is RestartServiceCommand)
+        {
+            // Deliberately NOT in the bootstrap window: it admits exactly the
+            // verbs that create the first account, and an unset-up
+            // installation is not restartable by whoever can reach the socket.
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "The installation has no accounts yet, so nobody owns a restart. Finish setup — the "
+                + "first account is the owner — and restart as that account.");
         }
 
         return await _inner.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
