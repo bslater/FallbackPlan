@@ -16,6 +16,7 @@ This document is **normative for terminology**. Where any other document, code i
 | **Source** | A device together with the filesystem roots whose state it captures. |
 | **Backup set** | A named unit of policy: source selection, exclusions, schedule, retention, destinations, and format profiles. |
 | **Snapshot** | An immutable point-in-time representation of a backup set. |
+| **Protection state** | A backup set's derived status — the closed vocabulary and its console glance layer are normative at [10 §1.1](10-observability.md#11-states-must-be-distinguishable). |
 | **Repository** | The logical collection of encrypted content, metadata, indexes, and snapshots, identified by a repository ID. |
 | **Store** | Physical object storage holding repository objects — a local directory, a peer, or a cloud bucket/container. |
 | **Replica** | A store holding a copy of a repository's objects. A destination's replica is **whole-archive**: complete, self-verifying, independently restorable. It may lawfully lag the source or hold a hub-trimmed subset under retention; it never diverges ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)). |

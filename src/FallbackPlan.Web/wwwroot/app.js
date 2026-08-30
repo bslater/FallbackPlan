@@ -88,11 +88,24 @@ const PROTECTION = {
   NeverBackedUp: { cls: "", icon: "○", label: "Never backed up", blurb: "No committed snapshot exists for this set yet." },
   Captured: { cls: "warn", icon: "◐", label: "Captured", blurb: "Committed, but only within this machine's own failure domain — no defence against losing the machine." },
   Protected: { cls: "ok", icon: "●", label: "Protected", blurb: "Durable at a replica outside this machine's failure domain." },
-  Replicated: { cls: "ok", icon: "●", label: "Replicated", blurb: "Durable at a named destination." },
   Verified: { cls: "ok", icon: "✔", label: "Verified", blurb: "Independently confirmed at a destination." },
-  PolicyCompliant: { cls: "ok", icon: "✔", label: "Policy compliant", blurb: "This set's durability policy is satisfied." },
   Degraded: { cls: "serious", icon: "▲", label: "Degraded", blurb: "Recoverable, but below policy — act soon." },
   Unrecoverable: { cls: "bad", icon: "✖", label: "Unrecoverable", blurb: "Required objects are missing or damaged with no replica able to heal them." },
+};
+
+// The glance vocabulary (10 §1.1's presentation layer): five words for the
+// collapsed row, grouped from the derived state without crossing a
+// never-merge rule (NFR-OPS-002) — captured never reads like protected
+// (a copy that dies with the machine is not "Healthy"), and degraded never
+// reads like unrecoverable. The precise state and its reasons sit one
+// expand away; every other surface keeps the full vocabulary.
+const GLANCE = {
+  NeverBackedUp: { cls: "", icon: "○", label: "Never backed up" },
+  Captured: { cls: "warn", icon: "▲", label: "Needs attention" },
+  Protected: { cls: "ok", icon: "●", label: "Healthy" },
+  Verified: { cls: "ok", icon: "●", label: "Healthy" },
+  Degraded: { cls: "serious", icon: "▲", label: "Needs attention" },
+  Unrecoverable: { cls: "bad", icon: "✖", label: "Unrecoverable" },
 };
 
 const JOBSTATE = {
@@ -652,18 +665,21 @@ function renderSetCard(set) {
   }).join("")}</div>` : `<p class="sub">No destinations declared for this set.</p>`;
 
   // The destinations' collapse pattern, one level up: the summary line is
-  // the glance — name, earned status, and a slim meter while a run is live —
-  // and everything else waits behind the expand. Open state is remembered
-  // across the frequent overview re-renders, like the boxes inside.
+  // the glance — name, one of the five glance words, and a slim meter while
+  // a run is live ("Backing up" IS the glance then) — and everything else,
+  // the precise derived state included, waits behind the expand. Open state
+  // is remembered across the frequent overview re-renders.
+  const glance = GLANCE[set.status.state] ?? { cls: "", icon: "?", label: set.status.state };
   return `<details class="set" data-set="${esc(set.setName)}" ${S.openSets.has(set.setName) ? "open" : ""}>
     <summary>
       <b>${esc(set.setName)}</b>
-      ${badge(meta, meta.label)}
-      ${liveJob ? `<span class="set-live-mini"><span class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></span><span class="detail">${lpTotal > 0 ? lpRatio + "%" : "backing up"}</span></span>` : ""}
+      ${running
+        ? `${badge({ cls: "accent", icon: "◐" }, "Backing up")}<span class="set-live-mini"><span class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></span><span class="detail">${lpTotal > 0 ? lpRatio + "%" : "…"}</span></span>`
+        : badge(glance, glance.label)}
     </summary>
     <div class="set-body">
-      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${esc(meta.blurb)}
-         ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}
+      <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
+      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}
          ${verification}</p>
       ${destinations}
       ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}

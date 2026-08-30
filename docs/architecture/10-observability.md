@@ -23,18 +23,43 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 
 ### 1.1 States must be distinguishable
 
-The status vocabulary is normative, because collapsing any two of these is how a user comes to believe they are protected when they are not:
+The status vocabulary is normative, because collapsing any two of these is how a user comes to believe they are protected when they are not. It has two layers: the **derived states** the service computes and every surface carries, and the console's **glance words** — a five-word grouping for the collapsed overview row, with the derived state one expand away.
+
+> **Amendment (2026-08).** `replicated` and `policy-compliant` were retired from the derived vocabulary: neither was ever emitted — `replicated` said nothing the `captured`/`protected` failure-domain distinction does not say more precisely, and `policy-compliant` presupposed a durability policy the product does not have (it may return with one). Their wire numbers stay reserved (`ProtectionState`). The glance layer was added at the same time.
+
+**Derived states** (`ProtectionState` — the wire's words, exhaustively):
 
 | State | Meaning |
 |-------|---------|
+| `never backed up` | No committed snapshot exists for the set |
 | `captured` | Snapshot committed to a replica — the staging archive, or for a direct-ship set a same-domain destination — but only within the source's own failure domain: real, and **not** a defence against losing the machine |
 | `protected` | Durable at a replica **outside** the source's failure domain ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain)) |
-| `replicated` | Durable at a named destination |
 | `verified` | Independently confirmed at that destination, with coverage and age |
-| `policy-compliant` | The backup set's durability policy is satisfied |
 | `degraded` | Recoverable, but below policy — an offline destination, failed verification, or quota exhaustion |
-| `awaiting seed` | A destination owed its first full backup (`needs_full` — [ADR-0047 §5](../adr/0047-backup-pool-and-priorities.md)): deliberately skipped by incrementals and being seeded by catch-up. Not `behind` — nothing it was ever sent is missing — and not `degraded` |
 | `unrecoverable` | Required objects are missing or damaged with no replica able to heal them |
+
+**Glance words** (the console's collapsed row; every grouping below respects the never-merge rules):
+
+| Glance | Derived states it covers | Meaning at a glance |
+|--------|--------------------------|---------------------|
+| ○ Never backed up | `never backed up` | No recoverable backup has ever completed |
+| ● Healthy | `protected`, `verified` | Current and recoverable at a replica that survives losing this machine |
+| ◐ Backing up · N% | any, while a run is live | A backup is actively running — the meter rides the glance line |
+| ▲ Needs attention | `captured`, `degraded` | Recoverable, but something is below what protection requires — the expanded card says exactly what |
+| ✖ Unrecoverable | `unrecoverable` | Required data is missing or damaged with no replica able to restore it |
+
+`captured` sits under **Needs attention**, never under **Healthy**: a copy that dies with the machine reading "Healthy" would be [PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)'s false confidence verbatim. The expanded card always leads with the derived state and its meaning.
+
+**Destination rows** (per set × destination — the matrix the badge is derived from):
+
+| Row state | Meaning |
+|-----------|---------|
+| `in-sync` | Held everything the archive held, as of the last attempt |
+| `behind` | The archive has moved on since this destination's last success. Carries a reason: `catching-up` (a backup completed after its last sync — the self-healing window, rendered as a `syncing` chip), `awaiting-seed`, `never-synced`, or `reported` (the ledger's own words) |
+| `awaiting seed` | Owed its first full backup (`needs_full` — [ADR-0047 §5](../adr/0047-backup-pool-and-priorities.md)): deliberately skipped by incrementals and being seeded by catch-up. Not `behind` — nothing it was ever sent is missing — and not `degraded` |
+| `unavailable` | Could not be reached — a gap that closes itself when it returns (FR-DEST-003) |
+| `failed` | Reached, and the attempt failed anyway |
+| `not-supported` | The kind is accepted by configuration and not yet served — a stated incapacity, never a failure (FR-DEST-005) |
 
 `degraded` and `unrecoverable` are materially different and are never merged into a single "problem" indicator. The first means act soon; the second means data is already gone.
 

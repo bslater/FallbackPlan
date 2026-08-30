@@ -124,9 +124,7 @@ public static class StatusRollup
         ProtectionState.Degraded => 80,
         ProtectionState.Captured => 40,
         ProtectionState.Protected => 30,
-        ProtectionState.Replicated => 20,
         ProtectionState.Verified => 10,
-        ProtectionState.PolicyCompliant => 0,
         _ => 50,
     };
 }

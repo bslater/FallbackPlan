@@ -168,6 +168,48 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheProtectionMap_CarriesTheVocabularyExactly()
+    {
+        // The console renders the service's derived state by name (ADR-0028
+        // §8) — its map must be the normative vocabulary (NFR-OPS-002 as
+        // amended), whole and nothing more: a missing row renders "?" for a
+        // real state, and a dead row is a label waiting to drift.
+        var script = AppJs();
+        var literal = script[script.IndexOf("const PROTECTION = {", StringComparison.Ordinal)
+            ..script.IndexOf("};", script.IndexOf("const PROTECTION = {", StringComparison.Ordinal), StringComparison.Ordinal)];
+        var keys = System.Text.RegularExpressions.Regex.Matches(literal, @"^\s{2}(\w+):", System.Text.RegularExpressions.RegexOptions.Multiline)
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+
+        CollectionAssert.AreEquivalent(
+            Enum.GetNames<FallbackPlan.Domain.Status.ProtectionState>(), keys);
+    }
+
+    [TestMethod]
+    public void TheGlance_GroupsWithoutCrossingNeverMergeRules()
+    {
+        // Five words for the collapsed row, grouped from the derived state.
+        // The groupings NFR-OPS-002 forbids stay forbidden: captured never
+        // reads like protected (a copy that dies with the machine is not
+        // "Healthy"), and degraded never reads like unrecoverable.
+        var script = AppJs();
+        var literal = script[script.IndexOf("const GLANCE = {", StringComparison.Ordinal)
+            ..script.IndexOf("};", script.IndexOf("const GLANCE = {", StringComparison.Ordinal), StringComparison.Ordinal)];
+        var rows = System.Text.RegularExpressions.Regex.Matches(literal, @"^\s{2}(\w+):.*label: ""([^""]+)""", System.Text.RegularExpressions.RegexOptions.Multiline)
+            .ToDictionary(match => match.Groups[1].Value, match => match.Groups[2].Value);
+
+        CollectionAssert.AreEquivalent(
+            Enum.GetNames<FallbackPlan.Domain.Status.ProtectionState>(), rows.Keys.ToArray());
+        Assert.AreEqual("Healthy", rows["Protected"]);
+        Assert.AreEqual("Healthy", rows["Verified"]);
+        Assert.AreEqual("Needs attention", rows["Captured"],
+            "captured grouped as Healthy would be PT-8's false confidence verbatim");
+        Assert.AreEqual("Needs attention", rows["Degraded"]);
+        Assert.AreEqual("Unrecoverable", rows["Unrecoverable"]);
+        Assert.AreEqual("Never backed up", rows["NeverBackedUp"]);
+    }
+
+    [TestMethod]
     public void TheOverviewSets_StackVerticallyAndCollapse()
     {
         var script = AppJs();
@@ -198,16 +240,21 @@ public sealed class ConsoleProgressScriptTests
             ..row.IndexOf("</summary>", StringComparison.Ordinal)];
         var body = row[row.IndexOf("</summary>", StringComparison.Ordinal)..];
 
-        // Clean by construction: the summary line is the set's name, its
-        // protection badge, and — while a run is live — a slim meter.
-        // Everything else (roots, destinations, warnings, actions) waits
-        // behind the expand.
-        Assert.Contains("badge(meta", summary, StringComparison.Ordinal,
-            "the collapsed row must still show the protection status");
+        // Clean by construction: the summary line is the set's name, one of
+        // the five glance words ("Backing up" with a slim meter while a run
+        // is live), nothing else. The precise derived state and everything
+        // beneath it (roots, destinations, warnings, actions) wait behind
+        // the expand.
+        Assert.Contains("badge(glance", summary, StringComparison.Ordinal,
+            "the collapsed row shows the glance word");
+        Assert.Contains("Backing up", summary, StringComparison.Ordinal,
+            "a live run is its own glance");
         Assert.Contains("set-live-mini", summary, StringComparison.Ordinal,
             "a running backup shows on the collapsed row as a slim meter");
         Assert.DoesNotContain("actions-row", summary, StringComparison.Ordinal,
             "buttons belong to the expanded body, not the glance line");
+        Assert.Contains("badge(meta", body, StringComparison.Ordinal,
+            "the precise derived state is the expanded card's first line");
         Assert.Contains("actions-row", body, StringComparison.Ordinal);
         Assert.Contains("${destinations}", body, StringComparison.Ordinal,
             "expanding a set is what reveals the per-destination stack");

@@ -188,6 +188,14 @@ two never-merge rules (NFR-OPS-002) enforced by construction: derivation
 returns the full per-destination detail, and any summary is computed
 from it, never stored beside it.
 
+> **Amended (2026-08):** `Replicated` and `PolicyCompliant` were retired
+> from the enum — neither was ever emitted by the deriver, and a normative
+> vocabulary with dead entries invites drift. Their wire numbers stay
+> reserved. The vocabulary as it stands, and the console's five-word
+> glance layer over it, are normative at
+> [10 §1.1](../architecture/10-observability.md#11-states-must-be-distinguishable);
+> NFR-OPS-002 was amended to match.
+
 Phase-1 derivation, honest about its inputs: with a single local
 destination, a backup set whose latest snapshot committed is `captured`
 — and is reported `protected` **only** when the store demonstrably sits
@@ -368,3 +376,4 @@ for that reason.
 | 2026-08 | Amended (§1 ×2) | The due-ness rules restated for a pass that ticks during captures, a pool, and save-queues-first-backup (ADR-0047); the schedule arithmetic moved to the shared library both the service and the console read |
 | 2026-08 | Amended (§4 ×2) | The status derivation gained its destination axis — one `DestinationStatus.Describe` both producers call — and a warning class that surfaces without moving the derived state |
 | 2026-08 | Amended (Consequences) | The peer-host model superseded: peers are destinations under ADR-0030's pairing, not a second service shape |
+| 2026-08 | Amended (§4) | The vocabulary standardised: never-emitted `Replicated` and `PolicyCompliant` retired with their wire numbers reserved, and the console gained the five-word glance layer over the derived states — both normative at 10 §1.1, NFR-OPS-002 amended to match, pinned by `Domain.Tests/ProtectionStateTests` and the console vocabulary pins |
