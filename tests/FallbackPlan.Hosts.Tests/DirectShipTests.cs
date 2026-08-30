@@ -878,6 +878,10 @@ public sealed class DirectShipTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                // The placement condition (ADR-0051) judges by volume, and the
+                // fixture's every path shares one real volume — the vaults are
+                // told apart by name, the compliant install's shape.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 MaxConcurrentBackupsOverride = 2,
             },
             passphrase,
@@ -1047,6 +1051,10 @@ public sealed class DirectShipTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                // The placement condition (ADR-0051) judges by volume, and the
+                // fixture's every path shares one real volume — the vaults are
+                // told apart by name, the compliant install's shape.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 Logging = withLogging ? _logging : null,
             },
             passphrase,

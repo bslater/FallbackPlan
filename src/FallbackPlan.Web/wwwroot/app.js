@@ -86,8 +86,8 @@ const SETTLED = new Set([
 
 const PROTECTION = {
   NeverBackedUp: { cls: "", icon: "○", label: "Never backed up", blurb: "No committed snapshot exists for this set yet." },
-  Captured: { cls: "warn", icon: "◐", label: "Captured", blurb: "Committed, but only within this machine's own failure domain — no defence against losing the machine." },
-  Protected: { cls: "ok", icon: "●", label: "Protected", blurb: "Durable at a replica outside this machine's failure domain." },
+  Captured: { cls: "warn", icon: "◐", label: "Captured", blurb: "Committed, but only on the drive the files live on — no defence against losing it." },
+  Protected: { cls: "ok", icon: "●", label: "Protected", blurb: "Durable at a replica on its own drive — or beyond." },
   Verified: { cls: "ok", icon: "✔", label: "Verified", blurb: "Independently confirmed at a destination." },
   Degraded: { cls: "serious", icon: "▲", label: "Degraded", blurb: "Recoverable, but below policy — act soon." },
   Unrecoverable: { cls: "bad", icon: "✖", label: "Unrecoverable", blurb: "Required objects are missing or damaged with no replica able to heal them." },

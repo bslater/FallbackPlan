@@ -32,8 +32,8 @@ The status vocabulary is normative, because collapsing any two of these is how a
 | State | Meaning |
 |-------|---------|
 | `never backed up` | No committed snapshot exists for the set |
-| `captured` | Snapshot committed to a replica — the staging archive, or for a direct-ship set a same-domain destination — but only within the source's own failure domain: real, and **not** a defence against losing the machine |
-| `protected` | Durable at a replica **outside** the source's failure domain ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain)) |
+| `captured` | Snapshot committed to a replica — the staging archive, or a same-volume destination — but only on the drive the files live on: real, and **not** a defence against losing that drive ([ADR-0051](../adr/0051-local-destination-placement.md): such a destination can no longer be newly chosen) |
+| `protected` | Durable at a replica **separate from the drive the source lives on** — a second drive, a same-site machine, or an independent store, the best copy's residual risk always named beside the badge ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) as amended by [ADR-0051](../adr/0051-local-destination-placement.md)) |
 | `verified` | Independently confirmed at that destination, with coverage and age |
 | `degraded` | Recoverable, but below policy — an offline destination, failed verification, or quota exhaustion |
 | `unrecoverable` | Required objects are missing or damaged with no replica able to heal them |
@@ -43,12 +43,12 @@ The status vocabulary is normative, because collapsing any two of these is how a
 | Glance | Derived states it covers | Meaning at a glance |
 |--------|--------------------------|---------------------|
 | ○ Never backed up | `never backed up` | No recoverable backup has ever completed |
-| ● Healthy | `protected`, `verified` | Current and recoverable at a replica that survives losing this machine |
+| ● Healthy | `protected`, `verified` | Current and recoverable at a replica that survives losing the drive the files live on |
 | ◐ Backing up · N% | any, while a run is live | A backup is actively running — the meter rides the glance line |
 | ▲ Needs attention | `captured`, `degraded` | Recoverable, but something is below what protection requires — the expanded card says exactly what |
 | ✖ Unrecoverable | `unrecoverable` | Required data is missing or damaged with no replica able to restore it |
 
-`captured` sits under **Needs attention**, never under **Healthy**: a copy that dies with the machine reading "Healthy" would be [PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)'s false confidence verbatim. The expanded card always leads with the derived state and its meaning.
+`captured` sits under **Needs attention**, never under **Healthy**: a copy that dies with the source's own drive reading "Healthy" would be [PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)'s false confidence verbatim. The expanded card always leads with the derived state and its meaning.
 
 **Destination rows** (per set × destination — the matrix the badge is derived from):
 

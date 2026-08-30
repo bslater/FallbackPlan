@@ -132,3 +132,4 @@ copy at the same site survives losing the machine, not losing the site.
 | 2026-08 | Accepted | Forced into the open by PT-8 |
 | 2026-08 | Accepted (amended) | Amendment 1: domains are declared per configured destination and evaluated per set; staging never counts ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-08 | Accepted (amended) | Amendment 2: the vocabulary is built — declared `failure_domain` per destination, peer default narrowed to `same-site`, threshold fixed at surviving the machine. |
+| 2026-08 | Accepted (amended) | The protection threshold moved from surviving the machine to surviving the source's volume, and drive separation became the condition of choosing a local destination — the owner's direction, recorded in [ADR-0051](0051-local-destination-placement.md); the ladder itself is unchanged. |

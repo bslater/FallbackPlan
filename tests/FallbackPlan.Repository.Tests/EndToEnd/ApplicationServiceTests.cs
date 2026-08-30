@@ -270,7 +270,7 @@ public sealed class ApplicationServiceTests : IDisposable
         var status = StatusDeriver.Derive(
             HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
         Assert.AreEqual(ProtectionState.Captured, status.State);
-        Assert.Contains(warning => warning.Contains("failure domain", StringComparison.Ordinal), status.Warnings);
+        Assert.Contains(warning => warning.Contains("shares the source's volume", StringComparison.Ordinal), status.Warnings);
 
         Assert.AreEqual(ProtectionState.Protected, StatusDeriver.Derive(HealthyInputs()).State);
     }
@@ -278,18 +278,19 @@ public sealed class ApplicationServiceTests : IDisposable
     [TestMethod]
     public void BackupSetStatus_TheFourDomains_EarnExactlyWhatTheySurvive()
     {
-        // FR-SNP-007's four answers to "if this machine is destroyed, does a
-        // copy survive?": the two that die with it cap at Captured however
-        // healthy their sync is; the two that survive it protect.
+        // FR-SNP-007's four answers, under ADR-0051's boundary: protection
+        // asks "if the drive the files live on is destroyed, does a copy
+        // survive?" — only same-volume dies with it and caps at Captured.
+        // A second drive protects, with the residual risk named beside it.
         var sameVolume = StatusDeriver.Derive(
             HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameVolume)] });
         Assert.AreEqual(ProtectionState.Captured, sameVolume.State);
 
         var sameMachine = StatusDeriver.Derive(
             HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameMachine)] });
-        Assert.AreEqual(ProtectionState.Captured, sameMachine.State);
+        Assert.AreEqual(ProtectionState.Protected, sameMachine.State);
         Assert.Contains(
-            warning => warning.Contains("same-machine", StringComparison.Ordinal), sameMachine.Warnings);
+            warning => warning.Contains("drive failure", StringComparison.Ordinal), sameMachine.Warnings);
 
         var sameSite = StatusDeriver.Derive(
             HealthyInputs() with { Destinations = [Destination(domain: FailureDomain.SameSite)] });
@@ -334,9 +335,10 @@ public sealed class ApplicationServiceTests : IDisposable
 
         var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [demoted] });
 
-        // Distinct devices → same-machine, an on-domain copy: Captured, the
-        // tier it earned yesterday — never Degraded for the window itself.
-        Assert.AreEqual(ProtectionState.Captured, status.State);
+        // Distinct devices → same-machine: a second drive's held copy keeps
+        // the Protected it earned yesterday (ADR-0051's boundary) — never
+        // Degraded for the window itself.
+        Assert.AreEqual(ProtectionState.Protected, status.State);
         Assert.Contains(
             warning => warning.Contains("'local' holds the previous backup", StringComparison.Ordinal)
                 && warning.Contains("catches up", StringComparison.Ordinal),
@@ -369,9 +371,20 @@ public sealed class ApplicationServiceTests : IDisposable
     public void BackupSetStatus_ACatchingUpOnDomainDestination_StaysCapturedNotDegraded()
     {
         var status = StatusDeriver.Derive(
-            HealthyInputs() with { Destinations = [CatchingUp(domain: FailureDomain.SameMachine)] });
+            HealthyInputs() with { Destinations = [CatchingUp(domain: FailureDomain.SameVolume)] });
 
         Assert.AreEqual(ProtectionState.Captured, status.State);
+    }
+
+    [TestMethod]
+    public void BackupSetStatus_ACatchingUpSecondDrive_KeepsProtected()
+    {
+        // ADR-0051: a second drive's held copy earns what an off-machine
+        // one does — the catch-up window keeps the tier the copy earned.
+        var status = StatusDeriver.Derive(
+            HealthyInputs() with { Destinations = [CatchingUp(domain: FailureDomain.SameMachine)] });
+
+        Assert.AreEqual(ProtectionState.Protected, status.State);
     }
 
     [TestMethod]
@@ -410,8 +423,8 @@ public sealed class ApplicationServiceTests : IDisposable
         {
             Destinations =
             [
-                CatchingUp(domain: FailureDomain.SameMachine),
-                Destination("usb", DestinationSyncState.Failed, FailureDomain.SameMachine),
+                CatchingUp(domain: FailureDomain.SameVolume),
+                Destination("usb", DestinationSyncState.Failed, FailureDomain.SameVolume),
             ],
         });
 

@@ -151,6 +151,33 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
         }
 
+        // The placement condition, entered from this door (ADR-0051,
+        // FR-DEST-017): moving an already-referenced local destination's
+        // path onto a root's drive creates the same violation choosing it
+        // would — judged only when the path actually changes, so a standing
+        // older binding survives unrelated edits (ADR-0035).
+        if (kind == DestinationKind.LocalPath
+            && path is { Length: > 0 }
+            && existing is not null
+            && !string.Equals(existing.Path, path, StringComparison.Ordinal))
+        {
+            foreach (var set in configuration.BackupSets.Where(set => set.Destinations.Any(reference =>
+                string.Equals(reference.Ref, existing.Name, StringComparison.Ordinal))))
+            {
+                if (LocalDestinationPlacement.Judge(
+                        [.. set.Roots.Select(root => root.Path)], path,
+                        runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.InvalidArgument,
+                        $"Moving '{existing.Name}' to '{path}' would put it on "
+                        + $"{(conflict.SamePhysicalDisk ? "the same physical drive as" : "the same volume as")} "
+                        + $"root '{conflict.Root}' of backup set '{set.Name}' — a backup on the drive the files "
+                        + "live on dies with them (ADR-0051).");
+                }
+            }
+        }
+
         var destinations = configuration.Destinations.ToList();
         var index = existing is null
             ? -1
@@ -683,7 +710,7 @@ public sealed partial class ServiceCommandHandler
             }
 
             var input = DestinationStatus.Describe(
-                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, DeviceIdOf);
+                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, runtime.VolumeIdOf);
 
             if (input.Domain > best)
             {

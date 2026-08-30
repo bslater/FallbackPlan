@@ -1308,6 +1308,46 @@ public sealed partial class ServiceCommandHandler(
             return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
         }
 
+        // The condition of choosing a local destination (ADR-0051,
+        // FR-DEST-017): it must sit on a different volume than every root —
+        // and a different physical drive where the platform can say — or the
+        // backup dies with the files it protects. Judged only for bindings
+        // this edit chooses: a newly referenced destination, or every local
+        // reference when the roots change. A standing binding in an older
+        // configuration keeps loading and keeps its status warnings
+        // (ADR-0035); it is the choosing that is gated.
+        var rootPaths = resolvedRoots.Select(root => root.Path).ToList();
+        var rootsChanged = existing is null
+            || existing.Roots.Count != resolvedRoots.Count
+            || existing.Roots.Zip(resolvedRoots).Any(pair =>
+                !string.Equals(pair.First.Path, pair.Second.Path, StringComparison.Ordinal));
+        foreach (var name in command.Set.Destinations)
+        {
+            if (configuration.FindDestination(name) is not
+                { Kind: DestinationKind.LocalPath, Path: { Length: > 0 } destinationPath })
+            {
+                continue;
+            }
+
+            var newlyChosen = existing is null || !existing.Destinations.Any(reference =>
+                string.Equals(reference.Ref, name, StringComparison.Ordinal));
+            if (!newlyChosen && !rootsChanged)
+            {
+                continue;
+            }
+
+            if (LocalDestinationPlacement.Judge(
+                    rootPaths, destinationPath, runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
+                    + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
+                    + "Choose a local destination on a different drive (ADR-0051).");
+            }
+        }
+
+
         // Replace in place: the first set is the default RunBackupCommand
         // runs, and status renders declaration order — an edit must not
         // reshuffle either (ADR-0037 §5).
@@ -2439,7 +2479,7 @@ public sealed partial class ServiceCommandHandler(
             var ledger = runtime.DestinationSync.Find(set.Id, reference.Ref);
             var input = DestinationStatus.Describe(
                 reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
-                ledger, lastCompleted, nowMs, DeviceIdOf);
+                ledger, lastCompleted, nowMs, runtime.VolumeIdOf);
 
             inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(
@@ -2463,14 +2503,6 @@ public sealed partial class ServiceCommandHandler(
         SyncCause.Reported => "reported",
         _ => null,
     };
-
-    /// <summary>
-    /// The volume a path sits on, or null when the platform will not say —
-    /// the one piece of <see cref="DestinationStatus.Describe"/> that has to
-    /// be supplied from outside the use-case layer (architecture 11 §2).
-    /// </summary>
-    private static ulong? DeviceIdOf(string path) =>
-        Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat) ? stat.Device : null;
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —

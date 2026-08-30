@@ -19,7 +19,7 @@ public enum ProtectionState
     /// <summary>Committed, but only within the source's own failure domain — real, and no defence against losing the machine.</summary>
     Captured = 1,
 
-    /// <summary>Durable at a replica outside the source's failure domain (PT-8).</summary>
+    /// <summary>Durable at a replica separate from the drive the source lives on (ADR-0051; PT-8's same-disk confidence stays impossible).</summary>
     Protected = 2,
 
     // 3 and 5 are retired, and their numbers stay reserved: the contract

@@ -274,9 +274,10 @@ public sealed record DestinationStatusInput
     /// <summary>
     /// Where the destination sits relative to the source (FR-SNP-007):
     /// declared in configuration or derived by kind (ADR-0018 Amendment 2).
-    /// <see cref="FailureDomain.SameVolume"/> and <see cref="FailureDomain.SameMachine"/>
-    /// die with the machine, so they cap what the destination can earn at
-    /// <see cref="ProtectionState.Captured"/> (PT-8) — and the staging
+    /// Only <see cref="FailureDomain.SameVolume"/> dies with the source's
+    /// own drive, so it alone caps what the destination can earn at
+    /// <see cref="ProtectionState.Captured"/> (ADR-0051's boundary; PT-8's
+    /// same-disk false confidence stays impossible) — and the staging
     /// archive never appears here at all: it is a cache, not a destination
     /// (ADR-0018 Amendment 1).
     /// </summary>
@@ -483,11 +484,11 @@ public static class StatusDeriver
         // The matrix, one row per destination — the truth every roll-up is
         // computed from, never invented beside (ADR-0028 §8).
         var protectedByAny = false;
+        var bestProtectingDomain = FailureDomain.SameVolume;
 
         // "In sync" here includes a held previous backup during the catch-up
         // window: the independent destination IS in sync with the backup it
         // holds, which is precisely the claim the roll-up makes.
-        var independentInSync = false;
         var capturedOnlyByAny = false;
         var supportedButNotInSync = false;
         DestinationStatusInput? verifiedBy = null;
@@ -522,13 +523,18 @@ public static class StatusDeriver
 
             switch (destination.Sync)
             {
-                // Protected asks one question: if this machine is destroyed,
-                // does a copy survive (FR-SNP-007, ADR-0018)? Same-site and
-                // independent answer yes; same-volume and same-machine die
-                // with it, however healthy their sync is.
-                case DestinationSyncState.InSync when destination.Domain >= FailureDomain.SameSite:
+                // Protected asks one question: if the drive the files live
+                // on is destroyed, does a copy survive (FR-SNP-007,
+                // ADR-0018 as amended by ADR-0051)? A second drive, a
+                // same-site machine and an independent store all answer yes
+                // — with the residual risk of the best of them named below —
+                // and only same-volume dies with it, however healthy its
+                // sync is.
+                case DestinationSyncState.InSync when destination.Domain >= FailureDomain.SameMachine:
                     protectedByAny = true;
-                    independentInSync |= destination.Domain == FailureDomain.Independent;
+                    bestProtectingDomain = destination.Domain > bestProtectingDomain
+                        ? destination.Domain
+                        : bestProtectingDomain;
 
                     // Verified current: proven bytes at least as new as the
                     // sync's own claim (peer-protocol 04). A destination whose
@@ -566,7 +572,7 @@ public static class StatusDeriver
                 case DestinationSyncState.InSync:
                     capturedOnlyByAny = true;
                     warnings.Add(
-                        $"'{destination.Name}' shares the source's failure domain ({DomainLabel(destination.Domain)}) — a safeguard against mistakes, none against losing the machine.");
+                        $"'{destination.Name}' shares the source's volume ({DomainLabel(destination.Domain)}) — a safeguard against mistakes, none against losing the drive.");
                     break;
 
                 case DestinationSyncState.NotSupported:
@@ -591,9 +597,11 @@ public static class StatusDeriver
                 // reported fault, a never-synced pair, an owed seed — and
                 // every harder state still degrades below.
                 case DestinationSyncState.Behind when destination.HoldsPreviousBackup
-                    && destination.Domain >= FailureDomain.SameSite:
+                    && destination.Domain >= FailureDomain.SameMachine:
                     protectedByAny = true;
-                    independentInSync |= destination.Domain == FailureDomain.Independent;
+                    bestProtectingDomain = destination.Domain > bestProtectingDomain
+                        ? destination.Domain
+                        : bestProtectingDomain;
                     warnings.Add(
                         $"'{destination.Name}' holds the previous backup; the newest is still replicating — it catches up on the next sync pass.");
                     break;
@@ -614,10 +622,17 @@ public static class StatusDeriver
 
         if (protectedByAny)
         {
-            if (!independentInSync)
+            // Honest about the residue (ADR-0018, ADR-0051): the best
+            // protecting copy's own boundary is named, informational rather
+            // than alarming — the owner chose the placement, and what it
+            // does not survive should stay in front of them.
+            if (bestProtectingDomain == FailureDomain.SameMachine)
             {
-                // Honest about the residue (ADR-0018): a same-site copy
-                // answers the machine question, not the site one.
+                warnings.Add(
+                    "Protection rests on a second drive in this machine — it survives drive failure, not fire, theft, or losing the machine.");
+            }
+            else if (bestProtectingDomain == FailureDomain.SameSite)
+            {
                 warnings.Add(
                     "Protection rests on same-site destination(s) — a copy at the same site survives losing this machine, not losing the site.");
             }

@@ -58,6 +58,24 @@ public sealed record ServiceOptions
     internal Func<string, long?>? AvailableBytesProbe { get; init; }
 
     /// <summary>
+    /// Overrides the volume-identity probe behind destination placement
+    /// (ADR-0051, FR-DEST-017) and the failure-domain comparison
+    /// (ADR-0018): path → volume id, null meaning "the platform will not
+    /// say". A test harness's knob — a fixture's every path shares one real
+    /// volume, which would refuse every fixture set. Null, the production
+    /// value, asks the filesystem via the nearest existing ancestor.
+    /// </summary>
+    internal Func<string, ulong?>? VolumeIdentityOverride { get; init; }
+
+    /// <summary>
+    /// Overrides the physical-drive probe behind destination placement
+    /// (ADR-0051's "different physical hdd where possible"): path → drive
+    /// name, null meaning it cannot be named. Null, the production value,
+    /// asks <see cref="Filesystem.Local.PhysicalDisk"/>.
+    /// </summary>
+    internal Func<string, string?>? PhysicalDiskOverride { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -306,6 +324,32 @@ public sealed class ServiceRuntime : IAsyncDisposable
         !InstallationCredential.Holds
             ? IsSetUp ? "ready" : "setup_required"
             : KitConfirmation.Holds ? "ready" : "kit_required";
+
+    /// <summary>
+    /// The volume a path sits on, or null when the platform will not say —
+    /// consulted via the nearest existing ancestor, so a destination
+    /// directory that is not created yet still answers for where it would
+    /// land. One probe for the failure-domain comparison (ADR-0018) and the
+    /// placement condition (ADR-0051), so status and choosing cannot
+    /// disagree about what shares a drive.
+    /// </summary>
+    internal Func<string, ulong?> VolumeIdOf => Options.VolumeIdentityOverride ?? DefaultVolumeIdOf;
+
+    /// <summary>The physical drive behind a path, or null where it cannot be named (ADR-0051).</summary>
+    internal Func<string, string?> DiskIdOf => Options.PhysicalDiskOverride ?? Filesystem.Local.PhysicalDisk.Identify;
+
+    private static ulong? DefaultVolumeIdOf(string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (current is not null && !Directory.Exists(current) && !File.Exists(current))
+        {
+            current = Path.GetDirectoryName(current);
+        }
+
+        return current is not null && Filesystem.Local.LocalFileSystemSource.TryStat(current, out var stat)
+            ? stat.Device
+            : null;
+    }
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
