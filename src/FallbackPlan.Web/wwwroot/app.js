@@ -1121,9 +1121,11 @@ function closeDialog() {
   }
 }
 
-dialog.addEventListener("click", event => {
-  if (event.target === dialog) closeDialog(); // backdrop click
-});
+// A shown dialog is modal: its own buttons are the only exits. The browser's
+// Escape would close the native element while bypassing closeDialog()'s
+// teardown — leaking the draft, the restore wizard and its server-side
+// source handle — and a backdrop click discards mid-edit state by accident.
+dialog.addEventListener("cancel", event => event.preventDefault());
 
 function reportDialog(title, lines, sub) {
   openDialog(`
@@ -4524,7 +4526,18 @@ function toast(kind, text) {
   el.className = "toast " + kind;
   el.textContent = text;
   host.appendChild(el);
-  setTimeout(() => el.remove(), 7000);
+  // showModal() puts the dialog in the top layer, above any z-index; the
+  // host joins it as a popover — promoted later, so painted above — or a
+  // warning raised over an open modal is invisible behind the backdrop.
+  try {
+    if (host.showPopover && !host.matches(":popover-open")) host.showPopover();
+  } catch { /* older engine: the host stays a normal fixed element */ }
+  setTimeout(() => {
+    el.remove();
+    if (host.childElementCount === 0) {
+      try { host.hidePopover?.(); } catch { /* already hidden */ }
+    }
+  }, 7000);
 }
 
 /* ---------------------------------------------------------------- wiring */

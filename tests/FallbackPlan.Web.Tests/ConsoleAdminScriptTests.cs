@@ -55,6 +55,77 @@ public sealed class ConsoleAdminScriptTests
     }
 
     [TestMethod]
+    public void TheDialog_IsModal_AndOnlyItsButtonsClose()
+    {
+        // A shown dialog's only exits are its own accept and cancel buttons.
+        // The backdrop click used to dismiss it, and the browser's Escape
+        // was worse: it closed the native element while bypassing
+        // closeDialog()'s teardown — the draft, the restore wizard's state
+        // and its server-side source handle all leaked.
+        var script = AppJs();
+
+        Assert.Contains("addEventListener(\"cancel\"", script, StringComparison.Ordinal,
+            "Escape must be intercepted, or it closes past the teardown");
+        Assert.DoesNotContain("if (event.target === dialog) closeDialog()", script, StringComparison.Ordinal,
+            "the backdrop click must not dismiss a modal");
+    }
+
+    [TestMethod]
+    public void TheToasts_StayVisibleOverTheDialogTopLayer()
+    {
+        // showModal() puts the dialog in the browser's top layer, above any
+        // z-index — so a toast raised while a dialog is open (a section
+        // save's validation warning, a refusal from the service) was painted
+        // behind the backdrop, dimmed and blurred into invisibility. The
+        // toast host joins the top layer as a popover, promoted after the
+        // dialog and therefore above it.
+        var script = AppJs();
+        var toast = FunctionBody(script, "toast");
+
+        Assert.Contains("showPopover", toast, StringComparison.Ordinal,
+            "a toast must promote its host into the top layer");
+    }
+
+    [TestMethod]
+    public void EveryDialog_CarriesAnExplicitExit()
+    {
+        // Button-only closing must trap nobody: every openDialog template
+        // carries a close, a cancel, or a step-back of its own.
+        var script = AppJs();
+
+        // The restore wizard's shell interpolates its step body; the Cancel
+        // lives in each step's own template — rstNav(), or the confirm and
+        // report steps' hand-built close-dialog buttons.
+        for (var step = 1; step <= 6; step++)
+        {
+            var body = FunctionBody(script, $"rstStep{step}");
+            Assert.IsTrue(
+                body.Contains("rstNav(", StringComparison.Ordinal)
+                    || body.Contains("close-dialog", StringComparison.Ordinal),
+                $"restore step {step} lost its Cancel/Back navigation");
+        }
+
+        var closers = new[] { "close-dialog", "sec-cancel", "set-cancel-all", "rstNav(", "${body}" };
+        var index = 0;
+        var sites = 0;
+        while ((index = script.IndexOf("openDialog(`", index, StringComparison.Ordinal)) >= 0)
+        {
+            // The statement-closing "`);" — a row template nested inside the
+            // dialog's own literal closes with "`)." and must not end the slice.
+            var end = script.IndexOf("`);", index, StringComparison.Ordinal);
+            Assert.IsTrue(end > index, "an openDialog template did not terminate");
+            var template = script[index..end];
+            Assert.IsTrue(
+                closers.Any(closer => template.Contains(closer, StringComparison.Ordinal)),
+                $"the dialog at index {index} has no explicit exit: {template[..Math.Min(120, template.Length)]}");
+            index = end;
+            sites++;
+        }
+
+        Assert.IsGreaterThanOrEqualTo(15, sites, "the sweep should have found the console's dialogs");
+    }
+
+    [TestMethod]
     public void TheSetEditor_OffersTheStorageShape()
     {
         // Contract 1.23: direct-ship stops being a config-file secret. The

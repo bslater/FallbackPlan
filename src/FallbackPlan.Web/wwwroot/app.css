@@ -635,6 +635,22 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
   gap: 8px;
   max-width: min(420px, calc(100vw - 36px));
 }
+/* The host is a manual popover so toasts join the top layer and paint over
+   an open modal; undo the UA popover styling (centered block, border,
+   opaque background) to keep the fixed-corner stack above. */
+.toasts[popover] {
+  inset: auto;
+  bottom: 18px;
+  right: 18px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+}
 .toast {
   display: flex;
   gap: 9px;

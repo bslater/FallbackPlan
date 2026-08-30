@@ -93,4 +93,14 @@ public sealed class ConsoleShellLayerTests
             Assert.AreEqual(0, DivDepthOf(IndexHtml(), gate), $"{gate} must be a direct child of <body>");
         }
     }
+
+    [TestMethod]
+    public void TheToastHost_IsAManualPopover()
+    {
+        // The top layer paints above every z-index, so the toast host must
+        // join it to stay visible over an open modal — manual, so a toast
+        // never light-dismisses.
+        Assert.Contains("id=\"toasts\" aria-live=\"polite\" popover=\"manual\"", IndexHtml(),
+            StringComparison.Ordinal, "the toast host must be a manual popover");
+    }
 }

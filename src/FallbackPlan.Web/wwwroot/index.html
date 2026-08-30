@@ -56,7 +56,7 @@
      its modal backdrop still makes the whole page inert — the setup
      wizard's kit step went dead exactly that way — and a toast raised then
      never appears. ConsoleShellLayerTests pins this arrangement. -->
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="toasts" id="toasts" aria-live="polite" popover="manual"></div>
 <dialog class="dialog" id="dialog"></dialog>
 
 <!-- First-run setup (ADR-0044). Rendered by app.js when describe_service
