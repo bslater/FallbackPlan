@@ -60,15 +60,86 @@ public sealed class ConsoleAdminScriptTests
         // Contract 1.23: direct-ship stops being a config-file secret. The
         // editor states the trade honestly and the payload carries the
         // explicit choice — null never leaves this editor, because an
-        // explicit editor must not depend on preserve-by-omission.
+        // explicit editor must not depend on preserve-by-omission. The
+        // control lives in the "other" section's template since the editor
+        // became a summary with per-section dialogs.
         var script = AppJs();
-        var editor = FunctionBody(script, "openSetEditor");
+        var sections = FunctionBody(script, "setSectionHtml");
 
-        Assert.Contains("set-direct-ship", editor, StringComparison.Ordinal,
+        Assert.Contains("set-direct-ship", sections, StringComparison.Ordinal,
             "the storage shape is no longer editable anywhere a user can find");
-        Assert.Contains("no local staging copy", editor, StringComparison.Ordinal);
+        Assert.Contains("no local staging copy", sections, StringComparison.Ordinal);
         Assert.Contains("directShip:", script, StringComparison.Ordinal,
             "the upsert payload no longer carries the choice");
+    }
+
+    [TestMethod]
+    public void TheSetEditor_LandsOnASummaryWithASectionPerSetting()
+    {
+        // The editor opens on a summary of what is set — each setting a row
+        // of plain prose with its own Change… dialog — and nothing persists
+        // until the one confirm at the end.
+        var script = AppJs();
+        var summary = FunctionBody(script, "renderSetSummary");
+
+        foreach (var section in new[]
+        {
+            "sec-name", "sec-schedule", "sec-locations", "sec-exclusions",
+            "sec-destinations", "sec-retention", "sec-other",
+        })
+        {
+            Assert.Contains($"\"{section}\"", summary, StringComparison.Ordinal,
+                $"the summary must offer the {section} dialog");
+        }
+
+        Assert.Contains("describeSchedule(", summary, StringComparison.Ordinal,
+            "the schedule reads as prose, not the raw grammar");
+        Assert.Contains("retentionProse(", summary, StringComparison.Ordinal,
+            "retention reads as prose, not raw numbers");
+        Assert.Contains("set-confirm-all", summary, StringComparison.Ordinal,
+            "the summary carries the confirm-all step");
+        Assert.Contains("set-cancel-all", summary, StringComparison.Ordinal,
+            "and the cancel that discards every pending change");
+    }
+
+    [TestMethod]
+    public void TheSectionDialogs_StageIntoTheDraft_OnlyConfirmReachesTheService()
+    {
+        // A section's Save writes the draft and returns to the summary; the
+        // service hears nothing until Confirm sends the one upsert — which
+        // still runs the material-change comparison first (FR-SVC-009's
+        // two-step rule).
+        var script = AppJs();
+        var sectionSave = ActionBody(script, "sec-save");
+
+        Assert.Contains("E.touched", sectionSave, StringComparison.Ordinal,
+            "a saved section marks the draft as pending");
+        Assert.Contains("renderSetSummary(", sectionSave, StringComparison.Ordinal,
+            "a saved section returns to the summary");
+        Assert.DoesNotContain("applySetUpsert", sectionSave, StringComparison.Ordinal,
+            "a section save must not reach the service");
+
+        var confirm = ActionBody(script, "set-confirm-all");
+        Assert.Contains("payloadFromDraft(", confirm, StringComparison.Ordinal);
+        Assert.Contains("material", confirm, StringComparison.Ordinal,
+            "the confirm still routes material edits through the comparison panel");
+    }
+
+    [TestMethod]
+    public void TheScheduleAndRetention_ReadAsProse()
+    {
+        var script = AppJs();
+        var schedule = FunctionBody(script, "describeSchedule");
+        Assert.Contains("manual", schedule, StringComparison.Ordinal,
+            "no schedule reads as the manual trigger it is");
+        Assert.Contains("minute", schedule, StringComparison.Ordinal,
+            "units are spelled out, not the grammar's single letters");
+
+        var retention = FunctionBody(script, "retentionProse");
+        Assert.Contains("keeps everything", retention, StringComparison.Ordinal,
+            "an empty policy is said plainly");
+        Assert.Contains("at least", retention, StringComparison.Ordinal,
+            "the generation floor reads as a sentence");
     }
 
     [TestMethod]

@@ -1231,8 +1231,8 @@ function jobReport(job, snapshot) {
 // runs its own rescan job after a material save regardless.
 function renderSetSaveConfirm(saved, preview, previewError, { comparing = false } = {}) {
   document.getElementById("set-confirm")?.remove();
-  const editor = document.getElementById("set-editor");
-  if (editor) editor.hidden = true;
+  const beneath = document.getElementById("set-summary") ?? document.getElementById("set-editor");
+  if (beneath) beneath.hidden = true;
 
   const savedRoots = rootsOf(saved);
   const draftRoots = (E.pendingSave?.roots ?? []).map(root => root.path);
@@ -2625,6 +2625,9 @@ function newDraft(set) {
     destinations: new Set(set?.destinations ?? []),
     retention: set?.retention ?? null,
     overrides: { ...(set?.destinationRetention ?? {}) },
+    priority: set?.priority ?? null,
+    directShip: set ? (set.directShip ?? false) : true,
+    touched: new Set(),       // sections staged by their dialogs, pending the one confirm
     tree: new Map(),          // full path -> {open, listing}; "" is the machine's drive list
     lastPreviewKey: null,     // what the live preview last compared, to skip no-op walks
   };
@@ -2632,110 +2635,250 @@ function newDraft(set) {
 
 function openSetEditor(set) {
   E = newDraft(set);
+  renderSetSummary();
+}
+
+// The raw schedule grammar, said as a person would ("every 4 hours",
+// "daily at 02:30", "manual"). An unrecognised form is shown verbatim —
+// hiding it would be worse than reading oddly.
+function describeSchedule(schedule) {
+  if (!schedule) return "manual — runs only when you start it";
+  const every = /^every (\d+)([mhd])$/.exec(schedule);
+  if (every) {
+    const unit = { m: "minute", h: "hour", d: "day" }[every[2]];
+    const n = Number(every[1]);
+    return n === 1 ? `every ${unit}` : `every ${n} ${unit}s`;
+  }
+  const daily = /^daily at (.+)$/.exec(schedule);
+  return daily ? `daily at ${daily[1]}` : schedule;
+}
+
+// The retention policy as a sentence. Absent fields are "no rule"; with no
+// rules at all the truth is stated plainly rather than as blanks.
+function retentionProse(policy, overrides) {
+  const kept = [];
+  if (policy?.keepDaily != null) kept.push(`${policy.keepDaily} daily`);
+  if (policy?.keepWeekly != null) kept.push(`${policy.keepWeekly} weekly`);
+  if (policy?.keepMonthly != null) kept.push(`${policy.keepMonthly} monthly`);
+  let text = kept.length ? `keep ${kept.join(", ")} versions` : "";
+  if (policy?.minGenerations != null) {
+    text += `${text ? "; " : ""}always keep at least ${policy.minGenerations} backup${policy.minGenerations === 1 ? "" : "s"}`;
+  }
+  if (!text) text = "keeps everything — no rule ever expires a backup";
+  const named = Object.keys(overrides ?? {}).length;
+  return named ? `${text} · ${named} destination override${named === 1 ? "" : "s"}` : text;
+}
+
+// The landing view: what is set, per section, in prose — each with its own
+// Change… dialog — and the one confirm at the end. Nothing reaches the
+// service until that confirm; Cancel discards every staged change.
+function renderSetSummary() {
   dialog.classList.add("wide");
+  const pending = key => E.touched.has(key) ? ` <span class="chip accent">changed</span>` : "";
+  const compiled = compileMarks();
+  const roots = compiled.roots.length ? compiled.roots : E.roots;
+  const ruleCount = E.handIncludes.length + E.handExcludes.length;
+  const rows = [
+    ["sec-schedule", "schedule", "Schedule", esc(describeSchedule(E.schedule))],
+    ["sec-locations", "locations", "What is backed up",
+      roots.length
+        ? roots.map(root => `<span class="mono" title="${esc(root.path)}">${esc(truncateMiddle(root.path, 58))}</span>`).join(" · ")
+        : `<span class="subtle">nothing selected yet</span>`],
+    ["sec-exclusions", "exclusions", "Exclusions",
+      ruleCount === 0 ? "none"
+        : [...E.handExcludes.map(rule => `exclude ${esc(rule)}`),
+           ...E.handIncludes.map(rule => `include ${esc(rule)}`)].join(" · ")],
+    ["sec-destinations", "destinations", "Destinations",
+      E.destinations.size ? esc([...E.destinations].join(", ")) : `<span class="subtle">none chosen yet</span>`],
+    ["sec-retention", "retention", "Retention", esc(retentionProse(E.retention, E.overrides))],
+    ["sec-other", "other", "Other settings",
+      `${E.priority != null ? `priority ${esc(String(E.priority))}` : "default priority"} · `
+        + (E.directShip ? "ships straight to destinations" : "stages locally, then copies out")],
+  ];
 
-  const scheduleMode = !E.schedule ? "manual"
-    : /^every \d+[mhd]$/.test(E.schedule) ? "every"
-    : /^daily at /.test(E.schedule) ? "daily" : "custom";
-  const every = /^every (\d+)([mhd])$/.exec(E.schedule ?? "") ?? [null, "12", "h"];
-  const daily = /^daily at (.+)$/.exec(E.schedule ?? "")?.[1] ?? "02:30";
-
-  const policy = E.retention ?? {};
   openDialog(`
-    <div id="set-editor">
-    <h3>${E.isNew ? "New backup set" : "Edit backup set"}</h3>
-
-    <div class="editor-section">
-      <label class="field" for="set-name">Name</label>
-      <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">
+    <div id="set-summary">
+    <h3>${E.isNew ? "New backup set" : "Backup set settings"}</h3>
+    <p class="dlg-sub set-title-row"><b>${esc(E.name || "(unnamed)")}</b>
+      <button type="button" class="btn small" data-action="sec-name">Rename…</button>${pending("name")}</p>
+    <div class="cfg-rows">
+      ${rows.map(([action, key, label, value]) => `
+      <div class="cfg-row">
+        <div class="cfg-row-text"><b>${label}:</b> <span class="cfg-value">${value}</span>${pending(key)}</div>
+        <button type="button" class="btn small" data-action="${action}">Change…</button>
+      </div>`).join("")}
     </div>
-
-    <div class="editor-section">
-      <label class="field">Schedule</label>
-      <div class="radio-row">
-        <label><input type="radio" name="sched-mode" value="manual" ${scheduleMode === "manual" ? "checked" : ""}> manual only</label>
-        <label><input type="radio" name="sched-mode" value="every" ${scheduleMode === "every" ? "checked" : ""}> every
-          <input type="text" id="sched-n" class="num" value="${esc(every[1])}">
-          <select id="sched-unit">
-            <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
-            <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
-            <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
-          </select></label>
-        <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
-          <input type="time" id="sched-time" value="${esc(daily)}"></label>
-      </div>
-      <div id="sched-preview" class="subtle"></div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">What to capture <span class="plain">— on the service's machine</span></label>
-      <p class="subtle">Tick any folders — several, on any drive, in one set. Untick a child to leave it out;
-      everything ticked is captured, including what appears there later. Pattern rules refine further.</p>
-      <div id="sel-tree" class="tree"></div>
-      <div id="sel-summary" class="subtle"></div>
-      <div class="field-row">
-        <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
-        <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
-        <button type="button" class="btn small" data-action="rule-add-raw">Add rule</button>
-      </div>
-      <div id="rule-chips"></div>
-      <div id="draft-defects"></div>
-      <div class="field-row">
-        <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
-      </div>
-      <div id="change-preview"></div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Retention</label>
-      <p class="subtle">Absent fields are "no rule"; with no rules at all, every snapshot is kept. Retention selects —
-      deleting is a separate, confirmed act on the Maintenance page.</p>
-      <div class="field-row wrap">
-        <label class="mini">keep daily <input type="text" id="ret-daily" class="num" value="${policy.keepDaily ?? ""}"></label>
-        <label class="mini">weekly <input type="text" id="ret-weekly" class="num" value="${policy.keepWeekly ?? ""}"></label>
-        <label class="mini">monthly <input type="text" id="ret-monthly" class="num" value="${policy.keepMonthly ?? ""}"></label>
-        <label class="mini">min generations <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"></label>
-        <label class="mini">deferral days <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"></label>
-      </div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Destinations</label>
-      <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
-      destination — unset fields do not fall back.</p>
-      <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Priority</label>
-      <p class="subtle">Among waiting backups, a higher-priority set runs first. A backup you start by hand
-      always outranks any priority.</p>
-      <label class="mini">priority <input type="text" id="set-priority" class="num" value="${set?.priority ?? ""}"></label>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Storage shape</label>
-      <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
-      reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
-      local-path destination, and a backup waits when none is reachable. Unticked, backups stage into a
-      local archive first and copy outward after — a local buffer at the cost of a second copy on this
-      machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
-      until you retire it from the notice.</p>
-      <label class="mini"><input type="checkbox" id="set-direct-ship" ${(set ? set.directShip : true) ? "checked" : ""}>
-        ship straight to destinations</label>
-    </div>
-
     <div class="dlg-actions">
-      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-      <button type="button" class="btn primary" data-action="set-save">${E.isNew ? "Create set" : "Save changes"}</button>
+      <button type="button" class="btn" data-action="set-cancel-all">${E.touched.size ? "Discard changes" : "Close"}</button>
+      <button type="button" class="btn primary" data-action="set-confirm-all"
+        ${E.touched.size || E.isNew ? "" : "disabled"}>${E.isNew ? "Create set" : "Confirm changes"}</button>
     </div>
     </div>`);
+}
 
-  renderTree();
-  renderRuleChips();
-  renderSelectionSummary();
-  validateDraftSoon();
-  expandToMarks();
+/* ----- the per-section Change… dialogs ----- */
+
+function sectionTitle(key) {
+  return {
+    name: "Rename the set", schedule: "Schedule", locations: "What is backed up",
+    exclusions: "Exclusions", destinations: "Destinations", retention: "Retention",
+    other: "Other settings",
+  }[key];
+}
+
+// Each section's dialog body. One function so the whole vocabulary of what
+// a set carries is readable in one place; the ids match what the section
+// save reads and what the live pieces (tree, chips, previews) expect.
+function setSectionHtml(key) {
+  switch (key) {
+    case "name":
+      return `
+        <label class="field" for="set-name">Name</label>
+        <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">`;
+
+    case "schedule": {
+      const scheduleMode = !E.schedule ? "manual"
+        : /^every \d+[mhd]$/.test(E.schedule) ? "every"
+        : /^daily at /.test(E.schedule) ? "daily" : "custom";
+      const every = /^every (\d+)([mhd])$/.exec(E.schedule ?? "") ?? [null, "12", "h"];
+      const daily = /^daily at (.+)$/.exec(E.schedule ?? "")?.[1] ?? "02:30";
+      return `
+        <div class="radio-row">
+          <label><input type="radio" name="sched-mode" value="manual" ${scheduleMode === "manual" ? "checked" : ""}> manual only</label>
+          <label><input type="radio" name="sched-mode" value="every" ${scheduleMode === "every" ? "checked" : ""}> every
+            <input type="text" id="sched-n" class="num" value="${esc(every[1])}">
+            <select id="sched-unit">
+              <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
+              <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
+              <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
+            </select></label>
+          <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
+            <input type="time" id="sched-time" value="${esc(daily)}"></label>
+        </div>
+        <div id="sched-preview" class="subtle"></div>`;
+    }
+
+    case "locations":
+      return `
+        <p class="subtle">Tick any folders on the service's machine — several, on any drive, in one set.
+        Untick a child to leave it out; everything ticked is captured, including what appears there later.</p>
+        <div id="sel-tree" class="tree"></div>
+        <div id="sel-summary" class="subtle"></div>
+        <div id="draft-defects"></div>
+        <div class="field-row">
+          <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
+        </div>
+        <div id="change-preview"></div>`;
+
+    case "exclusions":
+      return `
+        <p class="subtle">Pattern rules refine what the folders capture — filters, not folder picks.</p>
+        <div class="field-row">
+          <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
+          <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
+          <button type="button" class="btn small" data-action="rule-add-raw">Add rule</button>
+        </div>
+        <div id="rule-chips"></div>
+        <div id="draft-defects"></div>`;
+
+    case "destinations":
+      return `
+        <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
+        destination — unset fields do not fall back.</p>
+        <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>`;
+
+    case "retention": {
+      const policy = E.retention ?? {};
+      return `
+        <p class="subtle">Absent fields are "no rule"; with no rules at all, every snapshot is kept.
+        Retention selects — deleting is a separate, confirmed act on the Maintenance page.</p>
+        <div class="ret-rows">
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-daily" class="num" value="${policy.keepDaily ?? ""}"> days</label>
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-weekly" class="num" value="${policy.keepWeekly ?? ""}"> weeks</label>
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-monthly" class="num" value="${policy.keepMonthly ?? ""}"> months</label>
+          <label class="ret-row">Always keep at least
+            <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"> backups</label>
+          <label class="ret-row">Hold expiry for a destination behind by up to
+            <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"> days before warning</label>
+        </div>`;
+    }
+
+    case "other":
+      return `
+        <label class="field">Priority</label>
+        <p class="subtle">Among waiting backups, a higher-priority set runs first. A backup you start by hand
+        always outranks any priority.</p>
+        <label class="mini">priority <input type="text" id="set-priority" class="num" value="${E.priority ?? ""}"></label>
+        <label class="field">Storage shape</label>
+        <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
+        reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
+        local-path destination, and a backup waits when none is reachable. Unticked, backups stage into a
+        local archive first and copy outward after — a local buffer at the cost of a second copy on this
+        machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
+        until you retire it from the notice.</p>
+        <label class="mini"><input type="checkbox" id="set-direct-ship" ${E.directShip ? "checked" : ""}>
+          ship straight to destinations</label>`;
+  }
+}
+
+// Sections whose controls mutate the draft live (the tree's marks, the rule
+// chips, the destination checkboxes) are snapshotted on open so Cancel can
+// mean it; the rest stage nothing until Save reads their inputs.
+function snapshotSection(key) {
+  switch (key) {
+    case "locations": return { marks: new Map(E.marks), roots: E.roots.map(root => ({ ...root })) };
+    case "exclusions": return { handIncludes: [...E.handIncludes], handExcludes: [...E.handExcludes] };
+    case "destinations": return {
+      destinations: new Set(E.destinations),
+      overrides: Object.fromEntries(Object.entries(E.overrides).map(([name, policy]) => [name, { ...policy }])),
+    };
+    default: return null;
+  }
+}
+
+function openSetSection(key) {
+  E.section = key;
+  E.sectionSnapshot = snapshotSection(key);
+  openDialog(`
+    <div id="set-editor" data-section="${esc(key)}">
+    <h3>${sectionTitle(key)}</h3>
+    ${setSectionHtml(key)}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="sec-cancel">Cancel</button>
+      <button type="button" class="btn primary" data-action="sec-save">Save</button>
+    </div>
+    </div>`);
+  dialog.classList.add("wide");
+
+  if (key === "locations") { renderTree(); renderSelectionSummary(); validateDraftSoon(); expandToMarks(); }
+  if (key === "exclusions") { renderRuleChips(); validateDraftSoon(); }
+  if (key === "schedule") validateDraftSoon();
+  if (key === "name") document.getElementById("set-name")?.focus();
+}
+
+// The one payload, built from the draft alone — every section dialog has
+// already staged its values, so the confirm needs no DOM to read.
+function payloadFromDraft() {
+  const compiled = compileMarks();
+  return {
+    id: E.id, name: E.name,
+    root: compiled.roots[0]?.path ?? "", // back-fill for anything pre-1.10 reading it
+    roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
+    schedule: E.schedule,
+    includeRules: [...E.handIncludes],
+    excludeRules: [...compiled.excludeRules, ...E.handExcludes],
+    destinations: [...E.destinations],
+    retention: E.retention,  // all-null clears; values set — always explicit from this editor
+    destinationRetention: E.overrides,
+    priority: E.priority,
+    // Always explicit from this editor (contract 1.23): null is the
+    // preserve-by-omission a pre-1.23 client sends, and an editor that
+    // shows the checkbox must say what it shows.
+    directShip: E.directShip,
+  };
 }
 
 function rerenderDestChoices() {
@@ -3166,6 +3309,9 @@ function validateDraftSoon() {
 }
 
 function scheduleFromEditor() {
+  // Outside the schedule dialog there are no radios to read — the staged
+  // draft is the answer, not a phantom "manual".
+  if (!document.querySelector("input[name=sched-mode]")) return E?.schedule ?? null;
   const mode = document.querySelector("input[name=sched-mode]:checked")?.value ?? "manual";
   if (mode === "manual") return null;
   if (mode === "every") {
@@ -3249,7 +3395,7 @@ Object.assign(actions, {
       host.innerHTML = `<p class="subtle">Walking the source…</p>`;
       const result = await run({
         command: "preview_set_changes",
-        setName: E.isNew ? (document.getElementById("set-name").value.trim() || "(draft)") : E.name,
+        setName: E.isNew ? (E.name || "(draft)") : E.name,
         roots: roots.map(root => ({ path: root.path, label: root.label })),
         includeRules: [...E.handIncludes],
         excludeRules: [...excludeRules, ...E.handExcludes],
@@ -3264,88 +3410,124 @@ Object.assign(actions, {
     });
   },
 
-  async "set-save"(el) {
-    E.name = document.getElementById("set-name").value.trim();
-    const compiled = compileMarks();
-    if (!E.name || compiled.roots.length === 0) {
-      toast("warn", "A set needs a name and at least one ticked folder.");
-      return;
-    }
+  "sec-name"() { openSetSection("name"); },
+  "sec-schedule"() { openSetSection("schedule"); },
+  "sec-locations"() { openSetSection("locations"); },
+  "sec-exclusions"() { openSetSection("exclusions"); },
+  "sec-destinations"() { openSetSection("destinations"); },
+  "sec-retention"() { openSetSection("retention"); },
+  "sec-other"() { openSetSection("other"); },
 
-    const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
-    if (Object.values(retention).some(Number.isNaN)) {
-      toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
-      return;
-    }
-
-    const priorityRaw = document.getElementById("set-priority")?.value ?? "";
-    const priority = intOrNull(priorityRaw);
-    if (priorityRaw.trim() !== "" && priority === null) {
-      toast("warn", "Priority is a whole number.");
-      return;
-    }
-
-    const destinations = [...document.querySelectorAll("[data-dest-check]")]
-      .filter(box => box.checked).map(box => box.dataset.destCheck);
-
-    const overrides = {};
-    for (const name of destinations) {
-      if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
-      const policy = {};
-      for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
-        const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
-        policy[field] = raw === "" ? null : Number(raw);
+  // A section's Save stages its values into the draft and returns to the
+  // summary — the service hears nothing until the one confirm below.
+  "sec-save"() {
+    const section = document.getElementById("set-editor")?.dataset.section;
+    switch (section) {
+      case "name": {
+        const name = document.getElementById("set-name").value.trim();
+        if (!name) { toast("warn", "A set needs a name."); return; }
+        E.name = name;
+        break;
       }
-      if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
-        toast("warn", `The override for '${name}' has a non-numeric value.`); return;
+      case "schedule":
+        E.schedule = scheduleFromEditor();
+        break;
+      case "locations": {
+        if (compileMarks().roots.length === 0) {
+          toast("warn", "Tick at least one folder first."); return;
+        }
+        endSourceScans();
+        break;
       }
-      overrides[name] = policy;
+      case "exclusions":
+        break; // the chips already staged into the draft; Save keeps them
+      case "destinations": {
+        const overrides = {};
+        for (const name of E.destinations) {
+          if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
+          const policy = {};
+          for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
+            const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
+            policy[field] = raw === "" ? null : Number(raw);
+          }
+          if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
+            toast("warn", `The override for '${name}' has a non-numeric value.`); return;
+          }
+          overrides[name] = policy;
+        }
+        E.overrides = overrides;
+        break;
+      }
+      case "retention": {
+        const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
+        if (Object.values(retention).some(Number.isNaN)) {
+          toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
+          return;
+        }
+        E.retention = retention;
+        break;
+      }
+      case "other": {
+        const priorityRaw = document.getElementById("set-priority")?.value ?? "";
+        const priority = intOrNull(priorityRaw);
+        if (priorityRaw.trim() !== "" && priority === null) {
+          toast("warn", "Priority is a whole number."); return;
+        }
+        E.priority = priority;
+        E.directShip = document.getElementById("set-direct-ship")?.checked ?? false;
+        break;
+      }
+      default: return;
     }
 
-    const includeRules = [...E.handIncludes];
-    const excludeRules = [...compiled.excludeRules, ...E.handExcludes];
-    const payload = {
-      id: E.id, name: E.name,
-      root: compiled.roots[0].path, // back-fill for anything pre-1.10 reading it
-      roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
-      schedule: scheduleFromEditor(),
-      includeRules, excludeRules,
-      destinations,
-      retention,           // all-null clears; values set — always explicit from this editor
-      destinationRetention: overrides,
-      priority,
-      // Always explicit from this editor (contract 1.23): null is the
-      // preserve-by-omission a pre-1.23 client sends, and an editor that
-      // shows the checkbox must say what it shows.
-      directShip: document.getElementById("set-direct-ship")?.checked ?? false,
-    };
+    E.touched.add(section);
+    E.sectionSnapshot = null;
+    renderSetSummary();
+  },
+
+  "sec-cancel"() {
+    // Live-mutating sections (tree marks, rule chips, destination toggles)
+    // are rolled back to the snapshot their dialog opened with.
+    if (E.sectionSnapshot) Object.assign(E, E.sectionSnapshot);
+    E.sectionSnapshot = null;
+    endSourceScans();
+    renderSetSummary();
+  },
+
+  "set-cancel-all"() {
+    closeDialog(); // the draft dies with the dialog; nothing was saved
+  },
+
+  async "set-confirm-all"(el) {
+    if (!E.name) { toast("warn", "A set needs a name — Rename… to give it one."); return; }
+    const payload = payloadFromDraft();
+    if (payload.roots.length === 0) {
+      toast("warn", "A set needs at least one folder — Change… under 'What is backed up'.");
+      return;
+    }
 
     // A material edit — the roots or the rules — changes what future backups
     // hold: files can silently leave the backup. So it is never applied on
     // one click: step two states the edit and only its explicit Apply saves
     // (ADR-0038). Compared as sorted sets, so mere reordering is not
-    // material. Everything else (name, schedule, retention) saves directly.
+    // material. Everything else (name, schedule, retention) applies from
+    // this confirm directly.
     const saved = E.isNew ? null : S.sets.find(set => set.id === E.id);
     const sortedEqual = (left, right) =>
       JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
     const material = saved && (
       !sortedEqual(rootsOf(saved), payload.roots.map(root => root.path))
-      || !sortedEqual(saved.includeRules ?? [], includeRules)
-      || !sortedEqual(saved.excludeRules ?? [], excludeRules));
+      || !sortedEqual(saved.includeRules ?? [], payload.includeRules)
+      || !sortedEqual(saved.excludeRules ?? [], payload.excludeRules));
 
     if (!material) {
       await withBusy(el, () => applySetUpsert(payload));
       return;
     }
 
-    // The confirm panel opens at once. The comparison that informs it is a
-    // full walk of the source — ten minutes for a newly added 10K-file
-    // folder, and it used to run right here, pinning this button to a
-    // spinner for the duration (the 583916 ms preview in the 2026-08-25
-    // log was exactly this await). It now fills the open panel in from the
-    // background, and Apply never waits for it: on a material save the
-    // service queues its own rescan job and the findings land under
-    // Notices either way (ADR-0038).
+    // The confirm panel opens at once and the comparison — a full walk of
+    // the source — fills it in from the background; Apply never waits for
+    // it (ADR-0038: the service queues its own rescan either way).
     E.pendingSave = payload;
     renderSetSaveConfirm(saved, null, null, { comparing: true });
 
@@ -3357,7 +3539,8 @@ Object.assign(actions, {
         command: "preview_set_changes",
         setName: saved.name,
         roots: payload.roots,
-        includeRules, excludeRules,
+        includeRules: payload.includeRules,
+        excludeRules: payload.excludeRules,
       }, { signal });
       if (result.result === "set_change_preview") preview = result;
       else previewError = result.message ?? "the service answered unexpectedly";
@@ -3377,8 +3560,8 @@ Object.assign(actions, {
   "set-save-back"() {
     endSourceScans(); // the walk was informing a step that no longer exists
     document.getElementById("set-confirm")?.remove();
-    const editor = document.getElementById("set-editor");
-    if (editor) editor.hidden = false;
+    const beneath = document.getElementById("set-summary") ?? document.getElementById("set-editor");
+    if (beneath) beneath.hidden = false;
     E.pendingSave = null;
   },
 

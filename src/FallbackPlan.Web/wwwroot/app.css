@@ -369,6 +369,19 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus, .btn:focus
 .set-live .meter { flex: 1; margin: 0; }
 .set-live .detail { white-space: nowrap; }
 
+/* The set-settings summary: one row per setting — label, current value in
+   prose, its own Change… — and the one confirm at the end. */
+.cfg-rows { display: flex; flex-direction: column; margin: 12px 0 4px; }
+.cfg-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 10px 2px; border-top: 1px solid var(--border);
+}
+.cfg-row-text { min-width: 0; overflow-wrap: anywhere; }
+.cfg-value { color: var(--muted); }
+.set-title-row { display: flex; align-items: center; gap: 10px; }
+.ret-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ret-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
 /* The overview's sets: one full-width vertical stack of collapsible rows —
    the destinations' pattern, one level up. Collapsed is the glance: name,
    earned status, a slim meter while a run is live. */
