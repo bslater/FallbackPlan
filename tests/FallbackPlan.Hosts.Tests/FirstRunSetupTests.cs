@@ -583,6 +583,92 @@ public sealed class FirstRunSetupTests : IDisposable
             "the printable kit must not carry the passphrase");
     }
 
+    [TestMethod]
+    public async Task Setup_RecordsTheInstallationsPublicParameters_SoAKitNeedsNoArchive()
+    {
+        // The kit is known the moment the passphrase is chosen
+        // (specifications/recovery-kit §2.2) — but the console could only
+        // learn the salt by reading a repository descriptor, which no
+        // installation has until its first backup. An operator who left
+        // before saving the kit was then stuck behind the full-screen setup
+        // gate, unable to reach the configuration that would let them run
+        // the backup that would write the descriptor (FR-KIT-004).
+        //
+        // Provisioning therefore records the PUBLIC half of the derivation
+        // beside the credential: the salt and parameters every archive would
+        // have stamped anyway, and the sealing public key that proves a
+        // re-derivation reproduced them.
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsNull(
+            InstallationParameters.TryLoad(_harness.StateDirectory),
+            "an unprovisioned installation has no derivation to publish");
+
+        await SetUpAsync(handler);
+
+        var published = InstallationParameters.TryLoad(_harness.StateDirectory);
+        Assert.IsNotNull(published, "provisioning must record the installation's public parameters");
+
+        // They are the real ones: deriving the chosen passphrase with them
+        // reproduces the sealing key they carry.
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var derived = WriteOnlyDerivation.Derive(
+            passphrase,
+            new Argon2Parameters
+            {
+                MemoryKiB = published.KdfMemoryKiB,
+                Iterations = published.KdfIterations,
+                Parallelism = published.KdfParallelism,
+            },
+            Convert.FromHexString(published.KdfSalt),
+            KdfValidationMode.OpenRepository);
+
+        Assert.AreEqual(
+            published.SealingPublicKey,
+            Convert.ToHexStringLower(derived.Credential.SealingPublicKey),
+            "the published verifier must be this installation's own");
+    }
+
+    [TestMethod]
+    public async Task TheInstallationsPublicParameters_CarryNoSecret_AndAreHealedWhenMissing()
+    {
+        // The file is public by construction — every archive descriptor
+        // publishes the same three facts — but "public by construction" is
+        // a claim worth holding to the bytes.
+        _harness.WriteConfiguration("every 1h");
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            await SetUpAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off));
+        }
+
+        var path = InstallationParameters.PathIn(_harness.StateDirectory);
+        var text = await File.ReadAllTextAsync(path, _timeout.Token);
+        Assert.DoesNotContain(PassphraseText, text, StringComparison.Ordinal);
+
+        var credential = await File.ReadAllBytesAsync(
+            Path.Combine(_harness.StateDirectory, "write-credentials", "installation.bin"), _timeout.Token);
+        Assert.DoesNotContain(
+            Convert.ToHexStringLower(credential), text, StringComparison.OrdinalIgnoreCase,
+            "the sealed credential must not be echoed into a public file");
+
+        // An installation provisioned before this file existed still gets
+        // one: the service writes it at startup from the credential it
+        // already holds, so upgrading is enough and no backup is needed.
+        var published = InstallationParameters.TryLoad(_harness.StateDirectory);
+        File.Delete(path);
+
+        await using (var restarted = await StartWithoutPassphraseAsync())
+        {
+            Assert.IsNotNull(restarted);
+            var healed = InstallationParameters.TryLoad(_harness.StateDirectory);
+            Assert.IsNotNull(healed, "a service holding a credential must publish its parameters");
+            Assert.AreEqual(published!.KdfSalt, healed!.KdfSalt);
+            Assert.AreEqual(published.SealingPublicKey, healed.SealingPublicKey);
+        }
+    }
+
     /// <summary>Where this harness writes its kit.</summary>
     private string KitPath() => Path.Combine(_harness.StateDirectory, "recovery-kit.fbpkrkit");
 

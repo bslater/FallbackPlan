@@ -439,6 +439,89 @@ public sealed class FirstRunSetupTests
     }
 
     [TestMethod]
+    public async Task RecoveryKit_OnAnInstallThatHasNeverCaptured_IsRebuiltFromThePublishedParameters()
+    {
+        // The deadlock this closes: provision the passphrase, close the tab
+        // before saving the kit, and come back. No set has ever run, so no
+        // descriptor exists to recover the salt from — and kit_required
+        // renders the full-screen setup gate, so the operator cannot reach
+        // the configuration that would let them run the backup that would
+        // write one. Setup could never finish (FR-KIT-004).
+        //
+        // Provisioning now records the public half of the derivation, so the
+        // kit is rebuildable from the moment the passphrase is chosen, which
+        // is what specifications/recovery-kit §2.2 says a v2 kit is.
+        var (scratch, archives, state) = Install();
+        try
+        {
+            var salt = RandomNumberGenerator.GetBytes(16);
+            var parameters = RepositoryCreationSettings.Default.KdfParameters;
+            using (var passphrase = Passphrase.Create(StrongPassphrase))
+            {
+                using var authority = WriteOnlyDerivation.Derive(
+                    passphrase, parameters, salt, KdfValidationMode.CreateRepository);
+                new InstallationParameters(
+                    Convert.ToHexStringLower(salt),
+                    parameters.MemoryKiB,
+                    parameters.Iterations,
+                    parameters.Parallelism,
+                    Convert.ToHexStringLower(authority.Credential.SealingPublicKey)).Save(state);
+            }
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, StrongPassphrase);
+
+            Assert.AreEqual("built", body.RootElement.GetProperty("outcome").GetString());
+            var kit = RecoveryKitCodec.Parse(Convert.FromBase64String(
+                body.RootElement.GetProperty("kit").GetProperty("machine").GetString()!));
+            Assert.IsTrue(kit.IsInstallationKit);
+            SequenceAssert.AreEqual(salt, kit.KdfSalt.ToArray());
+        }
+        finally
+        {
+            Remove(scratch);
+        }
+    }
+
+    [TestMethod]
+    public async Task RecoveryKit_AgainstThePublishedParameters_StillRefusesTheWrongPassphrase()
+    {
+        // The published parameters carry the verifier as well as the salt,
+        // so the proof is the same one a descriptor gives: derive, compare,
+        // and hand back nothing that does not match.
+        var (scratch, archives, state) = Install();
+        try
+        {
+            var salt = RandomNumberGenerator.GetBytes(16);
+            var parameters = RepositoryCreationSettings.Default.KdfParameters;
+            using (var passphrase = Passphrase.Create(StrongPassphrase))
+            {
+                using var authority = WriteOnlyDerivation.Derive(
+                    passphrase, parameters, salt, KdfValidationMode.CreateRepository);
+                new InstallationParameters(
+                    Convert.ToHexStringLower(salt),
+                    parameters.MemoryKiB,
+                    parameters.Iterations,
+                    parameters.Parallelism,
+                    Convert.ToHexStringLower(authority.Credential.SealingPublicKey)).Save(state);
+            }
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, "Not-The-Installation-Passphrase-1");
+
+            Assert.AreEqual("wrong", body.RootElement.GetProperty("outcome").GetString());
+        }
+        finally
+        {
+            Remove(scratch);
+        }
+    }
+
+    [TestMethod]
     public async Task RecoveryKit_WhereTheConsoleCannotReadTheRootsAtAll_SaysThatInstead()
     {
         // The other unavailable, kept distinct: a console that cannot see the

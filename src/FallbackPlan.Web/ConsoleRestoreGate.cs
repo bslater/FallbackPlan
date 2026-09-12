@@ -487,7 +487,45 @@ public static class ConsoleRestoreGate
             return new SetupAnswer(GateOutcome.Unavailable, "The service's device identity is not readable hex.");
         }
 
-        if (deviceId.Length != 16 || RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
+        if (deviceId.Length != 16)
+        {
+            return new SetupAnswer(
+                GateOutcome.Unavailable, "This console cannot read the service's archives from here.");
+        }
+
+        // The installation's own record of its derivation, written when the
+        // passphrase was chosen. Asked first because it is the one source
+        // that exists before any backup does — the case that used to strand
+        // a ceremony no archive could yet answer for.
+        if (Api.InstallationParameters.TryLoad(stateDirectory) is { } published)
+        {
+            using var passphrase = Passphrase.Create(passphraseText);
+            using var authority = WriteOnlyDerivation.Derive(
+                passphrase,
+                new Domain.Configuration.Argon2Parameters
+                {
+                    MemoryKiB = published.KdfMemoryKiB,
+                    Iterations = published.KdfIterations,
+                    Parallelism = published.KdfParallelism,
+                },
+                Convert.FromHexString(published.KdfSalt),
+                Domain.Configuration.KdfValidationMode.OpenRepository);
+
+            return Convert.ToHexStringLower(authority.Credential.SealingPublicKey) == published.SealingPublicKey
+                ? BuiltKit(
+                    authority.Credential, Convert.FromHexString(published.KdfSalt),
+                    new Domain.Configuration.Argon2Parameters
+                    {
+                        MemoryKiB = published.KdfMemoryKiB,
+                        Iterations = published.KdfIterations,
+                        Parallelism = published.KdfParallelism,
+                    },
+                    deviceId)
+                : new SetupAnswer(
+                    GateOutcome.Wrong, "That passphrase does not reproduce this installation's keys.");
+        }
+
+        if (RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
         {
             return new SetupAnswer(
                 GateOutcome.Unavailable, "This console cannot read the service's archives from here.");
@@ -522,26 +560,45 @@ public static class ConsoleRestoreGate
                     GateOutcome.Wrong, "That passphrase does not reproduce this installation's keys.");
             }
 
-            var framed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
-                RecoveryKitFactory.BuildForInstallation(
-                    authority.Credential, descriptor.KdfSalt.Span, descriptor.KdfParameters, deviceId,
-                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-
-            return new SetupAnswer(
-                GateOutcome.Verified,
-                Kit: new KitAnswer(
-                    framed,
-                    Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                        framed,
-                        "This kit is ONE of the two things you need. The other is your passphrase, which is "
-                        + "not in here. Keep them apart."),
-                    Convert.ToHexStringLower(framed.AsSpan(framed.Length - 32))));
+            return BuiltKit(
+                authority.Credential, descriptor.KdfSalt.Span, descriptor.KdfParameters, deviceId);
         }
 
         return new SetupAnswer(
             GateOutcome.Unavailable,
             "No archive of this installation exists yet, so its salt cannot be recovered — run a backup "
             + "first, then save the kit.");
+    }
+
+    /// <summary>
+    /// The kit a proved derivation produces, in both forms with the checksum
+    /// the page confirms.
+    /// </summary>
+    /// <param name="credential">The derivation, already proved against its verifier.</param>
+    /// <param name="kdfSalt">The installation's salt.</param>
+    /// <param name="kdfParameters">The parameters it was derived with.</param>
+    /// <param name="deviceId">The issuing device's public identity.</param>
+    /// <returns>The verified answer, carrying the kit.</returns>
+    private static SetupAnswer BuiltKit(
+        RepositoryWriteCredential credential,
+        ReadOnlySpan<byte> kdfSalt,
+        Domain.Configuration.Argon2Parameters kdfParameters,
+        byte[] deviceId)
+    {
+        var framed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
+            RecoveryKitFactory.BuildForInstallation(
+                credential, kdfSalt, kdfParameters, deviceId,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+
+        return new SetupAnswer(
+            GateOutcome.Verified,
+            Kit: new KitAnswer(
+                framed,
+                Repository.Format.RecoveryKit.RecoveryKitText.Render(
+                    framed,
+                    "This kit is ONE of the two things you need. The other is your passphrase, which is "
+                    + "not in here. Keep them apart."),
+                Convert.ToHexStringLower(framed.AsSpan(framed.Length - 32))));
     }
 
     private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)

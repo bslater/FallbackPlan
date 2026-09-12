@@ -353,6 +353,44 @@ mode remains as the fallback for a service that reaches `users_required`
 outside the ceremony — an installation whose owner was created headlessly
 skips the step entirely.
 
+## Amendment (2026-09): the installation records the public half of its own derivation
+
+The ceremony could be entered and then never finished. Resuming an unsaved
+kit asks for the passphrase and rebuilds the kit from the installation's
+Argon2id salt — and the console, which must not read the service's
+credential (NFR-SEC-009), could only learn that salt from a repository
+descriptor. An installation has no descriptor until its first backup, and
+`kit_required` renders the full-screen setup gate, so an operator who closed
+the tab before saving the kit could not reach the configuration that would
+let them run the backup that would write the descriptor. Setup was
+unfinishable, and FR-KIT-004 is the requirement that says it must not be.
+
+The fix is to make the implementation match what a v2 kit already claims to
+be. [ADR-0013's amendment](0013-recovery-kit.md) and
+[recovery-kit §2.2](../../specifications/recovery-kit/README.md#22-installation-kits-kit-format-v2)
+both say everything a kit carries is known the moment the passphrase is
+chosen. So provisioning now writes that: `installation-public.json` in the
+state directory, holding the salt, the Argon2id parameters and the derived
+sealing public key — the same three facts every archive descriptor of this
+installation would have published anyway. `ServiceRuntime` writes one at
+startup when a credential exists without one, so an installation provisioned
+before this change needs only an upgrade, never a backup.
+
+**It is a file, and deliberately not a field on `describe_service`.** Putting
+the three facts on the contract would have been the smaller change and the
+wrong one. The only other field a v2 kit carries is the issuing device id,
+which that result already publishes — so any client holding a session could
+have assembled a complete kit without the passphrase, and both NFR-SEC-009's
+acceptance clause and [threat model T-19](../threat-model.md#t-19-unlocked-key-material-at-rest-in-the-service-account)
+turn on holding a running service *not* being sufficient to produce one. A
+local file changes nothing about that: a paired remote console cannot read
+it, and a local attacker who can is one who already holds the sealed
+credential sitting beside it in the same protected directory. No trust
+boundary moves, which is why the threat model is unchanged.
+
+The console asks for the record first and falls back to hunting descriptors,
+so a service that predates the file keeps working unchanged.
+
 ## Status history
 
 | Date | Status | Note |
@@ -361,3 +399,4 @@ skips the step entirely.
 | 2026-08 | Accepted | Built end to end: the strength policy in Domain with the floor enforced only where a passphrase is chosen, the installation credential and the new rung in ServiceRuntime's archive ladder, contract 1.13's provision_installation with a caller scope so a remote console is refused, the console's three-step ceremony shown in place of its views, and the headless `fallbackplan-agent setup` verb — proven by service-level drills including a passphrase-free backup that seals to the chosen passphrase and a restore-side derivation check against each archive's descriptor |
 | 2026-08 | Amended | The ceremony no longer stops at the passphrase: it generates the installation recovery kit and will not complete until the operator confirms saving it (FR-KIT-004), adding a `kit_required` state between `setup_required` and `ready`. §3's original scoping is kept above rather than rewritten, because the reasoning it rested on is worth being able to find |
 | 2026-08 | Amended | The passphrase policy tightens to a floor of sixteen with composition rules (an uppercase letter, two digits, a special character), enforced at the same creation-only boundary; the wizard's passphrase and confirmation share one step gated together; and the ceremony ends by creating the owner account — the account policy live as a checklist, the passphrase excluded by hash comparison, and the new owner signed straight in |
+| 2026-09 | Amended | Provisioning records the public half of its derivation — salt, Argon2id parameters and sealing public key — as `installation-public.json` in the state directory, healed at startup for installations provisioned earlier, so the recovery kit is rebuildable from the moment the passphrase is chosen rather than from the first backup. An operator who left before saving the kit was otherwise stranded: the resume path needed a salt, the only salt it could read was in a repository descriptor, and the full-screen setup gate blocked creating the set that would write one. Recorded as a local file rather than a `describe_service` field on purpose — the device id is already published, so publishing these too would have let any session holder assemble a kit, which NFR-SEC-009 and T-19 both forbid |

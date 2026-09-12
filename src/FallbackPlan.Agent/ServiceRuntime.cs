@@ -146,6 +146,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
         KitConfirmation = new RecoveryKitConfirmation(options.StateDirectory);
+
+        // An installation provisioned before the public record existed gets
+        // one here, so a kit stays rebuildable without waiting for a backup
+        // to write the first descriptor (FR-KIT-004).
+        InstallationCredential.EnsurePublishedParameters();
     }
 
     /// <summary>How this service was started.</summary>

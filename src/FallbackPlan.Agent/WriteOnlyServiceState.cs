@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using Bodu;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -399,6 +400,7 @@ public sealed class InstallationCredentialStore(string stateDirectory)
             try
             {
                 File.Move(temporary, path, overwrite: false);
+                PublishParameters(provisioning);
                 return true;
             }
             catch (IOException)
@@ -413,6 +415,53 @@ public sealed class InstallationCredentialStore(string stateDirectory)
         finally
         {
             CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Publishes the derivation's public half beside the credential, unless
+    /// a readable record is already there.
+    /// </summary>
+    /// <remarks>
+    /// Called on the save and again at every start, which is what makes an
+    /// installation provisioned before this file existed able to rebuild its
+    /// kit: upgrading is enough, and no backup is needed. Never fatal — a
+    /// service that cannot write it still runs, and the console falls back to
+    /// reading a descriptor exactly as it always did.
+    /// </remarks>
+    public void EnsurePublishedParameters()
+    {
+        if (InstallationParameters.TryLoad(stateDirectory) is not null)
+        {
+            return;
+        }
+
+        using var provisioning = TryLoad();
+        if (provisioning is not null)
+        {
+            PublishParameters(provisioning);
+        }
+    }
+
+    /// <summary>Writes the public record for <paramref name="provisioning"/>.</summary>
+    /// <param name="provisioning">What was derived.</param>
+    private void PublishParameters(InstallationProvisioning provisioning)
+    {
+        try
+        {
+            new InstallationParameters(
+                Convert.ToHexStringLower(provisioning.KdfSalt),
+                provisioning.KdfParameters.MemoryKiB,
+                provisioning.KdfParameters.Iterations,
+                provisioning.KdfParameters.Parallelism,
+                Convert.ToHexStringLower(provisioning.Credential.SealingPublicKey))
+                .Save(stateDirectory);
+        }
+        catch (Exception unwritable) when (unwritable is IOException or UnauthorizedAccessException)
+        {
+            // A public convenience, never a precondition: the ceremony has
+            // already succeeded by the time this runs, and every reader of
+            // the file has a descriptor to fall back to.
         }
     }
 }
