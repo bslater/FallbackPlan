@@ -3,8 +3,10 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using FallbackPlan.Api;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.RecoveryKit;
+using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Web.Tests;
@@ -16,6 +18,16 @@ namespace FallbackPlan.Web.Tests;
 /// and what reaches the service is a sealed envelope rather than the
 /// passphrase.
 /// </summary>
+/// <remarks>
+/// Also the resume half (FR-KIT-004): an operator who left before saving the
+/// kit comes back to a console that rebuilds it from the installation's own
+/// salt, read off any descriptor the installation owns — a staging archive
+/// or, on an install whose every set ships direct, a metadata store
+/// ([ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)).
+/// Saving the kit is what lets setup finish, so a rebuild that cannot find
+/// the salt is not an inconvenience; it is an installation that can never
+/// leave the setup gate.
+/// </remarks>
 [TestClass]
 public sealed class FirstRunSetupTests
 {
@@ -49,6 +61,67 @@ public sealed class FirstRunSetupTests
     private static async Task<JsonDocument> SetupAsync(ConsoleHarness harness, string json)
     {
         using var response = await harness.Http.SendAsync(Post(harness, "/api/setup", json));
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// A scratch installation on disk — an archives root beside a state
+    /// directory — so the console's descriptor hunt has somewhere real to
+    /// look. The caller deletes <c>Scratch</c>.
+    /// </summary>
+    private static (string Scratch, string Archives, string State) Install()
+    {
+        var scratch = Path.Combine(Path.GetTempPath(), "fbp-kit", Guid.NewGuid().ToString("n")[..12]);
+        var archives = Path.Combine(scratch, "archives");
+        var state = Path.Combine(scratch, "state");
+        Directory.CreateDirectory(archives);
+        Directory.CreateDirectory(state);
+        return (scratch, archives, state);
+    }
+
+    private static void Remove(string scratch)
+    {
+        try
+        {
+            Directory.Delete(scratch, recursive: true);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or DirectoryNotFoundException)
+        {
+        }
+    }
+
+    /// <summary>Creates a write-only repository and answers its public KDF salt.</summary>
+    private static async Task<byte[]> WriteOnlyRepositoryAsync(string path)
+    {
+        Directory.CreateDirectory(path);
+        var store = new LocalFileSystemObjectStore(path);
+        using (var passphrase = Passphrase.Create(StrongPassphrase))
+        {
+            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
+            repository.Dispose();
+            authority.Dispose();
+        }
+
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
+        return descriptor.KdfSalt.ToArray();
+    }
+
+    /// <summary>Describes a real installation resuming at the unsaved-kit step.</summary>
+    private static void DescribesInstall(ConsoleHarness harness, string archives, string state) =>
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => new ServiceDescriptionResult(
+                "1.23", "test", "vm", state, false, 0,
+                ArchivesRoot: archives, SetupState: "kit_required", DeviceId: DeviceIdHex),
+            _ => new AcknowledgedResult(),
+        };
+
+    private static async Task<JsonDocument> RebuildKitAsync(ConsoleHarness harness, string passphrase)
+    {
+        using var response = await harness.Http.SendAsync(Post(
+            harness, "/api/recovery-kit", $$"""{"passphrase":"{{passphrase}}"}"""));
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
     }
@@ -339,17 +412,135 @@ public sealed class FirstRunSetupTests
         // Minting a fresh salt here would produce a kit that opens nothing —
         // the worst possible outcome for an artefact whose entire job is to
         // still work in ten years.
+        //
+        // A real installation that has captured nothing: both roots exist and
+        // both are empty. That is what this refusal is about, and it is a
+        // different answer from a console that cannot read the roots at all —
+        // the gate tells them apart now that it looks in both places.
+        var (scratch, archives, state) = Install();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(state, "sets"));
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, StrongPassphrase);
+
+            Assert.AreEqual("unavailable", body.RootElement.GetProperty("outcome").GetString());
+            Assert.Contains(
+                "cannot be recovered", body.RootElement.GetProperty("detail").GetString()!,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Remove(scratch);
+        }
+    }
+
+    [TestMethod]
+    public async Task RecoveryKit_WhereTheConsoleCannotReadTheRootsAtAll_SaysThatInstead()
+    {
+        // The other unavailable, kept distinct: a console that cannot see the
+        // service's directories has not learned that nothing was captured —
+        // it has learned nothing at all, and telling the operator to run a
+        // backup would be advice for a problem they do not have.
         var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
         await using var harness = await ConsoleHarness.StartAsync();
         Describes(harness, recipient, "kit_required");
 
-        using var response = await harness.Http.SendAsync(Post(
-            harness, "/api/recovery-kit", $$"""{"passphrase":"{{StrongPassphrase}}"}"""));
-        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        using var body = await RebuildKitAsync(harness, StrongPassphrase);
 
         Assert.AreEqual("unavailable", body.RootElement.GetProperty("outcome").GetString());
         Assert.Contains(
-            "cannot be recovered", body.RootElement.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+            "cannot read", body.RootElement.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RecoveryKit_OnADirectShipOnlyInstall_IsRebuiltFromTheMetadataStore()
+    {
+        // The install this ceremony has to survive (ADR-0046), and since the
+        // direct-ship default the ordinary one: every set ships direct, so
+        // the archives root stays empty and a set's descriptor lives in its
+        // metadata store under <state>/sets. Hunting the archives root alone
+        // stranded the operator in kit_required for good — the setup gate is
+        // full-screen, so they cannot reach configuration to change anything,
+        // and FR-KIT-004 makes saving the kit the condition of finishing.
+        var (scratch, archives, state) = Install();
+        try
+        {
+            var salt = await WriteOnlyRepositoryAsync(Path.Combine(state, "sets", new string('a', 32)));
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, StrongPassphrase);
+
+            Assert.AreEqual("built", body.RootElement.GetProperty("outcome").GetString());
+            var kit = RecoveryKitCodec.Parse(Convert.FromBase64String(
+                body.RootElement.GetProperty("kit").GetProperty("machine").GetString()!));
+            Assert.IsTrue(kit.IsInstallationKit);
+
+            // A second salt would mint a kit that opens nothing — the worst
+            // possible outcome for an artefact whose job is to still work in
+            // ten years.
+            SequenceAssert.AreEqual(salt, kit.KdfSalt.ToArray());
+        }
+        finally
+        {
+            Remove(scratch);
+        }
+    }
+
+    [TestMethod]
+    public async Task RecoveryKit_OnAStagingInstall_IsStillRebuiltFromTheStagingArchive()
+    {
+        // The shape that always worked, covered for the first time: the
+        // rebuild's success path had no test of any kind, which is how the
+        // direct-ship blind spot survived a whole hardening round.
+        var (scratch, archives, state) = Install();
+        try
+        {
+            var salt = await WriteOnlyRepositoryAsync(Path.Combine(archives, new string('a', 32)));
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, StrongPassphrase);
+
+            Assert.AreEqual("built", body.RootElement.GetProperty("outcome").GetString());
+            var kit = RecoveryKitCodec.Parse(Convert.FromBase64String(
+                body.RootElement.GetProperty("kit").GetProperty("machine").GetString()!));
+            SequenceAssert.AreEqual(salt, kit.KdfSalt.ToArray());
+        }
+        finally
+        {
+            Remove(scratch);
+        }
+    }
+
+    [TestMethod]
+    public async Task RecoveryKit_WithTheWrongPassphrase_RefusesRatherThanMintingAKitThatOpensNothing()
+    {
+        var (scratch, archives, state) = Install();
+        try
+        {
+            _ = await WriteOnlyRepositoryAsync(Path.Combine(state, "sets", new string('a', 32)));
+
+            await using var harness = await ConsoleHarness.StartAsync();
+            DescribesInstall(harness, archives, state);
+
+            using var body = await RebuildKitAsync(harness, "Not-The-Installation-Passphrase-1");
+
+            Assert.AreEqual("wrong", body.RootElement.GetProperty("outcome").GetString());
+            Assert.IsFalse(
+                body.RootElement.TryGetProperty("kit", out var offered) && offered.ValueKind != JsonValueKind.Null,
+                "a refused passphrase must be handed no kit at all");
+        }
+        finally
+        {
+            Remove(scratch);
+        }
     }
 
     [TestMethod]

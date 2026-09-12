@@ -201,6 +201,52 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DirectShipSet_ItsRestoreSource_IsNamedTheMetadataStoreRatherThanStaging()
+    {
+        // What the operator is told has to be true of the shape they chose.
+        // A direct-ship set stages nothing, so reporting its source as
+        // "staging" — which the console renders verbatim into "restoring …
+        // from staging" — describes a copy that does not exist, and points
+        // anyone diagnosing a restore at an empty archives root.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration();
+        _harness.WriteSourceFile("docs/kept.txt", "a file worth naming honestly");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), Timeout), out var opened);
+
+        Assert.AreNotEqual("staging", opened.Location, "a set that never stages has no staging archive to restore from");
+        Assert.Contains("metadata", opened.Location, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_NeverCaptured_IsRefusedByTheNameOfItsMetadataStore()
+    {
+        // The same honesty on the failure side: before the first run there
+        // is nothing to restore from, and the thing that is missing is the
+        // metadata store, not a staging archive nobody was ever going to
+        // write.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), Timeout), out var error);
+
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+        Assert.DoesNotContain("staging", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
     public async Task DirectShipSet_VerifyDestination_ReadsEachReplicaAgainstItsSealsCleanly()
     {
         // The deep sweep for a direct-ship pair: replica bytes re-read

@@ -472,8 +472,8 @@ public static class WebConsoleHost
             }
 
             var minted = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
-                description.ArchivesRoot, target.Id, request.Passphrase, description.RestoreGrantRecipient,
-                context.RequestAborted).ConfigureAwait(false);
+                description.ArchivesRoot, description.StateDirectory, target.Id, request.Passphrase,
+                description.RestoreGrantRecipient, context.RequestAborted).ConfigureAwait(false);
             if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
             {
                 await AnswerAsync(new ProvisionResponse(
@@ -867,11 +867,12 @@ public static class WebConsoleHost
                 return;
             }
 
-            var sets = await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted)
-                .ConfigureAwait(false) as BackupSetsResult;
-
+            // No set list is asked for: the gate searches the installation's
+            // repositories itself, so a set the service declines to list —
+            // or a result that is not a set list at all — no longer decides
+            // whether the operator can finish setting up.
             var rebuilt = await ConsoleRestoreGate.RebuildInstallationKitAsync(
-                description.ArchivesRoot, sets?.Sets.Select(set => set.Id) ?? [],
+                description.ArchivesRoot, description.StateDirectory,
                 request.Passphrase, description.DeviceId ?? string.Empty, context.RequestAborted)
                 .ConfigureAwait(false);
 

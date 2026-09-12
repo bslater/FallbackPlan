@@ -84,12 +84,20 @@ public sealed partial class ServiceCommandHandler
         var warnings = new List<string>();
         if (command.DestinationName is null)
         {
+            // What the operator is told has to be true of the shape they
+            // chose: a direct-ship set stages nothing, so naming a staging
+            // archive would describe a copy that does not exist and send
+            // anyone diagnosing a restore to an empty archives root. Its
+            // local store holds metadata only; the content is read through
+            // the sink from whichever destination holds it (ADR-0046).
+            var directShip = set.DirectShip;
             var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
             if (archive is null)
             {
                 return new ServiceError(
                     ServiceErrorReason.NotFound,
-                    $"Backup set '{set.Name}' has never backed up — its staging archive does not exist.");
+                    $"Backup set '{set.Name}' has never backed up — its "
+                    + (directShip ? "metadata store" : "staging archive") + " does not exist.");
             }
 
             handle = new OpenRestoreSourceHandle
@@ -97,7 +105,7 @@ public sealed partial class ServiceCommandHandler
                 SourceId = sourceId,
                 SetId = set.Id,
                 SetName = set.Name,
-                Location = "staging",
+                Location = directShip ? "metadata store" : "staging",
                 Store = archive.Store,
                 OwnedRepository = null,
                 RepositoryId = archive.Repository.RepositoryId,

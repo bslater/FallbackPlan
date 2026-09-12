@@ -4075,9 +4075,16 @@ function rstStep1() {
 /* step 2 — source */
 function rstStep2() {
   const options = [];
+  // A direct-ship set stages nothing, so offering "this machine's staging
+  // archive" would name a copy that does not exist: what is here is the
+  // set's records, and the content comes from its destinations as it reads.
+  const chosen = W.sets.find(candidate => candidate.name === W.setName);
+  const here = chosen?.directShip
+    ? `<b>This machine's records</b> <span class="detail">content read from this set's destinations</span>`
+    : `<b>This machine's staging archive</b> <span class="detail">the service's own copy</span>`;
   options.push(`
     <label class="radio-block"><input type="radio" name="rst-src" value="staging" ${W.destinationName === null ? "checked" : ""}>
-      <b>This machine's staging archive</b> <span class="detail">the service's own copy</span></label>`);
+      ${here}</label>`);
   for (const destination of W.dests) {
     if (destination.kind !== "local-path" && destination.kind !== "peer") continue;
     const label = destination.kind === "local-path"

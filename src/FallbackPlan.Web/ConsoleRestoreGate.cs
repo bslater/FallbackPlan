@@ -78,20 +78,7 @@ public static class ConsoleRestoreGate
     {
         ThrowHelper.ThrowIfNull(passphraseText);
 
-        var roots = new List<string>();
-        if (!string.IsNullOrWhiteSpace(archivesRoot) && Directory.Exists(archivesRoot))
-        {
-            roots.Add(archivesRoot);
-        }
-
-        if (!string.IsNullOrWhiteSpace(stateDirectory)
-            && Path.Combine(stateDirectory, "sets") is { } metadataRoot
-            && Directory.Exists(metadataRoot))
-        {
-            roots.Add(metadataRoot);
-        }
-
-        if (roots.Count == 0)
+        if (RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
         {
             return new GateAnswer(
                 GateOutcome.Unavailable,
@@ -116,13 +103,8 @@ public static class ConsoleRestoreGate
 
         using var passphrase = Passphrase.Create(passphraseText);
         var sawAnArchive = false;
-        foreach (var archive in roots.SelectMany(Directory.GetDirectories))
+        foreach (var archive in LocalRepositories(archivesRoot, stateDirectory))
         {
-            if (!File.Exists(Path.Combine(archive, RepositoryLifecycle.DescriptorKey.Value)))
-            {
-                continue;
-            }
-
             sawAnArchive = true;
             try
             {
@@ -188,20 +170,31 @@ public static class ConsoleRestoreGate
     /// The client half of the write-only provisioning ceremony (ADR-0042 §4,
     /// §10): Argon2id runs here, where the person typed, and what leaves this
     /// process is the write bundle sealed to the service's recipient key. An
-    /// existing v2 archive at <paramref name="archivesRoot"/>/<paramref name="setId"/>
-    /// makes this an adoption — the derivation uses the descriptor's recorded
-    /// salt and parameters and is proved against its public key before
-    /// anything is sealed; no archive (or no local read access) makes it a
-    /// creation with a fresh salt and the default parameters.
+    /// existing v2 repository for the set — a staging archive under
+    /// <paramref name="archivesRoot"/>, or a direct-ship metadata store under
+    /// <paramref name="stateDirectory"/> — makes this an adoption: the
+    /// derivation uses the descriptor's recorded salt and parameters and is
+    /// proved against its public key before anything is sealed. No repository
+    /// (or no local read access) makes it a creation with a fresh salt and the
+    /// default parameters.
     /// </summary>
+    /// <remarks>
+    /// Which branch this takes matters more than it looks. A creation mints a
+    /// <b>new salt</b>, so adopting-as-creating produces keys that cannot open
+    /// what the set has already written — a failure with nothing to see, as
+    /// against a refusal. Looking under both roots is what keeps the branch
+    /// honest for a set that ships direct and therefore stages nothing.
+    /// </remarks>
     /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
-    /// <param name="setId">The set's 32-hex identity, naming its staging archive directory.</param>
+    /// <param name="stateDirectory">The service's state directory, from <c>describe_service</c>; its <c>sets</c> child holds the metadata stores.</param>
+    /// <param name="setId">The set's 32-hex identity, naming its repository directory under either root.</param>
     /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
     /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
     /// <param name="cancellationToken">Cancels the derivation.</param>
     /// <returns>The answer.</returns>
     public static async Task<ProvisionAnswer> BuildProvisionEnvelopeAsync(
         string? archivesRoot,
+        string? stateDirectory,
         string setId,
         string passphraseText,
         string grantRecipientHex,
@@ -221,9 +214,7 @@ public static class ConsoleRestoreGate
 
         using var passphrase = Passphrase.Create(passphraseText);
 
-        var archivePath = string.IsNullOrWhiteSpace(archivesRoot) ? null : Path.Combine(archivesRoot, setId);
-        if (archivePath is not null
-            && File.Exists(Path.Combine(archivePath, RepositoryLifecycle.DescriptorKey.Value)))
+        if (RepositoryForSet(archivesRoot, stateDirectory, setId) is { } archivePath)
         {
             try
             {
@@ -233,7 +224,7 @@ public static class ConsoleRestoreGate
                 {
                     return new ProvisionAnswer(
                         GateOutcome.Unavailable,
-                        "This set's staging archive is a format 1 repository — an existing repository cannot "
+                        "This set's existing repository is format 1 — an existing repository cannot "
                         + "become write-only (ADR-0042).");
                 }
 
@@ -259,7 +250,7 @@ public static class ConsoleRestoreGate
                 // named — a ceremony must never crash the endpoint over it.
                 return new ProvisionAnswer(
                     GateOutcome.Unavailable,
-                    $"This set's staging archive descriptor does not read: {damaged.Message}");
+                    $"This set's repository descriptor does not read: {damaged.Message}");
             }
         }
 
@@ -268,6 +259,57 @@ public static class ConsoleRestoreGate
         // mismatch by name). Fresh salt, current default parameters.
         return BuildCreationEnvelope(passphrase, recipient!);
     }
+
+    /// <summary>
+    /// Where this installation's local key files can be: the archives root
+    /// holding staging archives, and <paramref name="stateDirectory"/>'s
+    /// <c>sets</c> child holding direct-ship metadata stores (ADR-0046).
+    /// </summary>
+    /// <remarks>
+    /// One definition, because three ceremonies need it and a fourth will.
+    /// Each used to spell the layout itself, and when direct-ship arrived
+    /// only the restore gate was taught the second root — leaving an
+    /// all-direct-ship installation unable to rebuild its recovery kit
+    /// (FR-KIT-004) and quietly turning write-only adoption into creation
+    /// against a fresh salt. A shape can now only be taught here.
+    /// </remarks>
+    private static List<string> RepositoryRoots(string? archivesRoot, string? stateDirectory)
+    {
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(archivesRoot) && Directory.Exists(archivesRoot))
+        {
+            roots.Add(archivesRoot);
+        }
+
+        if (!string.IsNullOrWhiteSpace(stateDirectory)
+            && Path.Combine(stateDirectory, "sets") is { } metadataRoot
+            && Directory.Exists(metadataRoot))
+        {
+            roots.Add(metadataRoot);
+        }
+
+        return roots;
+    }
+
+    /// <summary>
+    /// Every local directory carrying a repository descriptor, whichever
+    /// shape wrote it. Order follows <see cref="RepositoryRoots"/>.
+    /// </summary>
+    private static IEnumerable<string> LocalRepositories(string? archivesRoot, string? stateDirectory) =>
+        RepositoryRoots(archivesRoot, stateDirectory)
+            .SelectMany(Directory.GetDirectories)
+            .Where(candidate =>
+                File.Exists(Path.Combine(candidate, RepositoryLifecycle.DescriptorKey.Value)));
+
+    /// <summary>
+    /// One named set's repository, under whichever root holds it, or null
+    /// when the set has never been captured — or is not locally readable.
+    /// </summary>
+    private static string? RepositoryForSet(string? archivesRoot, string? stateDirectory, string setId) =>
+        RepositoryRoots(archivesRoot, stateDirectory)
+            .Select(root => Path.Combine(root, setId))
+            .FirstOrDefault(candidate =>
+                File.Exists(Path.Combine(candidate, RepositoryLifecycle.DescriptorKey.Value)));
 
     /// <summary>
     /// A recipient key is usable when it is hex and exactly 32 bytes —
@@ -406,26 +448,33 @@ public static class ConsoleRestoreGate
     /// wrong passphrase yields no kit rather than a useless one.
     /// </para>
     /// <para>
-    /// An installation with no archive yet has no salt to recover, and this
-    /// says so rather than inventing one. That case is real but narrow: it
-    /// needs a ceremony abandoned after provisioning and before any set's
+    /// Any one of the installation's repositories will do, whichever shape
+    /// wrote it: one passphrase and one salt stamp every archive an
+    /// installation will ever make (ADR-0044), so the first readable
+    /// descriptor is as good a witness as the last. It is searched for
+    /// rather than asked for by set, because a set the console has not been
+    /// told about is still this installation's.
+    /// </para>
+    /// <para>
+    /// An installation with no repository yet has no salt to recover, and
+    /// this says so rather than inventing one. That case is real but narrow:
+    /// it needs a ceremony abandoned after provisioning and before any set's
     /// first backup.
     /// </para>
     /// </remarks>
     /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
-    /// <param name="setIds">The configured sets, whose archives are searched for a descriptor.</param>
+    /// <param name="stateDirectory">The service's state directory, from <c>describe_service</c>; its <c>sets</c> child holds the metadata stores.</param>
     /// <param name="passphraseText">The typed passphrase.</param>
     /// <param name="deviceIdHex">The service's device identity.</param>
     /// <param name="cancellationToken">Cancels the descriptor reads.</param>
     /// <returns>The kit, or why one could not be rebuilt.</returns>
     public static async Task<SetupAnswer> RebuildInstallationKitAsync(
         string? archivesRoot,
-        IEnumerable<string> setIds,
+        string? stateDirectory,
         string passphraseText,
         string deviceIdHex,
         CancellationToken cancellationToken)
     {
-        ThrowHelper.ThrowIfNull(setIds);
         ThrowHelper.ThrowIfNull(passphraseText);
 
         byte[] deviceId;
@@ -438,20 +487,14 @@ public static class ConsoleRestoreGate
             return new SetupAnswer(GateOutcome.Unavailable, "The service's device identity is not readable hex.");
         }
 
-        if (deviceId.Length != 16 || archivesRoot is not { Length: > 0 })
+        if (deviceId.Length != 16 || RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
         {
             return new SetupAnswer(
                 GateOutcome.Unavailable, "This console cannot read the service's archives from here.");
         }
 
-        foreach (var setId in setIds)
+        foreach (var path in LocalRepositories(archivesRoot, stateDirectory))
         {
-            var path = Path.Combine(archivesRoot, setId);
-            if (!Directory.Exists(path))
-            {
-                continue;
-            }
-
             Repository.Format.Descriptor.RepositoryDescriptor descriptor;
             try
             {
