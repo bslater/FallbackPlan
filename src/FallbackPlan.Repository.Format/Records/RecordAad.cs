@@ -10,9 +10,19 @@ namespace FallbackPlan.Repository.Format.Records;
 /// <c>repository_id ‖ u16(format_version) ‖ u8(object_type) ‖ object_id ‖
 /// u32(ordinal)</c> — exactly 55 bytes. Binding the repository and ordinal is
 /// what makes a record moved between repositories or ordinals fail
-/// authentication; the blob identifier is deliberately absent so compaction
-/// can relocate records without re-encryption.
+/// authentication.
 /// </summary>
+/// <remarks>
+/// The blob identifier is absent because binding it would be redundant, not
+/// because a record can be relocated: the record's key already derives from
+/// its blob's salt, writer and counter, so it cannot be opened under any
+/// other blob's context at all (04 §4 as ADR-0025 §3 rewrote it;
+/// <c>RecordCipherTests.RecordCipher_MovedToADifferentBlob_FailsBecauseTheKeyDoesNotTravel</c>).
+/// This comment used to give the opposite reason — that the blob id is out so
+/// compaction can relocate records without re-encryption — which was the
+/// contradiction ADR-0025 exists to resolve. Format v3 changes the underlying
+/// property and drops the ordinal from this layout; v1 and v2 records keep it.
+/// </remarks>
 public static class RecordAad
 {
     /// <summary>The AAD length: 16 + 2 + 1 + 32 + 4 = 55 bytes.</summary>

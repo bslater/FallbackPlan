@@ -51,9 +51,9 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. **Forty-six of the fifty-one are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0050 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051.
+Status per record. **Forty-six of the fifty-two are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0050 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051.
 
-**Five remain `Proposed`, each for a stated reason rather than by neglect:** 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture).
+**Six remain `Proposed`, each for a stated reason rather than by neglect:** 0052 is a design taken deliberately early, while making it is still a format revision rather than a data migration, and nothing implements it; 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture).
 
 **A decision's status is not its implementation state**, and the two are tracked separately on purpose: `Status:` says whether the decision was accepted, and [implementation status](implementation-status.md) says whether the code does it. The two can differ in both directions, and do: three of the five records still marked `Proposed` are built and tested, and 0030 is Accepted while the transport that would carry it does not exist.
 
@@ -113,6 +113,8 @@ Status per record. **Forty-six of the fifty-one are Accepted.** Among them: 0005
 | [0048](adr/0048-determinate-backup-progress.md) | Determinate backup progress: a counted plan, a replayed snapshot, a stream that idles |
 | [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: a reconciled journal, an in-process restart, the startup record |
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and its drill-down: a job that can say what it did |
+| [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive |
+| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives |
 
 Template: [0000](adr/0000-template.md)
 

@@ -72,6 +72,58 @@ public sealed class RecordCipherTests
     }
 
     [TestMethod]
+    public void RecordCipher_MovedToADifferentBlob_FailsBecauseTheKeyDoesNotTravel()
+    {
+        // The third of architecture 03 §3.5's negative test — "a record moved
+        // between blobs, ordinals, or repositories fails authentication" — and
+        // the one the other two methods here never covered, because they hold
+        // the blob key fixed and vary only what the AAD binds.
+        //
+        // It fails for a different reason from its two siblings, and the
+        // difference is the point [ADR-0025](../../../docs/adr/0025-compaction-reseals-records.md)
+        // §3 rests on: the AAD does not name the blob, so nothing here breaks
+        // a tag over a mismatched field. The record simply cannot be opened,
+        // because the key is derived from the blob's own salt, writer and
+        // counter and none of those travel with the bytes. That is what makes
+        // compaction a decrypt-and-reseal operation rather than a copy — and
+        // it is precisely the property format v3 changes
+        // ([ADR-0052](../../../docs/adr/0052-relocatable-records-format-v3.md)),
+        // which is why it is worth having executable before it moves.
+        var classKey = Enumerable.Range(0, 32).Select(value => (byte)(value ^ 0x5a)).ToArray();
+        var writer = WriterId.FromBytes(Enumerable.Repeat((byte)0x11, WriterId.Size).ToArray());
+
+        var source = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(
+            classKey, Enumerable.Repeat((byte)0xa1, BlobKeyDeriver.BlobSaltLength).ToArray(), writer, 7, source);
+
+        var elsewhere = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(
+            classKey, Enumerable.Repeat((byte)0xb2, BlobKeyDeriver.BlobSaltLength).ToArray(), writer, 8, elsewhere);
+
+        Assert.IsFalse(source.SequenceEqual(elsewhere), "two blobs must never derive one key");
+
+        var plaintext = "segment plaintext"u8.ToArray();
+        var nonce = new byte[RecordNonce.AesGcmLength];
+        RecordNonce.Write(3, nonce);
+        var aad = new byte[RecordAad.Length];
+        RecordAad.Write(RepoA, FormatLimits.FormatVersion, ObjectType.SegmentRecord, SomeId, 3, aad);
+
+        var ciphertext = new byte[plaintext.Length];
+        var tag = new byte[RecordCipher.TagLength];
+        RecordCipher.Seal(source, nonce, aad, plaintext, ciphertext, tag);
+
+        // Byte-identical relocation: same ordinal, same AAD, same repository —
+        // only the container changed, and the record is already unreadable.
+        Assert.IsFalse(
+            RecordCipher.TryOpen(elsewhere, nonce, aad, ciphertext, tag, new byte[ciphertext.Length]),
+            "a record must not open under another blob's key context");
+
+        var restored = new byte[plaintext.Length];
+        Assert.IsTrue(RecordCipher.TryOpen(source, nonce, aad, ciphertext, tag, restored));
+        SequenceAssert.AreEqual(plaintext, restored);
+    }
+
+    [TestMethod]
     public void RecordCipher_CiphertextIsTampered_FailsAndEmitsNoPlaintext()
     {
         var plaintext = "segment plaintext"u8.ToArray();

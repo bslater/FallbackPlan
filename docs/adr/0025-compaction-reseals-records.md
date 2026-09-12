@@ -35,6 +35,15 @@ identifier (ADR-0007), not from any byte-preservation trick.
 
 ## Decision
 
+> **Superseded for format v3 (2026-09).** Decisions 1–3 below remain in force
+> for format v1 and v2, which are what every shipped repository is. They no
+> longer describe format v3, where the record key is scoped to the object
+> identifier, the nonce is constant and the AAD drops the ordinal, so that a
+> record can be relocated without being opened —
+> [ADR-0052](0052-relocatable-records-format-v3.md). See Amendment 3 for why
+> the rejection recorded below was right on its own evidence and wrong in
+> aggregate.
+
 ### 1 The AAD is unchanged
 
 The associated data remains exactly as shipped and as frozen in
@@ -194,6 +203,38 @@ by keeping physical location out of manifests — compaction moves records and
 rewrites no manifest, so "loses a live record" can only mean an index error,
 never a manifest one.
 
+## Amendment 3 (2026-09) — the rejection was right one at a time and wrong together
+
+The alternatives above reject "drop the ordinal from the AAD" in a sentence:
+"still fails to enable cross-blob byte-identical moves because the key context
+does not travel. All cost, no capability."
+
+Every word of that is true. It is also true of the other two changes the same
+capability needs, taken singly — making the key travel while the nonce stays
+positional achieves nothing, and neither does the reverse. Three changes, each
+correctly rejected on the grounds that the other two had not been made. The
+capability was never evaluated, because nothing in the record's frame asked
+for all three at once.
+
+[ADR-0052](0052-relocatable-records-format-v3.md) asks for all three, for
+format v3 only. It costs a third reader branch and a third set of conformance
+vectors; it does not cost a migration, because v1 and v2 repositories are read
+in place and nothing is rewritten.
+
+Two further things this record could not have known. Format v2's sealed data
+plane ([ADR-0042](0042-write-only-repositories.md)) arrived afterwards and
+already makes a content key travel with the bytes it seals, so the mechanism
+v3 needs is shipped rather than hypothetical. And Amendment 1's confinement of
+compaction to "the hub's staging archive" is architecturally orphaned by
+[ADR-0046](0046-direct-to-destination-publication.md): a direct-ship set has no
+staging archive, and that is now the default shape of a new local-path set. The
+amendment is not wrong, it simply has nowhere to stand for those sets.
+
+The timing is the whole argument for acting now rather than at phase 4.
+Nothing compacts — this record is *Specified only* and has been since it was
+written — so reversing its decision today is a format revision. After a
+compactor ships it is a data migration. The window closes by itself.
+
 ## Status history
 
 | Date | Status | Note |
@@ -201,3 +242,4 @@ never a manifest one.
 | 2026-08 | Accepted | Resolves Q15 with no format change; 04 §4 rewritten to match; compaction defined as a re-sealing operation for Phase 4 |
 | 2026-08 | Accepted (amended) | Amendment 1: compaction is a staging-archive operation whose output replicates; destinations never re-seal ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-08 | Accepted (amended) | Amendment 2: twelve named exit criteria drawn from the 29 compaction fixes in the surveyed changelog ([ledger](../review/2026-08-prior-art-changelog-ledger.md)). |
+| 2026-09 | Accepted (superseded for v3) | Amendment 3: the decrypt-and-reseal decision stands for format v1 and v2 and is superseded for format v3 by [ADR-0052](0052-relocatable-records-format-v3.md), which scopes the record key to the object identifier, makes the nonce constant and drops the ordinal from the AAD — the three changes this record rejected one at a time, each on the grounds that the other two existed. Amendment 1's staging confinement is separately orphaned for direct-ship sets, which have no staging archive |

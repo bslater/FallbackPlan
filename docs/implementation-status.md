@@ -76,6 +76,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: the journal reconciled at start with a notice, cancel settling a run the queue no longer knows, deletion deferring only to queue-active runs, the Owner-only in-process `restart_service` (contract 1.21) on the console and CLI, and the startup configuration record with provenance | Built | `Application/JobStateStore` · `Agent/ServiceRuntime` · `Agent/AgentHost` (the recycle loop and events 3760–3763) · `Agent/AuthenticatingService` · `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AgentServiceLifetimeTests`, `Hosts.Tests/AgentHostTests`, `Web.Tests/ConsoleAdminScriptTests` |
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
+| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 
 ---
 
@@ -212,6 +213,29 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 ### 0046 — the set that never stages
 
 Everything the row names is held by tests, including the 04 §5.1 kill matrix through a two-destination sink (`Hosts.Tests/DirectShipFaultSweepTests`). The gate has since been discharged for local-path sets (ADR-0046 Decision 7's amendment): `direct_ship` rides the contract (1.23) and the console's set editor, a shape flip migrates in-process with its seed queued at once, the retention-with-trimming drill ran (`Hosts.Tests/DirectShipRetentionTests` — and caught the sink stopping sweep deletes at the metadata store, now fanned to the destinations under the replication gate's licence), and a **new set referencing a local-path destination is born direct-ship**. Retirement's gate was regated in 2026-09 (Amendment 2) after a live install could not use it: it demanded every non-lifecycle object staging held be present at a destination, and nothing carries an object no live snapshot reaches, so the archive was refused for ever and its disk space held. It now refuses only over a blob the live history reaches that no destination has, or a non-blob object the flip's migration never carried across, and names example keys instead of a bare count. What keeps the row at **Partly built** is one tail: the peer write adapter (a declared peer is a stated `NotSupported` ledger row for direct-ship; peer-only sets default to staging until it lands).
+
+### 0052 — nothing writes v3, and that is the point
+
+The record is a **design**, taken at the moment when taking it is cheap. Under
+[ADR-0025](adr/0025-compaction-reseals-records.md) a record's key comes from
+its blob, its nonce is its position in that blob, and its AAD binds that
+position again — so a record cannot be moved without being opened, and
+compaction is decrypt-and-reseal. ADR-0052 scopes the record key to the object
+identifier, makes the nonce constant and drops the ordinal from the AAD, for
+format v3 only.
+
+**Nothing implements it and nothing should yet.** `Domain/FormatLimits` still
+carries versions 1 and 2, `Repository.Crypto/BlobKeyDeriver` still mixes the
+blob's salt, writer and counter, and
+`Repository.Format/Records/RecordNonce` still writes the ordinal. v1 and v2
+repositories are read in place forever, so there is no migration waiting to be
+run and no half-state to be in.
+
+What makes the timing the argument: [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet)
+is *Specified only*, so nothing compacts, so reversing its decision costs a
+format revision. After a compactor ships the same change costs a data
+migration. The window closes on its own, which is why the record exists before
+the code rather than alongside it.
 
 ## By phase
 
