@@ -113,6 +113,64 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Backup_ASetNamedWithAServiceRunning_IsRunByTheService()
+    {
+        // ADR-0028 §3 is unconditional: "the CLI connects to the service when
+        // one is running. Every command that reads or mutates repository or
+        // job state is served by the service." A backup does both, and this
+        // is the one shape of it an operator most often wants from a terminal
+        // — run my configured set, now.
+        //
+        // It used to be the one shape with no route at all. `--repo` means
+        // direct mode, which this very service would refuse because it holds
+        // the writer role, and `--connect` means a REMOTE service; so asking
+        // your own running service to back up your own configured set
+        // answered "--repo is required", naming the argument that could not
+        // have helped. The read verbs above already took the service-only
+        // path; backup simply never got the same branch.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "the words worth keeping");
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "backup", "--set", "docs", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+
+        // The service ran it, so the service's own journal is where it shows
+        // up — the proof that this was not direct mode wearing a label.
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false, Limit: null), _timeout.Token), out var jobs);
+        Assert.IsNotEmpty(jobs.Jobs, "the service's journal records nothing, so the CLI did the work itself");
+    }
+
+    [TestMethod]
+    public async Task Backup_ASetNamedWithNothingListening_RefusesWithBothWaysForward()
+    {
+        // The same refusal the read verbs give, and for the same reason:
+        // direct mode is never a silent fallback (ADR-0028 §3), so a missing
+        // service is stated rather than worked around — and the message names
+        // the argument that WOULD help, which the old one did not.
+        _harness.WriteConfiguration("every 1h");
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "backup", "--set", "docs", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("no service is listening", result.All, StringComparison.Ordinal);
+        Assert.Contains("--repo", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task ARepoLessVerb_NothingListening_RefusesWithDirections()
     {
         // Without --repo there is no direct fallback to guess at: the only

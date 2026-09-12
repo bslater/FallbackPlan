@@ -66,7 +66,7 @@ public static class CliApplication
         // which can only say "always" or "never".
         var repoOption = new Option<string?>("--repo")
         {
-            Description = "Path of the repository store root. Required unless --connect names a remote service.",
+            Description = "Path of the repository store root. Required for direct mode — working on a repository in this process. Omit it to ask the running service instead, which is what --set alone does.",
         };
         var passphraseEnvOption = new Option<string?>("--passphrase-env")
         {
@@ -923,7 +923,7 @@ public static class CliApplication
             var includeOption = new Option<string[]>("--include") { Description = "rules-v1 include rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var excludeOption = new Option<string[]>("--exclude") { Description = "rules-v1 exclude rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var fullOption = new Option<bool>("--full") { Description = "Ignore the prior snapshot; read every file." };
-            var command = WithRemoteCapableSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot). With --connect, runs a configured set on the remote service."));
+            var command = WithRemoteCapableSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot). With --set and no --repo, asks the running service to run that configured set — locally, or on the remote one named by --connect."));
             command.Arguments.Add(rootArgument);
             command.Options.Add(setOption);
             command.Options.Add(includeOption);
@@ -935,13 +935,23 @@ public static class CliApplication
             {
                 // The one verb that both writes and has a service equivalent, so
                 // the one whose side has to be resolved rather than assumed
-                // (ADR-0028 §3). Everything the two sides do differently lives
+                // (ADR-0028 §3). Everything the sides do differently lives
                 // behind the gateway; what is left here is the same either way —
                 // a remote service, like a local one, runs only a configured set.
+                //
+                // Naming no repository asks the local service, exactly as the
+                // read verbs do: "the CLI connects to the service when one is
+                // running", and a backup is the command an operator most often
+                // wants that way. Requiring --repo here meant requiring the
+                // flag for direct mode in order to ask the service — and the
+                // service, holding the writer role, would then refuse it.
                 var remote = ResolveRemote(parse, parse.GetValue(directOption));
                 var gateway = remote is { } target
                     ? await OperationGateway.OpenForRemoteAsync(
                         target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                    : parse.GetValue(repoOption) is not { Length: > 0 } && !parse.GetValue(directOption)
+                    ? await OperationGateway.OpenServiceOnlyAsync(
+                        parse.GetValue(stateOption), cancellationToken).ConfigureAwait(false)
                     : await OperationGateway.OpenForWriteAsync(
                         Repo(parse),
                         PassphraseEnv(parse),
