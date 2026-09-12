@@ -138,6 +138,8 @@ Recovery of **data** needs only the repository and the kit. Recovery of **operat
 
 Full model in [`11-solution-structure.md` §3](11-solution-structure.md#3-local-state-separation).
 
+**A direct-ship set sharpens this** ([ADR-0046](../adr/0046-direct-to-destination-publication.md)): its content never lands locally at all, so the state directory holds metadata and nothing else, and losing that directory is the whole loss rather than an inconvenience. Its destination is the only complete copy in existence, and recovery reads it directly — pointing the standalone tool at `<destination>/<repository id>` with the kit and the passphrase. The drill that holds this to the Release binaries is [eng/recovery-drill.sh](../../eng/recovery-drill.sh): it builds an installation, captures a corpus across the segment and blob boundaries, deletes the state directory, the archives root and the sources, and then compares every recovered byte against a manifest taken beforehand. Its in-process half runs in CI as `Hosts.Tests/RecoveryHostTests`.
+
 ---
 
 **Previous:** [07 — Retention and garbage collection](07-retention-and-gc.md) · **Next:** [09 — Replication and peers](09-replication-and-peers.md)

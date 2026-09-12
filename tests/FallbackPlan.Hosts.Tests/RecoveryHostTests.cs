@@ -1,4 +1,8 @@
+using FallbackPlan.Agent;
+using FallbackPlan.Application;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Recovery;
+using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -339,6 +343,141 @@ public sealed class RecoveryHostTests : IDisposable
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("liberate", result.Error, StringComparison.Ordinal);
     }
+
+    [TestMethod]
+    public async Task Restore_ADirectShipSetAfterTheMachineIsGone_ComesBackFromTheDestinationAlone()
+    {
+        // The shape a set created today actually has (ADR-0046): content
+        // ships straight to the destinations and the agent's state holds
+        // metadata only. So deleting the state directory is not a stand-in
+        // for losing the machine — for this set it IS the loss, and the
+        // destination is the only complete copy left in the world.
+        //
+        // NFR-OPS-005 and FR-KIT-006 are about exactly that morning. The
+        // earlier proof of them ran against a staging archive in the
+        // archives root, which a direct-ship installation never writes, so
+        // this is the first time the claim is held to the default shape.
+        var passphrase = "The one long Passphrase 42 of this installation!";
+        var password = "The-0wner-passw0rd";
+        var passwordVariable = "FBP_RECOVERY_OWNER_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, passphrase);
+        Environment.SetEnvironmentVariable(passwordVariable, password);
+
+        var vault = Path.Combine(_harness.WorkPath, "vault");
+        var kit = Path.Combine(_harness.WorkPath, "installation-kit.bin");
+        Directory.CreateDirectory(vault);
+
+        try
+        {
+            var setup = await HostHarness.RunAsync(
+                AgentHost.RunAsync,
+                "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+                "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+                "--kit-output", kit, "--user", "ben", "--password-env", passwordVariable);
+            Assert.AreEqual(0, setup.ExitCode, setup.Error);
+
+            _harness.WriteSourceFile("docs/notes.txt", "the words worth keeping");
+            _harness.WriteSourceFile("docs/big.bin", new string('r', 300_000));
+            WriteDirectShipConfiguration(vault);
+
+            await using (var runtime = await StartAsync(passphrase))
+            {
+                var set = runtime.Configuration.BackupSets.Single();
+                var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
+                    .WaitAsync(TestContext.CancellationTokenSource.Token);
+                Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+            }
+
+            var replica = Assert.ContainsSingle(Directory.GetDirectories(vault));
+
+            // The machine is gone. Everything the installation knew — the
+            // metadata store, the catalogue, the credential — goes with it.
+            Directory.Delete(_harness.StateDirectory, recursive: true);
+            Directory.Delete(_harness.SourceRoot, recursive: true);
+            Assert.IsTrue(
+                !Directory.Exists(_harness.ArchivesRoot)
+                    || Directory.GetFiles(_harness.ArchivesRoot, "*", SearchOption.AllDirectories).Length == 0,
+                "a direct-ship installation stages nothing, so the archives root cannot be a fallback");
+
+            // The trailing separator is what a shell's tab-completion gives a
+            // person typing this path, and it used to make every key resolve
+            // "outside the store root" — found by the recovery drill.
+            var listed = await RunAsync(
+                "snapshots", "--repo", replica + Path.DirectorySeparatorChar, "--kit", kit,
+                "--passphrase-env", _harness.PassphraseVariable);
+            Assert.AreEqual(0, listed.ExitCode, listed.Error);
+            Assert.DoesNotContain("SIGNATURE-FAILED", listed.Output, StringComparison.Ordinal);
+
+            var snapshot = listed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Split(' ')[0];
+            var output = Path.Combine(_harness.WorkPath, "recovered");
+            var restored = await RunAsync(
+                "restore", "--repo", replica, "--kit", kit,
+                "--passphrase-env", _harness.PassphraseVariable,
+                "--snapshot", snapshot, "--output", output);
+
+            Assert.AreEqual(0, restored.ExitCode, restored.Error);
+            Assert.Contains(", 0 failed,", restored.Output, StringComparison.Ordinal);
+
+            var notes = Assert.ContainsSingle(
+                Directory.GetFiles(output, "notes.txt", SearchOption.AllDirectories));
+            Assert.AreEqual("the words worth keeping", await File.ReadAllTextAsync(notes));
+            var big = Assert.ContainsSingle(
+                Directory.GetFiles(output, "big.bin", SearchOption.AllDirectories));
+            Assert.AreEqual(300_000, new FileInfo(big).Length);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(passwordVariable, null);
+        }
+    }
+
+    /// <summary>One direct-ship set against one local vault, written straight to config.</summary>
+    /// <param name="vault">Where the destination's replicas land.</param>
+    private void WriteDirectShipConfiguration(string vault) =>
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new DestinationConfiguration
+                {
+                    Id = new string('1', 32), Name = "vault",
+                    Kind = DestinationKind.LocalPath, Path = vault,
+                },
+            ],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = _harness.DocsSetId,
+                    Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
+                    Schedule = "every 1h",
+                    Destinations = [new SetDestinationReference { Ref = "vault" }],
+                    DirectShip = true,
+                },
+            ],
+        }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+
+    private async Task<ServiceRuntime> StartAsync(string passphraseText)
+    {
+        using var passphrase = Passphrase.Create(passphraseText);
+        return await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                // The fixture's paths share one real volume; the vault is
+                // told apart by name, which is the compliant shape ADR-0051
+                // describes.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+            },
+            passphrase,
+            TestContext.CancellationTokenSource.Token);
+    }
+
+    /// <summary>MSTest's per-test context, for its cancellation token.</summary>
+    public TestContext TestContext { get; set; } = null!;
 
     /// <inheritdoc />
     public void Dispose() => _harness.Dispose();

@@ -46,7 +46,15 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(rootPath);
 
-        _root = Path.GetFullPath(rootPath);
+        // The trailing separator is trimmed because every containment check
+        // below compares against `_root + separator`, and GetFullPath keeps
+        // one if the caller supplied it — so a root spelled with a trailing
+        // slash compared against two of them and no key could ever resolve.
+        // Callers supply it more often than it looks: completing a directory
+        // in any shell appends one, which is how `--repo <archive>/` reaches
+        // the recovery tool. TrimEndingDirectorySeparator leaves a genuine
+        // root ("/" or "C:\") alone.
+        _root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
         _spool = Path.Combine(_root, SpoolDirectoryName);
         _log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(_root);
