@@ -24,6 +24,16 @@ namespace FallbackPlan.Agent;
 internal static partial class Log
 {
     [LoggerMessage(
+        EventId = 3764, Level = LogLevel.Warning,
+        Message = "Set {SetId}: writer sequence adopted the repository's observed head, {From} -> {To} — local allocation state was behind its own published history")]
+    internal static partial void ObservedHeadAdopted(ILogger logger, string setId, ulong from, ulong to);
+
+    [LoggerMessage(
+        EventId = 3765, Level = LogLevel.Warning,
+        Message = "Set {SetId}: the repository's observed head could not be read ({Reason}); the sequence keeps local state and the colliding-put refusal stands behind it")]
+    internal static partial void ObservedHeadUnavailable(ILogger logger, string setId, string reason);
+
+    [LoggerMessage(
         EventId = 3700, Level = LogLevel.Error,
         Message = "Job {JobId} ({Description}) failed past its own handler")]
     internal static partial void JobFaulted(ILogger logger, string jobId, string description, Exception exception);

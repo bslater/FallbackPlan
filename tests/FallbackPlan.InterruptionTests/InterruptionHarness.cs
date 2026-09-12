@@ -66,11 +66,13 @@ public abstract class InterruptionHarness : IDisposable
         IPublicationObserver? observer = null,
         int concurrency = 1,
         string? spoolDirectory = null,
-        Repository.Catalogue.Catalogue? catalogue = null) =>
+        Repository.Catalogue.Catalogue? catalogue = null,
+        WriterSequence? sequence = null) =>
         new(
             SmallBlobPolicy with { Concurrency = concurrency },
             Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
+            sequence
+                ?? new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
             spoolDirectory ?? SpoolDirectory,
             observer,
             catalogue);

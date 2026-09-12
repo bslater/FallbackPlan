@@ -188,6 +188,60 @@ public sealed class WriterSequence : IBlobCounterAllocator
         }
     }
 
+    /// <summary>
+    /// Raises this writer's next number to clear an observed head the
+    /// repository attests (NFR-SEC-005), and reports whether it had to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sequence file says what this machine handed out and is exactly as
+    /// durable as the directory holding it. Lose it, restore an older copy of
+    /// it, or point a rebuilt machine at an existing repository, and the
+    /// writer starts handing out numbers the repository already spent. The
+    /// store's immutability catches that eventually — a colliding put is
+    /// refused and the publication fails — but it catches it partway through
+    /// a backup, as an I/O error, with no way to tell the operator what
+    /// actually happened.
+    /// </para>
+    /// <para>
+    /// The head the repository attests (<see cref="IndexState.ObservedHeadFor"/>)
+    /// is the other half of the same fact, and it is the half that survives:
+    /// it is signed, and it lives at every destination. Adopting it before a
+    /// publication starts turns that collision into a recovery.
+    /// </para>
+    /// <para>
+    /// <b>Adoption only ever raises.</b> A writer ahead of the published head
+    /// is the ordinary case — numbers are allocated before the objects
+    /// accounting for them exist — and lowering to the head would hand out
+    /// numbers that are already in flight, which is the very failure this
+    /// exists to prevent.
+    /// </para>
+    /// <para>
+    /// Outstanding obligations are left alone. A number pending from a
+    /// previous life is still owed its void delta whether or not the head
+    /// moved, and discarding the obligation would turn a recoverable gap into
+    /// a permanent one (07 §4).
+    /// </para>
+    /// </remarks>
+    /// <param name="observedHead">The highest sequence the repository attests for this writer; zero when it attests none.</param>
+    /// <returns>What the adoption did.</returns>
+    public SequenceAdoption AdoptObservedHead(ulong observedHead)
+    {
+        lock (_gate)
+        {
+            if (observedHead == 0 || _next > observedHead)
+            {
+                return new SequenceAdoption.AlreadyAhead(_next);
+            }
+
+            var from = _next;
+            _next = observedHead + 1;
+            Persist();
+
+            return new SequenceAdoption.Adopted(from, _next);
+        }
+    }
+
     /// <inheritdoc />
     /// <remarks>The pending mark is durable <b>before</b> the number is returned — an allocation the disk never saw could not get its void delta.</remarks>
     public ulong AllocateNext()
@@ -230,4 +284,35 @@ public sealed class WriterSequence : IBlobCounterAllocator
     void IBlobCounterAllocator.MarkAccounted(ulong blobCounter) => MarkAccounted(blobCounter);
 
     private void Persist() => _store.Save(new SequenceState(_next, [.. _pending], _lastDeltaId));
+}
+
+/// <summary>
+/// What <see cref="WriterSequence.AdoptObservedHead"/> found. The two cases
+/// are not equally interesting: one is every ordinary open, the other is
+/// evidence that this machine's allocation state was lost or rolled back and
+/// deserves to be said out loud.
+/// </summary>
+public abstract record SequenceAdoption
+{
+    private SequenceAdoption()
+    {
+    }
+
+    /// <summary>
+    /// The writer's own state already clears the repository's head, which is
+    /// the ordinary case: numbers are allocated before the objects accounting
+    /// for them are published, so the local next is normally above the head.
+    /// </summary>
+    /// <param name="Next">The number the writer will hand out next, unchanged.</param>
+    public sealed record AlreadyAhead(ulong Next) : SequenceAdoption;
+
+    /// <summary>
+    /// The repository knew a higher sequence than this writer did, and the
+    /// writer has moved past it. Nothing about this is normal: a writer's
+    /// state can only fall behind its own published objects by being lost,
+    /// restored from an older copy, or replaced by a rebuilt machine.
+    /// </summary>
+    /// <param name="From">What the writer would have handed out next.</param>
+    /// <param name="To">What it will hand out instead — one past the observed head.</param>
+    public sealed record Adopted(ulong From, ulong To) : SequenceAdoption;
 }

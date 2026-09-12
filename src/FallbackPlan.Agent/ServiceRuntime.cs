@@ -837,6 +837,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 throw;
             }
 
+            await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
+
             _archives.Add(setId, archive);
             return archive;
         }
@@ -844,6 +846,60 @@ public sealed class ServiceRuntime : IAsyncDisposable
         {
             _archivesGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Asks the repository how far this writer had got, and moves the local
+    /// sequence past it when local state turns out to be behind (NFR-SEC-005).
+    /// </summary>
+    /// <remarks>
+    /// The sequence file is allocation state and lives in the state directory;
+    /// the repository's own signed index and its journal keys carry the same
+    /// fact and live at every destination. Consulting them at open is what
+    /// turns a state directory that was lost, restored from an older copy, or
+    /// replaced by a rebuilt machine into a recovery rather than an I/O error
+    /// halfway through the next backup. It never lowers the sequence: a writer
+    /// ahead of the published head is the ordinary case.
+    /// </remarks>
+    private async ValueTask AdoptObservedHeadAsync(
+        string setId, ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        SequenceAdoption adoption;
+        try
+        {
+            var loader = new IndexLoader(
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Hierarchy,
+                LoggerFor<IndexLoader>());
+            var index = await loader.LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,
+                blobState: null, cancellationToken).ConfigureAwait(false);
+
+            adoption = archive.Sequence.AdoptObservedHead(
+                await ObservedHead.OfAsync(archive.Store, Writer, index, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException)
+        {
+            // A repository too damaged to read its own index is a problem the
+            // damage surfaces name properly. Refusing the open over it would
+            // deny the restore that is the way out of that state, and the
+            // colliding-put refusal still stands behind this.
+            Log.ObservedHeadUnavailable(LoggerFor<ServiceRuntime>(), setId, exception.Message);
+            return;
+        }
+
+        if (adoption is not SequenceAdoption.Adopted adopted)
+        {
+            return;
+        }
+
+        Log.ObservedHeadAdopted(LoggerFor<ServiceRuntime>(), setId, adopted.From, adopted.To);
+        Notices.Raise(
+            $"sequence-adopted:{setId}",
+            $"Set '{setId}' would have re-used writer sequence numbers its own history already holds: local "
+            + $"state said {adopted.From}, the repository attests {adopted.To - 1}. The writer has moved past "
+            + "it, so backups continue — but the state directory was lost, restored from an older copy, or "
+            + "belongs to a rebuilt machine, and anything else kept beside it deserves the same suspicion.",
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
     /// <summary>

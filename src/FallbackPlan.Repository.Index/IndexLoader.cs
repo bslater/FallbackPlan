@@ -50,6 +50,66 @@ public sealed class IndexState
 
     /// <summary>Every damage and security finding.</summary>
     public IReadOnlyList<DamageFinding> Findings { get; }
+
+    /// <summary>
+    /// The highest sequence number the repository itself attests for
+    /// <paramref name="writer"/> — the observed head (NFR-SEC-005).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The writer's own <c>sequence</c> file is allocation state: it says what
+    /// this machine has handed out, and it is exactly as durable as the state
+    /// directory holding it. This is the other half, and it is the half that
+    /// travels: every checkpoint carries a signed per-writer watermark and
+    /// every applied delta carries its signed sequence (07 §§5–6), so any
+    /// replica of the repository can say how far its writers had got. A
+    /// machine whose local state was lost or rolled back can therefore learn
+    /// the truth from the repository rather than from a collision partway
+    /// through its next backup.
+    /// </para>
+    /// <para>
+    /// Zero for a writer this index has never seen, which is the honest
+    /// answer for a genuinely new writer and for one whose objects are all
+    /// missing — the second being a damage finding this method is not the
+    /// place to raise.
+    /// </para>
+    /// </remarks>
+    /// <param name="writer">The writer to ask about.</param>
+    public ulong ObservedHeadFor(WriterId writer)
+    {
+        var head = 0UL;
+
+        foreach (var checkpoint in Checkpoints)
+        {
+            foreach (var watermark in checkpoint.Checkpoint.WriterWatermarks)
+            {
+                if (watermark.WriterId == writer)
+                {
+                    head = Math.Max(head, watermark.HighestSequence);
+                }
+            }
+        }
+
+        foreach (var delta in Deltas)
+        {
+            if (delta.Delta.WriterId == writer)
+            {
+                head = Math.Max(head, delta.Delta.Sequence);
+            }
+        }
+
+        // A gap inside the bounded patience is a number this writer allocated
+        // and has not accounted for: unpublished, but assuredly used.
+        foreach (var (gapWriter, sequence) in UnresolvedGaps)
+        {
+            if (gapWriter == writer)
+            {
+                head = Math.Max(head, sequence);
+            }
+        }
+
+        return head;
+    }
 }
 
 /// <summary>
