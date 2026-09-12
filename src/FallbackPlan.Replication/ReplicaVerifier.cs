@@ -19,7 +19,13 @@ public sealed record VerificationSample(string Key, ulong Offset, uint Length);
 /// exactly like a run where every sample passed. Proving nothing and proving
 /// everything must not look alike (FR-VER-003).
 /// </remarks>
-public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed)
+/// <param name="Sealed">
+/// How many of <paramref name="Passed"/> were proved by opening a record's
+/// AEAD tag rather than by comparing bytes against another copy. The strong
+/// half: a tag was computed by the writer under a key the destination has
+/// never held, so it cannot be forged and rot cannot survive it.
+/// </param>
+public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed, int Sealed = 0)
 {
     /// <summary>Whether this run established anything at all.</summary>
     public bool ProvedSomething => Passed > 0;
@@ -116,6 +122,12 @@ public static class ReplicaVerifier
     /// <param name="replica">The destination's store.</param>
     /// <param name="samples">The keys and ranges to check.</param>
     /// <param name="cancellationToken">Cancels the run.</param>
+    /// <param name="repository">
+    /// The opened repository, when the caller has one. Present, sampled
+    /// blobs are proved at the replica by their own AEAD tags, which needs
+    /// no independent copy; absent, every sample falls to the comparison,
+    /// which proves nothing where the source is the replica.
+    /// </param>
     /// <returns>
     /// What was proven and what was not. A range the <b>source</b> cannot read
     /// is skipped — it counts neither way — so a run that skipped everything
@@ -125,16 +137,36 @@ public static class ReplicaVerifier
     /// </returns>
     public static async Task<VerificationOutcome> VerifyAsync(
         IObjectStore source, IObjectStore replica,
-        IReadOnlyList<VerificationSample> samples, CancellationToken cancellationToken)
+        IReadOnlyList<VerificationSample> samples, CancellationToken cancellationToken,
+        Repository.OpenedRepository? repository = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(replica);
         ThrowHelper.ThrowIfNull(samples);
 
         var passed = 0;
+        var sealedProofs = 0;
         var failed = new List<string>();
+
+        // The blob half, proved at the replica and against nothing else.
+        // Comparison needs an independent copy, and a direct-ship set does not
+        // have one: its working store reads blobs back from the destinations
+        // themselves, so comparing would put a replica against itself. The
+        // AEAD tag needs no second copy, because the destination never held
+        // the key that computed it.
+        var sealedKeys = repository is null
+            ? []
+            : await SealedProofAsync(replica, samples, repository, failed, cancellationToken).ConfigureAwait(false);
+        passed += sealedKeys.Count;
+        sealedProofs = sealedKeys.Count;
+
         foreach (var sample in samples)
         {
+            if (sealedKeys.Contains(sample.Key) || failed.Contains(sample.Key))
+            {
+                continue;
+            }
+
             var expected = await RangeReader.ReadAsync(source, sample, cancellationToken).ConfigureAwait(false);
             if (expected is null)
             {
@@ -152,6 +184,85 @@ public static class ReplicaVerifier
             }
         }
 
-        return new VerificationOutcome(passed, failed);
+        return new VerificationOutcome(passed, failed, sealedProofs);
+    }
+
+    /// <summary>
+    /// Proves sampled blobs at the replica by opening them: the footer
+    /// authenticates the container, and a record read from it authenticates
+    /// its own bytes (specification 04 §6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A blob the reader cannot open at all is a failure — its footer did not
+    /// authenticate where it sits, which is exactly the damage a challenge
+    /// exists to find.
+    /// </para>
+    /// <para>
+    /// A blob that opens but whose records will not decrypt is <b>not</b>
+    /// counted either way here. In a write-only repository (ADR-0042) the
+    /// service holds the structure key and not the content key, so its data
+    /// records are unreadable by construction rather than by damage; the
+    /// container is still proved, and saying "proved" of the payloads would be
+    /// a claim nobody checked. Those keys fall through to the comparison half,
+    /// which reports honestly when it has no independent side.
+    /// </para>
+    /// </remarks>
+    private static async Task<HashSet<string>> SealedProofAsync(
+        IObjectStore replica,
+        IReadOnlyList<VerificationSample> samples,
+        Repository.OpenedRepository repository,
+        List<string> failed,
+        CancellationToken cancellationToken)
+    {
+        var blobKeys = samples
+            .Select(sample => sample.Key)
+            .Where(key => key.StartsWith("blobs/", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .Select(ObjectKey.Parse)
+            .ToList();
+
+        var proved = new HashSet<string>(StringComparer.Ordinal);
+        if (blobKeys.Count == 0)
+        {
+            return proved;
+        }
+
+        using var reader = new Repository.RepositoryReader(
+            repository.RepositoryId, repository.Keys, replica);
+        await reader.LoadBlobsAsync(blobKeys, cancellationToken).ConfigureAwait(false);
+
+        foreach (var skipped in reader.SkippedBlobs)
+        {
+            failed.Add(skipped.Key.Value);
+        }
+
+        foreach (var (storeKey, _, records) in reader.Blobs)
+        {
+            if (records.Count == 0)
+            {
+                continue;
+            }
+
+            // One record per blob, chosen at random rather than always the
+            // first: rot is rarely at the front, and a fixed choice is a
+            // choice a damaged replica could survive for ever.
+            var record = records[System.Random.Shared.Next(records.Count)];
+            var read = await reader.ReadSegmentAsync(record.ObjectId, cancellationToken).ConfigureAwait(false);
+
+            if (read.Outcome == Repository.Packing.RecordReadOutcome.Ok)
+            {
+                proved.Add(storeKey.Value);
+            }
+            else if (read.Outcome == Repository.Packing.RecordReadOutcome.AuthenticationFailed)
+            {
+                failed.Add(storeKey.Value);
+            }
+
+            // Any other outcome — a sealed data plane this service cannot
+            // open — leaves the key to the comparison half.
+        }
+
+        return proved;
     }
 }

@@ -600,8 +600,15 @@ public static class FanOut
                 // both destination kinds earn "verified" from bytes read back
                 // off the destination's own disk, never from a copy having
                 // reported success (FR-VER-001).
+                // The repository is handed in so the blob half can be proved
+                // at the replica by its own AEAD tags. Without it the only
+                // proof is a comparison, and a direct-ship set has nothing
+                // independent to compare against — archive.Store reads blobs
+                // back from the destinations themselves (ADR-0046), so the
+                // comparison would put this replica against itself.
                 var verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    archive.Store, replica, plan.Samples, cancellationToken).ConfigureAwait(false);
+                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository)
+                    .ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
                     RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);

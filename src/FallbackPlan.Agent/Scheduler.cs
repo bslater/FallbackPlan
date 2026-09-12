@@ -326,7 +326,16 @@ public static class Scheduler
 
         return record.State switch
         {
-            DestinationSyncState.InSync => behind,
+            // Verification rides the sync path, so a pair with nothing to copy
+            // used to go unchallenged for ever — and a direct-ship set
+            // (ADR-0046) has nothing to copy the moment it converges, because
+            // its capture wrote straight to the destination. That made
+            // FR-VER-002's "sample per interval" mean "sample whenever a copy
+            // happened to be due", which for the default shape of a new
+            // local-path set was never. The pass is cheap when there is
+            // nothing to carry — an inventory diff — so being due a challenge
+            // is reason enough to run it.
+            DestinationSyncState.InSync => behind || ShouldChallenge(record, now),
 
             // A run held the pair out for missing history (ADR-0046 §3's
             // scope rule): the catch-up IS the heal, so it runs at once —
@@ -341,6 +350,34 @@ public static class Scheduler
             _ => (ulong)now.ToUnixTimeMilliseconds() >= record.LastAttemptAt + BackoffMs(runtime, record.ConsecutiveFailures),
         };
     }
+
+    /// <summary>
+    /// How long a destination's proof of possession stays good before the
+    /// pair is due another (FR-VER-002).
+    /// </summary>
+    /// <remarks>
+    /// Six hours rather than the deep sweep's days because the two ask
+    /// different questions at very different prices: the sweep re-reads a
+    /// whole replica, while a challenge samples a bounded handful of objects.
+    /// Verification is reported as coverage AND age (FR-VER-003), and an age
+    /// measured in weeks makes the second half of that pair meaningless.
+    /// </remarks>
+    private const ulong ChallengeIntervalMs = 6UL * 3_600_000UL;
+
+    /// <summary>
+    /// Whether a pair is due a possession challenge: a destination that has
+    /// never been challenged is due now, and one that has is due again when
+    /// its proof has aged past <see cref="ChallengeIntervalMs"/>.
+    /// </summary>
+    /// <remarks>
+    /// A pair nothing has ever been copied to is not due one — there is
+    /// nothing there to prove, and asking would manufacture a failure about
+    /// an absence that is correct.
+    /// </remarks>
+    private static bool ShouldChallenge(DestinationSyncRecord record, DateTimeOffset now) =>
+        record.LastSuccessAt is not null
+        && (record.VerifiedAt is not { } verified
+            || (ulong)now.ToUnixTimeMilliseconds() >= verified + ChallengeIntervalMs);
 
     private static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
         Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
