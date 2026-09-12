@@ -26,11 +26,12 @@ dotnet test  FallbackPlan.slnx -c Release
 - After editing any `.resx`: `python3 eng/generate-resources.py` — the
   `Strings.g.cs` accessors are generated and CI checks they match
   ([ADR-0031](docs/adr/0031-exception-messages-are-resources.md)).
-- Before committing doc or test-comment changes, run all three:
+- Before committing doc or test-comment changes, run all four:
 
   ```bash
   python3 eng/check-requirements.py    # requirement IDs, traceability, test citations
   python3 eng/check-adr-status.py      # ADR table, status legend, code citations
+  python3 eng/check-proofs.py          # proof-obligation states, proof citations, gap ids
   python3 eng/check-links.py           # every relative link and anchor resolves
   ```
 
@@ -48,7 +49,11 @@ dotnet test  FallbackPlan.slnx -c Release
   **Built / Partly built / Specified only / Applied**.
 - Backticked tokens in implementation-status and ADR status rows are parsed
   as code citations by `check-adr-status.py` — they must name real
-  projects/files/classes, so don't backtick ordinary words there.
+  projects/files/classes, so don't backtick ordinary words there. The Proof
+  column of `docs/proof-obligations.md` is read the same way by
+  `check-proofs.py`, which also holds each row's state to the legend
+  (**Proved / Partly proved / Unproved / Open by decision**) and makes an
+  Unproved row name the requirement that would carry the work.
 - **Requirements** (`docs/requirements/functional.md`, `non-functional.md`)
   are numbered rows with acceptance criteria; behavior changes update or add
   rows (marked `**[new]**` / `**[amended]**`). The traceability matrix's

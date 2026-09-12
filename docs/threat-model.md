@@ -149,26 +149,22 @@ Stated plainly so no other document implies otherwise:
 
 ## Controls summary
 
-**This is the design's control set, and roughly half of it is built.** The distinction is drawn here rather than left to be inferred, because a threat model is read by people deciding whether to trust a system, and a designed control read as a deployed one is worse than no entry at all. Per-decision detail is in [implementation status](implementation-status.md).
+**This is the design's control set, and most of it is built.** The distinction is drawn here rather than left to be inferred, because a threat model is read by people deciding whether to trust a system, and a designed control read as a deployed one is worse than no entry at all. Per-decision detail is in [implementation status](implementation-status.md).
 
 **In force** — implemented, with tests holding them:
 
-OS-authenticated local command surface · key material confined to the service account and never crossing the command surface except as sealed envelopes on the two named write-only ceremonies (NFR-SEC-009 as amended by ADR-0042) · write-only repositories: content sealed to a derived public key whose scalar is never stored, the service holding a provably one-way write bundle (NFR-SEC-010) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
+Paired device identity for remote clients, off by default, carried over a real TLS socket — an unpaired client is refused, and a substituted identity is refused rather than prompted ([implementation status](implementation-status.md#0030--the-socket-exists)); mutual device authentication by the same construction, which has never yet spoken to another machine · dedup trust domains: every reuse of another writer's object passes `DedupTrustGate`, confirmed before it is referenced under the default `repository`, refused outright under `device`, referenced unread only under `repository-unverified` (T-10) · keyed verification challenges: a destination answers keyed random-range proofs and a local-path replica answers to direct read-back, with coverage and age carried on the sync ledger · peer quotas, enforced as bytes land · retention and garbage collection with signed tombstones over destructive operations · OS-authenticated local command surface · key material confined to the service account and never crossing the command surface except as sealed envelopes on the two named write-only ceremonies (NFR-SEC-009 as amended by ADR-0042) · write-only repositories: content sealed to a derived public key whose scalar is never stored, the service holding a provably one-way write bundle (NFR-SEC-010) · AEAD for every object · per-blob key derivation with structural nonce uniqueness · signed snapshots and journal records · anti-rollback anchored in durable local state (NFR-SEC-005) · bounded parsers, fuzzed · type-based secret redaction · pinned dependencies with locked restore and a CI vulnerability gate (NFR-SUP-002/003) · reproducible conformance vectors · restore refuses repository paths that do not resolve under the restore root.
 
 **Designed, not built** — each waits on a phase, not on a decision:
 
 | Control | Waiting on |
 |---------|-----------|
-| Paired device identity for remote clients, off by default | Built and carried over a real TLS socket; an unpaired client is refused and a substituted identity is refused rather than prompted ([implementation status](implementation-status.md#0030--the-socket-exists)) |
-| Mutual device authentication | The same — the construction exists and has never spoken to another machine |
 | Content withheld from remote clients unless separately enabled | [Q18](open-questions.md#q18--streaming-restored-content-to-a-remote-client) |
 | Least-privilege repository grants; separate read/append/retention/administrative permissions | Phase 2–3 |
-| Keyed verification challenges | Replication (architecture 09 §5) |
-| Repository-server rate limits and quotas | Phase 3 |
-| Signed audit trail for destructive operations | Retention and GC, which are not built at all |
+| Repository-server rate limits | Phase 3 — per-peer quotas are enforced (see *in force*); rate limiting is not |
 | Signed reproducible releases · rollback-protected auto-update | There is no release pipeline yet |
 
-**Dedup trust domains are not in either list above, and that is the point.** An earlier version of this page put them under *in force* with a note that the `device` domain was "specified and unexercised". That was wrong in the direction that matters: **verify-on-reuse is not implemented at all**, including for `repository`, which is the default. Reuse is decided by index presence alone. See T-10 above, and treat the control as absent rather than partial.
+**Dedup trust domains have moved twice, and the history is kept because the direction of each move is the point.** They were first listed *in force* with the `device` domain noted as "specified and unexercised" — flattery, because verify-on-reuse was not implemented at all. They were then moved out of both lists and described as absent, which was accurate when written and went stale when `DedupTrustGate` landed: from that point this page called an implemented control unbuilt while [T-10](#t-10-malicious-repository-member-poisons-deduplication) six sections above called it built. They are now *in force*, with T-10's two named residuals — FR-DED-004's acknowledgement gate, and verification remembered in the catalogue rather than the repository — stated there rather than here.
 
 ## Review obligations
 
