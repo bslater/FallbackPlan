@@ -107,8 +107,9 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// change): saving a new set queues its first backup at once, and a set
     /// gaining a destination queues that destination's seed.
     /// 1.18 carries retire_staging (ADR-0046): a migrated direct-ship set's
-    /// staging archive is deleted only by this explicit verb, refused while
-    /// anything staging holds has not reached a destination.
+    /// staging archive is deleted only by this explicit verb, and only when
+    /// deletion would lose nothing the live history needs (the refusal's
+    /// condition as ADR-0046 Amendment 2 states it; no wire change).
     /// 1.19 puts the full-backup facts on the status matrix (ADR-0047 §§5–6):
     /// each destination row says when its baseline completed and whether the
     /// pair is still owed its seed, so a console can render "awaiting full

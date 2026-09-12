@@ -367,31 +367,116 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
+        // What retirement could actually cost is narrower than what staging
+        // happens to hold, and the difference is the whole of this gate. The
+        // flip copied every non-blob object into the metadata store
+        // (ADR-0046), so only blob content can be lost here — and only blob
+        // content that a snapshot the repository still lists can reach. An
+        // object outside that closure is not history anybody is owed, and no
+        // pass will ever carry it: the copy follows the snapshot graph and,
+        // under a per-destination policy, the keep-set closure (FR-GC-010),
+        // so a blob a policy stranded or an interrupted run left behind is
+        // invisible to it. Demanding one anyway refused retirement for ever
+        // and made the archive's disk space the hostage, which is the one
+        // thing retirement exists to release.
+        var survey = await Retention.StagingMark.SurveyAsync(
+            archive.Store, archive.Repository, cancellationToken).ConfigureAwait(false);
+        if (survey.Undecodable.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{survey.Undecodable.Count} snapshot object(s) will not decode, so what the staging archive "
+                + "still owes cannot be established; run the verify verb before retiring.");
+        }
+
+        using var reader = new Repository.RepositoryReader(
+            archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var (reachable, unwalkable) = await Retention.StagingMark.MarkAsync(
+            reader, survey.Snapshots, cancellationToken).ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{unwalkable.Count} manifest(s) in the live history would not read, so nothing here can "
+                + "prove the archive is safe to delete; run the verify verb before retiring.");
+        }
+
+        var needed = reader.Blobs
+            .Where(blob => blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+            .Select(blob => blob.StoreKey.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // The metadata plane's own safety check. Migration is idempotent and
+        // runs at the first open after the flip, so this should hold of every
+        // set that got here — but it is the one way a non-blob object could
+        // exist in staging alone, and deleting the only copy of an index
+        // delta is not something to discover afterwards.
+        var metadata = new Storage.Local.LocalFileSystemObjectStore(runtime.SetMetadataPath(set.Id));
+        var metadataHeld = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in metadata.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            metadataHeld.Add(entry.Key.Value);
+        }
+
         var staging = new Storage.Local.LocalFileSystemObjectStore(stagingPath);
-        var missing = 0L;
+        var missing = new List<string>();
+        var unmigrated = new List<string>();
+        var discarded = 0L;
         await foreach (var entry in staging.ListAsync(
             Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
             var key = entry.Key.Value;
             if (key.StartsWith("tombstones/", StringComparison.Ordinal)
-                || key.StartsWith("leases/", StringComparison.Ordinal))
+                || key.StartsWith("leases/", StringComparison.Ordinal)
+                || union.Contains(key))
             {
                 continue;
             }
 
-            if (!union.Contains(key))
+            if (!key.StartsWith("blobs/", StringComparison.Ordinal))
             {
-                missing++;
+                if (!metadataHeld.Contains(key))
+                {
+                    unmigrated.Add(key);
+                }
+
+                continue;
+            }
+
+            // A blob the reader could not open is absent from `needed` by
+            // construction, and that is the right answer: damaged bytes no
+            // restore can use are not a reason to hold the archive. The
+            // count says so rather than letting it pass in silence.
+            if (needed.Contains(key))
+            {
+                missing.Add(key);
+            }
+            else
+            {
+                discarded++;
             }
         }
 
-        if (missing > 0)
+        if (unmigrated.Count > 0)
         {
             return new ServiceError(
                 ServiceErrorReason.Refused,
-                $"{missing} object(s) the staging archive holds have not reached any destination; run a "
-                + "scheduler pass (or the sync verb) to finish seeding, then retire again.");
+                $"{unmigrated.Count} metadata object(s) — {Sample(unmigrated)} — are held by the staging "
+                + "archive alone and never reached this set's metadata store; the flip's migration did not "
+                + "complete, and retiring now would delete the only copy.");
+        }
+
+        if (missing.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{missing.Count} blob(s) the live history still needs — {Sample(missing)} — have reached no "
+                + "destination; run a scheduler pass (or the sync verb) to finish seeding, then retire again.");
         }
 
         try
@@ -408,10 +493,22 @@ public sealed partial class ServiceCommandHandler
 
         return new ConfigurationChangeResult(
         [
-            $"Backup set '{set.Name}': the staging archive was retired; every object it held is at a destination.",
+            $"Backup set '{set.Name}': the staging archive was retired; every blob the live history needs "
+            + "is at a destination.",
+            discarded > 0
+                ? $"{discarded} blob(s) no live snapshot reaches went with it — history a retention policy "
+                + "dropped, or bytes an interrupted run left behind. Nothing referenced them."
+                : "It held nothing beyond that.",
             "The set publishes straight to its destinations; the agent keeps metadata only (ADR-0046).",
         ]);
     }
+
+    /// <summary>
+    /// Up to three keys of a refusal's evidence, so the message names
+    /// something the operator can go and look at rather than a bare count.
+    /// </summary>
+    private static string Sample(List<string> keys) =>
+        string.Join(", ", keys.Take(3)) + (keys.Count > 3 ? ", …" : string.Empty);
 
     private PairingsResult ListPairings() =>
         new([.. PeerGrantStore.Open(runtime.Options.StateDirectory).Grants

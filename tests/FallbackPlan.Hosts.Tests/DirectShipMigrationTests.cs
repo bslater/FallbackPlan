@@ -99,7 +99,7 @@ public sealed class DirectShipMigrationTests : IDisposable
             Assert.IsInstanceOfType<ServiceError>(
                 await handler.ExecuteAsync(new RetireStagingCommand("docs"), Timeout), out var early);
             Assert.AreEqual(ServiceErrorReason.Refused, early.Reason);
-            Assert.Contains("not reached", early.Message, StringComparison.Ordinal);
+            Assert.Contains("reached no destination", early.Message, StringComparison.Ordinal);
 
             // The pass seeds the destination from staging through the sink.
             var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddMinutes(2), Timeout);
@@ -301,6 +301,98 @@ public sealed class DirectShipMigrationTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
         Assert.Contains("relative", refused.Message, StringComparison.Ordinal);
         Assert.IsTrue(Directory.Exists(StagingPath), "a refused retirement must not touch the archive");
+    }
+
+    [TestMethod]
+    public async Task RetireStaging_AnObjectNoLiveSnapshotReaches_DoesNotHoldTheArchiveHostage()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        _harness.WriteSourceFile("docs/history.txt", new string('h', 60_000) + "the first era's bytes");
+
+        await using (var runtime = await StartAsync())
+        {
+            var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+            Assert.AreEqual(1, pass.Ran);
+            await pass.Transfers.WaitAsync(Timeout);
+        }
+
+        WriteConfiguration(directShip: true);
+        _harness.WriteSourceFile("docs/fresh.txt", "the direct-ship era's bytes");
+
+        await using (var runtime = await StartAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var set = runtime.Configuration.BackupSets.Single();
+
+            var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
+                .WaitAsync(Timeout);
+            Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+
+            var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddMinutes(2), Timeout);
+            await pass.Transfers.WaitAsync(Timeout);
+
+            // Everything a live snapshot reaches has arrived at the vault, so
+            // retirement is available at this point — and then an orphan
+            // appears. A blob a retention policy stranded, or one an
+            // interrupted run left behind, is held by staging and by nothing
+            // else, and no pass will ever carry it: the copy is driven by the
+            // snapshot graph, and under a per-destination policy by the
+            // keep-set closure, so an object outside both is invisible to it.
+            // Refusing retirement over one is refusing for ever, and the
+            // archive's disk space is the hostage.
+            var orphan = Path.Combine(
+                StagingPath, "blobs", "data", "abcd", "abcdefghijklmnopqrstuvwxyz234567");
+            Directory.CreateDirectory(Path.GetDirectoryName(orphan)!);
+            await File.WriteAllBytesAsync(orphan, new byte[64], Timeout);
+
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(
+                await handler.ExecuteAsync(new RetireStagingCommand("docs"), Timeout), out var retired);
+            Assert.IsTrue(
+                retired.Lines.Any(line => line.Contains("retired", StringComparison.Ordinal)),
+                string.Join(" / ", retired.Lines));
+            Assert.IsFalse(Directory.Exists(StagingPath), "retirement deletes the staging archive");
+        }
+    }
+
+    [TestMethod]
+    public async Task RetireStaging_HistoryTheDestinationsLack_IsRefusedAndSaysWhichObjects()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        _harness.WriteSourceFile("docs/history.txt", new string('h', 60_000) + "the first era's bytes");
+
+        await using (var runtime = await StartAsync())
+        {
+            var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+            Assert.AreEqual(1, pass.Ran);
+            await pass.Transfers.WaitAsync(Timeout);
+
+            // A second era staging holds alone: captured, never fanned out.
+            _harness.WriteSourceFile("docs/second-era.txt", new string('s', 40_000) + "unsynced history");
+            Assert.AreEqual(
+                "ran",
+                (await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(),
+                    DateTimeOffset.Now.AddMinutes(1), userInitiated: true).WaitAsync(Timeout)).Outcome);
+        }
+
+        WriteConfiguration(directShip: true);
+
+        await using (var runtime = await StartAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            _ = await Scheduler.Enqueue(
+                runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now, userInitiated: true)
+                .WaitAsync(Timeout);
+
+            // The refusal must be actionable: a bare count leaves the
+            // operator with nothing to look at, and no way to tell a
+            // seeding lag from history that is genuinely only here.
+            Assert.IsInstanceOfType<ServiceError>(
+                await handler.ExecuteAsync(new RetireStagingCommand("docs"), Timeout), out var refused);
+            Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+            Assert.Contains("blobs/", refused.Message, StringComparison.Ordinal);
+        }
     }
 
     private void WriteConfiguration(bool directShip) => new ClientConfiguration

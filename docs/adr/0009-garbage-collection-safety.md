@@ -167,7 +167,9 @@ deleting half, each destination bounded by its floor exactly as before, and
 proof-before-reclaim rule, now guarding the *destinations'* copies since no
 local copy exists behind them. A migrated set's leftover staging archive
 leaves only by `retire_staging` (ADR-0046, contract 1.18), refused while it
-holds anything the destination union lacks. Amendment 5's single-writer
+holds a blob the live history reaches that no destination has — never over
+one nothing references, which no pass could ever carry (ADR-0046 Amendment
+2). Amendment 5's single-writer
 grace arithmetic carries over verbatim — the metadata store is single-writer
 by the same construction. Compaction, still unbuilt, is the open question:
 "re-seals in staging and propagates as replication" has no staging to re-seal

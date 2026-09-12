@@ -2422,9 +2422,10 @@ const actions = {
     if (!set) { toast("bad", "The set this notice names is no longer configured"); return; }
     openDialog(`
       <h3>Retire the staging archive for '${esc(set.name)}'</h3>
-      <p class="dlg-sub">Deletes the local staging archive this set no longer publishes to. The service
-      refuses unless every object staging holds has already reached a destination — history then
-      restores from the destinations alone.</p>
+      <p class="dlg-sub">Deletes the local staging archive this set no longer publishes to and reclaims
+      its disk space. The service refuses while any blob your live history still needs has yet to reach
+      a destination, naming them — history then restores from the destinations alone. Bytes no snapshot
+      references go with the archive.</p>
       <label class="field" for="confirm-word">Type <b>retire</b> to confirm</label>
       <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
              data-action-input="confirm-word" data-word="retire" data-enables="retire-staging-go">
