@@ -79,7 +79,8 @@ public sealed class BlobWriter : IAsyncDisposable
         FileStream spool,
         SpoolPinnedConfiguration? pinned,
         byte[]? contentKey = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IncrementalHash? digest = null)
     {
         _log = logger ?? NullLogger.Instance;
         _envelope = envelope;
@@ -93,7 +94,11 @@ public sealed class BlobWriter : IAsyncDisposable
         _spoolPath = spoolPath;
         _spool = spool;
         _pinned = pinned;
-        _digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        // A resume hands over the hash its streaming walk already built, and
+        // the writer owns it from here — re-reading the spool to rebuild one
+        // would spend exactly the I/O the streaming walk saves.
+        _digest = digest ?? IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
     /// <summary>The writer-allocated blob identifier, known before any byte exists.</summary>
@@ -484,17 +489,34 @@ public sealed class BlobWriter : IAsyncDisposable
         // whose tag verifies reached the disk whole, so the tags themselves
         // bound the resume. Nothing has to be kept in step with the bytes,
         // which is what lets the sidecar be written once at create.
-        var spoolBytes = File.ReadAllBytes(spoolPath);
-
-        if (spoolBytes.Length < BlobEnvelope.Length)
+        //
+        // The walk reads forward one record at a time and never holds the
+        // file. It used to read the whole spool into one array, which put the
+        // memory bound at FormatLimits.MaxBlobSize — 512 MiB, twice
+        // NFR-PERF-001's agent budget, reached by nothing more exotic than a
+        // crash during a large blob. No step below needs a byte it has
+        // already passed, so the bound is one record plus this stream's
+        // buffer (FR-ARCH-002; `SpoolCheckpointTests` holds it).
+        var spoolLength = new FileInfo(spoolPath).Length;
+        if (spoolLength < BlobEnvelope.Length)
         {
             return Discard("spool_shorter_than_envelope");
         }
 
+        using var spoolRead = new FileStream(
+            spoolPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, FileOptions.SequentialScan);
+
+        // Enough for the longest envelope shape; Parse refuses a v2 data
+        // envelope that is shorter than its sealed key, exactly as it did
+        // when the whole file was in hand.
+        var prefix = new byte[(int)Math.Min(BlobEnvelope.MaxLength, spoolLength)];
+        spoolRead.ReadExactly(prefix);
+
         BlobEnvelope envelope;
         try
         {
-            envelope = BlobEnvelope.Parse(spoolBytes);
+            envelope = BlobEnvelope.Parse(prefix);
         }
         catch (BlobFormatException)
         {
@@ -522,8 +544,17 @@ public sealed class BlobWriter : IAsyncDisposable
         var contentKey = sealedContent ? checkpoint.ContentKey!.Value.ToArray() : null;
         var walkKey = contentKey ?? blobKey;
 
+        // Accumulated as the walk goes, then adopted by the writer below: a
+        // streaming walk cannot hand the bytes back afterwards, and re-reading
+        // the spool to hash it would spend the I/O this change saves.
+        var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        digest.AppendData(prefix.AsSpan(0, envelope.EnvelopeLength));
+        spoolRead.Position = envelope.EnvelopeLength;
+
         var entries = new List<RecordTableEntry>();
-        var offset = envelope.EnvelopeLength;
+        var offset = (long)envelope.EnvelopeLength;
+        var headerBytes = new byte[RecordHeader.Length];
+        var sealedBytes = Array.Empty<byte>();
         var scratch = Array.Empty<byte>();
 
         // One reason for every way the walk can fail. Structural damage and a
@@ -541,23 +572,27 @@ public sealed class BlobWriter : IAsyncDisposable
             }
 
             CryptographicOperations.ZeroMemory(scratch);
+            CryptographicOperations.ZeroMemory(sealedBytes);
+            digest.Dispose();
             return Discard("spool_tail_unauthenticated");
         }
 
         Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
         Span<byte> aad = stackalloc byte[RecordAad.Length];
 
-        while (offset < spoolBytes.Length)
+        while (offset < spoolLength)
         {
-            if (offset + RecordHeader.Length > spoolBytes.Length)
+            if (offset + RecordHeader.Length > spoolLength)
             {
                 return DiscardTail();
             }
 
+            spoolRead.ReadExactly(headerBytes);
+
             RecordHeader header;
             try
             {
-                header = RecordHeader.Parse(spoolBytes.AsSpan(offset, RecordHeader.Length));
+                header = RecordHeader.Parse(headerBytes);
             }
             catch (RecordFormatException)
             {
@@ -575,16 +610,24 @@ public sealed class BlobWriter : IAsyncDisposable
             // Parse already refused a stored_length past the 64 MiB limit;
             // this bounds the record against the file before allocating.
             var recordLength = RecordHeader.Length + (long)header.StoredLength + RecordCipher.TagLength;
-            if (offset + recordLength > spoolBytes.Length)
+            if (offset + recordLength > spoolLength)
             {
                 return DiscardTail();
             }
 
             var storedLength = (int)header.StoredLength;
+            var sealedLength = storedLength + RecordCipher.TagLength;
+            if (sealedBytes.Length < sealedLength)
+            {
+                sealedBytes = new byte[sealedLength];
+            }
+
             if (scratch.Length < storedLength)
             {
                 scratch = new byte[storedLength];
             }
+
+            spoolRead.ReadExactly(sealedBytes.AsSpan(0, sealedLength));
 
             RecordNonce.Write(header.Ordinal, nonce);
             RecordAad.Write(repositoryId, envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
@@ -596,12 +639,17 @@ public sealed class BlobWriter : IAsyncDisposable
                     walkKey,
                     nonce,
                     aad,
-                    spoolBytes.AsSpan(offset + RecordHeader.Length, storedLength),
-                    spoolBytes.AsSpan(offset + RecordHeader.Length + storedLength, RecordCipher.TagLength),
+                    sealedBytes.AsSpan(0, storedLength),
+                    sealedBytes.AsSpan(storedLength, RecordCipher.TagLength),
                     scratch.AsSpan(0, storedLength)))
             {
                 return DiscardTail();
             }
+
+            // Hashed only once the tag has passed, so the digest covers
+            // exactly the bytes the walk accepted.
+            digest.AppendData(headerBytes);
+            digest.AppendData(sealedBytes.AsSpan(0, sealedLength));
 
             entries.Add(new RecordTableEntry(
                 header.ObjectId,
@@ -617,8 +665,14 @@ public sealed class BlobWriter : IAsyncDisposable
         }
 
         // The plaintext was read only to prove the tag; it is nobody's output
-        // and does not outlive the walk.
+        // and does not outlive the walk. The ciphertext buffer goes with it —
+        // it is the one place a whole record still sits in memory.
         CryptographicOperations.ZeroMemory(scratch);
+        CryptographicOperations.ZeroMemory(sealedBytes);
+
+        // Released before the append handle below claims the file: that one
+        // takes FileShare.None, which this read handle would refuse.
+        spoolRead.Dispose();
 
         // Nothing is truncated. The walk either consumed the file exactly —
         // every record bounded within it — or it restarted.
@@ -626,12 +680,12 @@ public sealed class BlobWriter : IAsyncDisposable
         spool.Seek(0, SeekOrigin.End);
 
         var writer = new BlobWriter(
-            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger);
-        writer._digest.AppendData(spoolBytes);
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger,
+            digest);
         writer._entries.AddRange(entries);
-        writer.CurrentLength = spoolBytes.Length;
+        writer.CurrentLength = spoolLength;
 
-        Log.SpoolResumed(logger, envelope.BlobId, entries.Count, spoolBytes.Length);
+        Log.SpoolResumed(logger, envelope.BlobId, entries.Count, spoolLength);
 
         return new ResumeResult.Resumed(writer);
     }
