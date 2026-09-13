@@ -115,4 +115,10 @@
   <data name="KeyHierarchy_WriteOnlyHoldsNoDataKey" xml:space="preserve">
     <value>A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).</value>
   </data>
+  <data name="KeyHierarchy_WriteOnlyHoldsNoReclaimKey" xml:space="preserve">
+    <value>A write-only service holds no reclaim key: it may publish but not authorise a deletion, and a collection run takes its reclaim authority from a grant (ADR-0055).</value>
+  </data>
+  <data name="WriteOnlyDerivation_ReclaimSeedExactlyBytes" xml:space="preserve">
+    <value>A reclaim key seed is exactly {0} bytes.</value>
+  </data>
 </root>

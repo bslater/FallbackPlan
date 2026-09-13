@@ -112,6 +112,28 @@ public sealed class KeyHierarchy : IDisposable
             ? credential.DeriveSigningKeySeed(generation)
             : Expand("fbp/signing/v1"u8, generation.Value);
 
+    /// <summary>
+    /// Derives the reclaim-key seed for <paramref name="generation"/>
+    /// (<c>"fbp/reclaim/v1" ‖ u32(g)</c>) — the authority a tombstone signs
+    /// under, separate from the one publications sign under
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §1). The 32 bytes
+    /// are an Ed25519 private-key seed per RFC 8032 §5.1.5, exactly as
+    /// <see cref="DeriveSigningKeySeed"/>'s are — one clamping rule for both
+    /// keys, because two would be a second chance to get it wrong (ADR-0020 §1).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The hierarchy is write-only. This is the decision, not a gap: a v2
+    /// service is provisioned with a write credential that deliberately
+    /// carries no reclaim domain, so it can publish for ever and cannot author
+    /// a deletion (ADR-0055 §2). A collection run on such a repository takes
+    /// its reclaim seed from a grant instead (§6) — see
+    /// <see cref="RepositoryReadAuthority.ReclaimKeySeed"/>.
+    /// </exception>
+    public byte[] DeriveReclaimKeySeed(KeyGeneration generation) =>
+        _credential is null
+            ? Expand("fbp/reclaim/v1"u8, generation.Value)
+            : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoReclaimKey);
+
     /// <summary>Zeroes the held key material.</summary>
     public void Dispose()
     {

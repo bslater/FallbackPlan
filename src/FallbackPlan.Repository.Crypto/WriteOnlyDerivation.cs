@@ -21,6 +21,9 @@ public static class WriteOnlyDerivation
     /// <summary>The X25519 key length: 32 bytes.</summary>
     public const int SealingKeyLength = 32;
 
+    /// <summary>The Ed25519 reclaim seed length: 32 bytes (ADR-0055 §1).</summary>
+    public const int ReclaimKeyLength = 32;
+
     /// <summary>
     /// Derives the full read authority — the write credential plus the
     /// sealing private key. Callers that only provision a service should
@@ -73,14 +76,31 @@ public static class WriteOnlyDerivation
             throw;
         }
 
-        var credential = new RepositoryWriteCredential(
-            sealingPublic,
-            Expand(root, "fbp/content-id/v2"u8),
-            Expand(root, "fbp/key-id/v2"u8),
-            Expand(root, "fbp/metadata/v2"u8),
-            Expand(root, "fbp/signing/v2"u8));
+        // The reclaim root sits beside the sealing scalar and NOT inside the
+        // credential, which is the whole of ADR-0055 §2. The credential is
+        // what a service is provisioned with and what crosses a process
+        // boundary to get there; putting the reclaim domain in it would mean
+        // withholding the key in name only.
+        var reclaimSeed = Expand(root, "fbp/reclaim/v2"u8);
 
-        return new RepositoryReadAuthority(credential, sealingScalar);
+        RepositoryWriteCredential credential;
+        try
+        {
+            credential = new RepositoryWriteCredential(
+                sealingPublic,
+                Expand(root, "fbp/content-id/v2"u8),
+                Expand(root, "fbp/key-id/v2"u8),
+                Expand(root, "fbp/metadata/v2"u8),
+                Expand(root, "fbp/signing/v2"u8));
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(sealingScalar);
+            CryptographicOperations.ZeroMemory(reclaimSeed);
+            throw;
+        }
+
+        return new RepositoryReadAuthority(credential, sealingScalar, reclaimSeed);
     }
 
     private static byte[] Expand(ReadOnlySpan<byte> root, ReadOnlySpan<byte> info)
@@ -92,19 +112,30 @@ public static class WriteOnlyDerivation
 }
 
 /// <summary>
-/// A write credential together with the sealing private key — the shape a
-/// restore holds for exactly as long as its grant lives (ADR-0042 §5), and
-/// the shape setup holds for exactly as long as provisioning takes. Owns and
-/// disposes both halves.
+/// A write credential together with the two secrets it deliberately does not
+/// carry — the sealing private key that opens content (ADR-0042 §5) and the
+/// reclaim seed that authorises deletion
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §2). The shape a
+/// restore holds for exactly as long as its grant lives, and the shape setup
+/// holds for exactly as long as provisioning takes. Owns and disposes every
+/// part.
 /// </summary>
+/// <remarks>
+/// The two withheld secrets are different powers and are kept apart on
+/// purpose: one reads the backups, the other deletes them, and a grant for
+/// either must not silently confer the other.
+/// </remarks>
 public sealed class RepositoryReadAuthority : IDisposable
 {
     private readonly byte[] _sealingPrivateKey;
+    private readonly byte[] _reclaimKeySeed;
 
-    internal RepositoryReadAuthority(RepositoryWriteCredential credential, byte[] sealingPrivateKey)
+    internal RepositoryReadAuthority(
+        RepositoryWriteCredential credential, byte[] sealingPrivateKey, byte[] reclaimKeySeed)
     {
         Credential = credential;
         _sealingPrivateKey = sealingPrivateKey;
+        _reclaimKeySeed = reclaimKeySeed;
     }
 
     /// <summary>
@@ -112,8 +143,17 @@ public sealed class RepositoryReadAuthority : IDisposable
     /// credential and a granted scalar that arrived sealed (ADR-0042 §5).
     /// Both are cloned; the caller keeps responsibility for its own copies.
     /// </summary>
+    /// <param name="credential">The service's stored write bundle.</param>
+    /// <param name="sealingPrivateKey">The granted X25519 scalar.</param>
+    /// <param name="reclaimKeySeed">
+    /// The granted reclaim seed, or empty when the grant conveys read
+    /// authority alone. A restore grant does not carry it and must not: the
+    /// power to read is not the power to delete (ADR-0055 §6).
+    /// </param>
     public static RepositoryReadAuthority FromParts(
-        RepositoryWriteCredential credential, ReadOnlySpan<byte> sealingPrivateKey)
+        RepositoryWriteCredential credential,
+        ReadOnlySpan<byte> sealingPrivateKey,
+        ReadOnlySpan<byte> reclaimKeySeed = default)
     {
         if (sealingPrivateKey.Length != WriteOnlyDerivation.SealingKeyLength)
         {
@@ -122,11 +162,21 @@ public sealed class RepositoryReadAuthority : IDisposable
                 nameof(sealingPrivateKey));
         }
 
+        if (!reclaimKeySeed.IsEmpty && reclaimKeySeed.Length != WriteOnlyDerivation.ReclaimKeyLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(
+                    WriteOnlyDerivation.ReclaimKeyLength),
+                nameof(reclaimKeySeed));
+        }
+
         var serialized = credential.ToBytes();
         try
         {
             return new RepositoryReadAuthority(
-                RepositoryWriteCredential.FromBytes(serialized), sealingPrivateKey.ToArray());
+                RepositoryWriteCredential.FromBytes(serialized),
+                sealingPrivateKey.ToArray(),
+                reclaimKeySeed.ToArray());
         }
         finally
         {
@@ -140,13 +190,20 @@ public sealed class RepositoryReadAuthority : IDisposable
     /// <summary>The X25519 scalar that opens sealed content keys.</summary>
     public ReadOnlySpan<byte> SealingPrivateKey => _sealingPrivateKey;
 
+    /// <summary>
+    /// The Ed25519 seed a tombstone signs under (ADR-0055 §1) — empty when
+    /// this authority conveys read access alone.
+    /// </summary>
+    public ReadOnlySpan<byte> ReclaimKeySeed => _reclaimKeySeed;
+
     /// <summary>Deliberately redacted.</summary>
     public override string ToString() => "read-authority(redacted)";
 
-    /// <summary>Zeroes the private key and disposes the credential.</summary>
+    /// <summary>Zeroes both withheld secrets and disposes the credential.</summary>
     public void Dispose()
     {
         CryptographicOperations.ZeroMemory(_sealingPrivateKey);
+        CryptographicOperations.ZeroMemory(_reclaimKeySeed);
         Credential.Dispose();
     }
 }

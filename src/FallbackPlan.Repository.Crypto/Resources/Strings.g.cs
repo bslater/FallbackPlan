@@ -175,4 +175,20 @@ internal static class Strings
     /// A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).
     /// </summary>
     internal static string KeyHierarchy_WriteOnlyHoldsNoDataKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoDataKey));
+
+    /// <summary>
+    /// A write-only service holds no reclaim key: it may publish but not authorise a deletion, and a collection run takes its reclaim authority from a grant (ADR-0055).
+    /// </summary>
+    internal static string KeyHierarchy_WriteOnlyHoldsNoReclaimKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoReclaimKey));
+
+    /// <summary>
+    /// A reclaim key seed is exactly {0} bytes.
+    /// </summary>
+    private static string WriteOnlyDerivation_ReclaimSeedExactlyBytes => Get(nameof(WriteOnlyDerivation_ReclaimSeedExactlyBytes));
+
+    /// <summary>
+    /// A reclaim key seed is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_ReclaimSeedExactlyBytes, arg0);
 }

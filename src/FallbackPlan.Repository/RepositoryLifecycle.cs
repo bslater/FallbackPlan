@@ -186,7 +186,14 @@ public static class RepositoryLifecycle
             var descriptor = new RepositoryDescriptor(
                 repositoryId,
                 FormatLimits.FormatVersion,
-                RequiredFeatures: [],
+                // A repository created today signs its tombstones under the
+                // reclaim key (ADR-0055 §4). Declared required so an older
+                // reader refuses by name rather than verifying a deletion
+                // authorisation against the wrong key — and so the choice
+                // cannot be downgraded per object. Repositories created before
+                // this keep the signing key; that branch lives in
+                // Retention/StagingSweep and is what a migration rests on.
+                RequiredFeatures: [RepositoryDescriptorCodec.FeatureReclaimAuthority],
                 OptionalFeatures: [],
                 settings.KdfParameters,
                 kdfSalt,

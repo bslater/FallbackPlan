@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
@@ -327,6 +328,30 @@ public static class StagingSweep
     private static ulong SealingGeneration(OpenedRepository repository) =>
         Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
+    /// <summary>
+    /// The key a tombstone signs and verifies under
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §1, §4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tombstone's signature is the <em>authorisation</em> to delete
+    /// (specification 11 §3), which is a different claim from a publication's
+    /// signature and now carries a different key. A repository that declares
+    /// <c>reclaim-authority</c> signs here with the reclaim key; one that does
+    /// not keeps the signing key, and that branch is the compatibility rule the
+    /// whole migration rests on — every repository written before this decision
+    /// has tombstones on disk that must still verify.
+    /// </para>
+    /// <para>
+    /// The descriptor decides, never the tombstone. A per-object discriminator
+    /// would let whoever writes the object choose the weaker key.
+    /// </para>
+    /// </remarks>
+    private static RepositorySigner TombstoneSigner(OpenedRepository repository, KeyGeneration generation) =>
+        repository.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureReclaimAuthority)
+            ? RepositorySigner.FromSeed(repository.Hierarchy.DeriveReclaimKeySeed(generation), generation)
+            : RepositorySigner.Create(repository.Hierarchy, generation);
+
     private static async ValueTask<int> WriteAsync(
         IObjectStore store,
         OpenedRepository repository,
@@ -339,7 +364,7 @@ public static class StagingSweep
         // lives in the writer's sequence space.
         var keyGeneration = new KeyGeneration((uint)SealingGeneration(repository));
         byte[] encoded;
-        using (var signer = RepositorySigner.Create(repository.Hierarchy, keyGeneration))
+        using (var signer = TombstoneSigner(repository, keyGeneration))
         {
             encoded = TombstoneCodec.Encode(
                 tombstone, signer.Sign(TombstoneCodec.EncodeForSigning(tombstone)));
@@ -409,7 +434,7 @@ public static class StagingSweep
                 // under, and a failure is a security finding the caller
                 // reports — an unsigned tombstone is an attempt to have
                 // someone else delete data.
-                using var signer = RepositorySigner.Create(repository.Hierarchy, record.KeyGeneration);
+                using var signer = TombstoneSigner(repository, record.KeyGeneration);
                 return signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? decoded : null;
             }
             finally

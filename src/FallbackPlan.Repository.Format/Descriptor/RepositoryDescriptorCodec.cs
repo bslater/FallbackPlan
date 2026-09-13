@@ -39,8 +39,25 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureSealedDataPlane = 0x0001;
 
+    /// <summary>
+    /// The reclaim-authority feature
+    /// ([ADR-0055](../../../docs/adr/0055-reclaim-authority.md) §4): a
+    /// repository naming it in <c>required_features</c> signs its tombstones
+    /// under the reclaim key rather than the signing key, and a collector
+    /// verifies them that way.
+    /// </summary>
+    /// <remarks>
+    /// A repository-level statement and deliberately not the tombstone's own
+    /// <c>schema_version</c>. A per-object version is a per-object choice and
+    /// the attacker makes it — write a schema-1 tombstone and the weaker key
+    /// is back. Required rather than optional for the same reason: an
+    /// optional feature lets an older collector proceed and accept
+    /// signing-key tombstones, which is the downgrade this exists to stop.
+    /// </remarks>
+    public const ushort FeatureReclaimAuthority = 0x0002;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
-    private static readonly HashSet<ushort> Implemented = [FeatureSealedDataPlane];
+    private static readonly HashSet<ushort> Implemented = [FeatureSealedDataPlane, FeatureReclaimAuthority];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
