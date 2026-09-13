@@ -191,4 +191,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_ReclaimSeedExactlyBytes, arg0);
+
+    /// <summary>
+    /// A reclaim sub-root is exactly {0} bytes.
+    /// </summary>
+    private static string ReclaimAuthority_RootExactlyBytes => Get(nameof(ReclaimAuthority_RootExactlyBytes));
+
+    /// <summary>
+    /// A reclaim sub-root is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatReclaimAuthority_RootExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ReclaimAuthority_RootExactlyBytes, arg0);
 }

@@ -155,4 +155,72 @@ public sealed class ReclaimAuthorityTests
             authority.SealingPrivateKey.SequenceEqual(authority.ReclaimKeySeed),
             "reading content and authorising deletion are different powers and must be different keys");
     }
+
+    [TestMethod]
+    public void Grant_TheSeedItHandsOut_IsGenerational()
+    {
+        using var authority = DeriveAuthority("one long passphrase to rule them");
+        using var grant = new ReclaimAuthority(authority.ReclaimKeySeed);
+
+        var first = grant.SeedFor(new KeyGeneration(1));
+        var second = grant.SeedFor(new KeyGeneration(2));
+
+        // The sub-root is one value; what signs is expanded per generation,
+        // exactly as the write credential expands its signing sub-root. A
+        // grant that ignored the generation would outlive the rotation meant
+        // to retire it.
+        Assert.IsFalse(first.AsSpan().SequenceEqual(second));
+        SequenceAssert.AreEqual(first, grant.SeedFor(new KeyGeneration(1)));
+    }
+
+    [TestMethod]
+    public void Grant_AfterTheRunEnds_HandsOutNothing()
+    {
+        // The lifetime is as much the decision as the key: a service
+        // compromised between runs must hold nothing that authorises a
+        // deletion (ADR-0055 §6).
+        using var authority = DeriveAuthority("one long passphrase to rule them");
+        var grant = new ReclaimAuthority(authority.ReclaimKeySeed);
+        grant.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => grant.SeedFor(new KeyGeneration(1)));
+    }
+
+    [TestMethod]
+    public void Grant_TheWrongPassphrasesGrant_DoesNotVerifyTheRepositorysTombstone()
+    {
+        // How a wrong grant is caught before it writes anything: a tombstone
+        // the repository already holds was signed under the real key, so a
+        // grant that cannot verify it is not this repository's.
+        using var real = DeriveAuthority("one long passphrase to rule them");
+        using var wrong = DeriveAuthority("a different passphrase entirely!");
+        var generation = new KeyGeneration(3);
+
+        using var realGrant = new ReclaimAuthority(real.ReclaimKeySeed);
+        using var wrongGrant = new ReclaimAuthority(wrong.ReclaimKeySeed);
+
+        var payload = "a tombstone already on disk"u8.ToArray();
+        var seed = realGrant.SeedFor(generation);
+        byte[] signature;
+        try
+        {
+            using var signer = RepositorySigner.FromSeed(seed, generation);
+            signature = signer.Sign(payload);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(seed);
+        }
+
+        Assert.IsTrue(realGrant.Verifies(payload, signature, generation));
+        Assert.IsFalse(
+            wrongGrant.Verifies(payload, signature, generation),
+            "a grant from another passphrase must be rejected before it authors anything");
+    }
+
+    [TestMethod]
+    public void Grant_AShortRoot_IsRefusedRatherThanPadded()
+    {
+        Assert.ThrowsExactly<ArgumentException>(() => new ReclaimAuthority(new byte[16]));
+    }
 }

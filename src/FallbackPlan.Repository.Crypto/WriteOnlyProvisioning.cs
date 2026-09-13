@@ -121,6 +121,37 @@ public static class WriteOnlyProvisioning
         return ContentSealing.SealPayload(recipientPublicKey, sealingPrivateKey, GrantAad);
     }
 
+    /// <summary>
+    /// Seals a <b>reclaim</b> grant — the derived reclaim sub-root — for the
+    /// service's recipient key
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// </summary>
+    /// <remarks>
+    /// Named separately from <see cref="SealGrant"/> so a caller cannot send
+    /// the power to read where the power to delete is meant, or the reverse.
+    /// The envelopes are indistinguishable on the wire — both are opaque
+    /// 32-byte payloads under the same AAD — which is precisely why the
+    /// service proves a reclaim grant against a tombstone the repository
+    /// already holds before letting it author anything: a sealing scalar
+    /// arriving in a reclaim grant's place will not verify one.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="reclaimRoot">The 32-byte reclaim sub-root.</param>
+    /// <exception cref="ArgumentException">The sub-root is not exactly 32 bytes.</exception>
+    public static byte[] SealReclaimGrant(
+        ReadOnlySpan<byte> recipientPublicKey, ReadOnlySpan<byte> reclaimRoot)
+    {
+        if (reclaimRoot.Length != WriteOnlyDerivation.ReclaimKeyLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(
+                    WriteOnlyDerivation.ReclaimKeyLength),
+                nameof(reclaimRoot));
+        }
+
+        return ContentSealing.SealPayload(recipientPublicKey, reclaimRoot, GrantAad);
+    }
+
     /// <summary>Opens a restore grant with the service's recipient scalar.</summary>
     /// <exception cref="SealedContentException">The envelope does not open or is not a grant.</exception>
     public static byte[] OpenGrant(ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes)

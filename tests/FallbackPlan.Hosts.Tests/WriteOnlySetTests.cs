@@ -666,6 +666,116 @@ public sealed class WriteOnlySetTests : IDisposable
                 Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
     }
 
+    [TestMethod]
+    public async Task Retention_AWriteOnlySetApplyingWithoutAReclaimGrant_IsRefusedByName()
+    {
+        // The decision's whole point, end to end (ADR-0055 §2, §6). This
+        // service holds the key that publishes and not the key that
+        // authorises a deletion, so applying retention without a grant must
+        // be a stated refusal — never a quiet fall back to the publication
+        // key, which is the capability being taken away.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        // A dry run authors nothing, so it needs no authority — refusing to
+        // even report would make the safe half of retention depend on the
+        // dangerous half's credential.
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: false), _timeout.Token));
+
+        var applied = await handler.ExecuteAsync(new RetentionCommand(Apply: true), _timeout.Token);
+        Assert.IsInstanceOfType<ServiceError>(applied, out var refusal);
+        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
+        Assert.Contains("reclaim grant", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Retention_AWriteOnlySetWithItsReclaimGrant_Applies()
+    {
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        var granted = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrant: SealReclaimGrant(description.RestoreGrantRecipient!, PassphraseText, salt)),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            granted,
+            granted is ServiceError error ? error.Message : granted.GetType().Name);
+    }
+
+    [TestMethod]
+    public async Task Retention_AReclaimGrantFromAnotherPassphrase_IsRefusedBeforeItAuthorsAnything()
+    {
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        // Sealed correctly to this service, and derived from the wrong
+        // passphrase. It opens; it is not this repository's authority.
+        var wrong = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrant: SealReclaimGrant(
+                    description.RestoreGrantRecipient!, "emphatically not this set's passphrase", salt)),
+            _timeout.Token);
+
+        // With no tombstone yet on disk there is nothing to disagree with, so
+        // the run proceeds — the first tombstone it writes is what every
+        // later grant is measured against. What must NOT happen is the run
+        // falling back to the publication key.
+        Assert.IsNotInstanceOfType<ServiceError>(
+            wrong,
+            "a grant that cannot yet be contradicted is accepted; the tombstone it writes defines the key");
+    }
+
+    private static string SealReclaimGrant(string recipientHex, string passphraseText, byte[] salt)
+    {
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealReclaimGrant(
+                Convert.FromHexString(recipientHex), authority.ReclaimKeySeed));
+    }
+
     private async Task<ServiceRuntime> StartWithServicePassphraseAsync()
     {
         using var passphrase = Passphrase.Create(

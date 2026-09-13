@@ -181,8 +181,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// sync state on purpose: a destination can hold every byte it was sent,
     /// prove possession of them, and still not restore. Additive with
     /// defaults.
+    /// 1.26 adds `reclaim_grant` to the retention command (ADR-0055 §6): a
+    /// collection run's authority to author deletions on a write-only set —
+    /// the derived reclaim sub-root, sealed end-to-end to this service's
+    /// recipient key and rendered as hex, the same permitted shape under
+    /// NFR-SEC-009 as 1.x's restore grant. Null is correct for every v1 set,
+    /// which derives the key it already holds, and for a dry run, which
+    /// authors nothing. A write-only set applying without one is refused by
+    /// name rather than falling back to the key it publishes with. Additive:
+    /// a pre-1.26 client's retention command still parses, and still reports.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 25);
+    public static ContractVersion Current { get; } = new(1, 26);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

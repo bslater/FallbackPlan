@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Bodu.Security.Cryptography;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using KdfParameters = FallbackPlan.Domain.Configuration.Argon2Parameters;
 
@@ -101,6 +102,41 @@ public static class WriteOnlyDerivation
         }
 
         return new RepositoryReadAuthority(credential, sealingScalar, reclaimSeed);
+    }
+
+    /// <summary>
+    /// Expands the reclaim sub-root into the Ed25519 seed for one generation —
+    /// <c>"fbp/reclaim-generation/v2" ‖ u32(g)</c>, the same shape the write
+    /// credential uses for its signing sub-root
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §1, §6).
+    /// </summary>
+    /// <remarks>
+    /// Static and taking the root as a span rather than living on
+    /// <see cref="RepositoryWriteCredential"/>, because the credential is
+    /// precisely the thing that must never hold this root. A collection run
+    /// on a write-only repository reaches it through a grant and nowhere
+    /// else.
+    /// </remarks>
+    /// <param name="reclaimRoot">The 32-byte reclaim sub-root, from a grant or a derivation.</param>
+    /// <param name="generation">The key generation in force.</param>
+    /// <exception cref="ArgumentException">The root is not exactly 32 bytes.</exception>
+    public static byte[] DeriveReclaimKeySeed(ReadOnlySpan<byte> reclaimRoot, KeyGeneration generation)
+    {
+        if (reclaimRoot.Length != ReclaimKeyLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(ReclaimKeyLength),
+                nameof(reclaimRoot));
+        }
+
+        var derived = new byte[KeyHierarchy.DerivedKeyLength];
+        Span<byte> info = stackalloc byte[26 + sizeof(uint)];
+        "fbp/reclaim-generation/v2"u8.CopyTo(info);
+        var labelLength = "fbp/reclaim-generation/v2"u8.Length;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+            info[labelLength..(labelLength + sizeof(uint))], generation.Value);
+        HKDF.Expand(HashAlgorithmName.SHA256, reclaimRoot, derived, info[..(labelLength + sizeof(uint))]);
+        return derived;
     }
 
     private static byte[] Expand(ReadOnlySpan<byte> root, ReadOnlySpan<byte> info)

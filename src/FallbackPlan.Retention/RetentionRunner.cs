@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Domain.Identifiers;
@@ -43,6 +44,11 @@ public static class RetentionRunner
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <param name="setName">The set's name, for the log alone — the runner is handed a store, not a set.</param>
     /// <param name="logger">Where the pass reports what it kept and what it took.</param>
+    /// <param name="reclaim">
+    /// This run's authority to author deletions (ADR-0055 §6), or null when
+    /// the repository derives its own. A write-only set declaring
+    /// <c>reclaim-authority</c> needs one; a v1 set never does.
+    /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -56,7 +62,8 @@ public static class RetentionRunner
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken,
         string? setName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ReclaimAuthority? reclaim = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -158,7 +165,8 @@ public static class RetentionRunner
         if (plan.Deletable && (plan.DeletableBlobs.Count > 0 || plan.ExpiredSnapshotKeys.Count > 0))
         {
             written = await StagingSweep.TombstoneAsync(
-                store, repository, writerId, plan, survey, publicationSequence, nowUnixMilliseconds, cancellationToken)
+                store, repository, writerId, plan, survey, publicationSequence, nowUnixMilliseconds,
+                cancellationToken, reclaim)
                 .ConfigureAwait(false);
             lines.Add($"tombstoned: {written} object(s), eligible after the next publication");
         }
@@ -167,7 +175,8 @@ public static class RetentionRunner
         // pass's own tombstones never qualify, and earlier passes' are
         // revalidated against the world just computed (11 §3.2 step 3).
         var swept = await StagingSweep.SweepAsync(
-            store, repository, plan, survey, publicationSequence, cancellationToken).ConfigureAwait(false);
+            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim)
+            .ConfigureAwait(false);
         lines.Add(
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "
             + $"{swept.TombstonesCleared} tombstone(s) cleared");

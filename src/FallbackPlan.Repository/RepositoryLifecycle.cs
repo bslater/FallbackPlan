@@ -306,7 +306,10 @@ public static class RepositoryLifecycle
             var descriptor = new RepositoryDescriptor(
                 repositoryId,
                 FormatLimits.SealedFormatVersion,
-                RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+                RequiredFeatures: [
+                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
+                ],
                 OptionalFeatures: [],
                 settings.KdfParameters,
                 kdfSalt,
@@ -395,7 +398,10 @@ public static class RepositoryLifecycle
         var descriptor = new RepositoryDescriptor(
             repositoryId,
             FormatLimits.SealedFormatVersion,
-            RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
+            RequiredFeatures: [
+                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
+                ],
             OptionalFeatures: [],
             kdfParameters,
             kdfSalt.ToArray(),

@@ -121,4 +121,7 @@
   <data name="WriteOnlyDerivation_ReclaimSeedExactlyBytes" xml:space="preserve">
     <value>A reclaim key seed is exactly {0} bytes.</value>
   </data>
+  <data name="ReclaimAuthority_RootExactlyBytes" xml:space="preserve">
+    <value>A reclaim sub-root is exactly {0} bytes.</value>
+  </data>
 </root>

@@ -61,6 +61,14 @@ public static class StagingSweep
     /// </param>
     /// <param name="nowUnixMilliseconds">Informational stamp only (11 §3.1).</param>
     /// <param name="cancellationToken">Cancels the writes.</param>
+    /// <param name="reclaim">
+    /// The run's authority to author deletions (ADR-0055 §6), or null when the
+    /// repository derives it — a v1 repository holds the master key and needs
+    /// no grant. A write-only repository declaring <c>reclaim-authority</c>
+    /// cannot derive it and will throw without one, which is the intended
+    /// refusal: a service that cannot be granted the authority must not
+    /// quietly fall back to the key it publishes with.
+    /// </param>
     /// <returns>Tombstones written (or already present).</returns>
     public static async ValueTask<int> TombstoneAsync(
         IObjectStore store,
@@ -70,7 +78,8 @@ public static class StagingSweep
         SnapshotSurvey survey,
         ulong currentPublicationSequence,
         ulong nowUnixMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReclaimAuthority? reclaim = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -92,7 +101,7 @@ public static class StagingSweep
             var tombstone = new Tombstone(
                 Tombstone.BlobTypeCode, blob.BlobId.ToArray(), TombstoneReason.Unreferenced,
                 writerId.ToArray(), nowUnixMilliseconds, eligible);
-            written += await WriteAsync(store, repository, writerId, tombstone, cancellationToken)
+            written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -102,7 +111,7 @@ public static class StagingSweep
             var tombstone = new Tombstone(
                 (byte)ObjectType.SnapshotManifest, snapshot.ManifestObjectId.ToArray(),
                 TombstoneReason.Unreferenced, writerId.ToArray(), nowUnixMilliseconds, eligible);
-            written += await WriteAsync(store, repository, writerId, tombstone, cancellationToken)
+            written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -125,6 +134,14 @@ public static class StagingSweep
     /// <param name="freshSurvey">The survey that fresh plan was built from.</param>
     /// <param name="currentPublicationSequence">The writer's highest journal sequence now — the grace clock.</param>
     /// <param name="cancellationToken">Cancels the sweep.</param>
+    /// <param name="reclaim">
+    /// The run's authority to author deletions (ADR-0055 §6), or null when the
+    /// repository derives it — a v1 repository holds the master key and needs
+    /// no grant. A write-only repository declaring <c>reclaim-authority</c>
+    /// cannot derive it and will throw without one, which is the intended
+    /// refusal: a service that cannot be granted the authority must not
+    /// quietly fall back to the key it publishes with.
+    /// </param>
     /// <returns>What was deleted, deferred, cleared and found.</returns>
     public static async ValueTask<SweepOutcome> SweepAsync(
         IObjectStore store,
@@ -132,7 +149,8 @@ public static class StagingSweep
         CollectionPlan freshPlan,
         SnapshotSurvey freshSurvey,
         ulong currentPublicationSequence,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReclaimAuthority? reclaim = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -154,7 +172,7 @@ public static class StagingSweep
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
         {
-            var opened = await OpenTombstoneAsync(store, repository, entry.Key, cancellationToken).ConfigureAwait(false);
+            var opened = await OpenTombstoneAsync(store, repository, entry.Key, cancellationToken, reclaim).ConfigureAwait(false);
             if (opened is not { } tombstone)
             {
                 findings.Add($"security: tombstone {entry.Key} would not open or verify — nothing deleted for it");
@@ -329,6 +347,60 @@ public static class StagingSweep
         Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
     /// <summary>
+    /// Whether a grant is this repository's, proved against a tombstone it
+    /// already holds ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// There is no stored public key to check a granted seed against, so the
+    /// proof is by use. A tombstone already on disk was signed under the real
+    /// reclaim key; a grant that verifies it is the real one. A repository
+    /// holding none yet has nothing to disagree with, and answers true — the
+    /// first tombstone it writes is what every later grant is measured
+    /// against.
+    /// </para>
+    /// <para>
+    /// Checked before the run authors anything, because the alternative
+    /// failure is silent and late: a wrong grant would write tombstones
+    /// nothing can verify, and the next sweep would report them as forgeries —
+    /// an alarm about an attack that never happened, raised at whoever reads
+    /// the notices rather than at whoever sent the wrong envelope.
+    /// </para>
+    /// </remarks>
+    /// <param name="store">The repository's store.</param>
+    /// <param name="repository">The opened repository.</param>
+    /// <param name="reclaim">The grant to prove.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public static async ValueTask<bool> GrantProvesOutAsync(
+        IObjectStore store, OpenedRepository repository, ReclaimAuthority reclaim,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(repository);
+        ThrowHelper.ThrowIfNull(reclaim);
+
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+        {
+            var opened = await OpenTombstoneAsync(
+                store, repository, entry.Key, cancellationToken, reclaim, verify: false).ConfigureAwait(false);
+            if (opened is null)
+            {
+                // Unreadable for some other reason — damage, a key generation
+                // this service cannot open. Not this grant's fault, so keep
+                // looking rather than condemning it.
+                continue;
+            }
+
+            return reclaim.Verifies(
+                opened.SignedBytes.Span, opened.Signature.Span,
+                new KeyGeneration((uint)SealingGeneration(repository)));
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// The key a tombstone signs and verifies under
     /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §1, §4).
     /// </summary>
@@ -347,16 +419,38 @@ public static class StagingSweep
     /// would let whoever writes the object choose the weaker key.
     /// </para>
     /// </remarks>
-    private static RepositorySigner TombstoneSigner(OpenedRepository repository, KeyGeneration generation) =>
-        repository.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureReclaimAuthority)
-            ? RepositorySigner.FromSeed(repository.Hierarchy.DeriveReclaimKeySeed(generation), generation)
-            : RepositorySigner.Create(repository.Hierarchy, generation);
+    private static RepositorySigner TombstoneSigner(
+        OpenedRepository repository, KeyGeneration generation, ReclaimAuthority? granted)
+    {
+        if (!repository.Descriptor.RequiredFeatures.Contains(
+            RepositoryDescriptorCodec.FeatureReclaimAuthority))
+        {
+            return RepositorySigner.Create(repository.Hierarchy, generation);
+        }
+
+        // A grant wins where one was supplied, because a write-only
+        // repository's hierarchy cannot derive this key at all (ADR-0055 §6).
+        // A v1 repository derives it and needs no grant — the split defends
+        // the write-only shape, and §3 says so rather than implying more.
+        var seed = granted is not null
+            ? granted.SeedFor(generation)
+            : repository.Hierarchy.DeriveReclaimKeySeed(generation);
+        try
+        {
+            return RepositorySigner.FromSeed(seed, generation);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+        }
+    }
 
     private static async ValueTask<int> WriteAsync(
         IObjectStore store,
         OpenedRepository repository,
         WriterId writerId,
         Tombstone tombstone,
+        ReclaimAuthority? reclaim,
         CancellationToken cancellationToken)
     {
         // The SEALING generation stays the key generation — that is what
@@ -364,7 +458,7 @@ public static class StagingSweep
         // lives in the writer's sequence space.
         var keyGeneration = new KeyGeneration((uint)SealingGeneration(repository));
         byte[] encoded;
-        using (var signer = TombstoneSigner(repository, keyGeneration))
+        using (var signer = TombstoneSigner(repository, keyGeneration, reclaim))
         {
             encoded = TombstoneCodec.Encode(
                 tombstone, signer.Sign(TombstoneCodec.EncodeForSigning(tombstone)));
@@ -401,7 +495,8 @@ public static class StagingSweep
     }
 
     private static async ValueTask<DecodedTombstone?> OpenTombstoneAsync(
-        IObjectStore store, OpenedRepository repository, ObjectKey key, CancellationToken cancellationToken)
+        IObjectStore store, OpenedRepository repository, ObjectKey key, CancellationToken cancellationToken,
+        ReclaimAuthority? reclaim = null, bool verify = true)
     {
         byte[] bytes;
         using (var read = await store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false))
@@ -434,7 +529,15 @@ public static class StagingSweep
                 // under, and a failure is a security finding the caller
                 // reports — an unsigned tombstone is an attempt to have
                 // someone else delete data.
-                using var signer = TombstoneSigner(repository, record.KeyGeneration);
+                if (!verify)
+                {
+                    // The grant proof reads a tombstone to check the grant
+                    // AGAINST it, so it must not first ask the grant to
+                    // authorise the read — that would answer its own question.
+                    return decoded;
+                }
+
+                using var signer = TombstoneSigner(repository, record.KeyGeneration, reclaim);
                 return signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? decoded : null;
             }
             finally

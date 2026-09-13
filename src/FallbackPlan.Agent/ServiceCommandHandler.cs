@@ -255,6 +255,17 @@ public sealed partial class ServiceCommandHandler(
                 return verification;
             }
 
+            // The run's authority to author deletions (ADR-0055 §6). Opened
+            // here and disposed with the run, so a service compromised
+            // between runs holds nothing that can delete.
+            var (reclaim, grantRefusal) = await OpenReclaimGrantAsync(
+                set, archive, apply, command.ReclaimGrant, cancellationToken).ConfigureAwait(false);
+            if (grantRefusal is not null)
+            {
+                acquiredGate?.Release();
+                return grantRefusal;
+            }
+
             Retention.RetentionReport report;
             try
             {
@@ -270,10 +281,12 @@ public sealed partial class ServiceCommandHandler(
                     now,
                     cancellationToken,
                     set.Name,
-                    runtime.LoggerFor(typeof(Retention.RetentionRunner))).ConfigureAwait(false);
+                    runtime.LoggerFor(typeof(Retention.RetentionRunner)),
+                    reclaim).ConfigureAwait(false);
             }
             finally
             {
+                reclaim?.Dispose();
                 acquiredGate?.Release();
             }
 

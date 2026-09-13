@@ -605,7 +605,21 @@ public sealed record CheckCommand(string Level) : ServiceCommand;
 /// half, which is why it is not the default (FR-GC-005).
 /// </summary>
 /// <param name="Apply">False reports only; true tombstones and sweeps.</param>
-public sealed record RetentionCommand(bool Apply) : ServiceCommand;
+/// <param name="ReclaimGrant">
+/// A collection run's authority to author deletions on a write-only set
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6): the derived
+/// reclaim sub-root, sealed end-to-end to this service's published recipient
+/// key and rendered as hex — the same shape, and the same permitted exception
+/// under NFR-SEC-009, as ADR-0042 §5's restore grant. Held for the run and
+/// zeroed with it.
+/// <para>
+/// Null is correct for every v1 set, which derives the key from the master key
+/// and needs no grant, and for a dry run, which authors nothing. A write-only
+/// set declaring <c>reclaim-authority</c> and applying without one is refused
+/// by name rather than falling back to the key it publishes with.
+/// </para>
+/// </param>
+public sealed record RetentionCommand(bool Apply, string? ReclaimGrant = null) : ServiceCommand;
 
 /// <summary>
 /// Converges destinations now, outside the schedule (ADR-0034 §3,
