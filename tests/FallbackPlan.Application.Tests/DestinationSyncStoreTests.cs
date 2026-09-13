@@ -311,4 +311,54 @@ public sealed class DestinationSyncStoreTests
         store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 2_000, syncedSequence: 2);
         Assert.AreEqual(1_000UL, store.Find(SetId, "vault")!.BaselineCompletedAt);
     }
+
+    [TestMethod]
+    public void RecordCompleteness_OnAPairThatHasNeverSucceeded_DoesNotCallItInSync()
+    {
+        // The figures are written from the copy's `finally`, so on a pair's
+        // very first copy they reach the ledger BEFORE any success does. The
+        // row they create must not say the destination is in sync: nothing
+        // has yet held anything, and `in sync` is the one word a person reads
+        // as "my backup is there".
+        var store = DestinationSyncStore.Open(_state);
+
+        store.RecordCompleteness(SetId, "vault", heldBytes: 10, owedBytes: 100, nowUnixMilliseconds: 1_000);
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreNotEqual(DestinationSyncState.InSync, record.State);
+        Assert.IsNull(record.LastSuccessAt, "no success has happened, and the seed must not invent one");
+        Assert.AreEqual(10L, record.HeldBytes);
+        Assert.AreEqual(100L, record.OwedBytes);
+    }
+
+    [TestMethod]
+    public void RecordNeedsFull_OnAPairNeverSyncedAtAll_DoesNotCallItInSync()
+    {
+        // Same trap, the other pre-success writer: a set that has just gained
+        // a destination owes it everything, and the row that records the debt
+        // must not simultaneously claim the debt is paid.
+        var store = DestinationSyncStore.Open(_state);
+
+        store.RecordNeedsFull(SetId, "vault", nowUnixMilliseconds: 1_000);
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreNotEqual(DestinationSyncState.InSync, record.State);
+        Assert.IsTrue(record.NeedsFull);
+    }
+
+    [TestMethod]
+    public void RecordCompleteness_OnAPairAlreadyInSync_LeavesTheStateAlone()
+    {
+        // The seed is only for a pair with no row. A pair that earned in-sync
+        // keeps it: counting bytes is not an attempt and says nothing about
+        // whether the last copy succeeded.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        store.RecordCompleteness(SetId, "vault", heldBytes: 100, owedBytes: 100, nowUnixMilliseconds: 2_000);
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, record.State);
+        Assert.AreEqual(1_000UL, record.LastSuccessAt);
+    }
 }

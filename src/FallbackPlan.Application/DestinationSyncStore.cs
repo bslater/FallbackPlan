@@ -405,7 +405,7 @@ public sealed class DestinationSyncStore
         // the verification stamps, which outlive the sync that earned them:
         // they say when bytes were last proven, which a newer copy does not
         // undo.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
         {
             State = DestinationSyncState.InSync,
             LastAttemptAt = nowUnixMilliseconds,
@@ -453,7 +453,7 @@ public sealed class DestinationSyncStore
     public DestinationSyncRecord RecordCompleteness(
         string setId, string destination, long heldBytes, long owedBytes, ulong nowUnixMilliseconds)
     {
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             HeldBytes = heldBytes,
             OwedBytes = owedBytes,
@@ -471,7 +471,7 @@ public sealed class DestinationSyncStore
     /// <param name="nowUnixMilliseconds">The clock.</param>
     public DestinationSyncRecord RecordNeedsFull(string setId, string destination, ulong nowUnixMilliseconds)
     {
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             NeedsFull = previous?.BaselineCompletedAt is null,
         });
@@ -493,7 +493,7 @@ public sealed class DestinationSyncStore
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(reason);
 
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             State = DestinationSyncState.Behind,
             LastAttemptAt = nowUnixMilliseconds,
@@ -529,7 +529,7 @@ public sealed class DestinationSyncStore
         // The cursor rides with the stamps rather than with the sync, and only
         // on a pass that passed: advancing it after a failure would walk the
         // rotation past objects nobody proved anything about.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             VerifiedAt = nowUnixMilliseconds,
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
@@ -563,7 +563,7 @@ public sealed class DestinationSyncStore
         string setId, string destination, string? cursor, int examined, bool completedCircuit,
         ulong nowUnixMilliseconds)
     {
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             SweepCursor = cursor,
             SweptAt = nowUnixMilliseconds,
@@ -584,7 +584,7 @@ public sealed class DestinationSyncStore
         // The last success and every verification stamp survive a failure:
         // they record what WAS true, and a failed attempt does not un-prove
         // bytes that were proven. Only the failure counters move.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             State = state,
             LastAttemptAt = nowUnixMilliseconds,
@@ -601,13 +601,27 @@ public sealed class DestinationSyncStore
     /// three carry-forward sites and silently reset to its default if any one
     /// was missed.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="state"/> is stated by every caller rather than defaulted
+    /// here, and that is the whole point of it. The blank used to be born
+    /// <see cref="DestinationSyncState.InSync"/>, which was invisible only
+    /// while every mutator immediately overwrote the state — and three of them
+    /// do not. <see cref="RecordCompleteness"/> writes from the copy's
+    /// <c>finally</c>, so on a pair's first copy it reaches the ledger before
+    /// any success does, and the row it created announced that a destination
+    /// holding nothing yet was in sync. A caller that is not recording an
+    /// outcome passes <see cref="DestinationSyncState.Behind"/>: a pair with
+    /// no success behind it is behind by definition, which is what the row
+    /// meant before any of these writers existed.
+    /// </remarks>
     private static DestinationSyncRecord Seed(
-        DestinationSyncRecord? previous, string setId, string destination, ulong nowUnixMilliseconds) =>
+        DestinationSyncRecord? previous, string setId, string destination, ulong nowUnixMilliseconds,
+        DestinationSyncState state) =>
         previous ?? new DestinationSyncRecord
         {
             SetId = setId,
             Destination = destination,
-            State = DestinationSyncState.InSync,
+            State = state,
             LastAttemptAt = nowUnixMilliseconds,
         };
 
