@@ -51,7 +51,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. **Forty-six of the fifty-three are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0050 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051.
+Status per record. **Forty-seven of the fifty-four are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0051 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051; and 0054, which puts the recovery drill on a schedule.
 
 **Seven remain `Proposed`, each for a stated reason rather than by neglect:** 0053 records a ceremony that needs a peer-protocol bump to build, and names the kit rework its other half waits on; 0052 is a design taken deliberately early, while making it is still a format revision rather than a data migration, and nothing implements it; 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture).
 
@@ -116,6 +116,7 @@ Status per record. **Forty-six of the fifty-three are Accepted.** Among them: 00
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | A rebuilt machine claims its peer replica, and its set's shape survives |
+| [0054](adr/0054-scheduled-restore-drills.md) | Recovery is drilled on a cadence, and the drill says what it could not prove |
 
 Template: [0000](adr/0000-template.md)
 

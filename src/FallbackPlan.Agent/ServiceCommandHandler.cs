@@ -2491,7 +2491,10 @@ public sealed partial class ServiceCommandHandler(
                 Reason: ReasonLabel(input.Cause),
                 HeldBytes: ledger?.HeldBytes ?? 0,
                 OwedBytes: ledger?.OwedBytes ?? 0,
-                MeasuredAt: ledger?.MeasuredAt));
+                MeasuredAt: ledger?.MeasuredAt,
+                DrilledAt: ledger?.DrilledAt,
+                DrillFiles: ledger?.DrillFiles ?? 0,
+                DrillFailure: ledger?.DrillFailure));
         }
 
         return (inputs, rows, lastCompleted);

@@ -608,6 +608,25 @@ function destCompletion(d) {
   return Math.max(0, Math.min(100, Math.round(d.heldBytes / d.owedBytes * 100)));
 }
 
+// What the last restore drill found (contract 1.25). Three states, and the
+// console must keep all three apart: never drilled, drilled and passed,
+// drilled and failed. The first and the third both mean "this has not been
+// shown to work"; only the third means something is wrong, and collapsing
+// "never" into either of the others is how an unexercised destination comes
+// to look reassuring.
+function drillLabel(d) {
+  if (d.drilledAt == null) {
+    return `<span class="detail">never drilled</span>`;
+  }
+
+  if (d.drillFailure) {
+    return `<b class="bad">could not restore</b> <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillFailure)}</span>`;
+  }
+
+  const files = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) restored` : "restored";
+  return `${esc(files)} <span class="detail">${esc(rel(d.drilledAt))}</span>`;
+}
+
 // The ring: an SVG arc whose offset is set from script, because the CSP
 // forbids inline style attributes — the same reason the meters' widths are.
 // The unknown state draws the track alone rather than a zero-length arc, so
@@ -714,6 +733,7 @@ function renderSetCard(set) {
         <div><span class="detail">Full backup</span><span>${baseline}</span></div>
         <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
         <div><span class="detail">Possession</span><span>${esc(d.verification)}</span></div>
+        <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
         ${d.reason === "catching-up" && set.lastCompletedAt

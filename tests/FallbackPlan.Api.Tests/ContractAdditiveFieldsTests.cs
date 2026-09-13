@@ -416,4 +416,49 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.IsInstanceOfType<WatchFrame>(frame, out var watch);
         Assert.IsNull(watch.Session);
     }
+
+    [TestMethod]
+    public void TheRestoreDrillAnswer_WireNamesAndPre125Defaults()
+    {
+        // Contract 1.25 (ADR-0054): the status matrix carries when a drill
+        // last restored a file out of this destination's own replica, how
+        // many it brought back, and why it could not when it could not.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
+                "other-drive", "verified", DrilledAt: 7_000, DrillFiles: 3),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"drilled_at\":7000", modern, StringComparison.Ordinal);
+        Assert.Contains("\"drill_files\":3", modern, StringComparison.Ordinal);
+
+        // A pre-1.25 frame reads as never drilled — which a client must show
+        // as never drilled, not as a drill that passed. The three states are
+        // distinguishable on the bytes: no stamp, a stamp alone, and a stamp
+        // with a failure beside it.
+        var old = modern
+            .Replace(",\"drilled_at\":7000", "", StringComparison.Ordinal)
+            .Replace(",\"drill_files\":3", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(row.DrilledAt);
+        Assert.AreEqual(0, row.DrillFiles);
+        Assert.IsNull(row.DrillFailure);
+
+        // A failed drill is a stamp AND a reason, never a bare absence: the
+        // client that cannot tell it from "never drilled" reports an
+        // unrecoverable destination as merely unexercised.
+        var failed = JsonSerializer.Deserialize<DestinationStatusDescriptor>(
+            JsonSerializer.Serialize(
+                new DestinationStatusDescriptor(
+                    "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
+                    "other-drive", "verified",
+                    DrilledAt: 7_000, DrillFailure: "'docs/a.txt' would not restore"),
+                FrameCodec.SerializerOptions),
+            FrameCodec.SerializerOptions)!;
+        Assert.AreEqual(7_000UL, failed.DrilledAt);
+        Assert.AreEqual(0, failed.DrillFiles);
+        Assert.IsNotNull(failed.DrillFailure);
+    }
 }

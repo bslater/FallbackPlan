@@ -457,6 +457,11 @@ details.dest > summary::before { padding-top: 12px; }
 .ring.unknown .ring-label { color: var(--muted); font-weight: 500; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
+/* A drill that could not bring a file back is the loudest thing a
+   destination row has to say, so it is coloured rather than left to read
+   like the rest of the facts around it. */
+.dest-body b.bad { color: var(--bad); }
+
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 /* The file being processed: one line, already middle-truncated in script —
    the CSS clamp only catches narrow windows the character budget missed. */

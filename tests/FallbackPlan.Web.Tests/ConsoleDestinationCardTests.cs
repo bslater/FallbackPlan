@@ -120,4 +120,52 @@ public sealed class ConsoleDestinationCardTests
         Assert.Contains("config?.directShip", body, StringComparison.Ordinal);
         Assert.Contains("destCompletion(d)", body, StringComparison.Ordinal);
     }
+
+    [TestMethod]
+    public void Drill_NeverDrilled_ReadsAsNeitherPassedNorFailed()
+    {
+        var body = FunctionBody(AppJs(), "drillLabel");
+
+        // Three states, three answers (contract 1.25). "Never drilled" and
+        // "could not restore" both mean this destination has not been shown
+        // to work, and only the second means something is wrong — a label
+        // that folded "never" into either would make an unexercised
+        // destination look like an exercised one.
+        Assert.Contains("drilledAt == null", body, StringComparison.Ordinal);
+        Assert.Contains("never drilled", body, StringComparison.Ordinal);
+        Assert.Contains("d.drillFailure", body, StringComparison.Ordinal);
+        Assert.Contains("could not restore", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Drill_TheFailureText_ComesFromTheServiceAndIsEscaped()
+    {
+        var body = FunctionBody(AppJs(), "drillLabel");
+
+        // The drill's own words reach the page, so they go through the
+        // escape like every other service string — a restore failure detail
+        // can carry a captured file's path, which is attacker-influenced
+        // content by definition.
+        Assert.Contains("esc(d.drillFailure)", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Drill_TheRow_IsOnTheDestinationBodyBesidePossession()
+    {
+        var body = FunctionBody(AppJs(), "renderSetCard");
+
+        // Beside Possession rather than in the glance: a drill age is a fact
+        // somebody checks, not one they scan. The card's caption line stays
+        // about what the destination holds now.
+        Assert.Contains("Restore drill", body, StringComparison.Ordinal);
+        Assert.Contains("drillLabel(d)", body, StringComparison.Ordinal);
+
+        // Below the expand, not in it: in the rendered markup the drill row
+        // comes after the caption, which stays about what the destination
+        // holds right now.
+        Assert.IsTrue(
+            body.IndexOf("dest-caption", StringComparison.Ordinal)
+                < body.IndexOf("drillLabel(d)", StringComparison.Ordinal),
+            "the drill row belongs in the destination body, under the glance");
+    }
 }

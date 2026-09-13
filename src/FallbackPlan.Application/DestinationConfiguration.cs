@@ -156,6 +156,22 @@ public sealed record DestinationConfiguration
     public int? DeepVerifyIntervalDays { get; init; }
 
     /// <summary>
+    /// How often a restore drill brings a sampled file back out of this
+    /// destination's replica, in days; absent takes the default
+    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// </summary>
+    /// <remarks>
+    /// Much longer than the sweep's interval because a drill is much more
+    /// expensive — it rebuilds a catalogue from the replica's own index plane
+    /// and writes real bytes — and because what it watches for changes far
+    /// more slowly than rot does. Zero or negative is refused at load rather
+    /// than silently meaning "never": a destination nobody drills is a
+    /// decision, and it has to be spelled out somewhere a reader can see it.
+    /// </remarks>
+    [JsonPropertyName("drill_interval_days")]
+    public int? DrillIntervalDays { get; init; }
+
+    /// <summary>
     /// The destination's priority (ADR-0047): among waiting transfers of the
     /// same initiation, higher ships first, and a prioritised backup writes
     /// to its destinations in this order. Absent means 0; a set's reference

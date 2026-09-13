@@ -78,6 +78,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
+| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, and a failure raising a notice rather than blaming the copy | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 
 ---
 
@@ -261,6 +262,25 @@ the two shapes it has. Nothing writes a third version yet, so nothing was
 broken — and the first field anyone added would have been, by a kit parsed for
 a repository id it does not carry. The test is now an equality, pinned in
 `Repository.Tests/InstallationKitCodecTests`.
+
+### 0054 — what the scheduled drill does not prove
+
+Built, and deliberately narrower than the operator drill it sits beside. The
+scheduled one restores a sampled file from a destination's own replica through
+the same guided-restore verbs a person would use — its own store, its own
+repository open, a catalogue rebuilt from its own index plane — so it proves
+the read path is open for that destination, repeatedly, without anybody
+remembering to ask.
+
+It does **not** parse the kit file, does not exercise the standalone recovery
+tool's dependency closure, and cannot delete the state directory it is running
+out of. All three remain [the committed recovery drill](../eng/recovery-drill.sh)'s,
+which is unchanged and not superseded ([ADR-0054](adr/0054-scheduled-restore-drills.md) §5).
+
+Peer destinations are not drilled: restoring across the wire on a cadence the
+peer never agreed to is peer-protocol work rather than a schedule, and the gap
+is carried openly on [proof obligations](proof-obligations.md) rather than
+implied by an absence.
 
 ## By phase
 

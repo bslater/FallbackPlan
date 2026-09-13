@@ -672,6 +672,20 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// and a client that draws that as empty claims it holds nothing when nobody
 /// has looked.
 /// </param>
+/// <param name="DrilledAt">
+/// When a restore drill last brought a sampled file back out of this
+/// destination's replica, Unix milliseconds; null when none ever has, and
+/// from services before contract 1.25 (ADR-0054). Null is not a failure:
+/// "nobody has tried" and "we tried and it did not work" are different
+/// answers, and the second is <paramref name="DrillFailure"/>.
+/// </param>
+/// <param name="DrillFiles">Files that drill restored whole; zero when it restored none.</param>
+/// <param name="DrillFailure">
+/// Why the last drill could not bring a file back, in its own words; null
+/// when it could, and null when none has run. A destination may hold every
+/// byte it was sent, prove possession of them, and still fail this — which
+/// is the whole reason the field is separate from the sync state.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -685,7 +699,10 @@ public sealed record DestinationStatusDescriptor(
     string? Reason = null,
     long HeldBytes = 0,
     long OwedBytes = 0,
-    ulong? MeasuredAt = null);
+    ulong? MeasuredAt = null,
+    ulong? DrilledAt = null,
+    int DrillFiles = 0,
+    string? DrillFailure = null);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

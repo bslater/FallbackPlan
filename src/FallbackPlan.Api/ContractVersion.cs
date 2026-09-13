@@ -170,8 +170,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// complete when it holds its own keep-set. Additive with defaults, and
     /// the timestamp is what separates "holds none of it" from "nobody has
     /// counted" — a client without it must not draw an empty gauge.
+    /// 1.25 adds the restore drill's answer to each destination row: when a
+    /// drill last brought a sampled file back out of that destination's own
+    /// replica, how many files it restored, and why it could not when it
+    /// could not (ADR-0054). Three states a client must keep apart — never
+    /// drilled (drilled_at null), drilled and passed (a stamp, no failure),
+    /// and drilled and failed (a stamp AND a failure) — because the first
+    /// and the third both mean "this has not been shown to work" while only
+    /// the third means something is wrong. The failure is separate from the
+    /// sync state on purpose: a destination can hold every byte it was sent,
+    /// prove possession of them, and still not restore. Additive with
+    /// defaults.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 24);
+    public static ContractVersion Current { get; } = new(1, 25);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -222,6 +222,44 @@ public sealed record DestinationSyncRecord
     [JsonPropertyName("measured_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ulong? MeasuredAt { get; init; }
+
+    /// <summary>
+    /// When a restore drill last ran against this destination's replica,
+    /// Unix milliseconds; null when none ever has ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// </summary>
+    /// <remarks>
+    /// Null and a failure are different answers and both are kept. "Nobody
+    /// has tried" is not "we tried and it did not work", and a surface that
+    /// cannot tell them apart turns an unexercised destination into a
+    /// reassuring one.
+    /// </remarks>
+    [JsonPropertyName("drilled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? DrilledAt { get; init; }
+
+    /// <summary>Files the last drill brought back whole; zero when it brought back none.</summary>
+    [JsonPropertyName("drill_files")]
+    public int DrillFiles { get; init; }
+
+    /// <summary>Bytes those files amounted to.</summary>
+    [JsonPropertyName("drill_bytes")]
+    public long DrillBytes { get; init; }
+
+    /// <summary>
+    /// Why the last drill did not come back with a file, in the drill's own
+    /// words; null when it did.
+    /// </summary>
+    /// <remarks>
+    /// Recorded beside <see cref="DrilledAt"/> rather than through
+    /// <see cref="DestinationSyncState.Failed"/>, because a drill answers a
+    /// different question from a copy. A destination can hold every byte it
+    /// was sent, prove possession of them, and still not be restorable — and
+    /// calling that a sync failure would put the fault on the copy that
+    /// worked.
+    /// </remarks>
+    [JsonPropertyName("drill_failure")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DrillFailure { get; init; }
 }
 
 /// <summary>
@@ -458,6 +496,47 @@ public sealed class DestinationSyncStore
             HeldBytes = heldBytes,
             OwedBytes = owedBytes,
             MeasuredAt = nowUnixMilliseconds,
+        });
+    }
+
+    /// <summary>
+    /// Records what a restore drill found: the files it brought back whole
+    /// from this destination's own replica, or why it could not
+    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The stamp moves on a failed drill as well as a passed one, which is
+    /// the opposite of how the verification stamps behave, and deliberately.
+    /// A verification stamp answers "when were bytes last proven", so a
+    /// failure must leave the last true answer standing. A drill stamp
+    /// answers "when did we last try to recover", and a failed attempt IS a
+    /// try — leaving yesterday's success on the row would report a
+    /// destination as recently drilled when the most recent drill said it
+    /// cannot be restored.
+    /// </para>
+    /// <para>
+    /// The sync half of the row is untouched. A destination can hold every
+    /// byte it was sent and still fail to restore; that is not a failure of
+    /// the copy, and recording it as one would back off the transfers as
+    /// though they were at fault.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="files">Files restored whole; zero on a failure.</param>
+    /// <param name="bytes">What those files amounted to.</param>
+    /// <param name="failure">Why it did not work, or null when it did.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordDrill(
+        string setId, string destination, int files, long bytes, string? failure, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            DrilledAt = nowUnixMilliseconds,
+            DrillFiles = files,
+            DrillBytes = bytes,
+            DrillFailure = failure,
         });
     }
 

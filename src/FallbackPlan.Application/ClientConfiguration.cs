@@ -664,6 +664,13 @@ public sealed record ClientConfiguration
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
         }
+
+        // Same rule for the drill's cadence, and the same reason (ADR-0054).
+        if (destination.DrillIntervalDays is { } drill && drill <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+        }
     }
 
     private static void ValidateSetDestinations(BackupSetConfiguration set, HashSet<string> destinationNames)

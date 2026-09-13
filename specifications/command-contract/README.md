@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.24
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.25
 
 ---
 
@@ -45,7 +45,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.24 — 51 commands. One line each; parameters, results
+The register as of 1.25 — 51 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -111,4 +111,5 @@ verification, status) and predate the per-version changelog convention.
 | 1.21 | `restart_service`: an in-process recycle of the running service — Owner-only, local callers only, refused before setup and under `--once`; the acknowledgement is flushed before teardown and the restart signs every session out ([ADR-0049](../../docs/adr/0049-service-lifecycle-hygiene.md)) |
 | 1.22 | The completed-run record and drill-down: the job row carries the run's terminal numbers (nullable, additive — a pre-1.22 row reads "not recorded", never zero) and `list_jobs` takes an optional newest-N bound; `job_changes` and `job_failures` answer one run's diff and failure listing from the repository with exact counts and bounded samples; the progress stream names the `current_file` being processed; and the status matrix carries each demotion's `reason` plus the set's `last_completed_at` — all additive with null defaults ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)) |
 | 1.24 | A completion figure on each destination row: `held_bytes`, `owed_bytes` and `measured_at`, counted by the sync pass rather than by the status poll. Owed is by the destination's own retention policy, so a narrow override reads complete when it holds its own keep-set. Additive with defaults; `measured_at` is what separates "holds none of it" from "nobody has counted", and a client without it must not draw an empty gauge |
+| 1.25 | The restore drill's answer on each destination row: `drilled_at`, `drill_files` and `drill_failure` — when a drill last brought a sampled file back out of that destination's own replica, how many it restored, and why it could not when it could not. **Three states a client must keep apart:** never drilled (`drilled_at` absent), drilled and passed (a stamp, no failure), drilled and failed (a stamp **and** a failure). The first and the third both mean the destination has not been shown to restore, and only the third means something is wrong. The failure is deliberately not the destination's sync state: a destination may hold every byte it was sent and prove possession of them and still fail to restore. Additive with defaults |
 | 1.23 | The storage shape surfaced (ADR-0046): `direct_ship` on the set descriptor with null-preserve semantics; a direct-ship set must reference a local-path destination, a shape change is refused while a run is live and takes effect in-process with its seeding catch-up queued at once, and a new local-path set defaults to direct-ship |

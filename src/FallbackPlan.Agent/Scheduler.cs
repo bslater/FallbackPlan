@@ -29,6 +29,15 @@ public sealed record AgentPassResult(IReadOnlyList<AgentSetOutcome> Sets)
     /// </summary>
     public Task Transfers { get; init; } = Task.CompletedTask;
 
+    /// <summary>
+    /// The pass's restore drills (ADR-0054), still running when the pass
+    /// answered. Separate from <see cref="Transfers"/> and strictly after it:
+    /// a drill reads a replica, and reading one mid-convergence would report
+    /// damage that never existed — the same rule the deep sweep follows.
+    /// Never faults.
+    /// </summary>
+    public Task Drills { get; init; } = Task.CompletedTask;
+
     /// <summary>Sets that ran a backup this pass.</summary>
     public int Ran => Sets.Count(set => set.Outcome == "ran");
 
@@ -155,9 +164,11 @@ public static class Scheduler
         // the service does not, and the stable per-pair job identities keep
         // un-awaited passes from piling work up (the duplicate enqueue is
         // refused, and the NEXT pass re-evaluates the pair).
+        var transfers = RunTransferPhasesAsync(runtime, now, cancellationToken);
         return new AgentPassResult(outcomes)
         {
-            Transfers = RunTransferPhasesAsync(runtime, now, cancellationToken),
+            Transfers = transfers,
+            Drills = RunDrillPhaseAsync(runtime, transfers, now, cancellationToken),
         };
     }
 
@@ -246,6 +257,111 @@ public static class Scheduler
             // As with fan-out: one destination's sweep faulting past its own
             // handlers must never take anything down with it.
         }
+    }
+
+    /// <summary>
+    /// Phase 4, the restore drills (ADR-0054): after the transfers, because a
+    /// drill reads a replica and convergence writes and deletes in one. Never
+    /// throws — a check that takes the scheduler down is worse than the
+    /// condition it went looking for.
+    /// </summary>
+    /// <remarks>
+    /// One pair at a time, deliberately. A drill rebuilds a catalogue and
+    /// writes real bytes to disk; running every configured pair's at once
+    /// would turn the rarest job in the service into its heaviest moment.
+    /// </remarks>
+    private static async Task RunDrillPhaseAsync(
+        ServiceRuntime runtime, Task transfers, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await transfers.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The transfer phases guard their own failures; this await is for
+            // ordering, not for outcome.
+        }
+
+        foreach (var set in runtime.Configuration.BackupSets)
+        {
+            if (!runtime.ArchiveExists(set.Id))
+            {
+                continue;
+            }
+
+            foreach (var reference in set.Destinations)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (!ShouldDrill(runtime, set, reference.Ref, now))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await RecoveryDrillJob.RunAsync(
+                        runtime, set, reference.Ref, (ulong)now.ToUnixTimeMilliseconds(), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    // RunAsync records its own failures; anything past it is
+                    // one destination's problem and never the pass's.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a (set, destination) pair is due a restore drill.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only local-path destinations drill. A peer's replica is behind the
+    /// wire, and restoring a file from one costs a retrieval session and the
+    /// peer's bandwidth — the challenge already proves it holds the bytes,
+    /// and what the drill adds needs the whole read path, which is peer-
+    /// protocol work rather than a cadence. Stated rather than silently
+    /// skipped.
+    /// </para>
+    /// <para>
+    /// A pair nothing has ever reached is not due one: there is nothing there
+    /// to restore, and drilling would manufacture a failure about an absence
+    /// that is correct.
+    /// </para>
+    /// </remarks>
+    private static bool ShouldDrill(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
+    {
+        if (runtime.Configuration.FindDestination(destinationName) is not
+            { Kind: DestinationKind.LocalPath } destination)
+        {
+            return false;
+        }
+
+        var record = runtime.DestinationSync.Find(set.Id, destinationName);
+        if (record?.LastSuccessAt is null)
+        {
+            return false;
+        }
+
+        if (record.DrilledAt is not { } drilled)
+        {
+            return true;
+        }
+
+        var interval = (ulong)(destination.DrillIntervalDays ?? RecoveryDrillJob.DefaultIntervalDays)
+            * 24UL * 3_600_000UL;
+        return (ulong)now.ToUnixTimeMilliseconds() >= drilled + interval;
     }
 
     /// <summary>Whether a journal state is finished — the one-run-per-set rule's input.</summary>

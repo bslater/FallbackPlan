@@ -1955,7 +1955,7 @@ public static class CliApplication
                         foreach (var row in set.Destinations)
                         {
                             output.WriteLine(
-                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21} {DescribeDrill(row)}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
                 }
@@ -2110,4 +2110,22 @@ public static class CliApplication
                 CultureInfo.InvariantCulture,
                 $"  verified: {detail.Coverage:P0} of objects at {DateTimeOffset.FromUnixTimeMilliseconds((long)detail.VerifiedAtUnixMilliseconds):yyyy-MM-dd HH:mm}")
             : string.Empty;
+
+    /// <summary>
+    /// The last restore drill, in three states rather than two (ADR-0054):
+    /// never run, run and passed, run and failed.
+    /// </summary>
+    /// <remarks>
+    /// <c>drill:never</c> is printed rather than omitted, deliberately. A
+    /// blank column reads as "nothing to report", and "nobody has tried to
+    /// recover from this destination" is very much something to report — it
+    /// means the same thing a failure does about whether recovery is known to
+    /// work, and differs only in whether anything is known to be wrong.
+    /// </remarks>
+    private static string DescribeDrill(DestinationStatusDescriptor row) =>
+        row.DrilledAt is not { } drilled
+            ? "drill:never"
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"drill:{(row.DrillFailure is null ? "ok" : "FAILED")}@{DateTimeOffset.FromUnixTimeMilliseconds((long)drilled):yyyy-MM-dd}");
 }
