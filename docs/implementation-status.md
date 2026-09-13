@@ -79,6 +79,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, and a failure raising a notice rather than blaming the copy | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
+| [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key beside its attribution | **Specified only** | [notes](#0055--the-split-is-decided-the-code-follows) |
 
 ---
 
@@ -281,6 +282,31 @@ Peer destinations are not drilled: restoring across the wire on a cadence the
 peer never agreed to is peer-protocol work rather than a schedule, and the gap
 is carried openly on [proof obligations](proof-obligations.md) rather than
 implied by an absence.
+
+### 0055 — the split is decided, the code follows
+
+The record is landed and nothing implements it yet; this row moves to Built as
+the pieces land, and the notes here say which piece is which so a half-built
+state is legible rather than ambiguous.
+
+The **repository plane** is self-contained: a reclaim derivation beside the
+signing one, `Retention/StagingSweep`'s two call sites moved onto it, and a
+required descriptor feature that decides which key a reader verifies against.
+The compatibility rule is the load-bearing part — a repository without the
+feature keeps verifying tombstones under the signing key — and it is what a
+test has to pin first.
+
+The **peer plane** is not self-contained, and the dependency is worth knowing
+before starting it: a spoke holds no repository keys, so it can only check a
+reclaim signature against a published public key, and the carrier for that is
+the attribution-time key publication
+[ADR-0053](adr/0053-peer-claim-and-configuration-recovery.md) decided and did
+not build. Building it here lands that half of 0053 too.
+
+The **grant** exists so this is not a regression. Retention is format-agnostic
+today, so a write-only set collects right now using the write credential's
+signing key; removing that without replacing it would let a v2 repository grow
+without bound.
 
 ## By phase
 
