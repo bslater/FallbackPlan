@@ -14,6 +14,28 @@ public sealed record CopyOutcome(long Copied, long AlreadyHeld)
     public long Examined => Copied + AlreadyHeld;
 }
 
+/// <summary>
+/// How much of what a destination is owed it holds, as a pass discovers it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The denominator a completion figure needs, produced as a by-product of
+/// work the pass already does: converging a destination means listing both
+/// sides, so the bytes are in hand and only need adding up. Measuring this
+/// on a status poll instead would mean listing a whole replica to answer a
+/// question nobody asked.
+/// </para>
+/// <para>
+/// Reported as it goes rather than returned at the end, because the answer
+/// matters most when the pass does <em>not</em> finish: a drive pulled
+/// halfway leaves a destination genuinely part-full, and a figure that only
+/// exists on success could never say so.
+/// </para>
+/// </remarks>
+/// <param name="HeldBytes">Bytes the destination holds of what it is owed.</param>
+/// <param name="OwedBytes">Bytes it is owed in total. Zero when the source has nothing for it.</param>
+public sealed record CopyProgress(long HeldBytes, long OwedBytes);
+
 /// <summary>What one filtered convergence did — the FR-GC-010 shape.</summary>
 /// <param name="Copied">Objects the destination lacked and its policy keeps.</param>
 /// <param name="AlreadyHeld">Objects the destination already held and keeps.</param>
@@ -81,13 +103,19 @@ public static class StoreToStoreCopier
     /// <param name="cancellationToken">Stops the copy; a re-run resumes from the destination's inventory.</param>
     /// <param name="destinationName">The destination's configured name, for the log alone.</param>
     /// <param name="logger">Where the pass reports itself.</param>
+    /// <param name="progress">
+    /// Told how much of what the destination is owed it holds, as the pass
+    /// discovers it. Reported while copying rather than returned at the end,
+    /// so a pass that dies halfway still leaves the caller a true figure.
+    /// </param>
     /// <returns>What was copied and what was already there.</returns>
     public static async ValueTask<CopyOutcome> CopyAsync(
         IObjectStore source,
         IObjectStore destination,
         CancellationToken cancellationToken,
         string? destinationName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IProgress<CopyProgress>? progress = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
@@ -110,6 +138,14 @@ public static class StoreToStoreCopier
         var alreadyHeld = 0L;
         var matched = new HashSet<string>(StringComparer.Ordinal);
 
+        // The completion figures. Owed grows as the phases reveal what the
+        // source holds, so an early reading understates the denominator —
+        // which is why the pair is only recorded once the pass ends, and why
+        // both halves travel together rather than as two independent numbers
+        // a reader could pair up out of step.
+        var heldBytes = 0L;
+        var owedBytes = 0L;
+
         foreach (var phase in PhasePrefixes)
         {
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -121,9 +157,13 @@ public static class StoreToStoreCopier
                     continue;
                 }
 
+                owedBytes += entry.Length;
+
                 if (held.Contains(entry.Key.Value))
                 {
                     alreadyHeld++;
+                    heldBytes += entry.Length;
+                    progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     continue;
                 }
 
@@ -149,6 +189,12 @@ public static class StoreToStoreCopier
                     copied++;
                     Log.ObjectCopied(log, entry.Key);
                 }
+
+                // Counted on both answers: AlreadyExists means the
+                // destination holds these bytes too, which is the
+                // question this figure asks.
+                heldBytes += entry.Length;
+                progress?.Report(new CopyProgress(heldBytes, owedBytes));
             }
         }
 
@@ -180,6 +226,10 @@ public static class StoreToStoreCopier
     /// consulted by the push half — a spare is held where it already is, not
     /// propagated.
     /// </param>
+    /// <param name="progress">
+    /// Told how much of its own keep-set the destination holds, as the pass
+    /// discovers it.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
         IObjectStore source,
@@ -188,7 +238,8 @@ public static class StoreToStoreCopier
         CancellationToken cancellationToken,
         string? destinationName = null,
         ILogger? logger = null,
-        Func<string, bool>? spares = null)
+        Func<string, bool>? spares = null,
+        IProgress<CopyProgress>? progress = null)
     {
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
@@ -210,6 +261,13 @@ public static class StoreToStoreCopier
         var alreadyHeld = 0L;
         var matched = new HashSet<string>(StringComparer.Ordinal);
 
+        // Owed is what this destination's OWN policy keeps, not what the
+        // source holds: a narrow override is complete when it holds its own
+        // keep-set, and measuring it against a wide sibling's would leave it
+        // permanently short of a hundred per cent for doing exactly as told.
+        var heldBytes = 0L;
+        var owedBytes = 0L;
+
         foreach (var phase in PhasePrefixes)
         {
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
@@ -221,9 +279,13 @@ public static class StoreToStoreCopier
                     continue;
                 }
 
+                owedBytes += entry.Length;
+
                 if (held.Contains(entry.Key.Value))
                 {
                     alreadyHeld++;
+                    heldBytes += entry.Length;
+                    progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     continue;
                 }
 
@@ -249,6 +311,9 @@ public static class StoreToStoreCopier
                     copied++;
                     Log.ObjectCopied(log, entry.Key);
                 }
+
+                heldBytes += entry.Length;
+                progress?.Report(new CopyProgress(heldBytes, owedBytes));
             }
         }
 

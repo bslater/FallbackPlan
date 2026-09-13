@@ -2488,7 +2488,10 @@ public sealed partial class ServiceCommandHandler(
                 StatusDeriver.VerificationLabel(input),
                 BaselineCompletedAt: ledger?.BaselineCompletedAt,
                 NeedsFull: ledger?.NeedsFull ?? false,
-                Reason: ReasonLabel(input.Cause)));
+                Reason: ReasonLabel(input.Cause),
+                HeldBytes: ledger?.HeldBytes ?? 0,
+                OwedBytes: ledger?.OwedBytes ?? 0,
+                MeasuredAt: ledger?.MeasuredAt));
         }
 
         return (inputs, rows, lastCompleted);

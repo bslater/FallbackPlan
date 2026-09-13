@@ -571,24 +571,46 @@ public static class FanOut
                     name => ledger.Find(set.Id, name), nowMs, cancellationToken).ConfigureAwait(false);
             }
 
+            // Held against owed, in bytes, as the copy discovers it. Kept
+            // here rather than returned by the copier because the figure
+            // matters most when the pass does NOT finish: a drive pulled
+            // halfway leaves a destination genuinely part-full, and a number
+            // that only survived success could never say so. Recorded below
+            // on every exit, which is why it is captured and not written as
+            // it arrives — a ledger write per object would be thousands.
+            CopyProgress? completeness = null;
+            var counting = new Progress<CopyProgress>(latest => completeness = latest);
+
             long copied;
             long alreadyHeld;
-            if (keeps is not null)
+            try
             {
-                var converged = await StoreToStoreCopier.ConvergeAsync(
-                    archive.Store, replica, keeps, cancellationToken,
-                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                    spares).ConfigureAwait(false);
-                copied = converged.Copied;
-                alreadyHeld = converged.AlreadyHeld;
+                if (keeps is not null)
+                {
+                    var converged = await StoreToStoreCopier.ConvergeAsync(
+                        archive.Store, replica, keeps, cancellationToken,
+                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                        spares, counting).ConfigureAwait(false);
+                    copied = converged.Copied;
+                    alreadyHeld = converged.AlreadyHeld;
+                }
+                else
+                {
+                    var outcome = await StoreToStoreCopier.CopyAsync(
+                        archive.Store, replica, cancellationToken,
+                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                        counting).ConfigureAwait(false);
+                    copied = outcome.Copied;
+                    alreadyHeld = outcome.AlreadyHeld;
+                }
             }
-            else
+            finally
             {
-                var outcome = await StoreToStoreCopier.CopyAsync(
-                    archive.Store, replica, cancellationToken,
-                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
-                copied = outcome.Copied;
-                alreadyHeld = outcome.AlreadyHeld;
+                if (completeness is { } counted)
+                {
+                    ledger.RecordCompleteness(
+                        set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
+                }
             }
 
             ReportShortfall(

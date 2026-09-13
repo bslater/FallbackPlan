@@ -183,6 +183,45 @@ public sealed record DestinationSyncRecord
     [JsonPropertyName("last_reconciled_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ulong? LastReconciledAt { get; init; }
+
+    /// <summary>
+    /// Bytes this destination holds of what it is owed, as the last pass
+    /// counted them; zero when nothing has counted.
+    /// </summary>
+    /// <remarks>
+    /// The numerator of a completion figure, recorded by the pass rather than
+    /// measured on demand: converging a destination lists both sides anyway,
+    /// so the bytes are in hand. Asking a status poll for them instead would
+    /// mean listing a whole replica every few seconds.
+    /// </remarks>
+    [JsonPropertyName("held_bytes")]
+    public long HeldBytes { get; init; }
+
+    /// <summary>
+    /// Bytes this destination is owed in total, as the last pass counted
+    /// them; zero when nothing has counted.
+    /// </summary>
+    /// <remarks>
+    /// Owed by <em>this</em> destination's own policy, not by the set: a
+    /// narrow per-destination retention override is complete when it holds
+    /// its own keep-set (FR-GC-010), and measuring it against a wider
+    /// sibling's would leave it permanently short for doing as it was told.
+    /// </remarks>
+    [JsonPropertyName("owed_bytes")]
+    public long OwedBytes { get; init; }
+
+    /// <summary>
+    /// When <see cref="HeldBytes"/> and <see cref="OwedBytes"/> were counted,
+    /// Unix milliseconds; null when they never have been.
+    /// </summary>
+    /// <remarks>
+    /// Null is not zero, and the difference is the whole point: a destination
+    /// no pass has reached holds an unknown amount, and drawing that as an
+    /// empty gauge would claim it holds nothing when nobody has looked.
+    /// </remarks>
+    [JsonPropertyName("measured_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? MeasuredAt { get; init; }
 }
 
 /// <summary>
@@ -384,6 +423,41 @@ public sealed class DestinationSyncStore
             // later successes never move it — it records the first full.
             BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
             NeedsFull = false,
+        });
+    }
+
+    /// <summary>
+    /// Records how much of what a destination is owed it holds, and when that
+    /// was counted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="RecordSuccess"/> on purpose, because the two
+    /// answer different questions and a failed pass answers only this one. A
+    /// drive pulled halfway through leaves a destination genuinely part-full;
+    /// folding the count into the success would mean the only destinations
+    /// that could report being behind are the ones that are not.
+    /// </para>
+    /// <para>
+    /// Both halves are written together. Read separately they could be paired
+    /// out of step — a new numerator against an old denominator — which is a
+    /// percentage above a hundred or below zero, and a reader has no way to
+    /// tell that from a real one.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="heldBytes">Bytes it holds of what it is owed.</param>
+    /// <param name="owedBytes">Bytes it is owed in total.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordCompleteness(
+        string setId, string destination, long heldBytes, long owedBytes, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        {
+            HeldBytes = heldBytes,
+            OwedBytes = owedBytes,
+            MeasuredAt = nowUnixMilliseconds,
         });
     }
 

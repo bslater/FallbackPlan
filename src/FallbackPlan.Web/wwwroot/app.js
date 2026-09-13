@@ -570,6 +570,14 @@ function renderOverview() {
     bar.style.width = (bar.dataset.w ?? 0) + "%";
   }
 
+  // The rings, for the same reason: no inline style attribute may appear
+  // in the markup, so the arc's length is applied here.
+  for (const arc of el.querySelectorAll(".ring-fill")) {
+    const pct = Math.max(0, Math.min(100, Number(arc.dataset.pct ?? 0)));
+    arc.style.strokeDasharray = String(RING_CIRCUMFERENCE);
+    arc.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - pct / 100));
+  }
+
   // The overview re-renders on every status poll and progress event; a box
   // the person opened must not snap shut under them — set rows and the
   // destination boxes inside them alike.
@@ -585,6 +593,36 @@ function renderOverview() {
       else S.openSets.delete(row.dataset.set);
     });
   }
+}
+
+// How much of what a destination is owed it holds, as a percentage — or
+// null when nobody has counted. Null is NOT zero, and the card must not
+// draw it as an empty ring: a destination no pass has reached holds an
+// unknown amount, and an empty gauge over it would claim otherwise
+// (contract 1.24).
+function destCompletion(d) {
+  if (d.measuredAt == null) return null;
+  // Counted, and the set owes it nothing yet — an archive with no content
+  // is completely held by anyone who holds none of it.
+  if (!(d.owedBytes > 0)) return 100;
+  return Math.max(0, Math.min(100, Math.round(d.heldBytes / d.owedBytes * 100)));
+}
+
+// The ring: an SVG arc whose offset is set from script, because the CSP
+// forbids inline style attributes — the same reason the meters' widths are.
+// The unknown state draws the track alone rather than a zero-length arc, so
+// "nobody has counted" never looks like "holds nothing".
+const RING_CIRCUMFERENCE = 113.097;
+
+function ring(percent) {
+  const known = percent != null;
+  return `<span class="ring ${known ? "" : "unknown"}">
+    <svg viewBox="0 0 44 44" aria-hidden="true">
+      <circle class="ring-track" cx="22" cy="22" r="18"></circle>
+      ${known ? `<circle class="ring-fill" cx="22" cy="22" r="18" data-pct="${percent}"></circle>` : ""}
+    </svg>
+    <span class="ring-label">${known ? `${percent}<i>%</i>` : "—"}</span>
+  </span>`;
 }
 
 function renderSetCard(set) {
@@ -644,12 +682,33 @@ function renderSetCard(set) {
         : `<span class="detail">never</span>`;
     const key = `${set.setName}|${d.name}`;
     const pr = destPriority(d.name);
+
+    // The card's one caption line. While this set's run is live AND it ships
+    // straight to its destinations, the run's own progress IS this
+    // destination's progress, so it is shown here with its estimate. A
+    // staging set's live job is a capture rather than a transfer, and
+    // putting it on a destination card would attribute the wrong work to it.
+    const percent = running && config?.directShip && lpTotal > 0 ? lpRatio : destCompletion(d);
+    const caption = running && config?.directShip
+      ? (lpTotal > 0
+          ? `shipping · ${fmtCount(lpHandled)} of ${fmtCount(lpTotal)} files${lpEta ? " · " + esc(lpEta) : ""}`
+          : "shipping…")
+      : d.measuredAt == null
+        ? "not counted yet — no pass has reached it"
+        : d.owedBytes > 0 && d.heldBytes < d.owedBytes
+          ? `${fmtBytes(d.heldBytes)} of ${fmtBytes(d.owedBytes)} · last synced ${esc(rel(d.lastSuccessAt))}`
+          : `holds every byte it is owed · last synced ${esc(rel(d.lastSuccessAt))}`;
+
     return `<details class="dest" data-dest="${esc(key)}" ${S.openDests.has(key) ? "open" : ""}>
       <summary>
-        <b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
-        ${badge(ds, ds.label ?? d.state)}
-        ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
-        ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}
+        ${ring(percent)}
+        <span class="dest-head">
+          <span class="dest-title"><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
+            ${badge(ds, ds.label ?? d.state)}
+            ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
+            ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}</span>
+          <span class="detail dest-caption">${caption}</span>
+        </span>
       </summary>
       <div class="dest-body">
         <div><span class="detail">Full backup</span><span>${baseline}</span></div>

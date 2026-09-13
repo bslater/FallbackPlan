@@ -162,8 +162,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// flipped on migrates at its next open in the same process — no
     /// service restart — with staging retained as a read-only seed source
     /// until retire_staging.
+    /// 1.24 puts a completion figure on each destination row: held bytes,
+    /// owed bytes, and when they were counted. Counted by the sync pass,
+    /// which lists both sides anyway, rather than by the status poll, which
+    /// would have to list a whole replica to answer. Owed is by the
+    /// destination's OWN retention policy, so a narrow override reads
+    /// complete when it holds its own keep-set. Additive with defaults, and
+    /// the timestamp is what separates "holds none of it" from "nobody has
+    /// counted" — a client without it must not draw an empty gauge.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 23);
+    public static ContractVersion Current { get; } = new(1, 24);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

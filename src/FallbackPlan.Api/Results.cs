@@ -655,6 +655,23 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// or <c>reported</c> (<paramref name="Detail"/> carries the ledger's own
 /// words). Null on a healthy row and from older services.
 /// </param>
+/// <param name="HeldBytes">
+/// Bytes this destination holds of what it is owed, as the last pass counted
+/// them (contract 1.24). Meaningless without
+/// <paramref name="MeasuredAt"/>, which says whether anything counted at all.
+/// </param>
+/// <param name="OwedBytes">
+/// Bytes it is owed in total, by its own retention policy rather than by the
+/// set's (FR-GC-010): a narrow override is complete when it holds its own
+/// keep-set.
+/// </param>
+/// <param name="MeasuredAt">
+/// When the pair of byte figures was counted, Unix milliseconds; null when
+/// nothing has counted them and from services predating contract 1.24. Null
+/// is not zero: a destination no pass has reached holds an unknown amount,
+/// and a client that draws that as empty claims it holds nothing when nobody
+/// has looked.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -665,7 +682,10 @@ public sealed record DestinationStatusDescriptor(
     string Verification,
     ulong? BaselineCompletedAt = null,
     bool NeedsFull = false,
-    string? Reason = null);
+    string? Reason = null,
+    long HeldBytes = 0,
+    long OwedBytes = 0,
+    ulong? MeasuredAt = null);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

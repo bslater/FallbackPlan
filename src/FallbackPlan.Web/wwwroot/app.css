@@ -425,6 +425,36 @@ details.dest[open] > summary::before { content: "▾"; }
 }
 .dest-body > div { display: contents; }
 .dest-body .dest-note { grid-column: 1 / -1; display: block; }
+
+/* The destination card: a completion ring, then the name and its one
+   caption line. The summary row is the glance; everything precise still
+   waits behind the expand. */
+.dest-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dest-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dest-caption { font-variant-numeric: tabular-nums; }
+details.dest > summary { align-items: flex-start; }
+details.dest > summary::before { padding-top: 12px; }
+
+.ring { position: relative; display: inline-flex; flex: 0 0 auto; width: 44px; height: 44px; }
+.ring svg { width: 44px; height: 44px; transform: rotate(-90deg); }
+.ring circle { fill: none; stroke-width: 5; }
+.ring-track { stroke: var(--panel-2); }
+.ring-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset .5s;
+}
+/* Nobody has counted. The track alone, dashed: a zero-length arc would read
+   as "holds nothing", which is a different and much worse claim. */
+.ring.unknown .ring-track { stroke-dasharray: 3 5; opacity: .8; }
+.ring-label {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.ring-label i { font-style: normal; font-size: 8px; opacity: .75; margin-left: 1px; }
+.ring.unknown .ring-label { color: var(--muted); font-weight: 500; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
