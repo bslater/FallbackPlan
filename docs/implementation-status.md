@@ -77,6 +77,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
+| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
 
 ---
 
@@ -236,6 +237,30 @@ is *Specified only*, so nothing compacts, so reversing its decision costs a
 format revision. After a compactor ships the same change costs a data
 migration. The window closes on its own, which is why the record exists before
 the code rather than alongside it.
+
+### 0053 — a claim nobody can make, and a shape with no producer
+
+Both halves are **designed and unbuilt**, and the record says which obstacle
+each is behind rather than leaving it as effort not yet spent.
+
+The **claim ceremony** needs a peer-protocol message, a derivation on a new
+domain, and a durable field beside each attribution — a protocol version bump
+with its own drill. Nothing of it exists.
+
+The **set's shape in the kit** looked free and is not. The kit a service
+builds is an *installation* kit (ADR-0042's 2026-08 amendment), and the
+per-repository builder has exactly one production caller: the CLI's `kit`
+verb, pointed at a repository path with no configured set to read from. So the
+shape has no producer where the record put it, and carrying it means the
+installation kit holding one shape per set.
+
+What the attempt did land is a latent trap it walked into.
+`Repository.Format/RecoveryKit` decided "is this an installation kit" by
+`version >= 2`, so the version number meant both how new a kit is and which of
+the two shapes it has. Nothing writes a third version yet, so nothing was
+broken — and the first field anyone added would have been, by a kit parsed for
+a repository id it does not carry. The test is now an equality, pinned in
+`Repository.Tests/InstallationKitCodecTests`.
 
 ## By phase
 

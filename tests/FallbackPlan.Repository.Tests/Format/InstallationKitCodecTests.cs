@@ -33,6 +33,50 @@ public sealed class InstallationKitCodecTests
     }
 
     [TestMethod]
+    public void KitShape_IsDecidedByTheVersionItIs_NotByBeingAtLeastThatVersion()
+    {
+        // The discriminator used to be a threshold, which quietly gave the
+        // version number two jobs: how new a kit is, and which of the two
+        // shapes it has. A third version — whatever it eventually carries —
+        // would then have read as an installation kit and been parsed for
+        // fields it does not have: a repository id absent where one is
+        // mandatory, a key object skipped where one is present.
+        //
+        // Nothing writes a third version yet, which is exactly why this is
+        // the moment to pin it. The trap is in the artefact a recovery
+        // depends on, and it would be sprung by the first person to add a
+        // field rather than by anyone testing today (ADR-0053 §5).
+        Assert.IsTrue(
+            new RecoveryKit
+            {
+                KitFormatVersion = RecoveryKit.InstallationKitVersion,
+                MinimumToolVersion = "0.1.0", RepositoryFormatVersion = 2,
+                KdfMemoryKiB = 1, KdfIterations = 1, KdfParallelism = 1, KdfSalt = Salt,
+                IssuingDeviceId = Salt, IssuedAt = 1, Instructions = "x",
+            }.IsInstallationKit);
+
+        Assert.IsFalse(
+            new RecoveryKit
+            {
+                KitFormatVersion = 1,
+                MinimumToolVersion = "0.1.0", RepositoryFormatVersion = 1,
+                KdfMemoryKiB = 1, KdfIterations = 1, KdfParallelism = 1, KdfSalt = Salt,
+                IssuingDeviceId = Salt, IssuedAt = 1, Instructions = "x",
+            }.IsInstallationKit,
+            "a v1 kit describes one repository");
+
+        Assert.IsFalse(
+            new RecoveryKit
+            {
+                KitFormatVersion = (ushort)(RecoveryKit.InstallationKitVersion + 1),
+                MinimumToolVersion = "0.1.0", RepositoryFormatVersion = 1,
+                KdfMemoryKiB = 1, KdfIterations = 1, KdfParallelism = 1, KdfSalt = Salt,
+                IssuingDeviceId = Salt, IssuedAt = 1, Instructions = "x",
+            }.IsInstallationKit,
+            "a version above the installation kit's is not thereby an installation kit");
+    }
+
+    [TestMethod]
     public void InstallationKit_SerialisedAndParsed_RoundTripsTheEightKeyBody()
     {
         var original = Kit();

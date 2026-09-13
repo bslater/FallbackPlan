@@ -23,11 +23,24 @@ public sealed record RecoveryKit
     /// repository (kit format 2; ADR-0013's 2026-08 amendment).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The version is the discriminator rather than "is the repository id
     /// null", because the version is what the framing carries and what a
     /// reader checks before it has parsed a single field.
+    /// </para>
+    /// <para>
+    /// It is an equality test and not a threshold, and that is not a detail.
+    /// Written as <c>&gt;=</c>, the version number meant two things at once —
+    /// how new a kit is, and which of the two shapes it has — so the next
+    /// repository-kit version would have read as an installation kit and been
+    /// parsed for fields it does not carry. Nothing writes a third version
+    /// yet; the test is corrected now because the conflation would have
+    /// blocked whatever did, and because a latent trap in the artefact a
+    /// recovery depends on is worth closing before it is stood on
+    /// ([ADR-0053](../../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §4).
+    /// </para>
     /// </remarks>
-    public bool IsInstallationKit => KitFormatVersion >= InstallationKitVersion;
+    public bool IsInstallationKit => KitFormatVersion == InstallationKitVersion;
 
     /// <summary>The kit format version that describes an installation.</summary>
     public const ushort InstallationKitVersion = 2;
