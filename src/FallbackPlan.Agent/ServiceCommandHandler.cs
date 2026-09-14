@@ -145,7 +145,7 @@ public sealed partial class ServiceCommandHandler(
         var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var jobId = $"read-{Guid.NewGuid():n}";
 
-        runtime.Queue.Enqueue(new QueuedJob(
+        var accepted = runtime.Queue.Enqueue(new QueuedJob(
             jobId,
             JobLane.Reader,
             UserInitiated: true,
@@ -161,6 +161,15 @@ public sealed partial class ServiceCommandHandler(
                     completion.SetException(exception);
                 }
             }));
+
+        if (!accepted)
+        {
+            // The only refusal a fresh identity can draw is a queue that has
+            // stopped. Answering it is not optional: the completion below is
+            // signalled by the job running, so a caller left waiting on work
+            // the queue will never take waits for ever.
+            return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+        }
 
         // A caller that gives up releases the lane rather than leaving it held
         // by work nobody is waiting for.
@@ -184,7 +193,7 @@ public sealed partial class ServiceCommandHandler(
         var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var jobId = $"write-{Guid.NewGuid():n}";
 
-        runtime.Queue.Enqueue(new QueuedJob(
+        var accepted = runtime.Queue.Enqueue(new QueuedJob(
             jobId,
             JobLane.Writer,
             UserInitiated: true,
@@ -200,6 +209,15 @@ public sealed partial class ServiceCommandHandler(
                     completion.SetException(exception);
                 }
             }));
+
+        if (!accepted)
+        {
+            // The only refusal a fresh identity can draw is a queue that has
+            // stopped. Answering it is not optional: the completion below is
+            // signalled by the job running, so a caller left waiting on work
+            // the queue will never take waits for ever.
+            return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+        }
 
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
         return await completion.Task.ConfigureAwait(false);

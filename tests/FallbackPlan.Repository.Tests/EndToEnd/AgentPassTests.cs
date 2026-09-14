@@ -389,6 +389,41 @@ public sealed class AgentPassTests : IDisposable
             job.BackupSetId == new string('c', 32) && job.State == JobState.FailedPermanent, jobs.Jobs);
     }
 
+    [TestMethod]
+    public async Task AgentPass_ADrillThePassStarted_IsFinishedBeforeItReturns()
+    {
+        // "Once, whole" has to include the drill phase. A drill still running
+        // past the return is a drill whose commands are answered by a runtime
+        // being torn down underneath it: they come back cancelled, and the
+        // drill writes that into the state directory as a recovery failure —
+        // after the caller believed the pass was over and, in a service, while
+        // shutdown is deleting the things it is writing beside.
+        Directory.CreateDirectory(Vault.Path!);
+        WriteConfiguration("every 4h");
+
+        // Enough content that the drill's restore is measurable work rather
+        // than a handful of microseconds: the drill phase and the pass's own
+        // return are both woken by the transfer phase finishing, so a drill
+        // that costs nothing can win the race even while nothing waits for it.
+        File.WriteAllBytes(
+            Path.Combine(SourceRoot, "large.bin"),
+            [.. Enumerable.Range(0, 24 * 1024 * 1024).Select(i => (byte)(i * 31))]);
+
+        var result = await RunPassAsync(DateTimeOffset.UtcNow);
+        Assert.AreEqual(1, result.Ran);
+        Assert.IsTrue(result.Drills.IsCompleted, "the pass returned with a drill still running");
+
+        // The observable that found this: the owner of the state directory
+        // cannot delete it, because something it no longer knows about is
+        // still writing into it.
+        Directory.Delete(_root, recursive: true);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        Assert.IsFalse(
+            Directory.Exists(_root),
+            "the state directory was written to after the pass returned");
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

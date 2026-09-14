@@ -151,6 +151,42 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_TheServiceGoesAwayUnderneathIt_SaysNothingAboutTheReplica()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+
+        var first = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        await first.Transfers.WaitAsync(Timeout);
+        await first.Drills.WaitAsync(Timeout);
+        var drilled = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.IsNotNull(drilled?.DrilledAt, $"the clean drill must pass first: {drilled?.DrillFailure}");
+
+        // The service is stopping. Every command a drill in flight issues now
+        // comes back cancelled, and a cancellation says nothing whatever about
+        // the destination: it did not pass and it did not find damage. Writing
+        // it down as a failure turns an orderly shutdown into "your backups
+        // may not be restorable" — the loudest thing this product can say, and
+        // in this case entirely untrue.
+        await runtime.Queue.DisposeAsync();
+
+        var outcome = await RecoveryDrillJob.RunAsync(
+            runtime, runtime.Configuration.BackupSets[0], "vault",
+            (ulong)DateTimeOffset.Now.AddDays(40).ToUnixTimeMilliseconds(), CancellationToken.None);
+
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.AreEqual(drilled.DrilledAt, record!.DrilledAt, "an interrupted drill must leave the last answer standing");
+        Assert.IsNull(record.DrillFailure);
+        Assert.IsEmpty(
+            runtime.Notices.Notices.Where(notice => notice.Key.StartsWith("drill-failed:", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
     public async Task Drill_ADestinationNoPassHasReached_IsNeverDue()
     {
         // Nothing has been copied there, so there is nothing to restore from.

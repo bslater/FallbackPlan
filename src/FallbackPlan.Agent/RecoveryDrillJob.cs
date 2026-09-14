@@ -90,12 +90,20 @@ internal static class RecoveryDrillJob
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
         {
             // A drill cut short by shutdown states nothing: it did not pass
             // and it did not find damage, so the row keeps whatever the last
-            // completed drill said and the next pass tries again.
-            throw;
+            // completed drill said and the next pass tries again. The filter
+            // is deliberately absent: the cancellation that matters here is
+            // usually NOT this token's — it is the service's own queue going
+            // away underneath a drill in flight, which reaches this method as
+            // a cancelled command answer and is translated below. Blaming the
+            // destination for a shutdown would put the loudest notice this
+            // product can raise on the most ordinary event it has. A disposed
+            // object is the same event arriving a moment later, once the
+            // runtime has started taking itself apart.
+            return new DrillOutcome(0, 0, null);
         }
         catch (Exception exception)
         {
@@ -116,6 +124,27 @@ internal static class RecoveryDrillJob
         }
     }
 
+    /// <summary>
+    /// Turns a command refused because the service is stopping back into the
+    /// cancellation it was, so the drill records nothing.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ServiceCommandHandler"/> answers every cancellation as a
+    /// <see cref="ServiceErrorReason.Cancelled"/> error rather than throwing,
+    /// which is right for a client and wrong for this caller: a drill that
+    /// treated it as an answer about the replica would write "your backups may
+    /// not be restorable" every time the service stopped while one was in
+    /// flight.
+    /// </remarks>
+    /// <param name="error">The refusal to inspect.</param>
+    private static void ThrowIfCancelled(ServiceError error)
+    {
+        if (error.Reason == ServiceErrorReason.Cancelled)
+        {
+            throw new OperationCanceledException(error.Message);
+        }
+    }
+
     private static async Task<DrillOutcome> DrillAsync(
         ServiceCommandHandler handler,
         BackupSetConfiguration set,
@@ -128,6 +157,7 @@ internal static class RecoveryDrillJob
             new OpenRestoreSourceCommand(set.Name, destinationName), cancellationToken).ConfigureAwait(false);
         if (opened is ServiceError openFailure)
         {
+            ThrowIfCancelled(openFailure);
             return new DrillOutcome(0, 0, $"the replica would not open: {openFailure.Message}");
         }
 
@@ -176,6 +206,7 @@ internal static class RecoveryDrillJob
             switch (restored)
             {
                 case ServiceError error:
+                    ThrowIfCancelled(error);
                     return new DrillOutcome(0, 0, $"'{path}' would not restore: {error.Message}");
 
                 // The whole-file hash is checked inside the restore, after

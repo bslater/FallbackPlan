@@ -97,6 +97,11 @@ It raises a durable notice instead, which is the loudest thing the product has
 to say: a recovery that would not work has to be told to somebody *before* they
 need it rather than during.
 
+> **Amended (2026-09):** "a failed attempt is a try" means an attempt that
+> reached the replica. A drill cut short because the service is stopping
+> reached nothing and states nothing — see
+> [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09).
+
 The drill stamp moves on failure as well as success, which is the opposite of
 how the verification stamps behave. A verification stamp answers "when were
 bytes last proven", so a failure must leave the last true answer standing. A
@@ -187,8 +192,36 @@ on exactly the installations that most need one.
 **Record only a pass/fail boolean.** Half the size and loses the distinction
 the whole record turns on: never drilled is not a pass and is not a failure.
 
+## Amendment 1 — an interrupted drill is not a failed drill (2026-09)
+
+§3's three answers need a fourth thing said about them, and it is a thing about
+silence rather than a fourth state: a drill that is interrupted records
+**nothing at all** — no stamp, no reason, no notice — and the row keeps
+whatever the last completed drill said.
+
+The case is ordinary rather than exotic. A drill's commands run on the
+service's job queue, and stopping the service cancels them; the handler answers
+a cancelled command as a refusal like any other, so a drill that read that
+refusal as an answer about the replica wrote "a restore drill could not bring
+back a file" — the loudest notice this product can raise — every time the
+service stopped while a drill was in flight. §4 is right that a failed attempt
+is a try; a cancelled one is not an attempt at all, and the distinction is the
+same one §3 draws between never-drilled and failed.
+
+Two consequences follow, and both are now built:
+
+- A cancelled command answer (`ServiceErrorReason.Cancelled`) is translated
+  back into the cancellation it was, rather than being folded into the drill's
+  failure text with everything else a command can refuse for.
+- A one-shot pass waits for its drill phase before returning
+  (`Agent/AgentPass`), because returning earlier tore the runtime down
+  underneath a drill still issuing commands — which is how the false notice was
+  found, in a state directory that would not delete because something the
+  caller had stopped waiting for was still writing to it.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R11. Built: `Agent/RecoveryDrillJob` drills through the guided-restore verbs, `Agent/Scheduler` decides when, `Application/DestinationSyncStore` carries the answer, and contract 1.25 puts it on the status matrix. The scheduled drill deliberately proves less than [the operator drill](../../eng/recovery-drill.sh), and §5 says what |
+| 2026-09 | Amended | [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09): an interrupted drill states nothing. `Agent/RecoveryDrillJob` translates a cancelled command answer back into a cancellation, `Agent/AgentPass` waits for the drill phase, and `Agent/JobScheduler` refuses work once stopped instead of posting to disposed semaphores |

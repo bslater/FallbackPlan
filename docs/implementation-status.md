@@ -78,7 +78,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
-| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, and a failure raising a notice rather than blaming the copy | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
+| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, and (Amendment 1) an interrupted drill recording nothing at all | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 
 ---
@@ -282,6 +282,16 @@ Peer destinations are not drilled: restoring across the wire on a cadence the
 peer never agreed to is peer-protocol work rather than a schedule, and the gap
 is carried openly on [proof obligations](proof-obligations.md) rather than
 implied by an absence.
+
+A fourth answer was added by [Amendment 1](adr/0054-scheduled-restore-drills.md#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09),
+and it is silence: a drill interrupted because the service is stopping records
+nothing. It was written the other way first, and the cost of that was a false
+"a restore drill could not bring back a file" notice every time a drill was in
+flight at shutdown — the loudest thing the product says, about the most
+ordinary thing it does. `Agent/RecoveryDrillJob` now translates a cancelled
+command answer back into the cancellation it was, `Agent/AgentPass` waits for
+the drill phase before tearing the runtime down, and `Agent/JobScheduler`
+refuses work once it has stopped rather than posting to disposed semaphores.
 
 ### 0055 — what the split defends, and what it does not
 

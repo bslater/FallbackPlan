@@ -113,6 +113,7 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly Task[] _workers;
     private readonly ILogger _log;
     private long _arrival;
+    private bool _disposed;
 
     /// <summary>Starts the queue's workers.</summary>
     /// <param name="log">Where to report a job that failed outside its own handler.</param>
@@ -190,7 +191,11 @@ public sealed class JobScheduler : IAsyncDisposable
     /// faces one retry stream rather than a backlog.
     /// </summary>
     /// <param name="job">The work.</param>
-    /// <returns><see langword="true"/> when queued; <see langword="false"/> when the identity is already active.</returns>
+    /// <returns>
+    /// <see langword="true"/> when queued; <see langword="false"/> when the
+    /// identity is already active, or when the queue has stopped and will run
+    /// nothing further.
+    /// </returns>
     public bool Enqueue(QueuedJob job)
     {
         ThrowHelper.ThrowIfNull(job);
@@ -198,6 +203,16 @@ public sealed class JobScheduler : IAsyncDisposable
         string? victim = null;
         lock (_gate)
         {
+            if (_disposed)
+            {
+                // A stopping queue takes no more work. Refusing here rather
+                // than further down is what keeps the semaphores below from
+                // being posted to after they are disposed — an
+                // ObjectDisposedException raised on a background thread during
+                // shutdown, which reads as a crash to everything above it.
+                return false;
+            }
+
             if (_running.ContainsKey(job.JobId))
             {
                 return false;
@@ -254,9 +269,26 @@ public sealed class JobScheduler : IAsyncDisposable
     }
 
     /// <summary>Stops the queue, cancelling everything in flight.</summary>
+    /// <remarks>
+    /// Idempotent, for the same reason <see cref="ServiceRuntime.DisposeAsync"/>
+    /// is: a host that stops the queue deliberately and then lets the runtime
+    /// go disposes it twice, and the second call must be a no-op rather than an
+    /// <see cref="ObjectDisposedException"/> thrown out of a shutdown path
+    /// where nobody is left to handle it.
+    /// </remarks>
     /// <returns>A task that completes when the workers have stopped.</returns>
     public async ValueTask DisposeAsync()
     {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
         await _stopping.CancelAsync().ConfigureAwait(false);
 
         lock (_gate)

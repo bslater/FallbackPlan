@@ -47,6 +47,14 @@ public static class AgentPass
         // leave running (ADR-0029 Amendment 4) are awaited here, because the
         // runtime — and with it every queued job — is torn down on return.
         await result.Transfers.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // And the drill phase with them. It starts when the transfers finish,
+        // so returning after the transfers alone returns while a drill is
+        // still issuing commands — which the disposal below then cancels
+        // underneath it, and which the drill used to write into the state
+        // directory as a recovery failure, after the caller believed the pass
+        // was over ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+        await result.Drills.WaitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
 }
