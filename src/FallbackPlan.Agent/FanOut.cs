@@ -442,6 +442,17 @@ public static class FanOut
     /// per-publication monotonic a single-writer archive has — staging or
     /// direct-ship — needing no keys and no catalogue.
     /// </summary>
+    /// <summary>
+    /// The keep-set rendering of a destination whose policy keeps everything.
+    /// </summary>
+    /// <remarks>
+    /// A value rather than null, because the ledger reads null as "this pass
+    /// computed none" and carries the last one forward (ADR-0056). Keeping
+    /// everything is a keep-set, and a destination whose policy is removed has
+    /// to be able to say so.
+    /// </remarks>
+    private const string KeepsEverything = "keeps-all";
+
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
@@ -563,14 +574,39 @@ public static class FanOut
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
             Func<string, bool>? keeps = null;
+
+            // "Keeps everything" is a keep-set and has a rendering of its own:
+            // null would mean "nobody computed one", which is what the ledger
+            // carries forward rather than compares (ADR-0056).
+            var keepFingerprint = KeepsEverything;
             if (Retention.DestinationConvergence.HasRules(effective))
             {
                 var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
                     DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
                 keeps = convergence.Keeps;
+                keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
                 ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
             }
+
+            // What this pass has to do, decided before it reads anything
+            // (ADR-0056). A pair the last pass left level, with nothing
+            // published since and its keep-set unmoved, is one this pass can
+            // answer from what that pass wrote down — and the reading-through
+            // it wrote down expires, so the answer cannot go stale for ever.
+            // A migrating direct-ship set keeps its staging archive until
+            // retirement, and the ledger cannot speak for the history only
+            // that archive holds: its runs record success for what they
+            // shipped (ADR-0046 §3). Until the archive is gone, every pass
+            // reads through — which is what seeds the destination and what
+            // lets retirement establish that nothing would be lost.
+            var stagingRemains = archive.ShipSink is not null
+                && File.Exists(Path.Combine(
+                    runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
+
+            var scope = ReconciliationGate.Decide(
+                previous, syncedSequence, keepFingerprint, nowMs,
+                ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
 
             // Samples come from the pre-copy listing, filtered like the copy
             // itself: everything sampled is carried by the copy below, so a
@@ -600,9 +636,17 @@ public static class FanOut
             Func<string, bool>? spares = null;
             if (keeps is not null && archive.ShipSink is not null)
             {
-                spares = await Retention.DestinationConvergence.ComputeSparesAsync(
+                var sparePlan = await Retention.DestinationConvergence.ComputeSparesAsync(
                     archive.Store, archive.Repository, set.Destinations, set.Retention,
                     name => ledger.Find(set.Id, name), nowMs, cancellationToken).ConfigureAwait(false);
+                spares = sparePlan.Spares;
+
+                // Folded into the fingerprint the gate compares, because a
+                // spare set moves when a sibling catches up and nothing about
+                // that is published: a pass that skipped over it would keep
+                // holding copies whose only reason to exist had been
+                // delivered (ADR-0056).
+                keepFingerprint = $"{keepFingerprint}/{sparePlan.Fingerprint}";
             }
 
             // Held against owed, in bytes, as the copy discovers it. Kept
@@ -615,40 +659,61 @@ public static class FanOut
             CopyProgress? completeness = null;
             var counting = new Progress<CopyProgress>(latest => completeness = latest);
 
-            long copied;
-            long alreadyHeld;
-            try
+            long copied = 0;
+            long alreadyHeld = 0;
+            if (scope == SyncScope.Skip)
             {
-                if (keeps is not null)
-                {
-                    var converged = await StoreToStoreCopier.ConvergeAsync(
-                        archive.Store, replica, keeps, cancellationToken,
-                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                        spares, counting).ConfigureAwait(false);
-                    copied = converged.Copied;
-                    alreadyHeld = converged.AlreadyHeld;
-                }
-                else
-                {
-                    var outcome = await StoreToStoreCopier.CopyAsync(
-                        archive.Store, replica, cancellationToken,
-                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                        counting).ConfigureAwait(false);
-                    copied = outcome.Copied;
-                    alreadyHeld = outcome.AlreadyHeld;
-                }
+                // Nothing published since this pair was last read through, its
+                // keep-set has not moved, and the reading-through is still
+                // good: there is nothing a listing could discover, so the pass
+                // costs the sequence read that established it. The completeness
+                // figures and the shortfall check both belong to a pass that
+                // counted something, and this one counted nothing.
+                var skipLog = runtime.LoggerFor(typeof(FanOut));
+                Log.SyncSkipped(skipLog, set.Name, destination.Name, syncedSequence);
+                alreadyHeld = previous?.Objects ?? 0;
             }
-            finally
+            else
             {
-                if (completeness is { } counted)
+                var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
+                try
                 {
-                    ledger.RecordCompleteness(
-                        set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
+                    if (keeps is not null)
+                    {
+                        var converged = await StoreToStoreCopier.ConvergeAsync(
+                            archive.Store, replica, keeps, cancellationToken,
+                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                            spares, counting, copyScope).ConfigureAwait(false);
+                        copied = converged.Copied;
+                        alreadyHeld = converged.AlreadyHeld;
+                    }
+                    else
+                    {
+                        var outcome = await StoreToStoreCopier.CopyAsync(
+                            archive.Store, replica, cancellationToken,
+                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                            counting, copyScope).ConfigureAwait(false);
+                        copied = outcome.Copied;
+                        alreadyHeld = outcome.AlreadyHeld;
+                    }
                 }
+                finally
+                {
+                    if (completeness is { } counted)
+                    {
+                        ledger.RecordCompleteness(
+                            set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
+                    }
+                }
+
+                ReportShortfall(
+                    runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
             }
 
-            ReportShortfall(
-                runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
+            // Only a pass that read both inventories through may say so: the
+            // stamp is what a later pass skips on, and an incremental pass has
+            // not looked at the parts it did not walk.
+            var reconciled = scope == SyncScope.Reconcile;
 
             if (plan.Samples.Count > 0)
             {
@@ -671,7 +736,9 @@ public static class FanOut
                     return;
                 }
 
-                ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
+                ledger.RecordSuccess(
+                    set.Id, destination.Name, copied, nowMs, syncedSequence,
+                    keepFingerprint, reconciled, newestSnapshot);
                 if (verification.ProvedSomething)
                 {
                     ledger.RecordVerification(
@@ -682,7 +749,9 @@ public static class FanOut
                 return;
             }
 
-            ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
+            ledger.RecordSuccess(
+                set.Id, destination.Name, copied, nowMs, syncedSequence,
+                keepFingerprint, reconciled, newestSnapshot);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

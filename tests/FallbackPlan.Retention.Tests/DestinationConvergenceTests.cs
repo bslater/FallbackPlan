@@ -230,15 +230,21 @@ public sealed class DestinationConvergenceTests : IDisposable
             (ulong)day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds(),
             CancellationToken.None);
 
-        Assert.IsNotNull(spares, "an owed sibling must produce a spare filter");
-        Assert.IsFalse(spares(oldestFirst[0].StoreKey.Value), "a delivered snapshot earns no spare");
-        Assert.IsTrue(spares(oldestFirst[1].StoreKey.Value));
-        Assert.IsTrue(spares(oldestFirst[2].StoreKey.Value));
+        Assert.IsNotNull(spares.Spares, "an owed sibling must produce a spare filter");
+        Assert.IsFalse(spares.Spares(oldestFirst[0].StoreKey.Value), "a delivered snapshot earns no spare");
+        Assert.IsTrue(spares.Spares(oldestFirst[1].StoreKey.Value));
+        Assert.IsTrue(spares.Spares(oldestFirst[2].StoreKey.Value));
 
         // The owed snapshots' data travels with them: at least one blob is
         // under the spare, or the record would survive without its bytes.
         var blobs = await ListAsync(store, "blobs/");
-        Assert.IsTrue(blobs.Any(key => spares(key)), "the owed closure must cover blobs, not just snapshot records");
+        Assert.IsTrue(
+            blobs.Any(key => spares.Spares(key)), "the owed closure must cover blobs, not just snapshot records");
+
+        // And the set has a rendering, because a sibling catching up is how a
+        // spare set changes and no publication sequence records that
+        // (ADR-0056).
+        Assert.AreNotEqual(DestinationConvergence.SparePlanNothingFingerprint, spares.Fingerprint);
     }
 
     [TestMethod]
@@ -262,7 +268,8 @@ public sealed class DestinationConvergenceTests : IDisposable
             (ulong)day1.AddDays(1).AddHours(1).ToUnixTimeMilliseconds(),
             CancellationToken.None);
 
-        Assert.IsNull(spares, "nothing is owed, so nothing is spared — the steady state stays exact");
+        Assert.IsNull(spares.Spares, "nothing is owed, so nothing is spared — the steady state stays exact");
+        Assert.AreEqual(DestinationConvergence.SparePlanNothingFingerprint, spares.Fingerprint);
     }
 
     private static List<SetDestinationReference> SpareDestinations() =>

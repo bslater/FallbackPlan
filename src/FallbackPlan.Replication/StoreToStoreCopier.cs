@@ -108,6 +108,15 @@ public static class StoreToStoreCopier
         "journal/",
         "index/delta/",
         "index/checkpoint/",
+
+        // Named, not left to the catch-all: hints and audit records are part
+        // of the namespace specification 01 §2 defines, so a pass that skipped
+        // the catch-all sweep would leave real objects behind rather than
+        // hypothetical ones (ADR-0056). The catch-all is for prefixes this
+        // build has never heard of, and it is only correct to leave it out of
+        // an incremental pass if everything the build DOES write is named here.
+        "hints/",
+        "audit/",
         "",
         "snapshots/",
     ];

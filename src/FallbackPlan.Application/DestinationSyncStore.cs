@@ -176,13 +176,32 @@ public sealed record DestinationSyncRecord
     /// <summary>
     /// When this row was last rebuilt from the destination's own inventory,
     /// Unix milliseconds; null when never. The ledger is metadata about the
-    /// destination, and the destination stays the ground truth. Declared
-    /// ahead of its writer (ADR-0047 §6): no reconciliation pass exists yet
-    /// to stamp it — the field waits so that pass needs no migration.
+    /// destination, and the destination stays the ground truth. Declared ahead
+    /// of its writer by [ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md)
+    /// and written since [ADR-0056](../../docs/adr/0056-incremental-reconciliation.md),
+    /// which is also what reads it: a pass may only skip on the strength of a
+    /// recent reading-through, so this stamp is what gives the skip a shelf
+    /// life.
     /// </summary>
     [JsonPropertyName("last_reconciled_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ulong? LastReconciledAt { get; init; }
+
+    /// <summary>
+    /// A stable rendering of the keep-set this destination's policy selected
+    /// when the last pass ran; null when its policy keeps everything.
+    /// </summary>
+    /// <remarks>
+    /// The one input to a pass that moves with the clock rather than with
+    /// publication (ADR-0056): a snapshot ages out of a retention window while
+    /// nothing at all is published, and the destination is then owed a
+    /// deletion no publication sequence would ever reveal. Comparing the
+    /// rendering is how a pass tells "nothing has changed" from "nothing has
+    /// been published".
+    /// </remarks>
+    [JsonPropertyName("keep_fingerprint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? KeepFingerprint { get; init; }
 
     /// <summary>
     /// Bytes this destination holds of what it is owed, as the last pass
@@ -436,8 +455,31 @@ public sealed class DestinationSyncStore
     /// — the replication gate's input (FR-GC-009). A snapshot published after
     /// the sync started may or may not have crossed, so the claim stops here.
     /// </param>
+    /// <param name="keepFingerprint">
+    /// This destination's keep-set as the pass computed it, or null when the
+    /// caller computed none — a destination that keeps everything has a
+    /// rendering of its own, because "keeps everything" is a keep-set and
+    /// "nobody looked" is not. Compared by the next pass to tell a keep-set
+    /// that moved with the clock from one that did not (ADR-0056).
+    /// </param>
+    /// <param name="reconciled">
+    /// Whether this pass read both inventories through. Only a pass that did
+    /// may stamp <see cref="DestinationSyncRecord.LastReconciledAt"/>, because
+    /// that stamp is what a later pass skips on.
+    /// </param>
+    /// <param name="baselineSnapshotId">
+    /// The newest snapshot this destination held when its baseline completed.
+    /// Recorded once, with the baseline, and never moved after.
+    /// </param>
     public DestinationSyncRecord RecordSuccess(
-        string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedSequence = 0)
+        string setId,
+        string destination,
+        long objects,
+        ulong nowUnixMilliseconds,
+        ulong syncedSequence = 0,
+        string? keepFingerprint = null,
+        bool reconciled = false,
+        string? baselineSnapshotId = null)
     {
         // Everything not named here is carried forward by `with` — including
         // the verification stamps, which outlive the sync that earned them:
@@ -460,7 +502,17 @@ public sealed class DestinationSyncStore
             // baseline (a staging-model sync converges the whole archive);
             // later successes never move it — it records the first full.
             BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
+            BaselineSnapshotId = previous?.BaselineSnapshotId ?? baselineSnapshotId,
             NeedsFull = false,
+            // Carried forward when the caller computed none: a run recorded by
+            // the ship sink knows nothing about retention, and clearing the
+            // fingerprint there would make the next pass see a keep-set that
+            // had moved when it had not.
+            KeepFingerprint = keepFingerprint ?? previous?.KeepFingerprint,
+            // Carried forward, never cleared: an incremental pass leaves the
+            // last reading-through standing, which is exactly what its own
+            // expiry is measured from.
+            LastReconciledAt = reconciled ? nowUnixMilliseconds : previous?.LastReconciledAt,
         });
     }
 

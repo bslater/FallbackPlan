@@ -60,6 +60,14 @@ public sealed class DestinationShipSink : IObjectStore
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
     private long _shippedThisRun;
 
+    // The highest publication sequence this run put on the wire, read out of
+    // the snapshot record's own cleartext prefix as it goes past (ADR-0056).
+    // A direct-ship run IS the fan-out, so nothing else is in a position to
+    // record what the destinations now hold: before this, the ledger's
+    // synced_sequence sat at whatever the last copy pass wrote and a set that
+    // never needed a copy pass left it at its first value for ever.
+    private ulong _publishedThisRun;
+
     internal DestinationShipSink(
         ServiceRuntime runtime,
         LocalFileSystemObjectStore metadata,
@@ -258,6 +266,7 @@ public sealed class DestinationShipSink : IObjectStore
             _skippedThisRun.Clear();
             _skippedThisRun.AddRange(skipped);
             _shippedThisRun = 0;
+            _publishedThisRun = 0;
         }
     }
 
@@ -279,24 +288,33 @@ public sealed class DestinationShipSink : IObjectStore
         List<(string Name, string Error)> dropped;
         List<(string Name, DestinationSyncState State, string Error)> skipped;
         long shipped;
+        ulong published;
         lock (_gate)
         {
             survivors = [.. _inScope];
             dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value))];
             skipped = [.. _skippedThisRun];
             shipped = _shippedThisRun;
+            published = _publishedThisRun;
             _inScope = [];
             _runActive = false;
             _droppedThisRun.Clear();
             _skippedThisRun.Clear();
             _shippedThisRun = 0;
+            _publishedThisRun = 0;
         }
 
         if (succeeded)
         {
             foreach (var survivor in survivors)
             {
-                _runtime.DestinationSync.RecordSuccess(_setId, survivor.Name, shipped, nowUnixMilliseconds);
+                // A survivor received every object of this run, this run's
+                // snapshot included, so it holds everything published at or
+                // before that sequence — which is what the ledger's watermark
+                // means and what lets the next pass answer without listing
+                // (ADR-0056, FR-GC-009).
+                _runtime.DestinationSync.RecordSuccess(
+                    _setId, survivor.Name, shipped, nowUnixMilliseconds, published);
             }
         }
 
@@ -345,6 +363,8 @@ public sealed class DestinationShipSink : IObjectStore
             // read back is a diff it cannot plan.
             metadataResult = await _metadata.PutAsync(key, openContent, conditions, cancellationToken)
                 .ConfigureAwait(false);
+
+            await NoteIfSnapshotAsync(key, cancellationToken).ConfigureAwait(false);
         }
 
         List<Shipment> targets;
@@ -691,6 +711,54 @@ public sealed class DestinationShipSink : IObjectStore
     {
         var store = new LocalFileSystemObjectStore(Path.Combine(destination.Path!, _repositoryIdHex), _log);
         return _runtime.Options.ReplicaStoreDecorator?.Invoke(destination.Name, store) ?? store;
+    }
+
+    /// <summary>
+    /// Reads the publication sequence out of a snapshot object as it is
+    /// written, and keeps the run's highest.
+    /// </summary>
+    /// <remarks>
+    /// The number is in the record's cleartext prefix (specification 08 §2),
+    /// so this needs no keys and no catalogue — the same reading the fan-out
+    /// does when it surveys a staging archive, done once on the object that
+    /// carries it rather than over every snapshot in the set. A snapshot that
+    /// will not parse claims nothing: the run then records the sequence it
+    /// already had, which understates what the destination holds and is the
+    /// safe direction to be wrong in.
+    /// </remarks>
+    /// <param name="key">The object just written.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    private async ValueTask NoteIfSnapshotAsync(ObjectKey key, CancellationToken cancellationToken)
+    {
+        if (!key.Value.StartsWith("snapshots/", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            using var read = await _metadata.OpenReadAsync(key, range: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+            {
+                return;
+            }
+
+            using var memory = new MemoryStream();
+            await read.Content.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+            var counter = Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray()).Counter;
+
+            lock (_gate)
+            {
+                _publishedThisRun = Math.Max(_publishedThisRun, counter);
+            }
+        }
+        catch (Exception exception) when (exception is FormatException or IOException)
+        {
+            // The watermark is an optimisation over a listing, never a
+            // correctness input: not knowing it costs a pass that reads
+            // through, which is what every pass did before it existed.
+        }
     }
 
     private long? AvailableBytesOn(string destinationRoot)

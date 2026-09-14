@@ -226,4 +226,16 @@ internal static partial class Log
         EventId = 3759, Level = LogLevel.Warning,
         Message = "Job {JobId} ({Description}) was dequeued with no tracked cancellation and was discarded")]
     internal static partial void QueuedJobUntracked(ILogger logger, string jobId, string description);
+
+    // Debug rather than Information: on a busy install this is the commonest
+    // thing a pass does, and it is the absence of work. It is here at all
+    // because "the sync did nothing and said nothing" and "the sync did not
+    // run" look identical from outside, and only one of them is a bug
+    // (ADR-0056).
+    [LoggerMessage(
+        EventId = 3766, Level = LogLevel.Debug,
+        Message = "Set {Set} is level with {Destination} at publication sequence {Sequence}; "
+            + "nothing published since it was last read through, so this pass carried nothing")]
+    internal static partial void SyncSkipped(
+        ILogger logger, string set, string destination, ulong sequence);
 }
