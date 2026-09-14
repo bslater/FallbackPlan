@@ -20,6 +20,8 @@ A quota greater than 0 bounds **the total bytes of committed objects the destina
 
 Quota accounting requires knowing which peer a replica belongs to, so the destination records an **attribution** — repository id → peer identity — durably, the first time it accepts a `ReplicationOffer` for a repository ([03 §3.1](03-replication.md#31-replicationoffer)). The attribution outlives sessions and restarts; it is what makes "the total this peer stores here" a computable number.
 
+The attribution also carries the repository's **reclaim public key** when the source publishes one ([03 §3.1](03-replication.md#31-replicationoffer) key 4; [ADR-0055](../../docs/adr/0055-reclaim-authority.md)). A destination holds no repository keys by design, so this recorded key is the only thing it can check a deletion instruction's signature against ([06 §3](06-retention.md#3-what-the-spoke-validates)). It is recorded once and never replaced by a later offer.
+
 A `ReplicationOffer` naming a repository already attributed to a **different** peer MUST be refused `terms_refused`: the destination's terms extend only to repositories that are the peer's own here, and silently counting one household's archive against another's quota would corrupt both ledgers. Re-pairing does not transfer attributions; they are keyed by repository, not by grant.
 
 ## 3 Enforcement at the object boundary

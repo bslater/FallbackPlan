@@ -292,8 +292,18 @@ public static class FanOut
                 : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
 
             var priorSuccess = previous?.LastSuccessAt is not null;
+            // The reclaim public key travels with every offer and is kept by
+            // the destination at first attribution (ADR-0055 §5). Read from
+            // wherever this repository can reach it — derived for v1, off the
+            // write credential for v2 — so a write-only set, which cannot
+            // derive the private half at all, still tells its peers which key
+            // to check deletion instructions against.
+            var reclaimPublicKey = archive.Repository.Hierarchy.ReclaimPublicKey(
+                archive.Repository.CurrentMetadataGeneration);
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
-                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken)
+                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
+                reclaimPublicKey)
                 .ConfigureAwait(false);
 
             ReportShortfall(

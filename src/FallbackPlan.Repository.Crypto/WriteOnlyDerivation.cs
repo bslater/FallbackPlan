@@ -87,12 +87,25 @@ public static class WriteOnlyDerivation
         RepositoryWriteCredential credential;
         try
         {
+            // The PUBLIC half goes into the bundle and the private half does
+            // not (ADR-0055 §2, §5). A public key authorises nothing, and a
+            // service that cannot derive the private half still has to tell a
+            // keyless destination which key its deletion instructions will be
+            // signed under.
+            byte[] reclaimPublic;
+            using (var signer = RepositorySigner.FromSeed(
+                DeriveReclaimKeySeed(reclaimSeed, KeyGeneration.Zero), KeyGeneration.Zero))
+            {
+                reclaimPublic = signer.PublicKey.ToArray();
+            }
+
             credential = new RepositoryWriteCredential(
                 sealingPublic,
                 Expand(root, "fbp/content-id/v2"u8),
                 Expand(root, "fbp/key-id/v2"u8),
                 Expand(root, "fbp/metadata/v2"u8),
-                Expand(root, "fbp/signing/v2"u8));
+                Expand(root, "fbp/signing/v2"u8),
+                reclaimPublic);
         }
         catch
         {

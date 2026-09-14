@@ -24,6 +24,45 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
+    public void Offer_WithAReclaimPublicKey_RoundTripsIt()
+    {
+        // Key 4 (ADR-0055 §5): what a keyless destination checks a deletion
+        // instruction against, published on the offer that first attributes
+        // the repository to this peer.
+        var published = new byte[ReplicationOffer.ReclaimPublicKeyLength];
+        published.AsSpan().Fill(0xA7);
+
+        var offer = new ReplicationOffer(new byte[16], 5, "all", published);
+        var read = RoundTrip(offer, ReplicationOffer.Read);
+
+        Assert.IsTrue(read.ReclaimPublicKey.Span.SequenceEqual(published));
+        Assert.AreEqual(4, offer.BodyEntryCount);
+    }
+
+    [TestMethod]
+    public void Offer_WithoutOne_SaysThreeEntriesAndReadsEmpty()
+    {
+        // A source with no key to publish — an older build, or a write-only
+        // set provisioned before the decision — writes the offer it always
+        // wrote, and a reader that predates key 4 skips it like any other
+        // unknown key.
+        var offer = new ReplicationOffer(new byte[16], 5, "all");
+
+        Assert.AreEqual(3, offer.BodyEntryCount);
+        Assert.IsTrue(RoundTrip(offer, ReplicationOffer.Read).ReclaimPublicKey.IsEmpty);
+    }
+
+    [TestMethod]
+    public void Offer_AReclaimKeyOfTheWrongWidth_IsMalformedRatherThanIgnored()
+    {
+        // Dropping it quietly would leave a destination accepting unsigned
+        // deletion instructions while believing it holds a key to check them.
+        var offer = new ReplicationOffer(new byte[16], 5, "all", new byte[16]);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(offer, ReplicationOffer.Read));
+    }
+
+    [TestMethod]
     public void Inventory_WithKeysAndEmpty_RoundTrips()
     {
         var page = new ReplicationInventory(["blobs/data/aaaa/one", "snapshots/x/y/z"], More: true);

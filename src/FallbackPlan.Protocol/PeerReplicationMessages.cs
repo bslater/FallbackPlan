@@ -11,8 +11,18 @@ namespace FallbackPlan.Protocol;
 /// <param name="RepositoryId">The repository the offered objects belong to (16 bytes).</param>
 /// <param name="FormatCapability">The repository format the source's objects are in.</param>
 /// <param name="Scope">What the source offers — <c>all</c> in this revision (03 §4).</param>
+/// <param name="ReclaimPublicKey">
+/// The repository's reclaim public key
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5), 32 bytes, or
+/// empty when the source has none to publish. The destination records it at
+/// first attribution and checks deletion instructions against it — it holds no
+/// repository keys of its own, so this is the only thing it can check.
+/// </param>
 public sealed record ReplicationOffer(
-    ReadOnlyMemory<byte> RepositoryId, uint FormatCapability, string Scope) : IPeerMessage
+    ReadOnlyMemory<byte> RepositoryId,
+    uint FormatCapability,
+    string Scope,
+    ReadOnlyMemory<byte> ReclaimPublicKey = default) : IPeerMessage
 {
     /// <summary>The repository identity's length in bytes.</summary>
     public const int RepositoryIdLength = 16;
@@ -20,11 +30,14 @@ public sealed record ReplicationOffer(
     /// <summary>The most bytes a scope token may occupy (00 §2.3).</summary>
     public const int MaximumScopeBytes = 64;
 
+    /// <summary>An Ed25519 public key is 32 bytes.</summary>
+    public const int ReclaimPublicKeyLength = 32;
+
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.ReplicationOffer;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 3;
+    public int BodyEntryCount => ReclaimPublicKey.IsEmpty ? 3 : 4;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -37,6 +50,20 @@ public sealed record ReplicationOffer(
         writer.WriteUInt32(FormatCapability);
         writer.WriteInt32(3);
         writer.WriteTextString(Scope);
+
+        // Key 4, the reclaim public key
+        // ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5). Written
+        // on every offer and recorded by the destination only at first
+        // attribution, because a destination holds no repository keys and
+        // this is the only thing it can check a deletion instruction against.
+        // Omitted by a source that has none — an older build, or a write-only
+        // set provisioned before the decision — and a reader that predates it
+        // skips the key like any other it does not know.
+        if (!ReclaimPublicKey.IsEmpty)
+        {
+            writer.WriteInt32(4);
+            writer.WriteByteString(ReclaimPublicKey.Span);
+        }
     }
 
     /// <summary>Reads an offer from a body positioned after the message type.</summary>
@@ -50,6 +77,7 @@ public sealed record ReplicationOffer(
         byte[]? repositoryId = null;
         uint capability = 0;
         string? scope = null;
+        byte[]? reclaimPublicKey = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -64,6 +92,9 @@ public sealed record ReplicationOffer(
                 case 3:
                     scope = reader.ReadTextString();
                     break;
+                case 4:
+                    reclaimPublicKey = reader.ReadByteString();
+                    break;
                 default:
                     reader.SkipValue();
                     break;
@@ -77,7 +108,19 @@ public sealed record ReplicationOffer(
                 PeerRefusalReason.Malformed, "An offer is not the shape 03 §3.1 defines.");
         }
 
-        return new ReplicationOffer(repositoryId, capability, scope);
+        // A key of the wrong width is malformed rather than ignored: a
+        // destination that quietly dropped it would go on accepting unsigned
+        // deletion instructions while believing it had a key to check them
+        // against.
+        if (reclaimPublicKey is { } published && published.Length != ReclaimPublicKeyLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "An offer's reclaim public key is not 32 bytes (03 §3.1).");
+        }
+
+        return new ReplicationOffer(
+            repositoryId, capability, scope, reclaimPublicKey ?? ReadOnlyMemory<byte>.Empty);
     }
 
     /// <inheritdoc/>

@@ -60,10 +60,19 @@ internal static class ReplicationInitiator
     /// <param name="stream">The open session stream.</param>
     /// <param name="keeps">The destination's keep filter, or null to push whole and instruct nothing.</param>
     /// <param name="cancellationToken">Cancels the exchange.</param>
+    /// <param name="reclaimPublicKey">
+    /// The repository's reclaim public key
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5), published on
+    /// the offer so the destination can record it at first attribution; empty
+    /// when this source has none. Public by nature and authorising nothing —
+    /// what it buys is a keyless destination that can tell a real deletion
+    /// instruction from a forged one.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
-        Func<string, bool>? keeps, CancellationToken cancellationToken)
+        Func<string, bool>? keeps, CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> reclaimPublicKey = default)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -71,7 +80,9 @@ internal static class ReplicationInitiator
         try
         {
             await PeerFrame.WriteAsync(
-                stream, new ReplicationOffer(repositoryId, FormatCapability, "all"), cancellationToken)
+                stream,
+                new ReplicationOffer(repositoryId, FormatCapability, "all", reclaimPublicKey),
+                cancellationToken)
                 .ConfigureAwait(false);
 
             var (held, headroom) = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);

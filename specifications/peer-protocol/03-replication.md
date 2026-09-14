@@ -43,8 +43,15 @@ Source → destination, once, first.
 | 1 | `bytes[16]` | The repository identity the offered objects belong to |
 | 2 | `u32` | The repository format capability the source speaks ([02 §5](02-session.md#5-protocol-version) governs the *protocol* version; this is the *format* the objects are in) |
 | 3 | `text` | The scope, ≤ 64 bytes (§4) |
+| 4 | `bytes[32]` | *(optional)* The repository's **reclaim public key** ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)) — what this destination checks a deletion instruction's signature against ([06 §3](06-retention.md#3-what-the-spoke-validates)) |
 
 A destination that does not implement the offered format capability MUST refuse with `feature_unsupported`. A destination that will not accept this repository at all MUST refuse with `not_paired` — it is a policy refusal, and no finer reason is owed a peer (§7).
+
+Key 4 present with a length other than 32 bytes is `malformed`. A destination MUST NOT silently ignore a key of the wrong width: one that did would go on accepting unsigned deletion instructions while believing it held a key to check them against.
+
+A destination records key 4 **at first attribution** ([05 §2](05-quotas.md#2-ownership)) and MUST NOT let a later offer replace a key it already holds — the peer sending deletion instructions is exactly the peer that would like the key they are checked against to be its own. A destination whose attribution carries no key yet MAY record one a later offer publishes: filling an absence is not replacing an answer, and without it a peering established before this key existed could never be secured without being torn down.
+
+A source with no key to publish — an older build, or a write-only repository provisioned before the decision — omits key 4, and an older destination skips it like any other key it does not know.
 
 ### 3.2 ReplicationInventory
 

@@ -18,15 +18,31 @@ namespace FallbackPlan.Application;
 /// so a corrupt file is set aside rather than fatal, and the store refills as
 /// peers return.
 /// </remarks>
+/// <param name="Fingerprint">The owning peer's fingerprint.</param>
+/// <param name="ReclaimPublicKey">
+/// The repository's reclaim public key, lower-hex, as the source published it
+/// at first attribution ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)
+/// §5); null for an attribution recorded before the decision, or by a source
+/// that published none.
+/// <para>
+/// A destination holds no repository keys by design, so this is the only
+/// thing it can check a deletion instruction's signature against — the
+/// exception ADR-0020's amendment carves out of "nothing stores a public
+/// key", which is true inside the key boundary and not beyond it.
+/// </para>
+/// </param>
+public sealed record ReplicaOwner(string Fingerprint, string? ReclaimPublicKey = null);
+
+/// <inheritdoc cref="ReplicaOwnerStore"/>
 public sealed class ReplicaOwnerStore
 {
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
     private readonly string _path;
-    private readonly Dictionary<string, string> _owners;
+    private readonly Dictionary<string, ReplicaOwner> _owners;
     private readonly Lock _gate = new();
 
-    private ReplicaOwnerStore(string path, Dictionary<string, string> owners)
+    private ReplicaOwnerStore(string path, Dictionary<string, ReplicaOwner> owners)
     {
         _path = path;
         _owners = owners;
@@ -43,19 +59,36 @@ public sealed class ReplicaOwnerStore
 
         if (!File.Exists(path))
         {
-            return new ReplicaOwnerStore(path, new Dictionary<string, string>(StringComparer.Ordinal));
+            return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(StringComparer.Ordinal));
         }
 
+        var text = File.ReadAllText(path);
         try
         {
-            var owners = JsonSerializer.Deserialize<Dictionary<string, string>>(
-                File.ReadAllText(path), SerializerOptions) ?? [];
-            return new ReplicaOwnerStore(path, new Dictionary<string, string>(owners, StringComparer.Ordinal));
+            var owners = JsonSerializer.Deserialize<Dictionary<string, ReplicaOwner>>(text, SerializerOptions) ?? [];
+            return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(owners, StringComparer.Ordinal));
         }
         catch (JsonException)
         {
-            File.Move(path, path + ".corrupt", overwrite: true);
-            return new ReplicaOwnerStore(path, new Dictionary<string, string>(StringComparer.Ordinal));
+            // The pre-reclaim shape was a flat id-to-fingerprint map. Lifted
+            // rather than set aside, because an attribution discarded is a
+            // quota that stops being enforceable and a peer that has to
+            // re-offer to be recognised — too high a price for a field that
+            // was simply not there yet. The file rewrites in the new shape on
+            // the next attribution.
+            try
+            {
+                var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(text, SerializerOptions) ?? [];
+                return new ReplicaOwnerStore(
+                    path,
+                    legacy.ToDictionary(
+                        pair => pair.Key, pair => new ReplicaOwner(pair.Value), StringComparer.Ordinal));
+            }
+            catch (JsonException)
+            {
+                File.Move(path, path + ".corrupt", overwrite: true);
+                return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(StringComparer.Ordinal));
+            }
         }
     }
 
@@ -69,7 +102,14 @@ public sealed class ReplicaOwnerStore
     /// <b>different</b> peer — the offer is refused rather than one household's
     /// archive counting against another's quota (05 §2).
     /// </returns>
-    public bool TryAttribute(string repositoryIdHex, string fingerprint)
+    /// <param name="reclaimPublicKey">
+    /// The reclaim public key the source published with its offer (ADR-0055
+    /// §5), or null when it published none. Recorded at first attribution and
+    /// <b>never replaced</b> afterwards: the key a destination checks deletion
+    /// instructions against must not be replaceable by whoever is sending the
+    /// instructions, or the check would be one the attacker controls.
+    /// </param>
+    public bool TryAttribute(string repositoryIdHex, string fingerprint, string? reclaimPublicKey = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
         ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
@@ -78,12 +118,41 @@ public sealed class ReplicaOwnerStore
         {
             if (_owners.TryGetValue(repositoryIdHex, out var owner))
             {
-                return string.Equals(owner, fingerprint, StringComparison.Ordinal);
+                if (!string.Equals(owner.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                // A first attribution that recorded no key — an older source,
+                // or one provisioned before the decision — may still learn it
+                // once. Filling an absence is not replacing an answer, and the
+                // alternative is a peering that can never be secured without
+                // being torn down and rebuilt.
+                if (owner.ReclaimPublicKey is null && reclaimPublicKey is { Length: > 0 })
+                {
+                    _owners[repositoryIdHex] = owner with { ReclaimPublicKey = reclaimPublicKey };
+                    AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
+                }
+
+                return true;
             }
 
-            _owners[repositoryIdHex] = fingerprint;
+            _owners[repositoryIdHex] = new ReplicaOwner(
+                fingerprint, reclaimPublicKey is { Length: > 0 } ? reclaimPublicKey : null);
             AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
             return true;
+        }
+    }
+
+    /// <summary>The attribution for one repository, or null when there is none.</summary>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    public ReplicaOwner? Find(string repositoryIdHex)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
+
+        lock (_gate)
+        {
+            return _owners.GetValueOrDefault(repositoryIdHex);
         }
     }
 
@@ -97,7 +166,7 @@ public sealed class ReplicaOwnerStore
         lock (_gate)
         {
             return [.. _owners
-                .Where(pair => string.Equals(pair.Value, fingerprint, StringComparison.Ordinal))
+                .Where(pair => string.Equals(pair.Value.Fingerprint, fingerprint, StringComparison.Ordinal))
                 .Select(pair => pair.Key)];
         }
     }

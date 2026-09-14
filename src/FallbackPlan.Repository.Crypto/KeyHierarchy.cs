@@ -134,6 +134,39 @@ public sealed class KeyHierarchy : IDisposable
             ? Expand("fbp/reclaim/v1"u8, generation.Value)
             : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoReclaimKey);
 
+    /// <summary>
+    /// The Ed25519 <b>public</b> half of the reclaim key, from wherever this
+    /// hierarchy can reach it — derived for a v1 repository, read off the
+    /// write credential for a v2 one
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
+    /// </summary>
+    /// <remarks>
+    /// Uniform across both shapes on purpose: publishing the key to a keyless
+    /// destination is the same act either way, and a caller that had to ask
+    /// which kind of repository it held would be a caller that could get it
+    /// wrong. Empty only for a v2 credential written before the reclaim
+    /// decision, which publishes nothing until it is re-provisioned.
+    /// </remarks>
+    /// <param name="generation">The key generation in force.</param>
+    public byte[] ReclaimPublicKey(KeyGeneration generation)
+    {
+        if (_credential is { } credential)
+        {
+            return credential.ReclaimPublicKey.ToArray();
+        }
+
+        var seed = Expand("fbp/reclaim/v1"u8, generation.Value);
+        try
+        {
+            using var signer = RepositorySigner.FromSeed(seed, generation);
+            return signer.PublicKey.ToArray();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(seed);
+        }
+    }
+
     /// <summary>Zeroes the held key material.</summary>
     public void Dispose()
     {
