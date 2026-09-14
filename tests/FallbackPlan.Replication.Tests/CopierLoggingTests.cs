@@ -13,9 +13,9 @@ namespace FallbackPlan.Replication.Tests;
 /// <remarks>
 /// The counts asserted here are the ones the copier computes rather than the
 /// ones the original declarations promised. It never totals the work up front,
-/// because it streams from a listing; what it knows at the start is the
-/// destination's opening inventory, which is what decides whether a catch-up
-/// costs seconds or hours.
+/// because it streams from a listing — and since ADR-0056 it does not read the
+/// destination's opening inventory either, because that reading was a walk of
+/// the whole namespace taken before any work, to put a number on a line.
 /// </remarks>
 [TestClass]
 public sealed class CopierLoggingTests
@@ -66,8 +66,8 @@ public sealed class CopierLoggingTests
         Assert.AreEqual(3L, outcome.Copied);
 
         var opening = log.Records.Single(record => record.EventId == ReplicationStarting);
-        Assert.AreEqual(0, opening.Values.First(value => value.Key == "Held").Value);
         Assert.AreEqual("off-site", opening.Values.First(value => value.Key == "Destination").Value);
+        Assert.AreEqual("copy", opening.Values.First(value => value.Key == "Pass").Value);
 
         Assert.HasCount(
             3, log.Records.Where(record => record.EventId == ObjectCopied),
@@ -94,8 +94,16 @@ public sealed class CopierLoggingTests
         Assert.AreEqual(0L, outcome.Copied);
         Assert.AreEqual(3L, outcome.AlreadyHeld);
 
-        var opening = log.Records.Single(record => record.EventId == ReplicationStarting);
-        Assert.AreEqual(3, opening.Values.First(value => value.Key == "Held").Value);
+        // The opening line no longer carries the destination's inventory count
+        // (ADR-0056): saying it cost a listing of the destination's whole
+        // namespace before any work began, which is exactly the per-pass cost
+        // the incremental design removes. The same number arrives at the end,
+        // where the pass has counted it anyway.
+        Assert.ContainsSingle(log.Records.Where(record => record.EventId == ReplicationStarting));
+        Assert.AreEqual(
+            3L,
+            log.Records.Single(record => record.EventId == ReplicationComplete)
+                .Values.First(value => value.Key == "AlreadyHeld").Value);
         Assert.IsEmpty(log.Records.Where(record => record.EventId == ObjectCopied));
     }
 

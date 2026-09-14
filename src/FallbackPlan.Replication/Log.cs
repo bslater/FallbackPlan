@@ -15,10 +15,15 @@ namespace FallbackPlan.Replication;
 /// </remarks>
 internal static partial class Log
 {
+    // The opening inventory count this used to carry is gone, and its absence
+    // is the point: it was a listing of the destination's whole namespace,
+    // taken before any work, purely so the first line could say a number
+    // (ADR-0056). The same figure arrives in ReplicationComplete's
+    // {AlreadyHeld}, after the fact and at no cost.
     [LoggerMessage(
         EventId = 3000, Level = LogLevel.Information,
-        Message = "Replicating to {Destination}: the destination already holds {Held} object(s)")]
-    internal static partial void ReplicationStarting(ILogger logger, string destination, int held);
+        Message = "Replicating to {Destination}: {Pass} pass starting")]
+    internal static partial void ReplicationStarting(ILogger logger, string destination, string pass);
 
     [LoggerMessage(
         EventId = 3001, Level = LogLevel.Trace,
