@@ -18,6 +18,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// degrades honestly instead of failing the verbs, a sealed restore grant
 /// brings the bytes back identical, and moving the archive to a fresh state
 /// directory is an adoption that costs the passphrase exactly once.
+/// <para>
+/// Also FR-GC-008 (ADR-0055): a service holding only a write credential
+/// cannot author a deletion, so applying retention takes a reclaim grant —
+/// refused by name without one, accepted with it, and never needed for the
+/// dry run, which authors nothing.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class WriteOnlySetTests : IDisposable

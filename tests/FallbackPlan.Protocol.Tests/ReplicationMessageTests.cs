@@ -6,6 +6,13 @@ namespace FallbackPlan.Protocol.Tests;
 /// The replication messages (specification peer-protocol 03 §3): each frame
 /// round-trips through the codec, the state machine admits them only when the
 /// session is Open, and malformed or oversized bodies are refused.
+/// <para>
+/// Establishes part of FR-GC-008 (ADR-0055) on the wire: the offer carries
+/// the reclaim public key a keyless destination checks against, a retention
+/// page carries the signature under it, the signed bytes are length-prefixed
+/// so two drop-lists cannot collide, and a key or signature of the wrong
+/// width is malformed rather than quietly dropped.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class ReplicationMessageTests

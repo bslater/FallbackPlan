@@ -6,6 +6,13 @@ namespace FallbackPlan.Application.Tests;
 /// The replica attribution store (peer-protocol 05 §2): which peer each
 /// replica repository belongs to — the quota's denominator, and later the
 /// authority a retention command is validated against.
+/// <para>
+/// That "later" is now (FR-GC-008, ADR-0055 §5): the attribution carries the
+/// repository's reclaim public key, recorded at first attribution and never
+/// replaceable by a later offer, because the peer sending deletion
+/// instructions is the peer that would like the key they are checked against
+/// to be its own.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class ReplicaOwnerStoreTests : IDisposable

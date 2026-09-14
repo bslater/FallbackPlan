@@ -79,7 +79,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, and a failure raising a notice rather than blaming the copy | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
-| [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key beside its attribution | **Specified only** | [notes](#0055--the-split-is-decided-the-code-follows) |
+| [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 
 ---
 
@@ -283,30 +283,39 @@ peer never agreed to is peer-protocol work rather than a schedule, and the gap
 is carried openly on [proof obligations](proof-obligations.md) rather than
 implied by an absence.
 
-### 0055 — the split is decided, the code follows
+### 0055 — what the split defends, and what it does not
 
-The record is landed and nothing implements it yet; this row moves to Built as
-the pieces land, and the notes here say which piece is which so a half-built
-state is legible rather than ambiguous.
+Built on both planes. A tombstone signs under a reclaim key on its own
+derivation domain; a write-only service's write credential is deliberately not
+given that domain, so a service that can publish for ever cannot author a
+deletion. Such a set still collects, under a grant sealed to the service and
+zeroed with the run — a service compromised between runs holds nothing that
+deletes. On the wire, the repository's reclaim **public** key is published on
+the `ReplicationOffer` and recorded beside the attribution (recorded once,
+never replaceable by a later offer), and each `RetentionOffer` page carries a
+signature the destination checks against it.
 
-The **repository plane** is self-contained: a reclaim derivation beside the
-signing one, `Retention/StagingSweep`'s two call sites moved onto it, and a
-required descriptor feature that decides which key a reader verifies against.
-The compatibility rule is the load-bearing part — a repository without the
-feature keeps verifying tombstones under the signing key — and it is what a
-test has to pin first.
+Three limits, stated because the alternative is a reader inferring more:
 
-The **peer plane** is not self-contained, and the dependency is worth knowing
-before starting it: a spoke holds no repository keys, so it can only check a
-reclaim signature against a published public key, and the carrier for that is
-the attribution-time key publication
-[ADR-0053](adr/0053-peer-claim-and-configuration-recovery.md) decided and did
-not build. Building it here lands that half of 0053 too.
+- **An ordinary v1 service gains nothing.** It holds the master key and
+  derives both keys from it. The split defends the write-only shape; against a
+  fully compromised v1 device the destination retention floor is still the only
+  safeguard that holds ([ADR-0055](adr/0055-reclaim-authority.md) §3).
+- **A page signature does not bind the session.** Forgery and editing are
+  closed; replay of a page captured inside an authenticated session is not, and
+  [06 §4.1](../specifications/peer-protocol/06-retention.md#41-retentionoffer)
+  says so rather than leaving it to be assumed.
+- **A destination keeps no signed record of what it deleted**, only the count
+  it acknowledges. The signed audit record exists on the repository plane — the
+  tombstone — and not on the spoke's side of the instruction.
 
-The **grant** exists so this is not a regression. Retention is format-agnostic
-today, so a write-only set collects right now using the write credential's
-signing key; removing that without replacing it would let a v2 repository grow
-without bound.
+Two compatibility rules carry the migration, and both are the load-bearing
+part rather than politeness. A repository written before the decision has
+tombstones signed under the publication key and keeps verifying them that way;
+the descriptor decides, so the choice cannot be downgraded per object. And a
+spoke whose attribution carries no reclaim key cannot manufacture a verdict
+from an absence, so it proceeds as it always did — which is why the
+requirement is a negotiated feature rather than an assumption.
 
 ## By phase
 

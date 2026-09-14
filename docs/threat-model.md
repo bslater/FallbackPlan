@@ -57,7 +57,9 @@ A store or peer presents a stale snapshot set to hide recent backups or restore 
 **Mitigation:** no plaintext mode; master key wrapped under an Argon2id-derived KEK. Media alone yields nothing.
 
 ### T-6 Deletion by compromised store credentials
-**Mitigation:** destination-side retention floors a source cannot reduce; stronger authorisation for retention reduction and bulk deletion; signed audit records; provider object lock in a later phase. FR-GC-007, FR-GC-008.
+**Mitigation:** destination-side retention floors a source cannot reduce; a **reclaim key** that authorises removal, on its own derivation domain and deliberately absent from a write-only service's write credential, so a service that can publish cannot author a tombstone ([ADR-0055](adr/0055-reclaim-authority.md)); a collection run on such a set taking that authority from a grant sealed to the service and held only for the run; a peer retention instruction signed under the same key and refused whole by a destination that cannot verify it; the signed tombstone itself as the audit record of what was condemned, by whom and when; provider object lock in a later phase. FR-GC-007, FR-GC-008.
+
+The split defends the **write-only** shape and not an ordinary v1 service, which holds the master key and derives both keys from it. Against that, the retention floor is still the only measure that holds — which is why it stays first in this list and first in [architecture 07 §5](architecture/07-retention-and-gc.md#5-destructive-change-safeguards).
 
 ### T-7 Malicious or malformed protocol input
 **Mitigation:** bounded allocations and parser limits; fuzz testing of every binary parser; peer identity pinned at pairing.

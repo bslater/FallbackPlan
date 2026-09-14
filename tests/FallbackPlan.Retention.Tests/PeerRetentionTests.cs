@@ -13,7 +13,11 @@ namespace FallbackPlan.Retention.Tests;
 /// the spoke deletes exactly what it is told, and the granted floor is the
 /// one safeguard that holds when the hub is compromised — an instruction
 /// below it is refused whole, deleting nothing.
-/// Establishes FR-GC-007.
+/// Establishes FR-GC-007, and FR-GC-008's peer half (ADR-0055 §5): the spoke
+/// records the reclaim public key the offer publishes and acts on an
+/// instruction signed under it, and refuses whole — deleting nothing, exactly
+/// as a floor breach is refused — when the signature does not verify against
+/// the key it holds.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
