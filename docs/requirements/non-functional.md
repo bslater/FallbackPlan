@@ -45,6 +45,7 @@ Unless a requirement says otherwise, targets are measured on:
 | NFR-PERF-013 **[new]** | Background activity shall observe configured CPU, disk, network, and time-window limits. | With a 25% CPU cap, measured agent CPU stays ≤ 30% over any 60 s window. |
 | NFR-PERF-014 **[new]** | **Repository-side** index size per distinct segment object. Physical location moved from manifests into the index, so this is the structure that grew and nothing previously bounded it. | ≤ 80 bytes per distinct segment object after checkpoint compaction. A reader resolving one file fetches only the shards covering its segments, never the whole index. |
 | NFR-PERF-015 **[new]** | Targeted forensic recovery: time to first restored file when all index objects are lost, with prioritised footer scanning. | ≤ 10 minutes at scale **M** for a single named file, against the ≥ 2 hours a full rebuild takes. |
+| NFR-PERF-016 **[new]** | Work per replication pass shall be bounded by what changed rather than by the repository's object count ([ADR-0056](../adr/0056-incremental-reconciliation.md)), and a pass's resident key set by the largest dependency phase rather than the whole archive. | A pass over a converged pair issues zero source listings. A pass with work enumerates each object at most twice — once per side — rather than once per dependency phase, and holds no whole-namespace key set. |
 
 ## Reliability and recoverability
 

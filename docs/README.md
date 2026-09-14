@@ -118,6 +118,7 @@ Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | A rebuilt machine claims its peer replica, and its set's shape survives |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery is drilled on a cadence, and the drill says what it could not prove |
 | [0055](adr/0055-reclaim-authority.md) | The key that deletes is not the key that publishes |
+| [0056](adr/0056-incremental-reconciliation.md) | A sync pass costs what changed, and reads through on a cadence |
 
 Template: [0000](adr/0000-template.md)
 

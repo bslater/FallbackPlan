@@ -80,6 +80,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, and (Amendment 1) an interrupted drill recording nothing at all | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
+| [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
 
 ---
 
@@ -326,6 +327,38 @@ the descriptor decides, so the choice cannot be downgraded per object. And a
 spoke whose attribution carries no reclaim key cannot manufacture a verdict
 from an absence, so it proceeds as it always did — which is why the
 requirement is a negotiated feature rather than an assumption.
+
+### 0056 — what a skip claims, and what checks it
+
+Built. A pass over a pair the last one left level costs the publication
+sequence read that establishes it: no listing of either side, where before it
+listed the whole source namespace once per dependency phase and the whole
+destination once more. A pass with work lists each phase under that phase's own
+prefix, and releases the phase's key set when the phase ends.
+
+A skip is a claim about a destination made without looking at it, so what
+bounds it matters more than what it saves:
+
+- **It expires.** Only a pass that read both inventories through stamps
+  `last_reconciled_at`, and the stamp is good for a day. A destination that
+  loses an object can therefore be wrong for up to that long, where every pass
+  used to find it.
+- **It is not the only thing watching.** Verification reads bytes at the
+  destination on its own cadence and the drill restores a file from it. A pair
+  that fails either stops claiming to be level, and a pair that is not level is
+  never skipped — which is what actually caught the deleted blob in the test
+  written to prove the expiry.
+- **It cannot hide a migration.** A direct-ship set still carrying the staging
+  archive it migrated from reads through on every pass, because its runs speak
+  only for the objects they shipped.
+
+Two inputs move without anything being published, and both are fingerprinted
+rather than assumed: a retention window expiring with the clock, and a spare
+released when the sibling it was held for catches up.
+
+The reconciliation age is recorded and is **not** on the status contract, so no
+surface yet says when a destination was last read through. That is an additive
+contract change nobody has made.
 
 ## By phase
 

@@ -4,7 +4,7 @@ namespace FallbackPlan.Application.Tests;
 
 /// <summary>
 /// What a replication pass decides to do before it does anything
-/// (NFR-PERF-005, FR-REP-006, [ADR-0056](../../docs/adr/0056-incremental-reconciliation.md)):
+/// (NFR-PERF-016, FR-REP-005, [ADR-0056](../../docs/adr/0056-incremental-reconciliation.md)):
 /// skip, carry what is new, or read both inventories through.
 /// </summary>
 /// <remarks>

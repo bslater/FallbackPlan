@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23; peer-only sets stay staging until the sink serves peers) — see [implementation status](../implementation-status.md).
+**Built:** What a pass costs is bounded by what changed (§1.1, [ADR-0056](../adr/0056-incremental-reconciliation.md)): phase-scoped listings, a gate that skips a pair the last pass left level, and a reading-through that comes due on its own cadence. Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23; peer-only sets stay staging until the sink serves peers) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -30,6 +30,38 @@ Exchange sequence:
 Steps 3–6 are ordered so the cheapest discovery happens first: a filter exchange establishes most of what is missing without enumerating anything.
 
 **Built so far (peer-protocol 03, first slice).** The exchange runs for the widest scope — the source offers a whole repository, the destination declares the object keys it holds as an explicit inventory, and the source streams the rest, each object committed whole under a create-if-absent write so a re-run resumes with no checkpoint. Three decisions this section left open were settled there rather than in the architecture, because they are encoding and placement, not behaviour: the destination keeps each source's replica in a store it names locally by repository id (a storage path never crosses the wire, §3); an object commits atomically, so resumption is a property of the exchange rather than a negotiated position; and step 3's compact object-set filter is an *optional negotiated feature* layered over the explicit inventory, so a v1 implementation is complete without it. Snapshot scoping (steps 2, 4, 5) and the filter are a later slice; quotas (§6) are built per [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md); verification (§5) follows.
+
+### 1.1 What a pass costs
+
+A pass is a diff, and until [ADR-0056](../adr/0056-incremental-reconciliation.md)
+it re-derived the diff from scratch every time: the source's whole namespace
+listed once per dependency phase, the destination's whole inventory held in
+memory beside it. That cost the archive's object count multiplied by the number
+of dependency classes, whether or not anything had changed, which on the poll
+cadence is the wrong constant to be multiplying by anything.
+
+Three rules now bound it, and the order matters because each one only makes
+sense given the one before:
+
+1. **A phase lists under its own prefix.** A dependency phase *is* a prefix,
+   and the destination's inventory for a phase is released when the phase ends
+   — so a pass's resident key set is the largest phase rather than the
+   archive.
+2. **A pass decides before it reads.** The sync ledger records the publication
+   sequence a destination provably holds and when its inventory was last read
+   through. A pair with nothing published since, an unmoved keep-set and an
+   unexpired reading-through is answered from those records: the pass carries
+   nothing and lists nothing.
+3. **A reading-through comes due.** The watermark describes what the *source*
+   published and can say nothing about what the destination still holds, so
+   the skip has a shelf life — a day — after which both inventories are read
+   through whether or not anything has happened.
+
+Rule 3 is the one that keeps rule 2 honest, and it is not alone: destination
+verification (§5) reads bytes at the destination on its own cadence and the
+scheduled drill ([ADR-0054](../adr/0054-scheduled-restore-drills.md)) restores
+a file from it. A pair that fails either stops claiming to be level, and a pair
+that is not level is never skipped.
 
 ## 2. Transport
 

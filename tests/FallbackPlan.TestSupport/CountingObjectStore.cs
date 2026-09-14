@@ -11,7 +11,7 @@ namespace FallbackPlan.TestSupport;
 /// <remarks>
 /// <para>
 /// The measuring instrument for "work proportional to what changed"
-/// (NFR-PERF-005). A pass's cost is not visible in its outcome — a pass that
+/// (NFR-PERF-016). A pass's cost is not visible in its outcome — a pass that
 /// copies nothing can still have walked the whole archive eight times — so the
 /// only way to hold the claim is to count the calls underneath it.
 /// </para>

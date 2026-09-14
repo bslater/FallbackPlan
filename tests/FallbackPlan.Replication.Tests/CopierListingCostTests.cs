@@ -7,7 +7,7 @@ namespace FallbackPlan.Replication.Tests;
 
 /// <summary>
 /// What a replication pass costs to decide it has nothing to do
-/// (NFR-PERF-005, NFR-PERF-008, FR-REP-006). The outcome of a pass says
+/// (NFR-PERF-016, FR-REP-005). The outcome of a pass says
 /// nothing about this: a pass that copies no objects can still have walked the
 /// whole archive once for every dependency phase, and did.
 /// </summary>

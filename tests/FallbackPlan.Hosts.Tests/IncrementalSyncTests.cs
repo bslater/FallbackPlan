@@ -8,7 +8,7 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// A sync pass costs what has changed, not what the archive holds
-/// (NFR-PERF-005, FR-REP-006, FR-DEST-003): a pair the last pass left level
+/// (NFR-PERF-016, FR-REP-005, FR-DEST-003): a pair the last pass left level
 /// skips on the strength of what that pass wrote down, and the writing down
 /// expires so the skip cannot become permanent.
 /// </summary>
