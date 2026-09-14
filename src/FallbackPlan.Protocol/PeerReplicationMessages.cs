@@ -1,5 +1,6 @@
 using Bodu;
 using System.Formats.Cbor;
+using System.Buffers.Binary;
 using System.Text;
 
 namespace FallbackPlan.Protocol;
@@ -515,17 +516,81 @@ public sealed record ReplicationAck(ulong Count) : IPeerMessage
 /// <param name="RepositoryId">The repository the instruction applies to (16 bytes).</param>
 /// <param name="Keys">The store keys to delete, this page.</param>
 /// <param name="More">Whether another page follows.</param>
+/// <param name="Signature">
+/// An Ed25519 signature over <see cref="EncodeForSigning"/> under the
+/// repository's reclaim key
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5), 64 bytes, or
+/// empty when the commander has none to make. A spoke that negotiated
+/// <c>signed-retention</c> refuses a page without one.
+/// </param>
 public sealed record RetentionOffer(
-    ReadOnlyMemory<byte> RepositoryId, IReadOnlyList<string> Keys, bool More) : IPeerMessage
+    ReadOnlyMemory<byte> RepositoryId,
+    IReadOnlyList<string> Keys,
+    bool More,
+    ReadOnlyMemory<byte> Signature = default) : IPeerMessage
 {
     /// <summary>The most keys one page may carry (06 §4.1).</summary>
     public const int MaximumKeys = 4096;
+
+    /// <summary>An Ed25519 signature is 64 bytes.</summary>
+    public const int SignatureLength = 64;
 
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.RetentionOffer;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 3;
+    public int BodyEntryCount => Signature.IsEmpty ? 3 : 4;
+
+    /// <summary>
+    /// The bytes a page's signature covers: the repository identity, then each
+    /// key length-prefixed in the order sent, then the continuation flag.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Length-prefixed rather than delimited, so no key can be split or joined
+    /// by its own contents — a separator-delimited encoding would let two
+    /// different drop-lists produce identical signed bytes.
+    /// </para>
+    /// <para>
+    /// <b>Per page, and what that does and does not buy.</b> Each page stands
+    /// alone, so a page cannot be forged and a page cannot be edited. A page
+    /// can still be <em>dropped</em> by whoever controls the transport, which
+    /// deletes less than was instructed and is the safe direction, and an old
+    /// page can be <em>replayed</em> into a later session. Replay needs an
+    /// attacker already inside an authenticated, encrypted session, deletion
+    /// is idempotent so a replayed page usually names keys that are already
+    /// gone, and the spoke's retention floor still bounds what any instruction
+    /// can do. Closing it properly wants the signature bound to session-unique
+    /// material, which this revision does not carry — recorded rather than
+    /// left for a reader to assume away.
+    /// </para>
+    /// </remarks>
+    /// <returns>The canonical signed bytes.</returns>
+    public byte[] EncodeForSigning()
+    {
+        var length = RepositoryId.Length + sizeof(uint);
+        foreach (var objectKey in Keys)
+        {
+            length += sizeof(uint) + Encoding.UTF8.GetByteCount(objectKey);
+        }
+
+        var bytes = new byte[length + 1];
+        var offset = 0;
+        RepositoryId.Span.CopyTo(bytes);
+        offset += RepositoryId.Length;
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(offset), (uint)Keys.Count);
+        offset += sizeof(uint);
+
+        foreach (var objectKey in Keys)
+        {
+            var written = Encoding.UTF8.GetBytes(objectKey, bytes.AsSpan(offset + sizeof(uint)));
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(offset), (uint)written);
+            offset += sizeof(uint) + written;
+        }
+
+        bytes[offset] = More ? (byte)1 : (byte)0;
+        return bytes;
+    }
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -557,6 +622,12 @@ public sealed record RetentionOffer(
         writer.WriteEndArray();
         writer.WriteInt32(3);
         writer.WriteBoolean(More);
+
+        if (!Signature.IsEmpty)
+        {
+            writer.WriteInt32(4);
+            writer.WriteByteString(Signature.Span);
+        }
     }
 
     /// <summary>Reads one instruction page.</summary>
@@ -570,6 +641,7 @@ public sealed record RetentionOffer(
         byte[]? repositoryId = null;
         IReadOnlyList<string>? keys = null;
         var more = false;
+        byte[]? signature = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -584,6 +656,9 @@ public sealed record RetentionOffer(
                 case 3:
                     more = reader.ReadBoolean();
                     break;
+                case 4:
+                    signature = reader.ReadByteString();
+                    break;
                 default:
                     reader.SkipValue();
                     break;
@@ -596,7 +671,16 @@ public sealed record RetentionOffer(
                 PeerRefusalReason.Malformed, "A retention page omits its repository identifier or key array.");
         }
 
-        return new RetentionOffer(repositoryId, keys, more);
+        // A signature of the wrong width is malformed rather than ignored: a
+        // spoke that dropped it would fall back to accepting the instruction
+        // unsigned, which is the check the whole feature exists to make.
+        if (signature is { } carried && carried.Length != SignatureLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A retention page's signature is not 64 bytes (06 §4.1).");
+        }
+
+        return new RetentionOffer(repositoryId, keys, more, signature ?? ReadOnlyMemory<byte>.Empty);
     }
 
     private static List<string> ReadDropKeys(CborReader reader)

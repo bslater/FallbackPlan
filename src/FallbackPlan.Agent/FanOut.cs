@@ -301,9 +301,33 @@ public static class FanOut
             var reclaimPublicKey = archive.Repository.Hierarchy.ReclaimPublicKey(
                 archive.Repository.CurrentMetadataGeneration);
 
+            // The commander signs each retention page under the reclaim key
+            // (ADR-0055 §5) so the spoke can tell an authorised deletion from
+            // one sent by whoever merely holds this session. A write-only set
+            // cannot derive the key and signs nothing here; its peer retention
+            // waits on a grant, exactly as its local collection does.
+            Func<byte[], byte[]>? reclaimSigner = null;
+            if (!archive.Repository.Keys.WriteOnly)
+            {
+                reclaimSigner = signed =>
+                {
+                    var generation = archive.Repository.CurrentMetadataGeneration;
+                    var seed = archive.Repository.Hierarchy.DeriveReclaimKeySeed(generation);
+                    try
+                    {
+                        using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
+                        return signer.Sign(signed);
+                    }
+                    finally
+                    {
+                        System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+                    }
+                };
+            }
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
-                reclaimPublicKey)
+                reclaimPublicKey, reclaimSigner)
                 .ConfigureAwait(false);
 
             ReportShortfall(

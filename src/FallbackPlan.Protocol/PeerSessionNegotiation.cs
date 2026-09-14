@@ -40,9 +40,31 @@ public static class PeerSessionNegotiation
     /// <summary>An owner may read its replica back over the session (07; ADR-0041).</summary>
     public const string RetrievalFeature = "retrieval";
 
+    /// <summary>
+    /// A peer that offers this requires every <see cref="RetentionOffer"/> page
+    /// to carry a reclaim signature it can verify
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5; 06 §3).
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="RetentionInstructionFeature"/> rather than
+    /// folded into it, because the two say different things: one is "I accept
+    /// deletion instructions at all", the other is "and I will not act on one
+    /// that is not signed". A destination offering both refuses an unsigned
+    /// instruction; a commander whose repository publishes no reclaim key
+    /// simply never gets the second into the intersection, and is told what is
+    /// missing instead of being refused mid-exchange.
+    /// </remarks>
+    public const string SignedRetentionFeature = "signed-retention";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
-        [DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature, RetrievalFeature];
+    [
+        DestinationVerificationFeature,
+        RetentionInstructionFeature,
+        SignedRetentionFeature,
+        TerminationNoticeFeature,
+        RetrievalFeature,
+    ];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>

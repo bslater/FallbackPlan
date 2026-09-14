@@ -29,6 +29,10 @@ internal static class ReplicationResponder
     /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
     /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
+    /// <param name="signedRetentionNegotiated">
+    /// Whether the session's features require every retention page to carry a
+    /// reclaim signature this spoke can verify (ADR-0055 §5).
+    /// </param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <param name="preread">The first payload frame, when the caller already read it to route the session (ADR-0041).</param>
@@ -37,6 +41,7 @@ internal static class ReplicationResponder
         string replicasRoot, string spoolRoot, Stream stream,
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
         bool retentionNegotiated,
+        bool signedRetentionNegotiated,
         bool verificationNegotiated,
         CancellationToken cancellationToken,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
@@ -143,8 +148,9 @@ internal static class ReplicationResponder
                 .ConfigureAwait(false);
 
             var retentionDeleted = await ServeAfterAckAsync(
-                replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated,
-                stream, cancellationToken)
+                replica, offer.RepositoryId, peer, retentionNegotiated, signedRetentionNegotiated,
+                verificationNegotiated,
+                stream, owners, cancellationToken)
                 .ConfigureAwait(false);
 
             return new Outcome(repositoryIdHex, committed, RetentionDeleted: retentionDeleted);
@@ -172,8 +178,10 @@ internal static class ReplicationResponder
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
         bool retentionNegotiated,
+        bool signedRetentionNegotiated,
         bool verificationNegotiated,
         Stream stream,
+        FallbackPlan.Application.ReplicaOwnerStore owners,
         CancellationToken cancellationToken)
     {
         var retentionDeleted = 0L;
@@ -204,7 +212,8 @@ internal static class ReplicationResponder
                     }
 
                     retentionDeleted = await ServeRetentionAsync(
-                        replica, offeredRepositoryId, peer, frame.Value.Body, stream, cancellationToken)
+                        replica, offeredRepositoryId, peer, frame.Value.Body, stream,
+                        owners, signedRetentionNegotiated, cancellationToken)
                         .ConfigureAwait(false);
                     retentionServed = true;
                     break;
@@ -282,6 +291,73 @@ internal static class ReplicationResponder
     }
 
     /// <summary>
+    /// Refuses a retention page this spoke cannot prove came from the
+    /// repository's reclaim authority
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The refusal is total and deletes nothing, exactly as the floor breach
+    /// is: a partially-honoured instruction whose authorship is in doubt is
+    /// the worst of both answers.
+    /// </para>
+    /// <para>
+    /// Gated on the negotiated feature and on holding a key. A spoke that did
+    /// not negotiate <c>signed-retention</c> behaves as it always did, and one
+    /// whose attribution carries no reclaim public key has nothing to check
+    /// against — it cannot manufacture a verdict from an absence, and refusing
+    /// every instruction for a peering established before the key existed
+    /// would strand it. Both are the compatibility surface, and both are why
+    /// the feature has to be negotiated rather than assumed.
+    /// </para>
+    /// </remarks>
+    private static void RequireReclaimSignature(
+        RetentionOffer page,
+        string repositoryIdHex,
+        FallbackPlan.Application.ReplicaOwnerStore owners,
+        bool signedRetentionNegotiated)
+    {
+        if (!signedRetentionNegotiated)
+        {
+            return;
+        }
+
+        if (owners.Find(repositoryIdHex)?.ReclaimPublicKey is not { Length: > 0 } publicKeyHex)
+        {
+            return;
+        }
+
+        if (page.Signature.IsEmpty)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.TermsRefused,
+                "A retention instruction arrived unsigned under signed-retention — this replica deletes only on "
+                + "the authority of the repository's reclaim key (06 §3).");
+        }
+
+        byte[] publicKey;
+        try
+        {
+            publicKey = Convert.FromHexString(publicKeyHex);
+        }
+        catch (FormatException)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.TermsRefused,
+                "This replica's recorded reclaim public key is unreadable, so no instruction can be proven (06 §3).");
+        }
+
+        if (!Repository.Crypto.RepositorySigner.VerifyWithPublicKey(
+            publicKey, page.EncodeForSigning(), page.Signature.Span))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.TermsRefused,
+                "A retention instruction's signature does not verify against this replica's recorded reclaim "
+                + "public key — it was not authorised by the repository's reclaim authority (06 §3).");
+        }
+    }
+
+    /// <summary>
     /// Serves a retention instruction (peer-protocol 06): the commander
     /// computed, this side deletes exactly what it is told — bounded below
     /// by the granted retention floor, which is the one safeguard that holds
@@ -295,6 +371,8 @@ internal static class ReplicationResponder
         Protocol.PeerGrant peer,
         System.Formats.Cbor.CborReader firstBody,
         Stream stream,
+        FallbackPlan.Application.ReplicaOwnerStore owners,
+        bool signedRetentionNegotiated,
         CancellationToken cancellationToken)
     {
         // Every page is read before anything is deleted: the floor check is
@@ -310,6 +388,9 @@ internal static class ReplicationResponder
                     PeerRefusalReason.Malformed,
                     "A retention page names a repository other than the one this session replicated.");
             }
+
+            RequireReclaimSignature(
+                page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners, signedRetentionNegotiated);
 
             foreach (var key in page.Keys)
             {

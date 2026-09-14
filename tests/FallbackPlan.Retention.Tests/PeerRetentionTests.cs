@@ -109,6 +109,93 @@ public sealed class PeerRetentionTests : IDisposable
     }
 
     [TestMethod]
+    public async Task FanOut_TheSpokeRecordsTheReclaimKeyAndActsOnTheSignedInstruction()
+    {
+        // The peer half of ADR-0055 end to end. The spoke has no repository
+        // keys, so the only thing it can check a deletion instruction against
+        // is the reclaim public key the source published when the repository
+        // was first attributed to it.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+
+        var owner = ReplicaOwnerStore.Open(DestinationState).Find(RepositoryIdHex());
+        Assert.IsNotNull(owner);
+        Assert.IsNotNull(owner.ReclaimPublicKey, "the offer must publish the key the spoke will check against");
+        Assert.HasCount(64, owner.ReclaimPublicKey!);
+
+        // And the signed instruction was acted on, so signing did not merely
+        // fail to break anything — it went through the whole exchange.
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        Assert.AreEqual(
+            DestinationSyncState.InSync,
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend")!.State);
+    }
+
+    [TestMethod]
+    public async Task FanOut_TheSpokesRecordedKeyIsNotTheRepositorys_TheInstructionIsRefusedWhole()
+    {
+        // The attack the signature closes: an instruction that did not come
+        // from the reclaim authority. Swapping the spoke's recorded key is the
+        // cheapest way to make a genuine instruction fail to verify, and what
+        // it proves is the check runs and is total — nothing is deleted.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+
+        // The spoke holds its attribution store in memory, so the swap has to
+        // happen while it is down — which is also the honest shape of the
+        // attack: somebody with the destination's disk, not its process.
+        await _stop!.DisposeAsync();
+        _stop = null;
+
+        var ownersPath = Path.Combine(DestinationState, "replica-owners.json");
+        var recorded = await File.ReadAllTextAsync(ownersPath);
+        var real = ReplicaOwnerStore.Open(DestinationState).Find(RepositoryIdHex())!.ReclaimPublicKey!;
+        await File.WriteAllTextAsync(ownersPath, recorded.Replace(real, new string('a', 64), StringComparison.Ordinal));
+
+        RestartDestination();
+        WriteConfiguration(fingerprint);
+
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+
+        // Both snapshots survive: a refusal is whole, exactly as the floor
+        // breach is, because a partially-honoured instruction whose authorship
+        // is in doubt is the worst of both answers.
+        Assert.HasCount(2, await ListAsync(replica, "snapshots/"));
+
+        var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend");
+        Assert.AreEqual(DestinationSyncState.Failed, record!.State);
+        Assert.Contains("reclaim", record.LastError!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RestartDestination()
+    {
+        var listenerKeypair = PeerKeypairStore.Open(DestinationState);
+        var listener = RemoteServiceListener.Start(
+            listenerKeypair, PeerGrantStore.Open(DestinationState), new IPEndPoint(IPAddress.Loopback, 0),
+            "fallbackplan-agent/test", log: null, replicationStateDirectory: DestinationState);
+        listener.Bind(new UnusedService());
+        _endpoint = listener.Endpoint;
+        _stop = new Stopper(listener, listenerKeypair);
+    }
+
+    private string RepositoryIdHex() =>
+        Path.GetFileName(Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+
+    [TestMethod]
     public async Task FanOut_AKeyOnlyTheSpokeHolds_SurvivesTheRetentionInstruction()
     {
         // After a staging trim, a data blob's only remaining copy may sit at

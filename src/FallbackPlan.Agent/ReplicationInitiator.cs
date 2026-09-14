@@ -68,11 +68,17 @@ internal static class ReplicationInitiator
     /// what it buys is a keyless destination that can tell a real deletion
     /// instruction from a forged one.
     /// </param>
+    /// <param name="signer">
+    /// Signs each retention page's canonical bytes under the repository's
+    /// reclaim key (ADR-0055 §5), or null when this commander holds none —
+    /// a write-only set without a grant, or a build that publishes no key.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
         Func<string, bool>? keeps, CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> reclaimPublicKey = default)
+        ReadOnlyMemory<byte> reclaimPublicKey = default,
+        Func<byte[], byte[]>? signer = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -156,10 +162,24 @@ internal static class ReplicationInitiator
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
             {
                 var page = drops.Skip(offset).Take(RetentionOffer.MaximumKeys).ToList();
-                await PeerFrame.WriteAsync(
-                    stream,
-                    new RetentionOffer(repositoryId, page, More: offset + RetentionOffer.MaximumKeys < drops.Count),
-                    cancellationToken).ConfigureAwait(false);
+                var instruction = new RetentionOffer(
+                    repositoryId, page, More: offset + RetentionOffer.MaximumKeys < drops.Count);
+
+                // Signed under the reclaim key (ADR-0055 §5), so a spoke can
+                // tell an instruction authorised by whoever holds that key
+                // from one sent by whoever merely holds this session. A
+                // commander with no signer makes none, and a spoke that
+                // negotiated signed-retention refuses the page rather than
+                // acting on it.
+                if (signer is not null)
+                {
+                    instruction = instruction with
+                    {
+                        Signature = signer(instruction.EncodeForSigning()),
+                    };
+                }
+
+                await PeerFrame.WriteAsync(stream, instruction, cancellationToken).ConfigureAwait(false);
             }
 
             var retentionAck = await ReplicationWire.ReadAsync(

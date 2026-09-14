@@ -285,4 +285,66 @@ public sealed class ReplicationMessageTests
         Assert.ThrowsExactly<ArgumentException>(() =>
             RangeChallenge.Compute(challengeKey, nonce, "blobs/data/aa/one", 7, (uint)bytes.Length + 1, bytes));
     }
+
+    [TestMethod]
+    public void RetentionOffer_WithASignature_RoundTripsIt()
+    {
+        var signature = new byte[RetentionOffer.SignatureLength];
+        signature.AsSpan().Fill(0x5C);
+
+        var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false, signature);
+        var read = RoundTrip(page, RetentionOffer.Read);
+
+        Assert.IsTrue(read.Signature.Span.SequenceEqual(signature));
+        Assert.AreEqual(4, page.BodyEntryCount);
+    }
+
+    [TestMethod]
+    public void RetentionOffer_WithoutOne_StaysTheBodyItAlwaysWas()
+    {
+        var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false);
+
+        Assert.AreEqual(3, page.BodyEntryCount);
+        Assert.IsTrue(RoundTrip(page, RetentionOffer.Read).Signature.IsEmpty);
+    }
+
+    [TestMethod]
+    public void RetentionOffer_ASignatureOfTheWrongWidth_IsMalformedRatherThanIgnored()
+    {
+        // Dropping it quietly would fall back to accepting the instruction
+        // unsigned, which is the check the feature exists to make.
+        var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false, new byte[32]);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(page, RetentionOffer.Read));
+    }
+
+    [TestMethod]
+    public void RetentionOffer_TheSignedBytes_SeparateKeysThatConcatenateTheSame()
+    {
+        // Length-prefixed, not delimited. Two different drop-lists whose
+        // concatenations coincide must not produce identical signed bytes, or
+        // one page's signature would authorise the other's deletions.
+        var first = new RetentionOffer(new byte[16], ["blobs/aa", "bb"], More: false);
+        var second = new RetentionOffer(new byte[16], ["blobs/aabb"], More: false);
+
+        Assert.IsFalse(first.EncodeForSigning().AsSpan().SequenceEqual(second.EncodeForSigning()));
+    }
+
+    [TestMethod]
+    public void RetentionOffer_TheSignedBytes_CoverTheRepositoryAndTheContinuation()
+    {
+        var keys = new[] { "blobs/data/aa/one" };
+        var baseline = new RetentionOffer(new byte[16], keys, More: false).EncodeForSigning();
+
+        var otherRepository = new byte[16];
+        otherRepository[0] = 9;
+        Assert.IsFalse(
+            baseline.AsSpan().SequenceEqual(
+                new RetentionOffer(otherRepository, keys, More: false).EncodeForSigning()),
+            "a page signed for one repository must not authorise deletions in another");
+
+        Assert.IsFalse(
+            baseline.AsSpan().SequenceEqual(new RetentionOffer(new byte[16], keys, More: true).EncodeForSigning()),
+            "the continuation flag is part of the instruction and must be signed with it");
+    }
 }
