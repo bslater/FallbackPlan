@@ -13,7 +13,7 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// A transfer cut inside an object resumes where it stopped
-/// (FR-REP-003, [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+/// (FR-REP-003, NFR-PERF-016, [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
 /// </summary>
 /// <remarks>
 /// <para>

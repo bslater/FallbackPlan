@@ -81,6 +81,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, and (Amendment 1) an interrupted drill recording nothing at all | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
+| [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
 
 ---
 
@@ -359,6 +360,35 @@ released when the sibling it was held for catches up.
 The reconciliation age is recorded and is **not** on the status contract, so no
 surface yet says when a destination was last read through. That is an additive
 contract change nobody has made.
+
+### 0057 — what resuming trusts
+
+Built. A transfer cut inside an object now costs its tail rather than the whole
+object, which on a domestic uplink is the difference between a large blob
+eventually arriving and never arriving at all.
+
+The trust question is the only interesting one, and the answer is that the
+destination's claim binds nothing. It declares what it part holds and a digest
+of exactly those bytes; the source hashes its own prefix of the same object and
+compares; a mismatch sends the object whole. The destination cannot perform
+that check itself — it holds no repository keys, and a store key is a keyed
+rendering of an identifier rather than of the bytes — so the side that has the
+object is the side that decides. A peer therefore cannot talk a source into
+skipping bytes it has not proved it holds, and every disagreement lands on the
+behaviour that existed before.
+
+Three limits worth stating:
+
+- **It is the peer wire only.** A local-path destination re-copies from local
+  disk, where a restart costs seconds. Peers are served for staging sets
+  today; a direct-ship set's peer destination is still refused until the peer
+  write adapter lands ([ADR-0046](adr/0046-direct-to-destination-publication.md)).
+- **Staged bytes are charged to the peer's quota**, so a peer near its ceiling
+  can be refused for an object it would previously have been admitted for.
+  Uncounted bytes would be a ceiling that does not hold.
+- **A resumed commit is assembled from two sessions' bytes.** The prefix is
+  checked by digest and the tail by the session, so no part is unchecked — but
+  the object is no longer the product of one uninterrupted read.
 
 ## By phase
 

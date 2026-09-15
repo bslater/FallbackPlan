@@ -119,6 +119,7 @@ Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery is drilled on a cadence, and the drill says what it could not prove |
 | [0055](adr/0055-reclaim-authority.md) | The key that deletes is not the key that publishes |
 | [0056](adr/0056-incremental-reconciliation.md) | A sync pass costs what changed, and reads through on a cadence |
+| [0057](adr/0057-resumable-object-transfer.md) | An interrupted object resumes where it stopped |
 
 Template: [0000](adr/0000-template.md)
 

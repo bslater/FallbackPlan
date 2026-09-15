@@ -186,6 +186,8 @@ The features defined so far:
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
 | `signed-retention` | The peer requires every `RetentionOffer` page to carry a reclaim signature it can verify ([06 §3](06-retention.md#3-what-the-spoke-validates); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
+| `retrieval` | An owner may read its own replica back over the session ([07](07-retrieval.md)) |
+| `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
 
 `signed-retention` is separate from `retention-instruction` rather than folded into it, because the two say different things: one is *I accept deletion instructions at all*, the other is *and I will not act on one I cannot prove came from the repository's reclaim authority*. A commander whose repository publishes no reclaim key simply never gets the second into the intersection and is told what is missing at the hello, rather than being refused mid-exchange after the objects have already crossed.
 
@@ -219,7 +221,10 @@ frame = u32(payload_length) ‖ payload
 | 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
 | 264–265 | Verification | [04](04-verification.md#4-messages) |
-| 264+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 266 | Partial-object declaration | [03 §3.3.1](03-replication.md#331-replicationpartial) |
+| 267–271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
+| 278+ | Reserved for later payload documents | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 

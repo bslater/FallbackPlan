@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** What a pass costs is bounded by what changed (§1.1, [ADR-0056](../adr/0056-incremental-reconciliation.md)): phase-scoped listings, a gate that skips a pair the last pass left level, and a reading-through that comes due on its own cadence. Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23; peer-only sets stay staging until the sink serves peers) — see [implementation status](../implementation-status.md).
+**Built:** A transfer cut inside an object resumes where it stopped (§1.2, [ADR-0057](../adr/0057-resumable-object-transfer.md)). What a pass costs is bounded by what changed (§1.1, [ADR-0056](../adr/0056-incremental-reconciliation.md)): phase-scoped listings, a gate that skips a pair the last pass left level, and a reading-through that comes due on its own cadence. Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23; peer-only sets stay staging until the sink serves peers) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -62,6 +62,31 @@ verification (§5) reads bytes at the destination on its own cadence and the
 scheduled drill ([ADR-0054](../adr/0054-scheduled-restore-drills.md)) restores
 a file from it. A pair that fails either stops claiming to be level, and a pair
 that is not level is never skipped.
+
+### 1.2 What an interruption costs
+
+A cut transfer costs its tail, not the object
+([ADR-0057](../adr/0057-resumable-object-transfer.md)). The destination stages
+an incoming object outside its replica store, keyed by the object it belongs
+to; if the link dies the bytes stay, and on the next session the destination
+declares what it part holds along with a digest of exactly those bytes.
+
+The **source** decides whether to begin there. It hashes its own prefix of the
+same object and compares; on a match it sends the remainder, and on any
+disagreement it sends the object whole. The destination cannot make that check
+itself — it holds no repository keys, and a store key is a keyed rendering of
+an identifier rather than of the bytes — so the side that has the object is
+the side that decides, and a peer cannot talk a source into skipping bytes it
+has not proved it holds.
+
+Everything §1's atomicity rests on is unchanged: the destination still commits
+whole or not at all, under a create-if-absent write, and staged bytes are in no
+store, answer no read, appear in no inventory and cannot satisfy a possession
+challenge (§5). They are counted against the peer's quota, because they are
+real disk it is costing its host, and swept when nothing can resume them.
+
+A local-path destination has none of this and needs none: a copy cut there
+re-reads local disk, where the restart costs seconds.
 
 ## 2. Transport
 

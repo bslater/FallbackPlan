@@ -83,6 +83,9 @@ Source → destination, for each object the destination lacks: one `ReplicationO
 |-----|------|---------|
 | 1 | `text` | The object's key, ≤ 1024 bytes |
 | 2 | `u64` | The object's total length in bytes |
+| 3 | `u64` | Optional. Where this transfer begins within the object; absent means zero |
+
+**Key 3 is optional and its absence is zero.** A source MUST omit it for a whole-object transfer, so a destination that does not implement resumption reads exactly the message it has always read. A source MUST NOT send a non-zero key 3 unless `partial-object-resume` ([02 §6](02-session.md#6-feature-negotiation)) is in the session's intersection, and a destination that has not negotiated it MUST refuse one as `malformed`. A key 3 greater than key 2 is `malformed`: it names a gap no later chunk can fill.
 
 **`ReplicationChunk`**
 
@@ -91,9 +94,29 @@ Source → destination, for each object the destination lacks: one `ReplicationO
 | 1 | `u64` | The offset of these bytes within the current object |
 | 2 | `bytes` | The bytes, ≤ the replication chunk limit ([00 §2.3](00-conventions.md#23-limits-are-the-protocols-own)) |
 
-A `ReplicationChunk` belongs to the object named by the most recent `ReplicationObject`; a chunk with no current object, or an offset that is not the running total of bytes already received for it, is `malformed`. An object of length 0 is a `ReplicationObject` with no chunks. Chunking exists because a single frame is bounded to 16 MiB ([02 §7](02-session.md#7-framing)) and an object may exceed it; it is not fragmentation the destination reassembles into anything but the object's own bytes.
+A `ReplicationChunk` belongs to the object named by the most recent `ReplicationObject`; a chunk with no current object, or an offset that is not the running total of bytes already received for it — counting the resume point of key 3 as bytes already received — is `malformed`. An object of length 0 is a `ReplicationObject` with no chunks. Chunking exists because a single frame is bounded to 16 MiB ([02 §7](02-session.md#7-framing)) and an object may exceed it; it is not fragmentation the destination reassembles into anything but the object's own bytes.
 
 The destination MUST NOT make an object visible in its store until every byte of it has arrived — it commits the object whole, or not at all (§5).
+
+### 3.3.1 ReplicationPartial
+
+Destination → source, once, immediately after the last `ReplicationInventory` page, and only when `partial-object-resume` is in the session's intersection. The message is sent even when it declares nothing: a source that expected a frame and did not receive one would read the next message in its place.
+
+**`ReplicationPartial`**
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `array of text` | Object keys the destination holds part of, ≤ 64 entries, each ≤ 1024 bytes |
+| 2 | `array of u64` | Bytes staged for each, parallel to key 1 |
+| 3 | `array of bytes[32]` | SHA-256 of exactly those staged bytes, parallel to key 1 |
+
+The three arrays MUST have the same length; a declaration whose arrays disagree is `malformed` rather than trimmed to the shortest, because pairing a key with another entry's digest is how a resumed transfer would land bytes in the wrong object. A digest that is not 32 bytes is `malformed` rather than skipped: it is the check this message exists for, arriving broken.
+
+Each digest MUST be computed from the staged bytes at the time of declaring, not carried forward from when they arrived. A prefix that was damaged between sessions then fails the source's comparison and the object restarts, which is the outcome this rule exists to produce.
+
+A declaration is a **claim, not an instruction**. The source decides where a transfer begins, and MUST NOT accept a claim it has not checked against its own copy of the object: it reads its own first *n* bytes, computes SHA-256, and compares. Where they differ — or where the source declines for any reason — it sends the object with key 3 absent and the destination starts again from zero. A destination MUST NOT treat a whole-object transfer as an error after declaring a partial.
+
+Staged bytes are **not** part of the replica. They answer no read, appear in no inventory, and cannot satisfy a verification challenge ([04](04-verification.md)); a destination MUST NOT make them visible in its store before the object is complete (§5). A destination MAY discard a staged prefix at any time for any reason.
 
 ### 3.4 ReplicationComplete and ReplicationAck
 
@@ -125,7 +148,11 @@ The destination commits each object atomically: it holds an object's bytes until
 
 Objects are immutable and content-addressed, so a create-if-absent write is idempotent: an object the destination already holds is identical to the one the source would send, and re-sending it is wasteful but never wrong. This is what makes resumption a property of the exchange rather than a checkpoint the two sides must agree on.
 
-Resumption at boundaries *within* a single large object is not defined here; an interrupted object is re-sent whole. That is a later refinement, and the wire admits it — a future revision may let the inventory carry partial-object offsets.
+Resumption at boundaries *within* a single large object is defined by the `partial-object-resume` feature ([§3.3.1](#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)). Without it — and towards any peer that does not offer it — an interrupted object is re-sent whole, which remains correct and is what this section's atomicity argument rests on.
+
+With it, the destination declares what it part holds and the **source** decides whether to begin there, after checking the declared digest against its own bytes. Nothing above changes: the destination still commits whole or not at all, a create-if-absent write is still idempotent, and a staged prefix is still invisible until the object is complete. What the feature adds is a checkpoint the two sides agree on for the duration of one object — which §5 previously did without, and could do without only by re-sending everything an interruption cost.
+
+The agreement is deliberately weak in one direction: the destination's claim binds nothing, and a source that cannot verify it simply sends the object whole. A peer cannot therefore cause a source to skip bytes it has not proved it holds.
 
 ## 6 Framing and limits
 
@@ -139,6 +166,7 @@ Frames are as [02 §7](02-session.md#7-framing) defines them. This document occu
 | 259 | `ReplicationChunk` | §3.3 |
 | 260 | `ReplicationComplete` | §3.4 |
 | 261 | `ReplicationAck` | §3.4 |
+| 266 | `ReplicationPartial` | §3.3.1 |
 
 The per-message body limits are in [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own). The one that constrains the wire design is the chunk limit: an object larger than it is sent as several chunks, none of which — with its CBOR framing — may push a frame past the 16 MiB cap.
 
