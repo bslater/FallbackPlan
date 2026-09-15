@@ -121,6 +121,7 @@ Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0
 | [0056](adr/0056-incremental-reconciliation.md) | A sync pass costs what changed, and reads through on a cadence |
 | [0057](adr/0057-resumable-object-transfer.md) | An interrupted object resumes where it stopped |
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over a session it holds open |
+| [0059](adr/0059-session-bound-deletion-authority.md) | A deletion instruction is bound to the session it was authorised in |
 
 Template: [0000](adr/0000-template.md)
 

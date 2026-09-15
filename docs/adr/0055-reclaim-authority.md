@@ -140,6 +140,20 @@ instruction that carries no signature or a signature it cannot verify,
 refusing the whole instruction and deleting nothing — the same total refusal
 the floor check already performs, for the same reason.
 
+> **Amended (2026-09): the feature was the wrong gate, and the signature was
+> too narrow.** [ADR-0059](0059-session-bound-deletion-authority.md) replaces
+> both halves of the paragraph above. *Behind a negotiated feature* was a hole:
+> negotiation is an intersection of what the two sides offer and a listener
+> cannot require one, so a source that omitted `signed-retention` from its
+> hello had an **unsigned** drop-list obeyed — forgery, needing no reclaim key
+> at all. The gate is now the reclaim public key the spoke recorded at first
+> attribution, which no session can withdraw. And *over the canonical encoding
+> of its drop-list* was too narrow: those bytes say who authorised the
+> instruction and never when, so a recorded page replayed into a later session
+> verified. The signature now covers the session identifier as well. §4's own
+> reasoning — that a per-object choice is the attacker's choice — is what this
+> record failed to carry to the wire.
+
 A spoke holds no repository keys by design, so it can only verify against a
 **published public key**. The reclaim public key is recorded beside the
 attribution, at the first `ReplicationOffer` for a repository, which is where
@@ -202,6 +216,12 @@ granted for.
 - One more derived key in the hierarchy, and one more thing for a future
   rotation to carry.
 - Against a fully compromised v1 service the decision buys nothing (§3).
+- **[added 2026-09]** The peer signature as this record shipped it covered one
+  page and not the session, so an instruction captured inside an authenticated
+  session could be replayed into a later one. It was stated in the
+  specification and the requirement row and not here, which is the wrong place
+  for a record's own limit to live. Closed by
+  [ADR-0059](0059-session-bound-deletion-authority.md).
 
 ## Alternatives considered
 
@@ -233,3 +253,4 @@ nothing about cloud IAM.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R4, the last of its P0 findings. Narrows [ADR-0020 §3](0020-ed25519-signing-key-semantics.md) for keyless destinations and gives FR-GC-008 its first mechanism |
+| 2026-09 | Amended (gate and scope) | Amendment at §5: the peer half's requirement to sign was gated on the negotiated `signed-retention` feature, which the party it defends against decides whether to offer — so an unsigned, freshly composed drop-list was obeyed by a spoke that had simply been told not to ask. §4 of this record had already rejected exactly that shape of gate on the repository plane. [ADR-0059](0059-session-bound-deletion-authority.md) moves the gate to the reclaim public key the spoke recorded, extends the signature to cover the session identifier, and states the general rule in [02 §6](../../specifications/peer-protocol/02-session.md#6-feature-negotiation). `Hosts.Tests/PeerRetentionReplayTests` holds both |

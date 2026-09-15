@@ -14,7 +14,11 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// A deletion instruction is only as good as the session it was authorised
-/// for ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5, FR-GC-008).
+/// for, and nobody may excuse themselves from proving it
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5,
+/// [ADR-0059](../../docs/adr/0059-session-bound-deletion-authority.md)).
+/// Establishes the peer half of FR-GC-008, with FR-GC-007's floor deliberately
+/// set to nothing so that it cannot be what refuses.
 /// </summary>
 /// <remarks>
 /// <para>

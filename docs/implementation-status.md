@@ -83,6 +83,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
 | [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content declines to claim it verified, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`; [notes](#0058--what-the-adapter-does-not-carry) |
+| [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
 
 ---
 
@@ -452,6 +453,44 @@ object it could resume, because a run cut mid-blob seals a differently
 identified blob the next time. Offering it would park prefixes against the
 peer's quota for a week awaiting a second half that never comes. The fan-out's
 own push still resumes, because it reads from a store that keeps its objects.
+
+### 0059 — the hole under the hole
+
+Built, and it closed two things rather than one.
+
+The expected half was replay: a signed retention page covered its own bytes,
+which say who authorised an instruction and never when, so a page recorded from
+one session verified in the next. It now covers the session identifier as well,
+and that identifier cost nothing to obtain — every session already built the
+material to authenticate with and threw it away.
+
+The unexpected half was found writing the test for the first. The requirement
+to sign was gated on a **negotiated feature**, and negotiation is an
+intersection of what two sides offer, and a listener cannot require a feature.
+So the party the check defends against decided whether it applied: a source
+that omitted `signed-retention` from its hello had an unsigned, freshly
+composed drop-list obeyed. That is forgery rather than replay, needing no
+captured page and no reclaim key — only the device key a compromised
+write-only service holds.
+
+The fix is the durable fact the spoke wrote down for itself at first
+attribution. If it holds a reclaim public key for a repository, it requires a
+signature, whatever the hello said. [ADR-0055](adr/0055-reclaim-authority.md)
+§4 had already made this argument on the repository plane and had not carried
+it to the wire; [02 §6](../specifications/peer-protocol/02-session.md#6-feature-negotiation)
+now states it as a rule of the protocol, because it is not about retention.
+
+**What this costs.** An older commander signs the unbound encoding and a
+current spoke will not accept it — accepting both encodings is accepting the
+replayable one — so its retention is refused by name until it is upgraded. That
+is a deletion not made, never a backup not taken, and it is the right way round
+for a backup product.
+
+**What is still not met.** `FR-GC-008` also promises signed audit records, and
+a destination keeps no signed record of what it deleted, only the count it
+acknowledges. A receipt would be signed under the destination's own device key,
+since it holds no repository keys — a different artefact with its own lifetime.
+It stays in the requirement as not met.
 
 ### 0045 — the product can say who is acting
 
