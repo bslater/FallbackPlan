@@ -29,10 +29,6 @@ internal static class ReplicationResponder
     /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
     /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
-    /// <param name="signedRetentionNegotiated">
-    /// Whether the session's features require every retention page to carry a
-    /// reclaim signature this spoke can verify (ADR-0055 §5).
-    /// </param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
     /// <param name="resumeNegotiated">
     /// Whether the session's features admit a transfer beginning part-way
@@ -47,7 +43,6 @@ internal static class ReplicationResponder
         string replicasRoot, string spoolRoot, Stream stream,
         Protocol.PeerGrant peer, FallbackPlan.Application.ReplicaOwnerStore owners,
         bool retentionNegotiated,
-        bool signedRetentionNegotiated,
         bool verificationNegotiated,
         bool resumeNegotiated,
         CancellationToken cancellationToken,
@@ -173,8 +168,7 @@ internal static class ReplicationResponder
                 .ConfigureAwait(false);
 
             var retentionDeleted = await ServeAfterAckAsync(
-                replica, offer.RepositoryId, peer, retentionNegotiated, signedRetentionNegotiated,
-                verificationNegotiated,
+                replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated,
                 stream, owners, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -203,7 +197,6 @@ internal static class ReplicationResponder
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
         bool retentionNegotiated,
-        bool signedRetentionNegotiated,
         bool verificationNegotiated,
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
@@ -238,7 +231,7 @@ internal static class ReplicationResponder
 
                     retentionDeleted = await ServeRetentionAsync(
                         replica, offeredRepositoryId, peer, frame.Value.Body, stream,
-                        owners, signedRetentionNegotiated, cancellationToken)
+                        owners, cancellationToken)
                         .ConfigureAwait(false);
                     retentionServed = true;
                     break;
@@ -327,26 +320,39 @@ internal static class ReplicationResponder
     /// the worst of both answers.
     /// </para>
     /// <para>
-    /// Gated on the negotiated feature and on holding a key. A spoke that did
-    /// not negotiate <c>signed-retention</c> behaves as it always did, and one
-    /// whose attribution carries no reclaim public key has nothing to check
-    /// against — it cannot manufacture a verdict from an absence, and refusing
-    /// every instruction for a peering established before the key existed
-    /// would strand it. Both are the compatibility surface, and both are why
-    /// the feature has to be negotiated rather than assumed.
+    /// <b>Gated on the recorded key, not on the negotiated feature.</b> It was
+    /// gated on the feature, and that was a hole rather than a compatibility
+    /// surface: negotiation is an intersection of what the two sides offer and
+    /// a listener cannot require anything, so the party this check exists to
+    /// defend against was the party deciding whether it applied. A source that
+    /// simply omitted <c>signed-retention</c> from its hello had its UNSIGNED
+    /// instruction obeyed — forgery rather than replay, an arbitrary drop-list
+    /// needing no reclaim key at all, which is the hole the whole reclaim
+    /// split exists to close reached by declining to participate in it.
+    /// </para>
+    /// <para>
+    /// The gate is now the durable fact the spoke wrote down for itself: the
+    /// reclaim public key recorded at first attribution
+    /// ([05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership)).
+    /// Holding one means this repository's owner published a reclaim
+    /// authority, and that is not something a later session can take back.
+    /// A peering established before the key existed records none, has nothing
+    /// to check against, and is unaffected — it cannot manufacture a verdict
+    /// from an absence, and refusing it would strand it.
+    /// </para>
+    /// <para>
+    /// This is [ADR-0055](../../docs/adr/0055-reclaim-authority.md) §4's own
+    /// argument, carried to the wire: it chose a *required* descriptor feature
+    /// over a per-object schema version because "a per-object version is a
+    /// per-object choice, and the attacker chooses". An optional negotiated
+    /// feature is a per-session choice.
     /// </para>
     /// </remarks>
     private static void RequireReclaimSignature(
         RetentionOffer page,
         string repositoryIdHex,
-        FallbackPlan.Application.ReplicaOwnerStore owners,
-        bool signedRetentionNegotiated)
+        FallbackPlan.Application.ReplicaOwnerStore owners)
     {
-        if (!signedRetentionNegotiated)
-        {
-            return;
-        }
-
         if (owners.Find(repositoryIdHex)?.ReclaimPublicKey is not { Length: > 0 } publicKeyHex)
         {
             return;
@@ -356,8 +362,9 @@ internal static class ReplicationResponder
         {
             throw new PeerProtocolException(
                 PeerRefusalReason.TermsRefused,
-                "A retention instruction arrived unsigned under signed-retention — this replica deletes only on "
-                + "the authority of the repository's reclaim key (06 §3).");
+                "A retention instruction arrived unsigned for a repository whose reclaim public key this replica "
+                + "recorded — it deletes only on that key's authority, and no session may ask it to stop "
+                + "(06 §3).");
         }
 
         byte[] publicKey;
@@ -397,7 +404,6 @@ internal static class ReplicationResponder
         System.Formats.Cbor.CborReader firstBody,
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
-        bool signedRetentionNegotiated,
         CancellationToken cancellationToken)
     {
         // Every page is read before anything is deleted: the floor check is
@@ -414,8 +420,7 @@ internal static class ReplicationResponder
                     "A retention page names a repository other than the one this session replicated.");
             }
 
-            RequireReclaimSignature(
-                page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners, signedRetentionNegotiated);
+            RequireReclaimSignature(page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners);
 
             foreach (var key in page.Keys)
             {

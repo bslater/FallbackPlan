@@ -763,7 +763,9 @@ public sealed record ReplicationAck(ulong Count) : IPeerMessage
 /// repository's reclaim key
 /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5), 64 bytes, or
 /// empty when the commander has none to make. A spoke that negotiated
-/// <c>signed-retention</c> refuses a page without one.
+/// <c>signed-retention</c> announces that it will refuse a page without one
+/// — an announcement rather than a gate, since a spoke enforces on the
+/// reclaim key it recorded and not on what the sender chose to offer.
 /// </param>
 public sealed record RetentionOffer(
     ReadOnlyMemory<byte> RepositoryId,

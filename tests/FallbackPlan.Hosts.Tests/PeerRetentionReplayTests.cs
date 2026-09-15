@@ -112,13 +112,15 @@ public sealed class PeerRetentionReplayTests : IDisposable
         await PlantAsync(replica);
 
         var forged = new RetentionOffer(await RepositoryIdAsync(), [Condemned.Value], More: false);
-        var deleted = await InstructAsync(offerSignedRetention: false, pages: forged);
 
-        Assert.AreEqual(
-            0UL,
-            deleted,
-            "an unsigned instruction deleted an object because its sender declined to offer the feature that "
-                + "would have required a signature");
+        // The spoke recorded this repository's reclaim public key when it
+        // first took the replica, and that is not a fact a later session can
+        // withdraw. The refusal is total, exactly as a floor breach is.
+        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            () => InstructAsync(offerSignedRetention: false, pages: forged));
+        Assert.AreEqual(PeerRefusalReason.TermsRefused, refusal.Reason);
+        Assert.Contains("reclaim", refusal.Message, StringComparison.OrdinalIgnoreCase);
+
         Assert.IsTrue(
             (await replica.GetMetadataAsync(Condemned, Timeout)).Found,
             "the spoke destroyed an object on the authority of a session, which is the authority ADR-0055 "

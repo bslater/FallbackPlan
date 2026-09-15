@@ -212,8 +212,9 @@ internal static class ReplicationInitiator
                 // tell an instruction authorised by whoever holds that key
                 // from one sent by whoever merely holds this session. A
                 // commander with no signer makes none, and a spoke that
-                // negotiated signed-retention refuses the page rather than
-                // acting on it.
+                // recorded this repository's reclaim key refuses such a page
+                // rather than acting on it — whatever the session negotiated,
+                // because a check the sender can opt out of is not a check.
                 if (signer is not null)
                 {
                     instruction = instruction with
