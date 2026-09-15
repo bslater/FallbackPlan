@@ -242,20 +242,20 @@ public sealed class DirectShipPeerTests : IDisposable
             DestinationSyncState.Failed, record.State,
             $"the pass recorded the peer as failed: {record.LastError}");
 
-        // And the honest half. The fan-out phase behind the capture challenges
-        // the peer against this side's own bytes, and for this set there are
-        // none: the peer holds the only copy of the content. The pass must not
-        // stamp a verification drawn from the metadata alone — nine small
-        // objects proven would read on the console as a proven replica — so it
-        // stamps nothing and raises a notice a human can act on.
-        Assert.IsNull(
+        // And the proof. The fan-out phase behind the capture cannot challenge
+        // this peer against this side's own bytes, because for this set there
+        // are none — so it reads the replica back instead and authenticates a
+        // record inside a sampled blob under the repository's own key, which
+        // needs no second copy at all
+        // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md) §8).
+        Assert.IsNotNull(
             record.VerifiedAt,
-            $"the pass claimed to have verified {record.VerifiedObjects} object(s) against a source that "
-            + "holds no content of its own");
-        var notice = FallbackPlan.Application.NoticeStore.Open(_harness.StateDirectory).Unacknowledged
-            .FirstOrDefault(entry => entry.Message.Contains(
-                "no second copy", StringComparison.Ordinal));
-        Assert.IsNotNull(notice, "nothing told the operator why this destination is never verified");
+            "the pass left the only copy of this set's content unexamined");
+        Assert.IsGreaterThan(0, record.VerifiedObjects);
+        Assert.IsEmpty(
+            FallbackPlan.Application.NoticeStore.Open(_harness.StateDirectory).Unacknowledged
+                .Where(entry => entry.Message.Contains("unchecked", StringComparison.Ordinal)),
+            "the set was proved, so nothing should be telling the operator it was not");
 
         await AssertRestoresFromAsync(replica, "docs/report.txt", "one pass, end to end");
     }

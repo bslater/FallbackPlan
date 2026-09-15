@@ -76,9 +76,17 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     [TestMethod]
     public async Task Pass_ABlobRottedAtThePeer_IsAFindingAndNotASuccess()
     {
-        // The proof has to bite, or it is a stamp rather than a check. A
-        // length-preserving corruption is the case a listing and a length can
-        // never catch: only opening the record and failing its tag does.
+        // The proof has to bite, or it is a stamp rather than a check. The
+        // corruption is length-preserving, which is the case a listing and a
+        // length can never catch: only opening the blob and authenticating
+        // what is inside it does.
+        //
+        // It is also broad rather than a single flipped byte. The proof reads
+        // ONE record per blob, chosen at random — deliberately, because a
+        // fixed choice is one a damaged replica survives for ever — so a
+        // single flipped byte is a coin toss rather than a test. Whether this
+        // then fails as a container that will not open or as a record whose
+        // tag does not hold, both are findings and either is the point.
         await SeedAsync();
 
         var replica = await ReplicaPathAsync();
@@ -87,19 +95,58 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         foreach (var blob in blobs)
         {
             var bytes = await File.ReadAllBytesAsync(blob, Timeout);
-            bytes[bytes.Length / 2] ^= 0xFF;
+            for (var at = 32; at < bytes.Length - 256; at++)
+            {
+                bytes[at] ^= 0xFF;
+            }
+
             await File.WriteAllBytesAsync(blob, bytes, Timeout);
         }
 
-        _harness.WriteSourceFile("docs/second.txt", "a second capture, so the pass runs again");
-        await RunPassAsync();
+        // Driven by the `sync` verb rather than another pass. A converged pair
+        // costs nothing on a scheduled pass — that is ADR-0056's whole point —
+        // so nothing would look at the replica until the next capture or the
+        // next verification interval. An operator asking is the same code path
+        // arriving sooner.
+        await SyncAsync();
 
         var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
         Assert.IsNotNull(record);
         Assert.AreNotEqual(
             DestinationSyncState.InSync,
             record.State,
-            "every data blob at the peer was corrupted and the pass called the destination in sync");
+            $"every data blob at the peer was rotted and the pass called the destination in sync "
+                + $"(verified {record.VerifiedObjects} object(s))");
+    }
+
+    [TestMethod]
+    public async Task Pass_ARecordHeaderRottedAtThePeer_IsAFindingAndNotSilence()
+    {
+        // The narrow case, beside the broad one. Sixty-four bytes near the
+        // front of a single blob is what an aging disk actually does, and it
+        // is a long way from the wholesale rewrite above — the point being
+        // that the proof does not need the damage to be extensive, only to be
+        // somewhere it reads.
+        await SeedAsync();
+
+        var replica = await ReplicaPathAsync();
+        var blobs = Directory.GetFiles(Path.Combine(replica, "blobs", "data"), "*", SearchOption.AllDirectories);
+        var blob = Assert.ContainsSingle(blobs);
+        var bytes = await File.ReadAllBytesAsync(blob, Timeout);
+        for (var at = 32; at < 96 && at < bytes.Length; at++)
+        {
+            bytes[at] ^= 0xFF;
+        }
+
+        await File.WriteAllBytesAsync(blob, bytes, Timeout);
+        await SyncAsync();
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreNotEqual(
+            DestinationSyncState.InSync,
+            record.State,
+            $"a rotted record header at the peer was not a finding (verified {record.VerifiedObjects} object(s))");
     }
 
     private async Task SeedAsync()
@@ -110,6 +157,21 @@ public sealed class PeerReadBackVerificationTests : IDisposable
 
         await RunPassAsync();
         _ = await ReplicaPathAsync();
+    }
+
+    /// <summary>
+    /// The `sync` verb. A converged pair costs nothing on a scheduled pass —
+    /// that is ADR-0056's whole point — so nothing would look at the replica
+    /// until the next capture or the next verification interval. An operator
+    /// asking is the same code path arriving sooner.
+    /// </summary>
+    private async Task SyncAsync()
+    {
+        var sync = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
     }
 
     private async Task RunPassAsync()

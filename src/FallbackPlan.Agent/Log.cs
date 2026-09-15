@@ -248,6 +248,15 @@ internal static partial class Log
         Message = "Resuming {Key} at {Offset} bytes: the destination's staged prefix matches this copy")]
     internal static partial void ObjectResumed(ILogger logger, ObjectKey key, ulong offset);
 
+    // Information, not Warning: a replica that cannot be read back proves
+    // nothing and is accused of nothing, and the pair's row already says it is
+    // unproven. A warning here would train an operator to ignore one.
+    [LoggerMessage(
+        EventId = 3769, Level = LogLevel.Information,
+        Message = "Destination {Destination} could not be read back for proof: {Reason}. "
+            + "This pass records the sync without a verification")]
+    internal static partial void ReadBackUnavailable(ILogger logger, string destination, string reason);
+
     // Warning: the bytes were staged by this pair and no longer match, so
     // something between the two sessions damaged them. Re-sending is the right
     // answer and a silent one would hide a destination whose disk is rotting.

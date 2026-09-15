@@ -188,6 +188,59 @@ public static class ReplicaVerifier
     }
 
     /// <summary>
+    /// Proves blobs at a replica with no second copy to compare against: open
+    /// each one where it sits and authenticate a record inside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The comparison half of <see cref="VerifyAsync"/> needs an independent
+    /// copy and this needs none, which is the whole reason it exists: the
+    /// AEAD tag was computed by the writer under a key the destination has
+    /// never held, so the destination can neither forge it nor survive rot
+    /// beneath it. It is what a set whose only destination is a peer has
+    /// instead of a challenge ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md) §8).
+    /// </para>
+    /// <para>
+    /// Reads are targeted — the named blobs' footers and one record each — so
+    /// this costs a handful of ranged reads per blob rather than a transfer,
+    /// which is what makes it affordable over a peer's retrieval session.
+    /// </para>
+    /// <para>
+    /// There is no comparison half behind this one, so the outcomes that fall
+    /// through it are reported by nothing. That is deliberate and worth
+    /// stating: a sealed data plane this service cannot open is not damage
+    /// (ADR-0042 §5), and the two outcomes that mean the *plaintext* is wrong
+    /// — a framing violation and a content-identifier mismatch — describe
+    /// records whose tag verified, so they are damage the writer committed
+    /// rather than damage the replica did. Blaming a destination for them
+    /// would accuse the wrong party; they belong to the dedup trust gate at
+    /// write time and to the local sweep.
+    /// </para>
+    /// </remarks>
+    /// <param name="replica">The destination's store, however it is reached.</param>
+    /// <param name="blobKeys">The blob store keys to prove.</param>
+    /// <param name="repository">The opened repository, whose keys authenticate the records.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>What was proven and what was not.</returns>
+    public static async Task<VerificationOutcome> ProveSealedAsync(
+        IObjectStore replica,
+        IReadOnlyList<string> blobKeys,
+        Repository.OpenedRepository repository,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(replica);
+        ThrowHelper.ThrowIfNull(blobKeys);
+        ThrowHelper.ThrowIfNull(repository);
+
+        var failed = new List<string>();
+        var samples = blobKeys.Select(key => new VerificationSample(key, 0, 0)).ToList();
+        var proved = await SealedProofAsync(replica, samples, repository, failed, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new VerificationOutcome(proved.Count, failed, proved.Count);
+    }
+
+    /// <summary>
     /// Proves sampled blobs at the replica by opening them: the footer
     /// authenticates the container, and a record read from it authenticates
     /// its own bytes (specification 04 §6).

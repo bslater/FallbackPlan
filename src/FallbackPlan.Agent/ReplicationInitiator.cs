@@ -55,13 +55,25 @@ internal static class ReplicationInitiator
     /// commit exactly one object ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
     /// </param>
     /// <param name="ResumedObjects">How many objects began at a non-zero offset.</param>
+    /// <param name="HeldKeys">
+    /// The keys the spoke declared holding, when the caller asked for them —
+    /// the same account <paramref name="HeldAtStart"/> counts, kept rather
+    /// than discarded so a verifier can draw a sample from it.
+    /// </param>
+    /// <remarks>
+    /// Sampling from the spoke's own declaration sounds like letting the
+    /// examined party choose the questions, and is not: a key it omits to
+    /// avoid being asked about is a key this same session re-ships, because
+    /// the declaration is also the push's diff. Hiding a loss repairs it.
+    /// </remarks>
     public sealed record PushOutcome(
         long Committed,
         long Deleted,
         long HeldAtStart,
         ulong? Headroom = null,
         long BytesSent = 0,
-        long ResumedObjects = 0);
+        long ResumedObjects = 0,
+        IReadOnlyCollection<string>? HeldKeys = null);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -183,7 +195,7 @@ internal static class ReplicationInitiator
 
             if (keeps is null)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held);
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
@@ -208,7 +220,7 @@ internal static class ReplicationInitiator
                 .ToList();
             if (drops.Count == 0)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held);
             }
 
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
@@ -238,7 +250,7 @@ internal static class ReplicationInitiator
             var retentionAck = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
             return new PushOutcome(
-                (long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom, bytesSent, resumed);
+                (long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom, bytesSent, resumed, held);
         }
         catch (PeerProtocolException exception)
         {

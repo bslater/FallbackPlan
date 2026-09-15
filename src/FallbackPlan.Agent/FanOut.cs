@@ -115,6 +115,113 @@ public static class FanOut
         return accepted ? completion.Task : null;
     }
 
+    /// <summary>
+    /// Proves a sample of the peer's blobs by reading them back through the
+    /// retrieval session and authenticating a record in each
+    /// ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md) §8).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a set with a second copy the wire challenge is cheaper and is what
+    /// runs; this is for the set that has none, where the alternative is no
+    /// proof at all. It costs a second dialled session and a few ranged reads
+    /// per sampled blob, paid on the verification cadence rather than per
+    /// pass.
+    /// </para>
+    /// <para>
+    /// The sample is drawn from the keys the spoke itself declared, which is
+    /// not the examined party choosing the questions: the declaration is also
+    /// the push's diff, so a key omitted to avoid being asked about is a key
+    /// this same session has already re-shipped.
+    /// </para>
+    /// <para>
+    /// A dial that fails is not a finding. The peer proved nothing and is
+    /// accused of nothing; the pass falls through to recording an unproven
+    /// sync, exactly as it would for a peer that offers no retrieval at all.
+    /// </para>
+    /// </remarks>
+    /// <param name="runtime">The service, for the ledger and the dial.</param>
+    /// <param name="set">The set being verified.</param>
+    /// <param name="destination">The peer destination.</param>
+    /// <param name="archive">The set's archive, for the repository keys.</param>
+    /// <param name="outcome">The push that just finished, for what the spoke declared holding.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Cancels the read-back.</param>
+    /// <returns>Whether this recorded the pair's outcome.</returns>
+    private static async ValueTask<bool> ReadBackAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        DestinationConfiguration destination,
+        ArchiveHandle archive,
+        ReplicationInitiator.PushOutcome outcome,
+        ulong nowMs,
+        CancellationToken cancellationToken)
+    {
+        if (outcome.HeldKeys is not { Count: > 0 } held)
+        {
+            return false;
+        }
+
+        var blobs = held
+            .Where(key => key.StartsWith("blobs/", StringComparison.Ordinal))
+            .ToList();
+        if (blobs.Count == 0)
+        {
+            return false;
+        }
+
+        // Random rather than the first few: rot is not at the front, and a
+        // fixed choice is one a damaged replica survives for ever.
+        var sample = blobs
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(VerificationSampler.DefaultBudget)
+            .ToList();
+
+        var log = runtime.LoggerFor(typeof(FanOut));
+        Replication.VerificationOutcome verification;
+        try
+        {
+            await using var client = await PeerRetrievalClient.DialAsync(
+                runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
+                .ConfigureAwait(false);
+
+            verification = await Replication.ReplicaVerifier.ProveSealedAsync(
+                new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or Protocol.PeerProtocolException or UnauthorizedAccessException)
+        {
+            // The replica could not be read back at all. That is this pass
+            // failing to prove, not the destination failing a proof.
+            Log.ReadBackUnavailable(log, destination.Name, exception.Message);
+            return false;
+        }
+
+        var ledger = runtime.DestinationSync;
+        if (verification.Failed.Count > 0)
+        {
+            RecordVerificationFailure(runtime, set, destination.Name, verification, sample.Count, nowMs);
+            return true;
+        }
+
+        if (!verification.ProvedSomething)
+        {
+            // Every sampled blob was a sealed data plane this service cannot
+            // open — a write-only set (FR-WOR-003). The containers held; the
+            // payloads were not examined, and claiming them would be a claim
+            // nobody checked.
+            return false;
+        }
+
+        var (syncedSequence, _) = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            .ConfigureAwait(false);
+        ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
+        ledger.RecordVerification(
+            set.Id, destination.Name, verification.Passed, blobs.Count, syncedSequence, null, nowMs);
+        return true;
+    }
+
     /// <summary>Whether the store can answer for anything under a prefix.</summary>
     /// <param name="store">The store to ask.</param>
     /// <param name="prefix">The namespace prefix.</param>
@@ -321,16 +428,6 @@ public static class FanOut
             // copy.
             var contentSampleable = await HoldsAnyAsync(archive.Store, "blobs/", cancellationToken)
                 .ConfigureAwait(false);
-            if (!contentSampleable)
-            {
-                runtime.Notices.Raise(
-                    $"content-unverifiable:{set.Id}:{destination.Name}",
-                    $"Set '{set.Name}' keeps its file content only at peer '{destination.Name}', so this "
-                    + "installation has no second copy to check that content against and does not claim to "
-                    + "have verified it. The replica is whole and restores; what is missing is the proof. "
-                    + "Add a second destination to have each one checked against the other.",
-                    nowMs);
-            }
 
             var plan = contentSampleable
                 && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
@@ -427,6 +524,35 @@ public static class FanOut
                 // proof either, so no stamp is written and the trim gate stays
                 // shut until one is.
                 return;
+            }
+
+            // No ground truth to challenge against, but the replica can be
+            // opened where it sits (ADR-0058 §8): a record read back through
+            // the retrieval session authenticates under the repository's own
+            // key, which this peer has never held, so nothing here needs a
+            // second copy. This is the whole of a peer-only direct-ship set's
+            // proof, and without it such a set is never checked at all.
+            if (!contentSampleable)
+            {
+                if (session.Supports(Protocol.PeerSessionNegotiation.RetrievalFeature)
+                    && await ReadBackAsync(runtime, set, destination, archive, outcome, nowMs, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                // The read-back is this set's only route to a proof, so a peer
+                // that will not serve it — or that could not be reached to try
+                // — leaves the content unexamined. Said where a human will see
+                // it, because the alternative is a set that is quietly never
+                // checked and looks no different from one that is.
+                runtime.Notices.Raise(
+                    $"content-unverifiable:{set.Id}:{destination.Name}",
+                    $"Set '{set.Name}' keeps its file content only at peer '{destination.Name}', and that "
+                    + "peer would not serve the read-back this installation uses to prove it — so the "
+                    + "content is unchecked. The replica is whole and restores; what is missing is the "
+                    + "proof. Upgrade that peer, or add a second destination.",
+                    nowMs);
             }
 
             // Excused from proving (04 §1's acknowledged opt-out), or nothing

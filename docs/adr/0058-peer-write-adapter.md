@@ -152,6 +152,18 @@ back from the replica under the repository's own keys, which needs no second
 copy — extended to reach a peer through the retrieval session. That is a
 separate piece of work and is recorded as a gap rather than implied away.
 
+> **Amended (2026-09): the gap is closed.** The read-back this paragraph
+> nominated is built. A pass with no ground truth to challenge against now
+> dials the retrieval session decision 5 already provides, opens a sample of
+> the blobs the spoke declared holding, and authenticates a record inside each
+> under the repository's own key — which the peer has never held, so no second
+> copy is needed. The stamp is written from that; the notice is raised only
+> when the peer will not serve the read-back at all. The sample is drawn from
+> the spoke's own declaration and that is a closed loop rather than letting
+> the examined party choose the questions: the declaration is also the push's
+> diff, so a key omitted to avoid being asked about is a key the same session
+> re-ships. Held by `Hosts.Tests/PeerReadBackVerificationTests`.
+
 ### 9 A peer-only set still *defaults* to staging
 
 The capability and the default are different questions, and letting them
@@ -201,8 +213,11 @@ pass, and carried out by the instruction that is entitled to carry it.
 - A run holds an authenticated session per peer destination for its whole
   length, and the peer holds the matching listener connection. A capture that
   runs for hours is a connection open for hours.
-- A peer-only direct-ship set cannot be challenge-verified, by decision 8. It
-  restores, and the console says plainly that the content is unproven.
+- A peer-only direct-ship set cannot be *challenge*-verified, by decision 8.
+  Since that decision's 2026-09 amendment it is verified by read-back instead,
+  which costs a dialled session and a few ranged reads per sampled blob on the
+  verification cadence — more than a challenge, and the only proof such a set
+  can have.
 - Outside a run the sink cannot read a peer, so a catch-up copy that would
   source bytes from a peer has nothing to read. For a mixed set the local
   sibling answers; for a peer-only set there is nothing to catch up to.
@@ -237,3 +252,4 @@ is that it has none.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R0, and the discharge of [ADR-0046](0046-direct-to-destination-publication.md)'s stated tail. Built: `Agent/PeerShipStore` is the adapter, `Agent/DestinationShipSink` admits peer destinations and closes their sessions when the run's books close, `Agent/BackupRunner` awaits that close, `Agent/FanOut` withholds the verification stamp from a pair with no independent copy, and `Agent/ServiceCommandHandler` stops refusing a direct-ship set for having a peer where a local path was demanded, while leaving the peer-only default at staging. Held by `Hosts.Tests/DirectShipPeerTests` and `Hosts.Tests/DirectShipTests` |
+| 2026-09 | Amended (the proof arrives) | Amendment at §8: a set whose only destination is a peer is no longer unprovable. `Replication/ReplicaVerifier` gained `ProveSealedAsync`, the copy-free half of its own verification exposed on its own, and `Agent/FanOut` reaches it through the retrieval session when there is no ground truth to challenge against. The red that named the gap is the one worth remembering: every data blob at the peer rotted, a pass ran, and the destination was recorded in sync. `Hosts.Tests/PeerReadBackVerificationTests` holds it |
