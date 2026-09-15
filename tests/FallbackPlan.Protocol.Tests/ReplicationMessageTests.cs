@@ -1,4 +1,5 @@
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Protocol.Tests;
 
@@ -323,6 +324,41 @@ public sealed class ReplicationMessageTests
         var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false, new byte[32]);
 
         Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(page, RetentionOffer.Read));
+    }
+
+    [TestMethod]
+    public void RetentionOffer_TheSignedBytes_BoundToASession_ExtendTheUnboundOnes()
+    {
+        // The bound encoding is the unbound one with the session's name after
+        // it, fixed-length and last. That shape is what stops the two being
+        // confusable: an unbound page is exactly the prefix, and a tail is
+        // always 32 bytes or none, so no page signed for one session can be
+        // read as a page signed for no session at all.
+        var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false);
+        var binding = new byte[SessionBinding.SessionIdLength];
+        Array.Fill(binding, (byte)0x5a);
+
+        var unbound = page.EncodeForSigning();
+        var bound = page.EncodeForSigning(binding);
+
+        Assert.HasCount(unbound.Length + binding.Length, bound);
+        SequenceAssert.AreEqual(unbound, bound[..unbound.Length]);
+        SequenceAssert.AreEqual(binding, bound[unbound.Length..]);
+    }
+
+    [TestMethod]
+    public void RetentionOffer_TheSignedBytes_DifferPerSession()
+    {
+        // The property the binding exists for: the same drop-list authorised
+        // in two sessions is two different signatures, so a recording of one
+        // verifies against nothing in the other.
+        var page = new RetentionOffer(new byte[16], ["blobs/data/aa/one"], More: false);
+        var first = new byte[SessionBinding.SessionIdLength];
+        var second = new byte[SessionBinding.SessionIdLength];
+        Array.Fill(first, (byte)0x01);
+        Array.Fill(second, (byte)0x02);
+
+        Assert.IsFalse(page.EncodeForSigning(first).AsSpan().SequenceEqual(page.EncodeForSigning(second)));
     }
 
     [TestMethod]

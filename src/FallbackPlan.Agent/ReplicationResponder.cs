@@ -29,6 +29,11 @@ internal static class ReplicationResponder
     /// <param name="peer">The authenticated source's grant — its terms are what this side enforces (05 §1).</param>
     /// <param name="owners">The replica attribution store (05 §2).</param>
     /// <param name="retentionNegotiated">Whether the session's features admit a retention instruction (06 §1).</param>
+    /// <param name="sessionBinding">
+    /// This session's identifier (02 §3.5) — what a retention signature must
+    /// cover for this spoke to act on it, so that a page authorised for
+    /// another session verifies against nothing here.
+    /// </param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
     /// <param name="resumeNegotiated">
     /// Whether the session's features admit a transfer beginning part-way
@@ -45,6 +50,7 @@ internal static class ReplicationResponder
         bool retentionNegotiated,
         bool verificationNegotiated,
         bool resumeNegotiated,
+        ReadOnlyMemory<byte> sessionBinding,
         CancellationToken cancellationToken,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
@@ -168,7 +174,7 @@ internal static class ReplicationResponder
                 .ConfigureAwait(false);
 
             var retentionDeleted = await ServeAfterAckAsync(
-                replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated,
+                replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated, sessionBinding,
                 stream, owners, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -198,6 +204,7 @@ internal static class ReplicationResponder
         Protocol.PeerGrant peer,
         bool retentionNegotiated,
         bool verificationNegotiated,
+        ReadOnlyMemory<byte> sessionBinding,
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
         CancellationToken cancellationToken)
@@ -231,7 +238,7 @@ internal static class ReplicationResponder
 
                     retentionDeleted = await ServeRetentionAsync(
                         replica, offeredRepositoryId, peer, frame.Value.Body, stream,
-                        owners, cancellationToken)
+                        owners, sessionBinding, cancellationToken)
                         .ConfigureAwait(false);
                     retentionServed = true;
                     break;
@@ -347,11 +354,28 @@ internal static class ReplicationResponder
     /// per-object choice, and the attacker chooses". An optional negotiated
     /// feature is a per-session choice.
     /// </para>
+    /// <para>
+    /// <b>The signature must cover this session.</b> The page's own bytes say
+    /// who authorised the instruction and not when, so a page recorded from an
+    /// earlier session verifies perfectly in a later one — and the party able
+    /// to record it is the party that opened the earlier session. Verifying
+    /// over the session identifier as well
+    /// ([02 §3.5](../../specifications/peer-protocol/02-session.md)) makes a
+    /// recording verify against nothing.
+    /// </para>
+    /// <para>
+    /// Only the bound encoding is accepted, never both. Accepting both would
+    /// be accepting the replayable one, since nothing stops a replay claiming
+    /// to be the older form. An older commander's instruction is therefore
+    /// refused by name until it is upgraded, which costs a deletion not made
+    /// rather than a backup not taken.
+    /// </para>
     /// </remarks>
     private static void RequireReclaimSignature(
         RetentionOffer page,
         string repositoryIdHex,
-        FallbackPlan.Application.ReplicaOwnerStore owners)
+        FallbackPlan.Application.ReplicaOwnerStore owners,
+        ReadOnlyMemory<byte> sessionBinding)
     {
         if (owners.Find(repositoryIdHex)?.ReclaimPublicKey is not { Length: > 0 } publicKeyHex)
         {
@@ -380,12 +404,15 @@ internal static class ReplicationResponder
         }
 
         if (!Repository.Crypto.RepositorySigner.VerifyWithPublicKey(
-            publicKey, page.EncodeForSigning(), page.Signature.Span))
+            publicKey, page.EncodeForSigning(sessionBinding.Span), page.Signature.Span))
         {
             throw new PeerProtocolException(
                 PeerRefusalReason.TermsRefused,
                 "A retention instruction's signature does not verify against this replica's recorded reclaim "
-                + "public key — it was not authorised by the repository's reclaim authority (06 §3).");
+                + "public key for this session — it was not authorised by the repository's reclaim authority, "
+                + "or it was authorised for a different session and recorded. A commander too old to bind its "
+                + "signature to the session (the session-bound-retention feature) is refused here until it is "
+                + "upgraded; its backups are unaffected (06 §3).");
         }
     }
 
@@ -404,6 +431,7 @@ internal static class ReplicationResponder
         System.Formats.Cbor.CborReader firstBody,
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
+        ReadOnlyMemory<byte> sessionBinding,
         CancellationToken cancellationToken)
     {
         // Every page is read before anything is deleted: the floor check is
@@ -420,7 +448,8 @@ internal static class ReplicationResponder
                     "A retention page names a repository other than the one this session replicated.");
             }
 
-            RequireReclaimSignature(page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners);
+            RequireReclaimSignature(
+                page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners, sessionBinding);
 
             foreach (var key in page.Keys)
             {

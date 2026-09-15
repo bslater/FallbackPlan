@@ -796,23 +796,30 @@ public sealed record RetentionOffer(
     /// different drop-lists produce identical signed bytes.
     /// </para>
     /// <para>
-    /// <b>Per page, and what that does and does not buy.</b> Each page stands
-    /// alone, so a page cannot be forged and a page cannot be edited. A page
-    /// can still be <em>dropped</em> by whoever controls the transport, which
-    /// deletes less than was instructed and is the safe direction, and an old
-    /// page can be <em>replayed</em> into a later session. Replay needs an
-    /// attacker already inside an authenticated, encrypted session, deletion
-    /// is idempotent so a replayed page usually names keys that are already
-    /// gone, and the spoke's retention floor still bounds what any instruction
-    /// can do. Closing it properly wants the signature bound to session-unique
-    /// material, which this revision does not carry — recorded rather than
-    /// left for a reader to assume away.
+    /// <b>Per page, and bound to one session.</b> Each page stands alone, so a
+    /// page cannot be forged and cannot be edited. Passing the session's
+    /// identifier ([02 §3.5](../../specifications/peer-protocol/02-session.md))
+    /// also stops it being <em>replayed</em>: the signature then covers a value
+    /// neither end chose and no other connection shares, so a recording of the
+    /// exchange verifies against nothing later. Without it the signature says
+    /// who authorised the instruction and not when, which is what a captured
+    /// page exploits.
+    /// </para>
+    /// <para>
+    /// A page can still be <em>dropped</em> by the sender, which deletes less
+    /// than was instructed and is the safe direction. It cannot be dropped or
+    /// reordered by anyone else: the pages ride one TLS stream, so there is no
+    /// position between the endpoints from which to do either.
     /// </para>
     /// </remarks>
+    /// <param name="sessionBinding">
+    /// The session's identifier, appended to the signed bytes — empty for the
+    /// unbound encoding a peering that predates the reclaim key still uses.
+    /// </param>
     /// <returns>The canonical signed bytes.</returns>
-    public byte[] EncodeForSigning()
+    public byte[] EncodeForSigning(ReadOnlySpan<byte> sessionBinding = default)
     {
-        var length = RepositoryId.Length + sizeof(uint);
+        var length = RepositoryId.Length + sizeof(uint) + sessionBinding.Length;
         foreach (var objectKey in Keys)
         {
             length += sizeof(uint) + Encoding.UTF8.GetByteCount(objectKey);
@@ -833,6 +840,12 @@ public sealed record RetentionOffer(
         }
 
         bytes[offset] = More ? (byte)1 : (byte)0;
+        offset++;
+
+        // Last, and fixed-length, so the bound and unbound encodings share a
+        // prefix and neither can be mistaken for the other: an unbound page is
+        // exactly this without the tail, and a tail is always 32 bytes or none.
+        sessionBinding.CopyTo(bytes.AsSpan(offset));
         return bytes;
     }
 

@@ -59,13 +59,19 @@ Commander → spoke, one or more pages.
 | 1 | `bytes[16]` | Repository identifier the instruction applies to |
 | 2 | `array of text` | Store keys to delete, ≤ 4096 per page |
 | 3 | `bool` | More pages follow |
-| 4 | `bytes[64]` | *(optional)* Ed25519 signature over this page's canonical bytes under the repository's **reclaim key** ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
+| 4 | `bytes[64]` | *(optional)* Ed25519 signature over this page's canonical bytes **and the session identifier** under the repository's **reclaim key** ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
 
-The signed bytes are the repository identifier, then `u32` key count, then each key as `u32` byte length followed by its UTF-8 bytes in the order sent, then one byte carrying key 3. Length-prefixed rather than delimited, so that no two different drop-lists can produce identical signed bytes by concatenating the same way.
+The signed bytes are the repository identifier, then `u32` key count, then each key as `u32` byte length followed by its UTF-8 bytes in the order sent, then one byte carrying key 3, then the 32-byte `session_id` of [02 §3.5](02-session.md#35-the-session-identifier). Length-prefixed rather than delimited, so that no two different drop-lists can produce identical signed bytes by concatenating the same way; the `session_id` is last and fixed-length, so a bound page and an unbound one share a prefix and neither can be read as the other.
+
+A commander appends the `session_id` when the session negotiated **`session-bound-retention`** and omits it otherwise, because a spoke that cannot verify the bound form would refuse every page of an instruction meant for it. A spoke's own behaviour is **not** a function of the intersection: it requires whichever form it offered, since the intersection is half the commander's to choose and a spoke that read its requirement out of it would let the party being checked decide it ([02 §6](02-session.md#6-feature-negotiation)). A spoke MUST NOT accept both forms — accepting both is accepting the replayable one.
 
 A signature present with a length other than 64 bytes is `malformed`. A spoke MUST NOT silently ignore one: a spoke that did would fall back to accepting the instruction unsigned, which is the check the feature exists to make.
 
-The signature covers **one page**. A page therefore cannot be forged and cannot be edited, and a page dropped in transit deletes less than was instructed, which is the safe direction. An old page **can** be replayed into a later session: that requires an attacker already inside an authenticated, encrypted session, deletion is idempotent so a replayed page usually names keys that are already gone, and the floor of §3 still bounds what any instruction can do. Closing it wants the signature bound to session-unique material, which this revision does not carry — stated so an implementer does not assume otherwise.
+The signature covers **one page and one session**. A page therefore cannot be forged, cannot be edited, and cannot be replayed: `session_id` is derived from material neither end chose and no other connection shares, so a recording of an exchange verifies against nothing afterwards.
+
+A page can still be *dropped* by the commander, which deletes less than was instructed and is the safe direction. Nobody else can drop or reorder one — the pages ride a single ordered, integrity-protected stream — so there is no position from which to truncate an instruction without also being the party that composed it.
+
+A commander that signs no page at all is a separate case and is covered by §3: a spoke holding a reclaim key refuses it.
 
 Every page repeats the repository identifier, and a page whose identifier differs from the first is `malformed`. The spoke MUST read all pages before deleting anything: the floor check of §3 is over the whole instruction, and acting page-by-page would let an instruction pass the floor piecewise while breaching it in total.
 

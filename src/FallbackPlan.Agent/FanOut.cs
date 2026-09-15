@@ -375,11 +375,23 @@ public static class FanOut
                 };
             }
 
+            // The binding rides only to a spoke that says it verifies over one
+            // (peer-protocol 02 §6): a current commander talking to an older
+            // spoke signs the encoding that spoke can check, rather than having
+            // every page refused. The reverse has no such accommodation and
+            // must not — a spoke that accepted both encodings would be
+            // accepting the replayable one.
+            var sessionBinding =
+                session.Supports(Protocol.PeerSessionNegotiation.SessionBoundRetentionFeature)
+                    ? session.Binding
+                    : default;
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
                 reclaimPublicKey, reclaimSigner,
                 session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
-                runtime.LoggerFor(typeof(ReplicationInitiator)))
+                runtime.LoggerFor(typeof(ReplicationInitiator)),
+                sessionBinding)
                 .ConfigureAwait(false);
 
             ReportShortfall(

@@ -57,6 +57,30 @@ public static class PeerSessionNegotiation
     public const string SignedRetentionFeature = "signed-retention";
 
     /// <summary>
+    /// The peer verifies a retention signature over the session's identifier
+    /// as well as the page ([02 §3.5](../../specifications/peer-protocol/02-session.md);
+    /// [06 §4.1](../../specifications/peer-protocol/06-retention.md#41-retentionoffer)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It tells a <b>commander how to sign</b> and gates no check. A spoke
+    /// holding a reclaim key requires the bound signature whatever the hello
+    /// said, because a check the sender can opt out of is not a check
+    /// (02 §6); what the feature buys is that a current commander talking to
+    /// an older spoke signs the encoding that spoke can verify, instead of
+    /// having every page refused.
+    /// </para>
+    /// <para>
+    /// The other direction has no such kindness and cannot: an older commander
+    /// signs the unbound encoding and a current spoke will not accept it,
+    /// because accepting both is accepting the replayable one. Its retention
+    /// is refused, loudly and by name, until it is upgraded — which costs a
+    /// deletion not made, never a backup not taken.
+    /// </para>
+    /// </remarks>
+    public const string SessionBoundRetentionFeature = "session-bound-retention";
+
+    /// <summary>
     /// Both sides understand a transfer that begins part-way through an object
     /// ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md); 03 §5).
     /// </summary>
@@ -76,6 +100,7 @@ public static class PeerSessionNegotiation
         DestinationVerificationFeature,
         RetentionInstructionFeature,
         SignedRetentionFeature,
+        SessionBoundRetentionFeature,
         TerminationNoticeFeature,
         RetrievalFeature,
         PartialObjectResumeFeature,

@@ -69,24 +69,30 @@ public sealed class PeerRetentionReplayTests : IDisposable
         await SeedAsync();
         var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
 
-        // One page, signed once, under the repository's real reclaim key.
-        var page = await SignedDropAsync(Condemned.Value);
+        // One page, signed once with the repository's real reclaim key, inside
+        // a real session — and kept, which is the whole of the attack.
+        RetentionOffer? recorded = null;
 
         await PlantAsync(replica);
-        Assert.AreEqual(1UL, await InstructAsync(page), "the genuine instruction did not delete what it named");
+        var honest = await InstructAsync(async binding =>
+        {
+            recorded = await SignedDropAsync(binding, Condemned.Value);
+            return [recorded];
+        });
+
+        Assert.AreEqual(1UL, honest, "the genuine instruction did not delete what it named");
         Assert.IsFalse((await replica.GetMetadataAsync(Condemned, Timeout)).Found);
 
         // The object comes back — the source re-shipped it, a later capture
         // referenced it again, any ordinary reason. The instruction that
-        // condemned it belonged to a session that is over.
+        // condemned it belonged to a session that is over, and the recording
+        // goes out unchanged into a new one.
         await PlantAsync(replica);
-        var replayed = await InstructAsync(page);
+        var replayed = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            () => InstructAsync(_ => Task.FromResult<RetentionOffer[]>([recorded!])));
 
-        Assert.AreEqual(
-            0UL,
-            replayed,
-            "a page authorised for an earlier session was acted on in a later one — the signature proves who "
-                + "wrote the instruction and not when it was authorised");
+        Assert.AreEqual(PeerRefusalReason.TermsRefused, replayed.Reason);
+        Assert.Contains("session", replayed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.IsTrue(
             (await replica.GetMetadataAsync(Condemned, Timeout)).Found,
             "the replayed instruction destroyed an object that was put back after it was authorised");
@@ -117,7 +123,8 @@ public sealed class PeerRetentionReplayTests : IDisposable
         // first took the replica, and that is not a fact a later session can
         // withdraw. The refusal is total, exactly as a floor breach is.
         var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
-            () => InstructAsync(offerSignedRetention: false, pages: forged));
+            () => InstructAsync(
+                offerSignedRetention: false, pages: _ => Task.FromResult<RetentionOffer[]>([forged])));
         Assert.AreEqual(PeerRefusalReason.TermsRefused, refusal.Reason);
         Assert.Contains("reclaim", refusal.Message, StringComparison.OrdinalIgnoreCase);
 
@@ -127,10 +134,36 @@ public sealed class PeerRetentionReplayTests : IDisposable
                 + "took away from it");
     }
 
-    /// <summary>A backup, so the destination holds a replica and has recorded the reclaim key.</summary>
-    private async Task SeedAsync()
+    [TestMethod]
+    public async Task RetentionOffer_ToASpokeTooOldToVerifyABoundSignature_IsSignedTheWayThatSpokeCanCheck()
     {
-        await StartDestinationAsync();
+        // The rollout case, and the only direction that gets an
+        // accommodation. A household updates one machine before the other, so
+        // a current commander will meet a spoke that verifies the older
+        // unbound encoding. It signs what that spoke can check, because the
+        // feature is a statement about what the other side understands — and
+        // the deletion goes through rather than every page being refused.
+        //
+        // The reverse has no accommodation on purpose: a spoke that accepted
+        // both encodings would be accepting the replayable one.
+        await SeedAsync(spokeUnderstandsSessionBinding: false);
+        var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
+        await PlantAsync(replica);
+
+        var deleted = await InstructAsync(async binding =>
+        {
+            Assert.IsTrue(binding.IsEmpty, "a commander must not bind a signature a spoke cannot check");
+            return [await SignedDropAsync(binding, Condemned.Value)];
+        });
+
+        Assert.AreEqual(1UL, deleted);
+        Assert.IsFalse((await replica.GetMetadataAsync(Condemned, Timeout)).Found);
+    }
+
+    /// <summary>A backup, so the destination holds a replica and has recorded the reclaim key.</summary>
+    private async Task SeedAsync(bool spokeUnderstandsSessionBinding = true)
+    {
+        await StartDestinationAsync(spokeUnderstandsSessionBinding);
         _source.WriteSourceFile("notes.txt", "something worth keeping");
         WriteConfiguration();
 
@@ -157,8 +190,11 @@ public sealed class PeerRetentionReplayTests : IDisposable
         Assert.AreEqual(PutOutcome.Created, put.Outcome);
     }
 
-    /// <summary>One page condemning the named keys, signed under the repository's reclaim key.</summary>
-    private async Task<RetentionOffer> SignedDropAsync(params string[] keys)
+    /// <summary>
+    /// One page condemning the named keys, signed under the repository's
+    /// reclaim key over the given session's identifier.
+    /// </summary>
+    private async Task<RetentionOffer> SignedDropAsync(ReadOnlyMemory<byte> sessionBinding, params string[] keys)
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
@@ -171,7 +207,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
         try
         {
             using var signer = RepositorySigner.FromSeed(seed, generation);
-            return page with { Signature = signer.Sign(page.EncodeForSigning()) };
+            return page with { Signature = signer.Sign(page.EncodeForSigning(sessionBinding.Span)) };
         }
         finally
         {
@@ -184,9 +220,9 @@ public sealed class PeerRetentionReplayTests : IDisposable
     /// the given retention pages — the shape a commander's pass takes, with
     /// the push half emptied out.
     /// </summary>
-    /// <param name="pages">The retention pages to send.</param>
+    /// <param name="pages">Builds the retention pages, given the session's identifier.</param>
     /// <returns>What the spoke acknowledged deleting.</returns>
-    private Task<ulong> InstructAsync(params RetentionOffer[] pages) =>
+    private Task<ulong> InstructAsync(Func<ReadOnlyMemory<byte>, Task<RetentionOffer[]>> pages) =>
         InstructAsync(offerSignedRetention: true, pages);
 
     /// <summary>
@@ -196,9 +232,14 @@ public sealed class PeerRetentionReplayTests : IDisposable
     /// not have.
     /// </summary>
     /// <param name="offerSignedRetention">Whether to offer <c>signed-retention</c> at the hello.</param>
-    /// <param name="pages">The retention pages to send.</param>
+    /// <param name="pages">
+    /// Builds the retention pages once the session is open, so a page may be
+    /// signed over this session's identifier — or, for a replay, so a page
+    /// built for an earlier one may be returned unchanged.
+    /// </param>
     /// <returns>What the spoke acknowledged deleting.</returns>
-    private async Task<ulong> InstructAsync(bool offerSignedRetention, params RetentionOffer[] pages)
+    private async Task<ulong> InstructAsync(
+        bool offerSignedRetention, Func<ReadOnlyMemory<byte>, Task<RetentionOffer[]>> pages)
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
@@ -251,7 +292,13 @@ public sealed class PeerRetentionReplayTests : IDisposable
         _ = await ReplicationWire.ReadAsync(
             session.Stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, Timeout);
 
-        foreach (var page in pages)
+        // The same rule the fan-out applies: bind only to a spoke that says it
+        // verifies over one (02 §6).
+        var binding = session.Supports(PeerSessionNegotiation.SessionBoundRetentionFeature)
+            ? session.Binding
+            : default;
+
+        foreach (var page in await pages(binding))
         {
             await PeerFrame.WriteAsync(session.Stream, page, Timeout);
         }
@@ -309,7 +356,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
         ],
     }.Save(Path.Combine(_source.StateDirectory, "config.json"));
 
-    private async Task StartDestinationAsync()
+    private async Task StartDestinationAsync(bool understandsSessionBinding = true)
     {
         using var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory);
         using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
@@ -329,7 +376,11 @@ public sealed class PeerRetentionReplayTests : IDisposable
         _listenerKeypair = PeerKeypairStore.Open(_destinationState);
         _listener = RemoteServiceListener.Start(
             _listenerKeypair, destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            log: null, replicationStateDirectory: _destinationState);
+            log: null, replicationStateDirectory: _destinationState,
+            offeredFeatures: understandsSessionBinding
+                ? null
+                : [.. PeerSessionNegotiation.SupportedFeatures.Where(feature => !string.Equals(
+                    feature, PeerSessionNegotiation.SessionBoundRetentionFeature, StringComparison.Ordinal))]);
         _listener.Bind(new UnusedService());
         _endpoint = _listener.Endpoint;
 

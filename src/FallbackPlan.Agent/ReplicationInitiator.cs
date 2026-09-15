@@ -89,6 +89,14 @@ internal static class ReplicationInitiator
     /// reclaim key (ADR-0055 §5), or null when this commander holds none —
     /// a write-only set without a grant, or a build that publishes no key.
     /// </param>
+    /// <param name="sessionBinding">
+    /// This session's identifier (02 §3.5), covered by each retention
+    /// signature so that a recording of the exchange cannot be replayed into a
+    /// later one. Empty signs the older unbound encoding, which is what a
+    /// spoke too old to verify the bound one expects — the caller decides from
+    /// the negotiated features, because that is a question about what the
+    /// other side can understand.
+    /// </param>
     /// <param name="resumeNegotiated">
     /// Whether the session's features admit a transfer beginning part-way
     /// through an object (03 §5; [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
@@ -103,7 +111,8 @@ internal static class ReplicationInitiator
         ReadOnlyMemory<byte> reclaimPublicKey = default,
         Func<byte[], byte[]>? signer = null,
         bool resumeNegotiated = false,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ReadOnlyMemory<byte> sessionBinding = default)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -219,7 +228,7 @@ internal static class ReplicationInitiator
                 {
                     instruction = instruction with
                     {
-                        Signature = signer(instruction.EncodeForSigning()),
+                        Signature = signer(instruction.EncodeForSigning(sessionBinding.Span)),
                     };
                 }
 

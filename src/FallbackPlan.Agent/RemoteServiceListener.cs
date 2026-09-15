@@ -78,6 +78,21 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     }
 
     /// <summary>The endpoint this listener is bound to, interface and port.</summary>
+    /// <summary>
+    /// Whether this binding told its peers it verifies a retention signature
+    /// over the session identifier (02 §3.5) — and therefore whether it
+    /// requires one.
+    /// </summary>
+    /// <remarks>
+    /// A spoke that withheld the feature must also verify the unbound
+    /// encoding, or it would be refusing commanders for believing what it said
+    /// about itself. Withholding it is a compatibility test standing an older
+    /// spoke in front of a current source; nothing in production does.
+    /// </remarks>
+    private bool OffersSessionBoundRetention =>
+        (_offeredFeatures ?? PeerSessionNegotiation.SupportedFeatures)
+            .Contains(PeerSessionNegotiation.SessionBoundRetentionFeature, StringComparer.Ordinal);
+
     public IPEndPoint Endpoint => (IPEndPoint)_socket.LocalEndPoint!;
 
     /// <summary>
@@ -367,7 +382,16 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
                     session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),
-                    session.Supports(PeerSessionNegotiation.PartialObjectResumeFeature), _stopping.Token,
+                    session.Supports(PeerSessionNegotiation.PartialObjectResumeFeature),
+                    // Judged from what THIS binding offers, never from the
+                    // negotiated intersection. A retention signature must
+                    // cover the session for this spoke to act on it, and the
+                    // intersection is half the source's to choose — so reading
+                    // the requirement out of it would let the party being
+                    // checked decide it (02 §6). What this build offers is a
+                    // fact about this build.
+                    OffersSessionBoundRetention ? session.Binding : default,
+                    _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);
 

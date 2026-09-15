@@ -202,6 +202,7 @@ The features defined so far:
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
 | `signed-retention` | The peer requires every `RetentionOffer` page to carry a reclaim signature it can verify ([06 §3](06-retention.md#3-what-the-spoke-validates); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)). An **announcement**, never a gate: a spoke enforces on the key it recorded, not on this feature |
+| `session-bound-retention` | The peer verifies a `RetentionOffer` signature over the session identifier as well as the page ([§3.5](#35-the-session-identifier); [06 §4.1](06-retention.md#41-retentionoffer)). Tells a **commander how to sign**; a spoke requires whichever form it offered |
 | `retrieval` | An owner may read its own replica back over the session ([07](07-retrieval.md)) |
 | `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
 
