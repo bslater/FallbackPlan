@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §8.3–8.4, §16.2 · **Resolves:** [H6](../review/2026-08-architecture-review.md#h6--independently-verified-trusts-the-destination-to-report-on-itself), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection)
 
-**Built:** A transfer cut inside an object resumes where it stopped (§1.2, [ADR-0057](../adr/0057-resumable-object-transfer.md)). What a pass costs is bounded by what changed (§1.1, [ADR-0056](../adr/0056-incremental-reconciliation.md)): phase-scoped listings, a gate that skips a pair the last pass left level, and a reading-through that comes due on its own cadence. Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23; peer-only sets stay staging until the sink serves peers) — see [implementation status](../implementation-status.md).
+**Built:** A transfer cut inside an object resumes where it stopped (§1.2, [ADR-0057](../adr/0057-resumable-object-transfer.md)). What a pass costs is bounded by what changed (§1.1, [ADR-0056](../adr/0056-incremental-reconciliation.md)): phase-scoped listings, a gate that skips a pair the last pass left level, and a reading-through that comes due on its own cadence. Identity, pairing and the session layer built and carried over a real TLS socket; the object exchange (§1) built for the whole-repository scope ([peer-protocol 03](../../specifications/peer-protocol/03-replication.md)); quotas and their distinct exhaustion reporting (§6) built ([peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)); destination verification (§5) built ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)): every sync challenges a bounded sample with the newest snapshot always included, local-path replicas answer to direct read-back, and a failed proof is a durable finding, and for a direct-ship set the challenge's ground truth and the verifier's reads run **through the ship sink** against destination-held objects ([ADR-0046](../adr/0046-direct-to-destination-publication.md)); the direct write path of §4.1 is built as the default for new local-path sets (`direct_ship`, contract 1.23) and serves peer destinations too since the write adapter of §4.2 ([ADR-0058](../adr/0058-peer-write-adapter.md)), which a peer-only set may choose and does not get by default — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -197,8 +197,8 @@ destination, so every committed snapshot's closure exists at at least one
 destination — which is also what lets a sibling seed a destination that
 missed a run.
 
-**Run scope.** A run writes to the set's defect-free, reachable, local-path
-destinations that hold a **baseline** — or all reachable ones when the set
+**Run scope.** A run writes to the set's defect-free, reachable destinations
+that hold a **baseline** — or all reachable ones when the set
 has never captured, because that first capture is every destination's full
 backup. A baseline-less destination on a set with history is *skipped* by
 the run (an incremental would hand it a snapshot without its closure) and
@@ -217,6 +217,35 @@ destination failing fails the run, through the pipeline's ordinary
 interruption safety. Fan-out and this section's peer exchange survive as
 the catch-up and seeding pump; they are no longer the write path for these
 sets.
+
+### 4.2 Shipping to a peer
+
+A peer destination is a shipment like any other
+([ADR-0058](../adr/0058-peer-write-adapter.md)): `PeerShipStore` presents one
+live replication push session (§1) as an `IObjectStore`. The offer and the
+destination's inventory are exchanged when the run resolves its targets, each
+put writes a `ReplicationObject` and its chunks, and the run's books close
+with the completion and its acknowledgement — whose count must equal what the
+run sent, or the destination is recorded failed however the run itself ended.
+The inventory answers "already there" without touching the wire; every wire
+failure reaches the sink as an `IOException`, so a peer is dropped, named and
+healed by exactly the rule a full disk is.
+
+The session is held open rather than the run being spooled and pushed
+afterwards, because a spool of the run is a local copy of the backup, which is
+what the direct write path exists to remove. It deliberately does **not**
+negotiate `partial-object-resume` (§1.2): a run holds no object it could
+resume, so a prefix staged for it would be charged to the peer's quota for a
+week awaiting a second half that never comes.
+
+Reads travel a second retrieval session (§7 of
+[peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)),
+dialled only when bytes are actually wanted, and a key the inventory never
+listed is answered absent without dialling. Outside a run the sink does not
+resolve peers at all; a peer's replica is read back on the restore-source
+path. **A set whose content lives only at a peer therefore has no independent
+copy to verify against, and the pass says so rather than stamping a proof
+drawn from the metadata it happens to keep locally** — see §5.4.
 
 ## 5. Destination verification
 
@@ -252,6 +281,8 @@ Status reports **coverage and challenge age**, not a boolean. "Verified" with no
 ### 5.4 What this does not prove
 
 A challenge proves the destination holds those bytes **now**. It does not prove it will return them when asked to restore — a destination can pass every challenge and then refuse or fail at restore time. Nothing short of an actual restore proves that, which is why recovery drills exist ([`08-restore-and-recovery.md` §4.4](08-restore-and-recovery.md#44-lifecycle)).
+
+It also cannot be issued at all without an independent copy to judge the answer against. The expected proof is computed from this side's own bytes, so a direct-ship set whose only destination is a peer (§4.2) can challenge its metadata plane and nothing else — and a stamp drawn from that population would report a proven replica while the part a restore needs went unexamined. Such a pass therefore challenges nothing, stamps nothing, and raises a durable notice saying this installation holds no second copy of the content and does not claim to have checked it. A second destination closes it today; the record-tag proof, which opens sampled records read back from the replica under the repository's own keys and needs no second copy, would close it for a single peer and is not built for the peer path ([ADR-0058](../adr/0058-peer-write-adapter.md) §8).
 
 Recorded in [`../threat-model.md`](../threat-model.md#t-8-destination-withholding-data).
 

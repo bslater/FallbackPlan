@@ -106,7 +106,10 @@ public static class BackupRunner
             if (archive.ShipSink is { } shipSink)
             {
                 sink = shipSink;
-                await shipSink.BeginRunAsync(set, nowMs, cancellationToken).ConfigureAwait(false);
+                await shipSink.BeginRunAsync(
+                    set, nowMs, archive.Repository.Hierarchy.ReclaimPublicKey(
+                        archive.Repository.CurrentMetadataGeneration), cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             // A full run empties both the parent list and the incremental
@@ -252,7 +255,10 @@ public static class BackupRunner
             // never schedules — and the run's read scope is released so a
             // destination plugged back in answers without a restart.
             // Successes are recorded only when the snapshot committed.
-            sink?.CompleteRun(nowMs, runCommitted);
+            if (sink is not null)
+            {
+                await sink.CompleteRunAsync(nowMs, runCommitted).ConfigureAwait(false);
+            }
         }
     }
 

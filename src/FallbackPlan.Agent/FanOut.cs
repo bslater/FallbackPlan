@@ -115,6 +115,26 @@ public static class FanOut
         return accepted ? completion.Task : null;
     }
 
+    /// <summary>Whether the store can answer for anything under a prefix.</summary>
+    /// <param name="store">The store to ask.</param>
+    /// <param name="prefix">The namespace prefix.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    private static async ValueTask<bool> HoldsAnyAsync(
+        Storage.Abstractions.IObjectStore store, string prefix, CancellationToken cancellationToken)
+    {
+        await foreach (var _ in store
+            .ListAsync(
+                Storage.Abstractions.ObjectPrefix.Parse(prefix),
+                Storage.Abstractions.ListOptions.Default,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Runs one (set, destination) sync and records what happened.</summary>
     private static async ValueTask RunAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
@@ -283,7 +303,37 @@ public static class FanOut
             // predictable rotation would tell it exactly which objects it can
             // afford to lose.
             var previous = ledger.Find(set.Id, destination.Name);
-            var plan = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
+
+            // A challenge is answered by the peer and judged against bytes this
+            // side reads for itself, so a source with no content plane of its
+            // own can only ever challenge metadata — and a stamp drawn from
+            // that population would report a verified replica while the part a
+            // restore actually needs went unexamined. That is the emptiness
+            // slice 3.3 found in the local-path path, arriving here by a new
+            // road: a direct-ship set (ADR-0046) whose only destination is this
+            // peer holds no blob anywhere else, so the sink can offer none
+            // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)).
+            //
+            // The pass therefore challenges nothing rather than challenging the
+            // part that is cheap to hold, and says so where a human will see
+            // it. A set with a local sibling is unaffected: the sink answers
+            // blob reads from the sibling, which is a genuinely independent
+            // copy.
+            var contentSampleable = await HoldsAnyAsync(archive.Store, "blobs/", cancellationToken)
+                .ConfigureAwait(false);
+            if (!contentSampleable)
+            {
+                runtime.Notices.Raise(
+                    $"content-unverifiable:{set.Id}:{destination.Name}",
+                    $"Set '{set.Name}' keeps its file content only at peer '{destination.Name}', so this "
+                    + "installation has no second copy to check that content against and does not claim to "
+                    + "have verified it. The replica is whole and restores; what is missing is the proof. "
+                    + "Add a second destination to have each one checked against the other.",
+                    nowMs);
+            }
+
+            var plan = contentSampleable
+                && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
                 ? await VerificationSampler.SampleAsync(
                     archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
                     VerificationSampler.DefaultBudget, VerificationSampler.PeerReservoirShare,

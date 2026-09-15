@@ -96,7 +96,14 @@ blob key), the rename-manifest optimisation, and collision read-backs.
    > console's set editor. A **new set referencing a local-path destination
    > is born direct-ship**; staging is the explicit opt-out, and a peer-only
    > set stays staging until the peer write adapter lands (the one remaining
-   > tail). A shape change is refused while a run is live, takes effect
+   > tail).
+   >
+   > > **Amended (2026-09): the tail is discharged, the default is not.**
+   > > [ADR-0058](0058-peer-write-adapter.md) makes a peer destination a ship
+   > > target, so the configuration boundary refuses only a direct-ship set
+   > > with no destination the sink can write to at all. A peer-only set still
+   > > *defaults* to staging — that default was never only about what the sink
+   > > could serve, and ADR-0058 §9 says what it buys. A shape change is refused while a run is live, takes effect
    > in-process (the archive handle is evicted, so the next open migrates —
    > no service restart), and queues the seeding catch-up immediately, since
    > a flipped set's next capture refuses until a destination holds its
@@ -121,9 +128,11 @@ byte; catch-up needs no new machinery.
 4); dedupe pays a destination presence probe per candidate (local-disk
 cheap for local paths, and memoized per blob per publication); verification
 and retention convergence for direct-ship sets read through the sink and
-land properly destination-side in the next record; peer destinations are
-not yet served by the sink (a stated `NotSupported` in the ledger, never a
-silent skip) until the peer write adapter lands. Two narrower consequences
+land properly destination-side in the next record; peer destinations were
+not served by the sink until [ADR-0058](0058-peer-write-adapter.md), which
+admits them and carries its own named limits — chief among them that a set
+shipping only to a peer has no independent copy to verify its content
+against, and says so rather than claiming one. Two narrower consequences
 are accepted and named: each object is put **local metadata store first,
 then the targets**, so a put that fails at every target can leave the
 metadata store one object ahead of every destination — the run fails
@@ -244,3 +253,4 @@ a disk that had filled.
 | 2026-08 | Amended (converge spare) | Amendment 1: per-destination convergence gained the gate's owed-sibling veto — a narrow override's trim spares the closure of every snapshot a sibling destination has not provably received, releasing once delivered. `Hosts.Tests/DirectShipConvergeSpareTests` proves the middle snapshot's last copy survives an offline wide sibling and restores from that sibling alone after catch-up; before the spare, the drill's converge deleted it |
 | 2026-09 | Amended (retirement gate regated) | Amendment 2: the migration row above recorded the gate as "every non-lifecycle object it holds is present in the union of the destinations", and that rule never terminates. Publication follows the snapshot graph, and under a per-destination policy the keep-set closure (FR-GC-010), so a staged blob that no live snapshot reaches — history a policy dropped, bytes an interrupted run left behind — is invisible to every pass that could carry it. The archive was then refused for ever and its disk space held hostage, which is the one thing retirement exists to release; a live install met this with twenty-nine such objects and a toast telling it to run a pass that could not help. The gate now refuses exactly while deletion would cost something: a blob reachable from a snapshot the repository still lists that no destination holds, or a non-blob object the flip's migration never carried into the metadata store (the metadata plane's own belt and braces). Everything else goes with the archive and is counted in the result. Refusals name example keys instead of a bare count. `Hosts.Tests/DirectShipMigrationTests` holds both directions |
 | 2026-09 | Built (console ceremonies corrected) | The "hardened" row above overclaimed: the restore gate did scan the metadata stores, but its two siblings in `Web/ConsoleRestoreGate` never learned to. Rebuilding an interrupted setup's recovery kit searched `<archives>/<set id>` alone, so an install whose every set ships direct — the default for new local-path sets since the previous row — answered every rebuild with "no archive of this installation exists yet" and could never leave the setup gate (FR-KIT-004). Write-only provisioning had the same blind spot with a quieter failure: finding no descriptor it took the *creation* branch, minting a fresh salt for a set whose repository already existed. Both now resolve repositories through one shared root list, and the kit searches the installation rather than a caller-supplied set list — one passphrase stamps every archive, so any descriptor is as good a witness. The service also stopped calling a direct-ship set's restore source "staging" |
+| 2026-09 | Amended (peer write adapter) | The last stated tail is discharged by [ADR-0058](0058-peer-write-adapter.md): `Agent/PeerShipStore` presents one live replication push session as an `IObjectStore`, so a peer is a shipment like any other — priority-ordered with its siblings, dropped by the same rule, recorded in the same ledger — and a set whose backups live at a friend's house and nowhere else captures without keeping a staging copy of them on the machine they exist to survive. `Agent/FanOut` gained the honest half: a pass with no evidence independent of the destination records no verification rather than stamping one drawn from the metadata plane it happens to keep locally. A peer-only set's default is unchanged and now has a reason rather than an incapacity behind it. `Hosts.Tests/DirectShipPeerTests` holds the shipping, `Hosts.Tests/DirectShipTests` the boundary |

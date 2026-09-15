@@ -33,7 +33,7 @@ public sealed class ArchiveHandle : IDisposable
     /// The ship sink, when this archive direct-ships; null for a staging
     /// archive. The same object as <see cref="Store"/>, typed for the run
     /// hooks (<see cref="DestinationShipSink.BeginRunAsync"/> /
-    /// <see cref="DestinationShipSink.CompleteRun"/>) only the backup runner
+    /// <see cref="DestinationShipSink.CompleteRunAsync"/>) only the backup runner
     /// calls.
     /// </summary>
     public DestinationShipSink? ShipSink { get; init; }

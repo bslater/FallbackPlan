@@ -450,6 +450,17 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>Parses a verify level, or says what the vocabulary is.</summary>
+
+    /// <summary>
+    /// Whether a direct-ship capture can write to this destination at all —
+    /// the local-path store, or the peer write adapter
+    /// ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)). The reserved
+    /// cloud kinds (FR-DEST-005) are modelled by the configuration and served
+    /// by nothing.
+    /// </summary>
+    /// <param name="destination">The destination's declaration, or null when the reference dangles.</param>
+    private static bool ShipsDirectly(DestinationConfiguration? destination) =>
+        destination?.Kind is DestinationKind.LocalPath or DestinationKind.Peer;
     private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
     {
         (level, canonical, error) = text switch
@@ -1254,21 +1265,33 @@ public sealed partial class ServiceCommandHandler(
 
         // The storage shape (ADR-0046, contract 1.23): null preserves — a
         // pre-1.23 client cannot see the field and must not convert a set —
-        // an explicit value sets it, and a NEW set defaults to the shape it
-        // can actually run: direct-ship when a local-path destination is
-        // referenced (staging is the explicit opt-in from here on), staging
-        // when only kinds the sink does not serve yet are.
+        // and an explicit value sets it.
+        //
+        // What a NEW set defaults to is a judgement rather than a capability
+        // question, and the two came apart with the peer write adapter
+        // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)). A peer can
+        // now be shipped to directly, so the refusal below asks only whether
+        // the set references anything the sink can write to at all. The
+        // default still asks for a LOCAL PATH, because for a set whose only
+        // destination is a peer the staging archive is buying three things
+        // direct-ship gives up: a capture that does not wait on the link, a
+        // transfer that resumes after the link dies mid-object, and — the one
+        // that matters most — an independent copy to check the replica's
+        // content against, without which no pass can honestly call it
+        // verified (ADR-0058 §8). Direct-ship remains available to a peer-only
+        // set as a stated choice, for a machine with no room for the second
+        // copy; it is not one to make on a person's behalf.
         var directShip = command.Set.DirectShip
             ?? existing?.DirectShip
             ?? command.Set.Destinations.Any(name =>
                 configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath);
         if (directShip && !command.Set.Destinations.Any(name =>
-                configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath))
+                ShipsDirectly(configuration.FindDestination(name))))
         {
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument,
-                "A direct-ship set needs at least one local-path destination — "
-                + "direct-ship serves local-path destinations; peer shipping follows (ADR-0046).");
+                "A direct-ship set needs at least one local-path or peer destination — a capture with "
+                + "nowhere to ship has nothing it can promise (ADR-0046).");
         }
 
         // Changing the shape re-homes the set's repository: the archive
@@ -2605,6 +2628,7 @@ public enum CallerScope
 
     /// <summary>Over the remote binding — a paired device elsewhere (ADR-0028 §6).</summary>
     Remote,
+
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

@@ -16,7 +16,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// The peer write adapter: a direct-ship set (ADR-0046) ships its capture
 /// straight to a peer destination over the replication exchange, instead of
 /// being told that peer shipping follows later. Establishes the peer shape of
-/// FR-DEST-013 and FR-DEST-015, and the direct-ship shape of FR-REP-001.
+/// FR-DEST-013 and FR-DEST-015, the direct-ship shape of FR-REP-001, and
+/// FR-VER-001's rule that a pass with no evidence independent of the
+/// destination claims nothing.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -127,6 +129,58 @@ public sealed class DirectShipPeerTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DirectShipSet_ASecondCapture_AddsToTheReplicaWithoutDisturbingTheFirst()
+    {
+        // The incremental shape over a live session. The second run opens a
+        // second exchange, learns from the inventory what the peer already has,
+        // and ships only the new work — and both snapshots must still restore,
+        // because a replica that holds the newest snapshot and has lost the
+        // closure of an older one is a replica that lies about its history.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, withVault: false);
+        _harness.WriteSourceFile("docs/report.txt", "the first draft");
+
+        await RunOnceAsync();
+        var replica = await ReplicaPathAsync();
+
+        _harness.WriteSourceFile("docs/report.txt", "the second draft");
+        _harness.WriteSourceFile("docs/appendix.txt", "and something new");
+        await RunOnceAsync();
+
+        await AssertReplicaHoldsTheMetadataPlaneAsync(replica);
+        Assert.HasCount(
+            2,
+            Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories),
+            "the peer holds one snapshot, so the second capture shipped nothing or replaced the first");
+
+        var kit = await ExportKitAsync();
+        var listing = await RunRecoveryAsync(
+            "snapshots", "--repo", replica, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, listing.ExitCode, listing.Error);
+        var snapshots = listing.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])
+            .ToList();
+        Assert.HasCount(2, snapshots);
+
+        // Both, restored out of the peer's replica alone.
+        var drafts = new List<string>();
+        foreach (var snapshot in snapshots)
+        {
+            var into = Path.Combine(_harness.WorkPath, "recovered-" + snapshot[..8]);
+            var restore = await RunRecoveryAsync(
+                "restore", "--repo", replica, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable,
+                "--snapshot", snapshot, "--output", into);
+            Assert.AreEqual(0, restore.ExitCode, restore.Error);
+            drafts.Add(await File.ReadAllTextAsync(
+                Path.Combine(into, "docs", "report.txt"), Timeout));
+        }
+
+        Assert.Contains("the first draft", drafts);
+        Assert.Contains("the second draft", drafts);
+    }
+
+    [TestMethod]
     public async Task DirectShipSet_ThePeerIsUnreachable_TheLocalSiblingStillReceives()
     {
         // The drop rule, unchanged for a peer: one destination that cannot be
@@ -154,6 +208,56 @@ public sealed class DirectShipPeerTests : IDisposable
         Assert.AreNotEqual(
             DestinationSyncState.NotSupported, record.State,
             "an unreachable peer is unreachable, never an incapacity of this build");
+    }
+
+    [TestMethod]
+    public async Task DirectShipSet_AWholeSchedulerPass_LeavesThePeerHoldingWhatItWasSent()
+    {
+        // Capture is only the first half of a pass: the fan-out and the
+        // verification cadence run behind it, both of them written against a
+        // source that holds the bytes. A peer-only direct-ship set has no such
+        // source — the peer holds the only copy — so this test exists to hold
+        // the outcome that matters whatever those phases decide they can do:
+        // the replica the capture shipped is still there afterwards, whole,
+        // and the pair is not recorded as failed.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, withVault: false);
+        _harness.WriteSourceFile("docs/report.txt", "one pass, end to end");
+
+        var run = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable, "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+
+        var replica = await ReplicaPathAsync();
+        await AssertReplicaHoldsTheMetadataPlaneAsync(replica);
+        Assert.IsTrue(
+            Directory.GetFiles(Path.Combine(replica, "blobs"), "*", SearchOption.AllDirectories).Length > 0,
+            "the pass left the peer holding no blobs — something after the capture took them away");
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreNotEqual(
+            DestinationSyncState.Failed, record.State,
+            $"the pass recorded the peer as failed: {record.LastError}");
+
+        // And the honest half. The fan-out phase behind the capture challenges
+        // the peer against this side's own bytes, and for this set there are
+        // none: the peer holds the only copy of the content. The pass must not
+        // stamp a verification drawn from the metadata alone — nine small
+        // objects proven would read on the console as a proven replica — so it
+        // stamps nothing and raises a notice a human can act on.
+        Assert.IsNull(
+            record.VerifiedAt,
+            $"the pass claimed to have verified {record.VerifiedObjects} object(s) against a source that "
+            + "holds no content of its own");
+        var notice = FallbackPlan.Application.NoticeStore.Open(_harness.StateDirectory).Unacknowledged
+            .FirstOrDefault(entry => entry.Message.Contains(
+                "no second copy", StringComparison.Ordinal));
+        Assert.IsNotNull(notice, "nothing told the operator why this destination is never verified");
+
+        await AssertRestoresFromAsync(replica, "docs/report.txt", "one pass, end to end");
     }
 
     /// <summary>

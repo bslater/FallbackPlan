@@ -663,11 +663,17 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
-    public async Task UpsertBackupSet_ANewPeerOnlySet_StaysStagingWithoutRefusal()
+    public async Task UpsertBackupSet_ANewPeerOnlySet_StillDefaultsToStaging()
     {
-        // The sink does not serve peers yet, so a peer-only set defaults to
-        // the staging shape it can actually run — saved cleanly, never
-        // refused for a default the client did not choose.
+        // The sink CAN ship to a peer since the write adapter
+        // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)), and a
+        // peer-only set still defaults to staging — the capability question
+        // and the default are different questions. For a set whose only
+        // destination is a peer the staging archive buys a capture that does
+        // not wait on the link, a transfer that resumes after the link dies
+        // mid-object, and an independent copy to verify the replica's content
+        // against. Direct-ship is available to such a set as a stated choice;
+        // it is not one to make on a person's behalf.
         Directory.CreateDirectory(VaultA);
         WriteDirectShipConfiguration(vaultBToo: false);
         _harness.WriteSourceFile("docs/report.txt", "peer-bound");
@@ -688,15 +694,20 @@ public sealed class DirectShipTests : IDisposable
         var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"))
             .FindSet("outbound");
         Assert.IsNotNull(saved);
-        Assert.IsFalse(saved.DirectShip, "a peer-only set cannot ship directly yet and must default to staging");
+        Assert.IsFalse(
+            saved.DirectShip,
+            "a peer-only set keeps its staging archive by default — the link, the resume and the second copy");
     }
 
     [TestMethod]
-    public async Task UpsertBackupSet_DirectShipWithoutALocalPathDestination_IsRefusedByName()
+    public async Task UpsertBackupSet_DirectShipWithNoServableDestination_IsRefusedByName()
     {
-        // A peer-only direct-ship set used to save cleanly and then refuse
-        // every capture (the sink serves local-path kinds; peer shipping
-        // follows, ADR-0046). The configuration boundary is where that dies.
+        // A direct-ship set with nowhere to ship saves cleanly and then
+        // refuses every capture, which is a failure discovered at the worst
+        // possible moment. The configuration boundary is where that dies —
+        // and the rule is about what the sink can write to, not about one
+        // kind: a reserved cloud kind (FR-DEST-005) is modelled by the
+        // configuration and served by nothing.
         Directory.CreateDirectory(VaultA);
         WriteDirectShipConfiguration(vaultBToo: false);
         await using var runtime = await StartAsync();
@@ -704,17 +715,16 @@ public sealed class DirectShipTests : IDisposable
 
         Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
             new UpsertDestinationCommand(new DestinationDescriptor(
-                new string('7', 32), "friend", "peer", null,
-                "mgr7e7euwdpfkggmp4astkz5ia", "friend.example:9443")),
+                new string('7', 32), "bucket", "s3", null, null, null)),
             Timeout));
 
         var set = runtime.Configuration.BackupSets.Single();
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
-                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["friend"], DirectShip: true)),
+                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["bucket"], DirectShip: true)),
             Timeout), out var refused);
         Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
-        Assert.Contains("local-path", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("nowhere to ship", refused.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -815,12 +825,14 @@ public sealed class DirectShipTests : IDisposable
 
     /// <summary>Proves a replica is a whole repository: it unlocks alone.</summary>
     [TestMethod]
-    public async Task DirectShipSet_APeerBesideALocalPath_IsAStatedIncapacityNotAFailure()
+    public async Task DirectShipSet_AnUnpairedPeerBesideALocalPath_NamesThePairingAndLetsTheSiblingRun()
     {
-        // Peer shipping is ADR-0046's later slice: a declared peer is a
-        // stated incapacity in the ledger (FR-DEST-005's rule — never a
-        // silent skip, never a fault), while the local-path sibling carries
-        // the run.
+        // The peer here is declared and not paired, which since the write
+        // adapter ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)) is
+        // an ordinary unreachable destination rather than a shape this build
+        // does not serve. It must be a ledger row naming the reason
+        // (FR-DEST-005's rule — never a silent skip) and it must not stop the
+        // local-path sibling carrying the run.
         Directory.CreateDirectory(VaultA);
         WritePeerConfiguration(vaultAToo: true);
         _harness.WriteSourceFile("docs/report.txt", "served by the local sibling");
@@ -832,9 +844,11 @@ public sealed class DirectShipTests : IDisposable
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
 
         var peer = runtime.DestinationSync.Find(set.Id, "offsite-peer");
-        Assert.IsNotNull(peer, "the incapacity must be a ledger row, not silence");
-        Assert.AreEqual(DestinationSyncState.NotSupported, peer.State);
-        Assert.Contains("peer", peer.LastError!, StringComparison.Ordinal);
+        Assert.IsNotNull(peer, "the failure must be a ledger row, not silence");
+        Assert.AreNotEqual(
+            DestinationSyncState.NotSupported, peer.State,
+            "a peer this build can ship to is never an incapacity of the build");
+        Assert.Contains("pairing", peer.LastError!, StringComparison.Ordinal);
 
         Assert.AreEqual(
             DestinationSyncState.InSync, runtime.DestinationSync.Find(set.Id, "vault-a")!.State);
@@ -842,10 +856,13 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
-    public async Task DirectShipSet_OnlyAPeerDestination_RefusesTheCaptureAsAStatedFailure()
+    public async Task DirectShipSet_OnlyAnUnpairedPeer_RefusesTheCaptureAsAStatedFailure()
     {
-        // With every destination unservable there is nowhere to write; the
-        // refusal is stated, and the peer's row still says why.
+        // With the one destination unreachable there is nowhere to write; the
+        // refusal is stated, and the peer's row still says why. A peer that IS
+        // reachable is `Hosts.Tests/DirectShipPeerTests`' subject — this holds
+        // the other half, that an unreachable one refuses rather than letting
+        // a capture believe it shipped.
         WritePeerConfiguration(vaultAToo: false);
         _harness.WriteSourceFile("docs/report.txt", "nowhere serviceable");
 
@@ -856,9 +873,8 @@ public sealed class DirectShipTests : IDisposable
             .WaitAsync(Timeout);
         Assert.AreEqual("failed", outcome.Outcome);
         Assert.Contains("destination", outcome.Detail!, StringComparison.OrdinalIgnoreCase);
-        Assert.AreEqual(
-            DestinationSyncState.NotSupported,
-            runtime.DestinationSync.Find(set.Id, "offsite-peer")!.State);
+        Assert.Contains(
+            "pairing", runtime.DestinationSync.Find(set.Id, "offsite-peer")!.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]

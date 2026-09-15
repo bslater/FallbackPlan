@@ -82,6 +82,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
 | [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
+| [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content declines to claim it verified, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`; [notes](#0058--what-the-adapter-does-not-carry) |
 
 ---
 
@@ -409,6 +410,48 @@ Three limits worth stating:
 
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
 
+
+### 0058 — what the adapter does not carry
+
+Built. A direct-ship set ships to a paired peer over one replication session
+held open for the run, which discharges [ADR-0046](adr/0046-direct-to-destination-publication.md)'s
+last stated tail. A set whose backups live at a friend's house and nowhere
+else no longer has to keep a staging copy of them on the machine they exist to
+survive.
+
+Three things it deliberately does not do, so nobody reads the row as more than
+it is.
+
+**It does not verify.** A challenge is answered by the peer and judged against
+bytes this side reads for itself, and a set shipping only to a peer has none —
+the sink can offer the metadata plane it keeps locally and no content at all.
+Sampling that population would prove nine small objects and stamp the pair
+verified, which is the emptiness the verification-independence work already
+found once. So the pass challenges nothing, stamps nothing, and raises a
+durable notice. A second destination closes it today; closing it for a single
+peer wants the record-tag proof reaching through the retrieval session, and
+that is not built.
+
+**It does not read a peer outside a run.** A peer shipment is a live session,
+not a directory, so `ReadOrder` still resolves local paths only. A catch-up
+copy that would source bytes from a peer therefore has nothing to read; for a
+mixed set the local sibling answers, and for a peer-only set there is nothing
+to catch up to. Restores go the restore-source path, which is where a peer's
+replica has always been read.
+
+**It does not become the default for a peer-only set.** The boundary stops
+refusing such a set for having a peer where a local path was demanded, and the
+default stays staging, because for a set with one peer destination the staging
+archive buys a capture that does not wait on the link, a resumable transfer,
+and the second copy the paragraph above is about. Direct-ship is now a choice
+that set can make, with three stated costs.
+
+**It does not resume.** The ship session withholds `partial-object-resume`
+([ADR-0057](adr/0057-resumable-object-transfer.md)) on purpose: a run holds no
+object it could resume, because a run cut mid-blob seals a differently
+identified blob the next time. Offering it would park prefixes against the
+peer's quota for a week awaiting a second half that never comes. The fan-out's
+own push still resumes, because it reads from a store that keeps its objects.
 
 ### 0045 — the product can say who is acting
 

@@ -58,6 +58,13 @@ public sealed class DestinationShipSink : IObjectStore
     private bool _runActive;
     private readonly Dictionary<string, string> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
+
+    // Every peer session this run opened, survivors and casualties alike. A
+    // dropped destination leaves _inScope at the moment it fails, so this is
+    // the only list that can still close and dispose its session — and a live
+    // TLS connection nobody closes is a socket the peer holds open until it
+    // times out (ADR-0058).
+    private readonly List<PeerShipStore> _peersThisRun = [];
     private long _shippedThisRun;
 
     // The highest publication sequence this run put on the wire, read out of
@@ -105,10 +112,19 @@ public sealed class DestinationShipSink : IObjectStore
     /// </summary>
     /// <param name="set">The set as configured for this run.</param>
     /// <param name="nowUnixMilliseconds">The clock, for the ledger rows.</param>
+    /// <param name="reclaimPublicKey">
+    /// The repository's reclaim public key (ADR-0055 §5), published on the
+    /// offer a peer destination is opened with and recorded by it at first
+    /// attribution; empty for a local path, which needs none, and for a
+    /// repository that publishes none.
+    /// </param>
     /// <param name="cancellationToken">Cancels the seeding.</param>
     /// <exception cref="IOException">No destination is reachable — there is nowhere to write a backup.</exception>
     public async ValueTask BeginRunAsync(
-        BackupSetConfiguration set, ulong nowUnixMilliseconds, CancellationToken cancellationToken)
+        BackupSetConfiguration set,
+        ulong nowUnixMilliseconds,
+        ReadOnlyMemory<byte> reclaimPublicKey,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(set);
 
@@ -128,12 +144,13 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            if (destination.Kind != DestinationKind.LocalPath)
+            if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer))
             {
-                // The peer write adapter lands with ADR-0046's later slice; a
-                // stated incapacity, never a silent skip (FR-DEST-005's rule).
+                // The reserved cloud kinds (FR-DEST-005): configuration models
+                // them, the runtime does not serve them yet. A stated
+                // incapacity, never a silent skip.
                 skipped.Add((destination.Name, DestinationSyncState.NotSupported,
-                    "direct-ship serves local-path destinations; peer shipping follows (ADR-0046)"));
+                    $"destination kind '{destination.Kind}' is not yet supported"));
                 continue;
             }
 
@@ -143,7 +160,7 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            if (!Directory.Exists(destination.Path))
+            if (destination.Kind == DestinationKind.LocalPath && !Directory.Exists(destination.Path))
             {
                 skipped.Add((destination.Name, DestinationSyncState.Unavailable,
                     $"destination path '{destination.Path}' does not exist"));
@@ -188,7 +205,8 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            if (DestinationCapacity.FloorShortfall(
+            if (destination.Kind == DestinationKind.LocalPath
+                && DestinationCapacity.FloorShortfall(
                     destination.Path!, AvailableBytesOn(destination.Path!)) is { } shortOfSpace)
             {
                 // The same floor the fan-out keeps (FR-DEST-010): a backup
@@ -199,14 +217,16 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            // The store's own construction can refuse — a file squatting on
-            // the replica root, a permission lost since the probe — and that
-            // is this destination's drop, never the run's failure.
+            // Opening the destination can refuse — a file squatting on the
+            // replica root, a permission lost since the probe, a peer that is
+            // not answering — and that is this destination's drop, never the
+            // run's failure. A peer's refusal arrives as an IOException by
+            // construction, so both kinds are dropped by one rule (ADR-0058).
             try
             {
                 inScope.Add(new Shipment(
                     destination.Name,
-                    ReplicaStoreFor(destination),
+                    await StoreForAsync(destination, reclaimPublicKey, cancellationToken).ConfigureAwait(false),
                     SetDestinationReference.EffectivePriority(reference, destination)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -282,11 +302,12 @@ public sealed class DestinationShipSink : IObjectStore
     /// </summary>
     /// <param name="nowUnixMilliseconds">The clock.</param>
     /// <param name="succeeded">Whether the run committed its snapshot.</param>
-    public void CompleteRun(ulong nowUnixMilliseconds, bool succeeded = true)
+    public async ValueTask CompleteRunAsync(ulong nowUnixMilliseconds, bool succeeded = true)
     {
         List<Shipment> survivors;
         List<(string Name, string Error)> dropped;
         List<(string Name, DestinationSyncState State, string Error)> skipped;
+        List<PeerShipStore> peers;
         long shipped;
         ulong published;
         lock (_gate)
@@ -294,14 +315,51 @@ public sealed class DestinationShipSink : IObjectStore
             survivors = [.. _inScope];
             dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value))];
             skipped = [.. _skippedThisRun];
+            peers = [.. _peersThisRun];
             shipped = _shippedThisRun;
             published = _publishedThisRun;
             _inScope = [];
             _runActive = false;
             _droppedThisRun.Clear();
             _skippedThisRun.Clear();
+            _peersThisRun.Clear();
             _shippedThisRun = 0;
             _publishedThisRun = 0;
+        }
+
+        // A peer's exchange is not finished until it has been told so and has
+        // said how much it committed, and that count is the only evidence this
+        // run has that the replica holds what the ledger is about to claim
+        // (ADR-0058). A peer that will not close is recorded as failed, however
+        // the run itself ended — and its session is disposed either way.
+        // The books close however the run ended, so the closing exchange cannot
+        // be held to the run's own cancellation — but nor may a peer that has
+        // stopped answering hold a service shutdown open.
+        using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        foreach (var peer in peers)
+        {
+            try
+            {
+                if (succeeded)
+                {
+                    _ = await peer.CompleteAsync(closing.Token).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or OperationCanceledException)
+            {
+                Log.ShipDestinationDropped(_log, peer.DestinationName, exception.Message);
+                survivors.RemoveAll(candidate =>
+                    string.Equals(candidate.Name, peer.DestinationName, StringComparison.Ordinal));
+                if (!dropped.Exists(entry => string.Equals(entry.Name, peer.DestinationName, StringComparison.Ordinal)))
+                {
+                    dropped.Add((peer.DestinationName, exception.Message));
+                }
+            }
+            finally
+            {
+                await peer.DisposeAsync().ConfigureAwait(false);
+            }
         }
 
         if (succeeded)
@@ -594,7 +652,12 @@ public sealed class DestinationShipSink : IObjectStore
 
         // Outside a run — a catch-up copy, a preview — resolve fresh from the
         // configuration, so a destination plugged back in answers without a
-        // service restart.
+        // service restart. Local paths only: a peer shipment is a live session
+        // rather than a directory, and dialling one per read outside a run
+        // would put a TLS handshake behind a presence probe. A peer's replica
+        // is read back on the restore-source path instead (ADR-0041), and the
+        // fan-out's own push reads through this sink's union, which for a
+        // peer-only set is the peer's session while the run holds it open.
         var configuration = _runtime.Configuration;
         var set = configuration.BackupSets.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, _setId, StringComparison.Ordinal));
@@ -705,6 +768,38 @@ public sealed class DestinationShipSink : IObjectStore
             },
             PutConditions.IfNotExists,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// This destination as a store to write through: a directory for a local
+    /// path, a live replication push session for a peer (ADR-0058).
+    /// </summary>
+    /// <param name="destination">The destination's declaration.</param>
+    /// <param name="reclaimPublicKey">The repository's reclaim public key, for a peer's offer.</param>
+    /// <param name="cancellationToken">Cancels the dial.</param>
+    private async ValueTask<IObjectStore> StoreForAsync(
+        DestinationConfiguration destination,
+        ReadOnlyMemory<byte> reclaimPublicKey,
+        CancellationToken cancellationToken)
+    {
+        if (destination.Kind != DestinationKind.Peer)
+        {
+            return ReplicaStoreFor(destination);
+        }
+
+        var peer = await PeerShipStore.OpenAsync(
+            _runtime, destination, Convert.FromHexString(_repositoryIdHex), reclaimPublicKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Registered the moment it exists, not when the run admits it: seeding
+        // can still refuse this destination, and an unregistered session is one
+        // nobody closes.
+        lock (_gate)
+        {
+            _peersThisRun.Add(peer);
+        }
+
+        return peer;
     }
 
     private IObjectStore ReplicaStoreFor(DestinationConfiguration destination)

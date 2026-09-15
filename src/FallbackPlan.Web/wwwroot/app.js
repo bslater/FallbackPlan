@@ -2897,7 +2897,9 @@ function setSectionHtml(key) {
         <label class="field">Storage shape</label>
         <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
         reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
-        local-path destination, and a backup waits when none is reachable. Unticked, backups stage into a
+        local-path or paired-peer destination, and a backup waits when none is reachable. With only a peer
+        to ship to, there is no second copy here to check its content against, so it is never reported as
+        verified. Unticked, backups stage into a
         local archive first and copy outward after — a local buffer at the cost of a second copy on this
         machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
         until you retire it from the notice.</p>
