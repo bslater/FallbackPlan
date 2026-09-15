@@ -12,13 +12,19 @@ namespace FallbackPlan.Protocol;
 public sealed class PeerSession
 {
     internal PeerSession(
-        Stream stream, PeerGrant peer, ushort version, IReadOnlyList<string> features, PeerTerms? theirTerms)
+        Stream stream,
+        PeerGrant peer,
+        ushort version,
+        IReadOnlyList<string> features,
+        PeerTerms? theirTerms,
+        ReadOnlyMemory<byte> binding)
     {
         Stream = stream;
         Peer = peer;
         Version = version;
         Features = features;
         TheirTerms = theirTerms;
+        Binding = binding;
     }
 
     /// <summary>The open duplex stream. What flows over it now is the payload, not the handshake.</summary>
@@ -29,6 +35,20 @@ public sealed class PeerSession
 
     /// <summary>The negotiated protocol version (02 §3).</summary>
     public ushort Version { get; }
+
+    /// <summary>
+    /// The 32 bytes both ends call this connection (02 §3.5) — a name for one
+    /// session that neither side chose and that no other session shares.
+    /// </summary>
+    /// <remarks>
+    /// It is what a payload binds to when it must say *this session* and not
+    /// merely *this repository*: a signature over material including these
+    /// bytes is one a recording of the exchange cannot replay into a later
+    /// connection. Derived from the authentication transcript, so it costs
+    /// nothing on the wire — the nonces and channel bindings it names were
+    /// already exchanged to prove who is speaking.
+    /// </remarks>
+    public ReadOnlyMemory<byte> Binding { get; }
 
     /// <summary>The features in effect (02 §4) — a gated message is sent only when its feature is here.</summary>
     public IReadOnlyList<string> Features { get; }
@@ -213,7 +233,8 @@ public static class PeerSessionDriver
             var accept = PeerSessionNegotiation.Negotiate(ourHello, theirHello);
 
             authenticator.Open();
-            return new PeerSession(stream, peer, accept.Version, accept.Features, theirHello.Terms);
+            return new PeerSession(
+                stream, peer, accept.Version, accept.Features, theirHello.Terms, authenticator.SessionId);
         }
         catch (PeerProtocolException exception)
         {

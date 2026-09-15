@@ -77,6 +77,18 @@ public sealed class PeerAuthenticator
     /// <summary>The grant the peer authenticated as, once it has.</summary>
     public PeerGrant? Peer { get; private set; }
 
+    /// <summary>
+    /// What both ends call this connection (02 §3.5), available once the peer
+    /// has proved itself and null before that.
+    /// </summary>
+    /// <remarks>
+    /// Set in <see cref="Verify"/> rather than <see cref="Accept"/>, because
+    /// an identifier derived from a claim nobody has proved is a name for a
+    /// session that may not exist. Anything binding a signature to this
+    /// session is therefore unable to do so before there is a session.
+    /// </remarks>
+    public ReadOnlyMemory<byte> SessionId { get; private set; }
+
     /// <summary>This side's claim, to send at once (02 §3.1).</summary>
     /// <returns>The message.</returns>
     public SessionAuth Offer() => _ours;
@@ -174,6 +186,7 @@ public sealed class PeerAuthenticator
                 $"Peer {_theirs.Identity.Fingerprint} did not prove possession of the identity it presented.");
         }
 
+        SessionId = SessionBinding.SessionId(initiator, responder);
         State = PeerSessionState.Authenticated;
         return Peer;
     }

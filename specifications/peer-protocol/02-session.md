@@ -126,6 +126,22 @@ The certificate A sees is the attacker's, not B's, so the `spki_hash` values in 
 
 The freshness that makes each connection's transcript unique comes from two independent places: the ephemeral certificate keypair, which an attacker cannot use without its private key, and the nonces. The nonces are carried because §1's "never reuse a certificate" is a rule a peer **cannot verify about the other side** — it would have to remember every certificate it had ever seen. A fresh nonce from each side makes the transcript unique whether or not the peer honoured that rule, and costs nothing, since both `SessionAuth` messages are sent without waiting.
 
+### 3.5 The session identifier
+
+Both sides derive a 32-byte name for the connection from the same context:
+
+```text
+session_id = SHA-256("fbp-peer-v1:session-id" ‖ context)
+```
+
+where `context` is §3.2's, unchanged. It is **role-neutral**: §3.2's two labels exist so a proof cannot be reflected, and an identifier has the opposite requirement, because its whole use is that both ends reach the same bytes. The third label is what keeps the constructions apart, so no input to one can be read as an input to the other. → [00 §4](00-conventions.md#4-domain-separation)
+
+It is available once §3.3's checks have passed and not before: a name derived from a claim nobody has proved is a name for a session that may not exist.
+
+A payload uses it to say **this session** rather than merely *this repository* — a signature over material that includes it is one a recording of the exchange cannot replay into a later connection, because neither end controls the value. An initiator chooses its own nonce and its own ephemeral certificate and can steer the result onto no value a past connection had. [06 §4.1](06-retention.md#41-retentionoffer) is the first use.
+
+`session_id` shares `binding_version` with the transcript deliberately. The version sits inside `context`, so a build that changed this derivation without bumping it would fail §3.3 authentication before reaching any payload — the loud failure rather than the puzzling one.
+
 ## 4 Session establishment
 
 In `Authenticated`:
