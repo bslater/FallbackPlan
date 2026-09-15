@@ -67,6 +67,12 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             // (peer-protocol 03 §8).
             _replicasRoot = Path.Combine(replicationStateDirectory, "replicas");
             _spoolRoot = Path.Combine(replicationStateDirectory, "spool", "replication");
+
+            // Staged prefixes outlive the session that made them (ADR-0057),
+            // so something has to be responsible for the ones no session will
+            // ever come back for. Startup is where a process kill — which
+            // leaves a prefix nobody closed — is noticed at all.
+            PartialSpool.Sweep(_spoolRoot, DateTimeOffset.UtcNow);
             _owners = FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
         }
     }
@@ -361,7 +367,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
                     session.Supports(PeerSessionNegotiation.SignedRetentionFeature),
-                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature), _stopping.Token,
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),
+                    session.Supports(PeerSessionNegotiation.PartialObjectResumeFeature), _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);
 

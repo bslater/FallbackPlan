@@ -67,6 +67,13 @@ public enum PeerMessageType : ushort
     /// <summary>The destination's proof of possession, or its honest inability (04 §4.2).</summary>
     VerificationProof = 265,
 
+    /// <summary>
+    /// The destination declares the objects it part holds, so a cut transfer
+    /// can begin where it stopped (03 §5; feature-gated as
+    /// "partial-object-resume").
+    /// </summary>
+    ReplicationPartial = 266,
+
     /// <summary>An owner asks to read back its replica (07 §3.1; feature-gated as "retrieval").</summary>
     RetrieveOpen = 272,
 

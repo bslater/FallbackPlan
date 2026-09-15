@@ -235,6 +235,7 @@ public sealed class PeerAuthenticator
         PeerMessageType.ReplicationOffer or PeerMessageType.ReplicationInventory
             or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
             or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
+            or PeerMessageType.ReplicationPartial
             or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck
             or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady

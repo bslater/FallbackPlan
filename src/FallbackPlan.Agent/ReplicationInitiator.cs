@@ -1,7 +1,10 @@
+using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -45,7 +48,20 @@ internal static class ReplicationInitiator
     /// a build that does not say. Null therefore means "not told", never "no
     /// room": the two must not be spelled the same.
     /// </param>
-    public sealed record PushOutcome(long Committed, long Deleted, long HeldAtStart, ulong? Headroom = null);
+    /// <param name="BytesSent">
+    /// Object bytes this push put on the wire. The count a resumed transfer
+    /// exists to reduce, and the only number that can tell "the object crossed
+    /// again" from "its tail crossed" — the object counts cannot, because both
+    /// commit exactly one object ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+    /// </param>
+    /// <param name="ResumedObjects">How many objects began at a non-zero offset.</param>
+    public sealed record PushOutcome(
+        long Committed,
+        long Deleted,
+        long HeldAtStart,
+        ulong? Headroom = null,
+        long BytesSent = 0,
+        long ResumedObjects = 0);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -73,15 +89,26 @@ internal static class ReplicationInitiator
     /// reclaim key (ADR-0055 §5), or null when this commander holds none —
     /// a write-only set without a grant, or a build that publishes no key.
     /// </param>
+    /// <param name="resumeNegotiated">
+    /// Whether the session's features admit a transfer beginning part-way
+    /// through an object (03 §5; [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+    /// Without it the destination declares nothing and every object starts at
+    /// zero, which is what every build before this one did.
+    /// </param>
+    /// <param name="logger">Where a resumed — or refused — prefix is reported.</param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
         Func<string, bool>? keeps, CancellationToken cancellationToken,
         ReadOnlyMemory<byte> reclaimPublicKey = default,
-        Func<byte[], byte[]>? signer = null)
+        Func<byte[], byte[]>? signer = null,
+        bool resumeNegotiated = false,
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
+
+        var log = logger ?? NullLogger.Instance;
 
         try
         {
@@ -93,7 +120,17 @@ internal static class ReplicationInitiator
 
             var (held, headroom) = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
 
+            // What the destination part holds, when both sides agreed a cut
+            // object may be finished rather than started again (ADR-0057). A
+            // claim, not an instruction: each one is checked against this
+            // source's own bytes before anything is skipped.
+            var partials = resumeNegotiated
+                ? await ReadPartialsAsync(stream, cancellationToken).ConfigureAwait(false)
+                : [];
+
             var sent = 0L;
+            var bytesSent = 0L;
+            var resumed = 0L;
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -104,8 +141,14 @@ internal static class ReplicationInitiator
                     continue;
                 }
 
-                await SendObjectAsync(source, entry, stream, cancellationToken).ConfigureAwait(false);
+                var from = await SendObjectAsync(
+                    source, entry, stream, partials, log, cancellationToken).ConfigureAwait(false);
                 sent++;
+                bytesSent += entry.Length - (long)from;
+                if (from > 0)
+                {
+                    resumed++;
+                }
             }
 
             await PeerFrame.WriteAsync(stream, new ReplicationComplete((ulong)sent), cancellationToken)
@@ -131,7 +174,7 @@ internal static class ReplicationInitiator
 
             if (keeps is null)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed);
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
@@ -156,7 +199,7 @@ internal static class ReplicationInitiator
                 .ToList();
             if (drops.Count == 0)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed);
             }
 
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
@@ -184,7 +227,8 @@ internal static class ReplicationInitiator
 
             var retentionAck = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
-            return new PushOutcome((long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom);
+            return new PushOutcome(
+                (long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom, bytesSent, resumed);
         }
         catch (PeerProtocolException exception)
         {
@@ -289,6 +333,85 @@ internal static class ReplicationInitiator
         : key.StartsWith("blobs/", StringComparison.Ordinal) ? 5
         : 1;
 
+    /// <summary>Reads the destination's partial declaration (03 §3.4).</summary>
+    /// <param name="stream">The session stream.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>Staged length and prefix digest per object key.</returns>
+    private static async Task<Dictionary<string, (ulong Staged, ReadOnlyMemory<byte> Digest)>> ReadPartialsAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        var declaration = await ReplicationWire.ReadAsync(
+            stream, PeerMessageType.ReplicationPartial, ReplicationPartial.Read, cancellationToken)
+            .ConfigureAwait(false);
+
+        var partials = new Dictionary<string, (ulong, ReadOnlyMemory<byte>)>(StringComparer.Ordinal);
+        for (var index = 0; index < declaration.Keys.Count; index++)
+        {
+            // Last wins rather than refusing a repeated key: a duplicate is a
+            // peer being untidy, and both entries get checked against the same
+            // bytes anyway.
+            partials[declaration.Keys[index]] = (declaration.StagedLengths[index], declaration.Digests[index]);
+        }
+
+        return partials;
+    }
+
+    /// <summary>
+    /// Where this object's transfer may begin: the destination's claim, once
+    /// this source has checked it against its own bytes.
+    /// </summary>
+    /// <remarks>
+    /// The check is the decision (ADR-0057). The destination cannot verify what
+    /// it staged — it holds no repository keys and the store key is a keyed
+    /// rendering of an identifier rather than of the bytes — so the only side
+    /// that can tell a good prefix from a rotted one is the side that has the
+    /// object. A mismatch is not a refusal: the transfer simply starts at zero,
+    /// which is what it would have done anyway.
+    /// </remarks>
+    /// <param name="source">The store holding the object.</param>
+    /// <param name="entry">Its listing entry.</param>
+    /// <param name="partials">What the destination declared.</param>
+    /// <param name="log">Where the decision is reported.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    private static async Task<ulong> ResumePointAsync(
+        IObjectStore source,
+        ObjectEntry entry,
+        IReadOnlyDictionary<string, (ulong Staged, ReadOnlyMemory<byte> Digest)> partials,
+        ILogger log,
+        CancellationToken cancellationToken)
+    {
+        if (!partials.TryGetValue(entry.Key.Value, out var claim)
+            || claim.Staged == 0
+            || claim.Staged >= (ulong)entry.Length)
+        {
+            return 0;
+        }
+
+        // Below one chunk there is nothing worth the hash: the saving is
+        // bounded by what a single frame would have carried anyway.
+        if (claim.Staged < ReplicationChunk.MaximumBytes)
+        {
+            return 0;
+        }
+
+        using var read = await source.OpenReadAsync(
+            entry.Key, new ObjectRange(0, (long)claim.Staged), cancellationToken).ConfigureAwait(false);
+        if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+        {
+            return 0;
+        }
+
+        var mine = await SHA256.HashDataAsync(read.Content, cancellationToken).ConfigureAwait(false);
+        if (mine.AsSpan().SequenceEqual(claim.Digest.Span))
+        {
+            Log.ObjectResumed(log, entry.Key, claim.Staged);
+            return claim.Staged;
+        }
+
+        Log.ObjectResumeRefused(log, entry.Key, claim.Staged);
+        return 0;
+    }
+
     private static async Task<(HashSet<string> Held, ulong? Headroom)> ReadInventoryAsync(
         Stream stream, CancellationToken cancellationToken)
     {
@@ -317,10 +440,35 @@ internal static class ReplicationInitiator
         }
     }
 
-    private static async Task SendObjectAsync(
-        IObjectStore source, ObjectEntry entry, Stream stream, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends one object and answers the offset it began at — zero today, and
+    /// the resume point once the destination can say it holds a prefix
+    /// ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+    /// </summary>
+    /// <param name="source">The store holding the object.</param>
+    /// <param name="entry">Its listing entry — the length comes from here.</param>
+    /// <param name="stream">The session stream.</param>
+    /// <param name="partials">What the destination declared it part holds.</param>
+    /// <param name="log">Where a resumed or refused prefix is reported.</param>
+    /// <param name="cancellationToken">Cancels the send.</param>
+    private static async Task<ulong> SendObjectAsync(
+        IObjectStore source,
+        ObjectEntry entry,
+        Stream stream,
+        IReadOnlyDictionary<string, (ulong Staged, ReadOnlyMemory<byte> Digest)> partials,
+        ILogger log,
+        CancellationToken cancellationToken)
     {
-        using var read = await source.OpenReadAsync(entry.Key, range: null, cancellationToken).ConfigureAwait(false);
+        var from = await ResumePointAsync(source, entry, partials, log, cancellationToken).ConfigureAwait(false);
+
+        // A ranged read of exactly the tail. The range cannot say "to the end"
+        // (its length is required), which is no obstacle: the listing already
+        // said how long the object is.
+        using var read = from > 0
+            ? await source.OpenReadAsync(
+                entry.Key, new ObjectRange((long)from, entry.Length - (long)from), cancellationToken)
+                .ConfigureAwait(false)
+            : await source.OpenReadAsync(entry.Key, range: null, cancellationToken).ConfigureAwait(false);
         if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
         {
             // Immutable objects are never deleted in this build, so a key that
@@ -331,11 +479,11 @@ internal static class ReplicationInitiator
         }
 
         await PeerFrame.WriteAsync(
-            stream, new ReplicationObject(entry.Key.Value, (ulong)entry.Length), cancellationToken)
+            stream, new ReplicationObject(entry.Key.Value, (ulong)entry.Length, from), cancellationToken)
             .ConfigureAwait(false);
 
         var buffer = new byte[ReplicationChunk.MaximumBytes];
-        var offset = 0UL;
+        var offset = from;
         int got;
         while ((got = await read.Content.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
@@ -343,5 +491,7 @@ internal static class ReplicationInitiator
                 stream, new ReplicationChunk(offset, buffer.AsMemory(0, got)), cancellationToken).ConfigureAwait(false);
             offset += (ulong)got;
         }
+
+        return from;
     }
 }

@@ -354,4 +354,101 @@ public sealed class ReplicationMessageTests
             baseline.AsSpan().SequenceEqual(new RetentionOffer(new byte[16], keys, More: true).EncodeForSigning()),
             "the continuation flag is part of the instruction and must be signed with it");
     }
+
+    [TestMethod]
+    public void Object_WithoutAResumeOffset_CarriesTheTwoKeysItAlwaysDid()
+    {
+        // The compatibility rule at the wire: a whole-object transfer looks
+        // exactly as it did before resumption existed, so an older destination
+        // — which skips keys it does not know — reads the same message
+        // (ADR-0057).
+        var header = new ReplicationObject("blobs/data/0000/object-a", 4096);
+
+        Assert.AreEqual(2, header.BodyEntryCount);
+        Assert.AreEqual(0UL, RoundTrip(header, ReplicationObject.Read).ResumeOffset);
+    }
+
+    [TestMethod]
+    public void Object_WithAResumeOffset_RoundTripsIt()
+    {
+        var header = new ReplicationObject("blobs/data/0000/object-a", 4096, 1024);
+
+        Assert.AreEqual(3, header.BodyEntryCount);
+        Assert.AreEqual(header, RoundTrip(header, ReplicationObject.Read));
+    }
+
+    [TestMethod]
+    public void Object_ResumingPastItsOwnLength_IsMalformed()
+    {
+        // A gap no later chunk can fill: the commit would publish bytes nobody
+        // sent, which is the one outcome resumption must never produce.
+        var header = new ReplicationObject("blobs/data/0000/object-a", 4096, 8192);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(header, ReplicationObject.Read));
+    }
+
+    [TestMethod]
+    public void Partial_RoundTripsEveryEntry()
+    {
+        var partial = new ReplicationPartial(
+            ["blobs/data/0000/object-a", "blobs/data/0001/object-b"],
+            [1024, 2048],
+            [new byte[32], Enumerable.Repeat((byte)7, 32).ToArray()]);
+
+        var read = RoundTrip(partial, ReplicationPartial.Read);
+
+        Assert.AreEqual(2, read.Keys.Count);
+        Assert.AreEqual("blobs/data/0001/object-b", read.Keys[1]);
+        Assert.AreEqual(2048UL, read.StagedLengths[1]);
+        Assert.IsTrue(read.Digests[1].Span.SequenceEqual(Enumerable.Repeat((byte)7, 32).ToArray()));
+    }
+
+    [TestMethod]
+    public void Partial_DeclaringNothing_IsStillAnAnswer()
+    {
+        // The destination sends this frame whether or not it part holds
+        // anything: a source that expected a frame and did not get one would
+        // read the next message in its place.
+        var read = RoundTrip(new ReplicationPartial([], [], []), ReplicationPartial.Read);
+
+        Assert.IsEmpty(read.Keys);
+    }
+
+    [TestMethod]
+    public void Partial_WithArraysOfDifferentLengths_IsMalformed()
+    {
+        // Pairing a key with somebody else's digest is how a resume lands
+        // bytes in the wrong object, so a declaration that does not line up is
+        // refused rather than trimmed to the shortest arm.
+        var partial = new ReplicationPartial(
+            ["blobs/data/0000/object-a", "blobs/data/0001/object-b"], [1024], [new byte[32]]);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(partial));
+    }
+
+    [TestMethod]
+    public void Partial_WithADigestOfTheWrongWidth_IsMalformed()
+    {
+        // Malformed rather than skipped, for the reason the reclaim key is:
+        // the digest is the check this message exists for, and dropping a
+        // broken one quietly would turn a verification into a shrug.
+        var partial = new ReplicationPartial(["blobs/data/0000/object-a"], [1024], [new byte[16]]);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(partial, ReplicationPartial.Read));
+        Assert.Contains("16 bytes", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Partial_DeclaringMoreThanTheCap_IsMalformed()
+    {
+        var keys = Enumerable.Range(0, ReplicationPartial.MaximumEntries + 1)
+            .Select(index => $"blobs/data/0000/object-{index}").ToArray();
+        var partial = new ReplicationPartial(
+            keys,
+            [.. keys.Select(_ => 1024UL)],
+            [.. keys.Select(_ => (ReadOnlyMemory<byte>)new byte[32])]);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(partial, ReplicationPartial.Read));
+    }
 }

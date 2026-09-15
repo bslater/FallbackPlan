@@ -1,3 +1,4 @@
+using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
@@ -238,4 +239,21 @@ internal static partial class Log
             + "nothing published since it was last read through, so this pass carried nothing")]
     internal static partial void SyncSkipped(
         ILogger logger, string set, string destination, ulong sequence);
+
+    // Information, not Debug: this is the saving the work exists for, and an
+    // operator watching a slow uplink finish a transfer it started yesterday
+    // should be able to see that it did (ADR-0057).
+    [LoggerMessage(
+        EventId = 3767, Level = LogLevel.Information,
+        Message = "Resuming {Key} at {Offset} bytes: the destination's staged prefix matches this copy")]
+    internal static partial void ObjectResumed(ILogger logger, ObjectKey key, ulong offset);
+
+    // Warning: the bytes were staged by this pair and no longer match, so
+    // something between the two sessions damaged them. Re-sending is the right
+    // answer and a silent one would hide a destination whose disk is rotting.
+    [LoggerMessage(
+        EventId = 3768, Level = LogLevel.Warning,
+        Message = "The destination staged {Offset} bytes of {Key} that do not match this copy; "
+            + "the object is being sent whole instead")]
+    internal static partial void ObjectResumeRefused(ILogger logger, ObjectKey key, ulong offset);
 }

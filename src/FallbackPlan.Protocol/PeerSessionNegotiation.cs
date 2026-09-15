@@ -56,6 +56,20 @@ public static class PeerSessionNegotiation
     /// </remarks>
     public const string SignedRetentionFeature = "signed-retention";
 
+    /// <summary>
+    /// Both sides understand a transfer that begins part-way through an object
+    /// ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md); 03 §5).
+    /// </summary>
+    /// <remarks>
+    /// It gates both halves at once — the destination declaring what it part
+    /// holds, and the source beginning an object at a non-zero offset —
+    /// because either half alone is a protocol error to the other side: an
+    /// older destination reads a chunk at a non-zero offset as
+    /// <see cref="PeerRefusalReason.Malformed"/>, correctly, since without the
+    /// agreement there is nothing it could mean.
+    /// </remarks>
+    public const string PartialObjectResumeFeature = "partial-object-resume";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
     [
@@ -64,6 +78,7 @@ public static class PeerSessionNegotiation
         SignedRetentionFeature,
         TerminationNoticeFeature,
         RetrievalFeature,
+        PartialObjectResumeFeature,
     ];
 
     /// <summary>Builds the hello this build sends.</summary>

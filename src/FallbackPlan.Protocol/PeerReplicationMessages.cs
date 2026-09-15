@@ -296,13 +296,21 @@ public sealed record ReplicationInventory(
 /// </summary>
 /// <param name="Key">The object's store key.</param>
 /// <param name="Length">The object's total length in bytes.</param>
-public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
+/// <param name="ResumeOffset">
+/// Where this transfer begins: zero for the whole object, and the bytes the
+/// destination already staged when a cut one is being finished
+/// ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)). The source
+/// decides it, never the destination — the destination declares what it holds
+/// and the source verifies that claim against its own copy before agreeing to
+/// skip anything.
+/// </param>
+public sealed record ReplicationObject(string Key, ulong Length, ulong ResumeOffset = 0) : IPeerMessage
 {
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.ReplicationObject;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 2;
+    public int BodyEntryCount => ResumeOffset > 0 ? 3 : 2;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -313,6 +321,17 @@ public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
         writer.WriteTextString(Key);
         writer.WriteInt32(2);
         writer.WriteUInt64(Length);
+
+        // Omitted rather than written as zero when the object starts at the
+        // beginning, so an older destination — which skips keys it does not
+        // know — sees exactly the message it has always seen. A source only
+        // ever sets it when "partial-object-resume" is in the intersection
+        // ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+        if (ResumeOffset > 0)
+        {
+            writer.WriteInt32(3);
+            writer.WriteUInt64(ResumeOffset);
+        }
     }
 
     /// <summary>Reads an object header.</summary>
@@ -325,6 +344,7 @@ public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
 
         string? objectKey = null;
         ulong length = 0;
+        ulong resumeOffset = 0;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -335,6 +355,9 @@ public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
                     break;
                 case 2:
                     length = reader.ReadUInt64();
+                    break;
+                case 3:
+                    resumeOffset = reader.ReadUInt64();
                     break;
                 default:
                     reader.SkipValue();
@@ -349,7 +372,17 @@ public sealed record ReplicationObject(string Key, ulong Length) : IPeerMessage
                 PeerRefusalReason.Malformed, "An object header names no key, or one over the length limit.");
         }
 
-        return new ReplicationObject(objectKey, length);
+        // A resume point outside the object is not a transfer this destination
+        // could complete: it would leave a gap no later chunk can fill, and
+        // the commit would publish bytes nobody sent.
+        if (resumeOffset > length)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"An object header resumes at {resumeOffset}, past the {length} bytes it declares.");
+        }
+
+        return new ReplicationObject(objectKey, length, resumeOffset);
     }
 }
 
@@ -429,6 +462,215 @@ public sealed record ReplicationChunk(ulong Offset, ReadOnlyMemory<byte> Bytes) 
 
     /// <inheritdoc/>
     public override int GetHashCode() => HashCode.Combine(Offset, Bytes.Length);
+}
+
+/// <summary>
+/// What the destination already holds part of, so a transfer cut inside an
+/// object can begin where it stopped (specification peer-protocol 03 §3.4;
+/// [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Sent by the destination once, after its last inventory page, and only when
+/// "partial-object-resume" is in the session's intersection. A partial is a
+/// different kind of fact from the inventory's: the inventory says what the
+/// replica holds, and this says what a scratch file holds — bytes that are in
+/// no store, answer no read, and may yet be thrown away.
+/// </para>
+/// <para>
+/// The digest is over exactly the staged bytes, computed from the file at the
+/// moment of declaring rather than remembered from when they arrived, so a
+/// staged prefix that rotted on disk fails the comparison instead of being
+/// resumed on top of.
+/// </para>
+/// </remarks>
+/// <param name="Keys">The objects part held.</param>
+/// <param name="StagedLengths">How many bytes of each, parallel to <paramref name="Keys"/>.</param>
+/// <param name="Digests">SHA-256 of each staged prefix, parallel to <paramref name="Keys"/>.</param>
+public sealed record ReplicationPartial(
+    IReadOnlyList<string> Keys,
+    IReadOnlyList<ulong> StagedLengths,
+    IReadOnlyList<ReadOnlyMemory<byte>> Digests) : IPeerMessage
+{
+    /// <summary>How many partials one message may declare.</summary>
+    /// <remarks>
+    /// A destination has at most one transfer in flight per session, so a
+    /// healthy peer declares nought or one. The cap is for the unhealthy one:
+    /// it bounds the work a peer can ask a source to do by claiming, and it is
+    /// generous enough that an installation which lost power mid-transfer on
+    /// several repositories still declares them all.
+    /// </remarks>
+    public const int MaximumEntries = 64;
+
+    /// <summary>The length of a staged-prefix digest.</summary>
+    public const int DigestLength = 32;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationPartial;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 3;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Keys.Count != StagedLengths.Count || Keys.Count != Digests.Count)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A partial declaration's three arrays are not the same length.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteStartArray(Keys.Count);
+        foreach (var key in Keys)
+        {
+            writer.WriteTextString(key);
+        }
+
+        writer.WriteEndArray();
+
+        writer.WriteInt32(2);
+        writer.WriteStartArray(StagedLengths.Count);
+        foreach (var staged in StagedLengths)
+        {
+            writer.WriteUInt64(staged);
+        }
+
+        writer.WriteEndArray();
+
+        writer.WriteInt32(3);
+        writer.WriteStartArray(Digests.Count);
+        foreach (var digest in Digests)
+        {
+            writer.WriteByteString(digest.Span);
+        }
+
+        writer.WriteEndArray();
+    }
+
+    /// <summary>Reads a partial declaration.</summary>
+    /// <param name="reader">The frame's reader.</param>
+    /// <returns>The declaration.</returns>
+    /// <exception cref="PeerProtocolException">The body violates 03 §3.4.</exception>
+    public static ReplicationPartial Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        List<string>? keys = null;
+        List<ulong>? staged = null;
+        List<ReadOnlyMemory<byte>>? digests = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    keys = ReadPartialKeys(reader);
+                    break;
+                case 2:
+                    staged = ReadStagedLengths(reader);
+                    break;
+                case 3:
+                    digests = ReadDigests(reader);
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        keys ??= [];
+        staged ??= [];
+        digests ??= [];
+
+        // Refused, not trimmed to the shortest: three arrays that disagree are
+        // a peer that does not mean what this message means, and pairing a key
+        // with somebody else's digest is how a resume lands bytes in the wrong
+        // object.
+        if (keys.Count != staged.Count || keys.Count != digests.Count)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A partial declaration carried {keys.Count} key(s), {staged.Count} length(s) "
+                + $"and {digests.Count} digest(s).");
+        }
+
+        return new ReplicationPartial(keys, staged, digests);
+    }
+
+    private static int ArrayLength(CborReader reader)
+    {
+        var length = reader.ReadStartArray();
+        if (length is null || length > MaximumEntries)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A partial declaration carried more than the {MaximumEntries} entries this protocol permits.");
+        }
+
+        return length.Value;
+    }
+
+    private static List<string> ReadPartialKeys(CborReader reader)
+    {
+        var count = ArrayLength(reader);
+        var keys = new List<string>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var key = reader.ReadTextString();
+            if (key.Length == 0 || Encoding.UTF8.GetByteCount(key) > ReplicationInventory.MaximumKeyBytes)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "A partial declaration names an empty or over-long key.");
+            }
+
+            keys.Add(key);
+        }
+
+        reader.ReadEndArray();
+        return keys;
+    }
+
+    private static List<ulong> ReadStagedLengths(CborReader reader)
+    {
+        var count = ArrayLength(reader);
+        var lengths = new List<ulong>(count);
+        for (var index = 0; index < count; index++)
+        {
+            lengths.Add(reader.ReadUInt64());
+        }
+
+        reader.ReadEndArray();
+        return lengths;
+    }
+
+    private static List<ReadOnlyMemory<byte>> ReadDigests(CborReader reader)
+    {
+        var count = ArrayLength(reader);
+        var digests = new List<ReadOnlyMemory<byte>>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var digest = reader.ReadByteString();
+
+            // Malformed rather than skipped, for the reason the reclaim key is
+            // (ADR-0055 §5): a digest of the wrong width is the check this
+            // message exists for, arriving broken. Dropping it quietly would
+            // turn a verification into a shrug.
+            if (digest.Length != DigestLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A partial declaration's digest is {digest.Length} bytes; {DigestLength} were expected.");
+            }
+
+            digests.Add(digest);
+        }
+
+        reader.ReadEndArray();
+        return digests;
+    }
 }
 
 /// <summary>

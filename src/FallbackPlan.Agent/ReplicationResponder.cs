@@ -34,6 +34,12 @@ internal static class ReplicationResponder
     /// reclaim signature this spoke can verify (ADR-0055 §5).
     /// </param>
     /// <param name="verificationNegotiated">Whether the session's features admit verification challenges (04 §1).</param>
+    /// <param name="resumeNegotiated">
+    /// Whether the session's features admit a transfer beginning part-way
+    /// through an object (03 §5; [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)).
+    /// Without it nothing is declared, nothing is kept, and a resume offset is
+    /// refused — which is this build's behaviour towards every older peer.
+    /// </param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <param name="preread">The first payload frame, when the caller already read it to route the session (ADR-0041).</param>
     /// <returns>What was received.</returns>
@@ -43,6 +49,7 @@ internal static class ReplicationResponder
         bool retentionNegotiated,
         bool signedRetentionNegotiated,
         bool verificationNegotiated,
+        bool resumeNegotiated,
         CancellationToken cancellationToken,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
@@ -130,9 +137,14 @@ internal static class ReplicationResponder
             // the peer's committed bytes across every repository it owns
             // here, so usage is summed before the first object crosses.
             var quota = peer.Terms.QuotaBytes;
+            // Staged prefixes count too (ADR-0057): they are real disk this
+            // peer is costing its host, and leaving them out would let a peer
+            // park bytes outside the ceiling it agreed to by starting
+            // transfers it never finishes.
+            var owned = owners.OwnedBy(peer.Identity.Fingerprint);
             var usage = quota > 0
-                ? await UsageAsync(replicasRoot, owners.OwnedBy(peer.Identity.Fingerprint), cancellationToken)
-                    .ConfigureAwait(false)
+                ? await UsageAsync(replicasRoot, owned, cancellationToken).ConfigureAwait(false)
+                    + PartialSpool.StagedBytes(spoolRoot, owned)
                 : 0UL;
 
             // The same two numbers the boundary stop is enforced from, told
@@ -141,7 +153,20 @@ internal static class ReplicationResponder
             await SendInventoryAsync(
                 replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null, cancellationToken)
                 .ConfigureAwait(false);
-            var committed = await ReceiveAsync(replica, spoolRoot, stream, quota, usage, cancellationToken)
+
+            // What this side part holds, after what it wholly holds: a source
+            // that agreed to resumption learns it can finish an object rather
+            // than start it again (ADR-0057). Everything unresumable is swept
+            // by the survey rather than declared — an unnameable file, a stale
+            // one, one whose object has since arrived by another route.
+            var spoolDirectory = PartialSpool.DirectoryFor(spoolRoot, repositoryIdHex);
+            if (resumeNegotiated)
+            {
+                await SendPartialsAsync(replica, spoolDirectory, stream, cancellationToken).ConfigureAwait(false);
+            }
+
+            var committed = await ReceiveAsync(
+                replica, spoolDirectory, stream, quota, usage, resumeNegotiated, cancellationToken)
                 .ConfigureAwait(false);
 
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
@@ -473,9 +498,34 @@ internal static class ReplicationResponder
             .ConfigureAwait(false);
     }
 
+    /// <summary>Declares what this replica part holds, so a cut object can be finished.</summary>
+    /// <param name="replica">The replica store, so a prefix of a committed object is dropped rather than offered.</param>
+    /// <param name="spoolDirectory">This repository's staged prefixes.</param>
+    /// <param name="stream">The session stream.</param>
+    /// <param name="cancellationToken">Stops the survey.</param>
+    private static async Task SendPartialsAsync(
+        LocalFileSystemObjectStore replica, string spoolDirectory, Stream stream,
+        CancellationToken cancellationToken)
+    {
+        var declarations = await PartialSpool.SurveyAsync(
+            spoolDirectory, replica, DateTimeOffset.UtcNow, ReplicationPartial.MaximumEntries, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Sent even when empty: "I part hold nothing" is an answer, and a
+        // source expecting one frame that did not arrive would read the first
+        // object header in its place.
+        await PeerFrame.WriteAsync(
+            stream,
+            new ReplicationPartial(
+                [.. declarations.Select(declaration => declaration.Key)],
+                [.. declarations.Select(declaration => declaration.Staged)],
+                [.. declarations.Select(declaration => (ReadOnlyMemory<byte>)declaration.Digest)]),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<long> ReceiveAsync(
-        LocalFileSystemObjectStore replica, string spoolRoot, Stream stream,
-        ulong quota, ulong usage, CancellationToken cancellationToken)
+        LocalFileSystemObjectStore replica, string spoolDirectory, Stream stream,
+        ulong quota, ulong usage, bool resumeNegotiated, CancellationToken cancellationToken)
     {
         var committed = 0L;
         Incoming? current = null;
@@ -509,7 +559,12 @@ internal static class ReplicationResponder
                         // declared and nothing is yet spooled — the clean
                         // stop at the object boundary (05 §3). Everything
                         // committed so far stays committed.
-                        if (quota > 0 && usage + header.Length > quota)
+                        // What this object still costs, which for a resumed one
+                        // is its tail: the staged prefix is already counted in
+                        // usage, and charging for it twice would refuse a peer
+                        // for bytes it has.
+                        var owing = header.Length - header.ResumeOffset;
+                        if (quota > 0 && usage + owing > quota)
                         {
                             throw new PeerProtocolException(
                                 PeerRefusalReason.TermsRefused,
@@ -519,12 +574,28 @@ internal static class ReplicationResponder
 
                         try
                         {
-                            current = new Incoming(spoolRoot, header.Key, header.Length);
+                            // A resume offset from a peer that never agreed to
+                            // resumption is a chunk stream that would not add
+                            // up; refusing it is the same answer this side has
+                            // always given to an offset it did not expect.
+                            if (header.ResumeOffset > 0 && !resumeNegotiated)
+                            {
+                                throw new PeerProtocolException(
+                                    PeerRefusalReason.Malformed,
+                                    $"An object resumed at {header.ResumeOffset} without "
+                                    + $"'{PeerSessionNegotiation.PartialObjectResumeFeature}' in force.");
+                            }
+
+                            current = new Incoming(
+                                spoolDirectory, header.Key, header.Length, header.ResumeOffset, resumeNegotiated)
+                            {
+                                Resumed = header.ResumeOffset,
+                            };
                             if (current.Complete)
                             {
                                 await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
                                 committed++;
-                                usage += header.Length;
+                                usage += owing;
                                 current.Dispose();
                                 current = null;
                             }
@@ -550,7 +621,7 @@ internal static class ReplicationResponder
                             {
                                 await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
                                 committed++;
-                                usage += current.Length;
+                                usage += current.Length - current.Resumed;
                                 current.Dispose();
                                 current = null;
                             }
@@ -617,22 +688,43 @@ internal static class ReplicationResponder
         private readonly ulong _length;
         private readonly string _path;
         private readonly FileStream _spool;
+        private readonly bool _keepIfInterrupted;
         private ulong _received;
+        private bool _committed;
 
-        public Incoming(string spoolRoot, string key, ulong length)
+        /// <summary>Opens the staged file for an object about to arrive.</summary>
+        /// <param name="directory">This repository's spool directory.</param>
+        /// <param name="key">The object key.</param>
+        /// <param name="length">The object's declared total length.</param>
+        /// <param name="resumeOffset">Where the source says it will begin.</param>
+        /// <param name="keepIfInterrupted">
+        /// Whether a cut leaves the staged bytes behind for a later session.
+        /// False when the pair did not negotiate resumption, which keeps an
+        /// un-negotiated session's disk behaviour exactly as it was.
+        /// </param>
+        public Incoming(string directory, string key, ulong length, ulong resumeOffset, bool keepIfInterrupted)
         {
             _key = key;
             _length = length;
-            _path = Path.Combine(spoolRoot, Guid.NewGuid().ToString("n"));
-            _spool = new FileStream(_path, FileMode.CreateNew, FileAccess.ReadWrite);
+            _keepIfInterrupted = keepIfInterrupted;
+            _path = PartialSpool.PathFor(directory, key);
+            _spool = PartialSpool.Open(directory, key, length, resumeOffset);
+            _received = resumeOffset;
         }
 
         public bool Complete => _received == _length;
 
         public ulong Length => _length;
 
+        /// <summary>How many bytes of this object this session did not have to receive.</summary>
+        public ulong Resumed { get; init; }
+
         public async ValueTask AppendAsync(ReplicationChunk chunk, CancellationToken cancellationToken)
         {
+            // Still strictly sequential, and still anchored to what this side
+            // holds — the anchor simply no longer has to start at zero
+            // (ADR-0057). A chunk that does not continue the staged prefix is
+            // as malformed as it ever was.
             if (chunk.Offset != _received)
             {
                 throw new PeerProtocolException(
@@ -671,21 +763,21 @@ internal static class ReplicationResponder
                     new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)),
                 PutConditions.IfNotExists,
                 cancellationToken).ConfigureAwait(false);
+
+            _committed = true;
         }
 
         public void Dispose()
         {
             _spool.Dispose();
-            try
+
+            // Kept only when the bytes could still be finished by a later
+            // session: committed means they are in the store, and an
+            // un-negotiated pair would never be offered them back, so in both
+            // cases the file is scratch that has served its purpose.
+            if (_committed || !_keepIfInterrupted)
             {
-                if (File.Exists(_path))
-                {
-                    File.Delete(_path);
-                }
-            }
-            catch (IOException)
-            {
-                // A leftover spool file is scratch, not state.
+                PartialSpool.Discard(_path);
             }
         }
     }

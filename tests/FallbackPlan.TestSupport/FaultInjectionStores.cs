@@ -486,3 +486,131 @@ public sealed class DeleteFaultingObjectStore(IObjectStore inner) : IObjectStore
             : inner.DeleteAsync(key, conditions, cancellationToken);
     }
 }
+
+/// <summary>
+/// A store whose read of one chosen object dies part-way through, the way a
+/// link dies part-way through a transfer.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The gap the other decorators in this file leave. They all inject at the
+/// <see cref="IObjectStore"/> boundary — a put that fails, a delete that lies,
+/// a read that refuses — and none of them can stop a transfer *inside* an
+/// object, which is the only interruption that makes resumption mean anything.
+/// A source whose content stream throws after N bytes drops the connection
+/// mid-object from the sending side, which is what a rebooting router looks
+/// like to the peer on the other end.
+/// </para>
+/// <para>
+/// The cut is armed once and cleared by <see cref="Heal"/>, so one fixture can
+/// sever a transfer and then let the retry run over a healthy store — the
+/// two-phase shape a resume test needs.
+/// </para>
+/// </remarks>
+/// <param name="inner">The store doing the actual work.</param>
+/// <param name="keyFilter">Which object to cut.</param>
+/// <param name="readableBytes">How many bytes of it to hand over before throwing.</param>
+public sealed class SeveringReadObjectStore(
+    IObjectStore inner, Func<string, bool> keyFilter, long readableBytes) : IObjectStore
+{
+    private volatile bool _healed;
+
+    /// <summary>Whether the cut has fired.</summary>
+    public bool Severed { get; private set; }
+
+    /// <summary>Stops cutting: later reads are whole.</summary>
+    public void Heal() => _healed = true;
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => inner.Capabilities;
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public async ValueTask<OpenReadResult> OpenReadAsync(
+        ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+    {
+        var read = await inner.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
+        if (_healed || read.Outcome != OpenReadOutcome.Found || read.Content is null || !keyFilter(key.Value))
+        {
+            return read;
+        }
+
+        Severed = true;
+        return new OpenReadResult(new SeveringStream(read.Content, readableBytes, key.Value));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken) =>
+        inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(
+        ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(
+        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        inner.DeleteAsync(key, conditions, cancellationToken);
+
+    private sealed class SeveringStream(Stream inner, long readableBytes, string key) : Stream
+    {
+        private long _read;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => inner.Length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_read >= readableBytes)
+            {
+                throw new IOException($"Injected fault: the read of '{key}' was severed after {_read} bytes.");
+            }
+
+            var allowed = (int)Math.Min(buffer.Length, readableBytes - _read);
+            var got = await inner.ReadAsync(buffer[..allowed], cancellationToken).ConfigureAwait(false);
+            _read += got;
+            return got;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush() => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+}

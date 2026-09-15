@@ -327,7 +327,9 @@ public static class FanOut
 
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
-                reclaimPublicKey, reclaimSigner)
+                reclaimPublicKey, reclaimSigner,
+                session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
+                runtime.LoggerFor(typeof(ReplicationInitiator)))
                 .ConfigureAwait(false);
 
             ReportShortfall(
