@@ -331,16 +331,16 @@ public sealed class ClientModeTests : IDisposable
     [TestMethod]
     public async Task Restore_RoutedThroughTheService_WritesTheFiles()
     {
-        // A format-1 archive under a passphrase-holding service, for now: a
-        // restore routed through the service on a set-up installation needs
-        // a restore grant (ADR-0042 §5), and the CLI does not derive one yet
-        // — that lands with the CLI's own move off the passphrase service.
-        await _harness.CreateFormatOneRepositoryAsync();
+        // A set-up installation holds no content key (ADR-0042 §7): the CLI
+        // derives the restore grant from the passphrase it was given — the
+        // console's ceremony, at the shell — and the service restores under
+        // it. A routed restore that sent no grant would write nothing.
+        await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
         await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
 
-        await using var runtime = await StartServiceAsync(formatOne: true);
+        await using var runtime = await StartServiceAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
 
@@ -350,7 +350,7 @@ public sealed class ClientModeTests : IDisposable
         var result = await RunCliAsync(
             "restore", snapshots.Snapshots[0].SnapshotId, "--output", destination);
 
-        Assert.AreEqual(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
 
         // The service wrote them, on its own machine (ADR-0028 §6) — which on
@@ -404,15 +404,9 @@ public sealed class ClientModeTests : IDisposable
     private Task<HostHarness.Invocation> RunBackupAsync(params string[] extra) =>
         RunCliAsync(["backup", .. extra]);
 
-    private async Task<ServiceRuntime> StartServiceAsync(bool formatOne = false)
+    private async Task<ServiceRuntime> StartServiceAsync()
     {
-        using var passphrase = formatOne
-            ? Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!)
-            : null;
-        if (!formatOne)
-        {
-            await _harness.SetupAsync();
-        }
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -420,7 +414,7 @@ public sealed class ClientModeTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 }

@@ -817,6 +817,25 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// controls it would only be refused for. The refusal is still enforced at the
 /// service — this saves a round trip, it does not decide anything.
 /// </param>
+/// <param name="KdfSalt">
+/// The installation's Argon2id salt, lowercase hex (contract 1.28): the
+/// public half of its key derivation, which every archive it writes records
+/// in its own descriptor. With the three parameters beside it and the
+/// passphrase, a client derives the same authority the console's restore
+/// ceremony derives — and seals the grant a set-up installation's restore
+/// needs (ADR-0042 §5) without holding the archive. Null until first-run
+/// setup has run, and from services before 1.28.
+/// </param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfIterations">Argon2id time cost; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfParallelism">Argon2id lanes; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="SealingPublicKey">
+/// The installation's X25519 sealing public key, lowercase hex — the
+/// verifier a client compares its derivation against before sending
+/// anything, so a wrong passphrase is caught where it was typed. Public by
+/// construction: it is what content is sealed <em>to</em>. Null with
+/// <paramref name="KdfSalt"/>.
+/// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
     string ServiceVersion,
@@ -832,7 +851,12 @@ public sealed record ServiceDescriptionResult(
     string? KitStatus = null,
     ulong? KitConfirmedAt = null,
     string? SignedInUser = null,
-    string? SignedInRole = null) : ServiceResult;
+    string? SignedInRole = null,
+    string? KdfSalt = null,
+    uint? KdfMemoryKib = null,
+    uint? KdfIterations = null,
+    byte? KdfParallelism = null,
+    string? SealingPublicKey = null) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

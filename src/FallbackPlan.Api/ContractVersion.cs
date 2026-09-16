@@ -200,8 +200,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// null failure: it is a pass, and a client must not render it as a
     /// failure. Additive with a default: a pre-1.27 client reads such a row
     /// as a plain pass, which overstates by exactly the limit it cannot see.
+    /// 1.28 puts the installation's public derivation parameters on
+    /// describe_service — the Argon2id salt and parameters, and the sealing
+    /// public key — so a client holding the passphrase can derive the
+    /// restore grant a set-up installation's restore needs (ADR-0042 §5)
+    /// without holding the archive: the paired console's ceremony, now
+    /// possible from the CLI, locally and over the remote binding. Every
+    /// value is public by construction (each archive's descriptor records the
+    /// same three facts) and null until setup has run. Additive with
+    /// defaults.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 27);
+    public static ContractVersion Current { get; } = new(1, 28);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

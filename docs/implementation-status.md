@@ -787,6 +787,17 @@ the provisioning dialog to byte-identical restored files. Losing the
 passphrase loses the backup, acknowledged at setup; v2 has no
 passphrase change (03 §7).
 
+A restore routed through a set-up service — the CLI's `restore` in
+client mode and over `--connect` — runs the same ceremony the console
+does, from the shell: `describe_service` publishes the installation's
+public derivation parameters and sealing public key (contract 1.28), the
+CLI derives the authority from `--passphrase-env`, proves it against the
+published key before sending anything, opens a restore source under the
+sealed grant and restores through it (`Cli/OperationGateway`,
+`Hosts.Tests/ClientModeTests`, `Hosts.Tests/RemoteConsoleTests`). Without
+the passphrase the verb is refused naming the flag rather than restoring
+nothing.
+
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
 
 ---

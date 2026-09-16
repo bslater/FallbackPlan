@@ -418,6 +418,43 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheDerivationParameters_WireNamesAndPre128Defaults()
+    {
+        // Contract 1.28: describe_service carries the installation's public
+        // derivation parameters — what a client holding the passphrase
+        // derives a restore grant from without holding an archive.
+        var modern = JsonSerializer.Serialize(
+            new ServiceDescriptionResult(
+                "1.28", "test", "machine", "/state", false, 0,
+                KdfSalt: "000102030405060708090a0b0c0d0e0f", KdfMemoryKib: 65536, KdfIterations: 3,
+                KdfParallelism: 4, SealingPublicKey: new string('9', 64)),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"kdf_salt\":\"000102030405060708090a0b0c0d0e0f\"", modern, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_memory_kib\":65536", modern, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_iterations\":3", modern, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_parallelism\":4", modern, StringComparison.Ordinal);
+        Assert.Contains("\"sealing_public_key\":\"" + new string('9', 64) + "\"", modern, StringComparison.Ordinal);
+
+        // A pre-1.28 frame carries none of them, which a client reads as
+        // "not published" — the same as a service not yet set up.
+        var old = modern
+            .Replace(",\"kdf_salt\":\"000102030405060708090a0b0c0d0e0f\"", "", StringComparison.Ordinal)
+            .Replace(",\"kdf_memory_kib\":65536", "", StringComparison.Ordinal)
+            .Replace(",\"kdf_iterations\":3", "", StringComparison.Ordinal)
+            .Replace(",\"kdf_parallelism\":4", "", StringComparison.Ordinal)
+            .Replace(",\"sealing_public_key\":\"" + new string('9', 64) + "\"", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var row = JsonSerializer.Deserialize<ServiceDescriptionResult>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(row.KdfSalt);
+        Assert.IsNull(row.KdfMemoryKib);
+        Assert.IsNull(row.KdfIterations);
+        Assert.IsNull(row.KdfParallelism);
+        Assert.IsNull(row.SealingPublicKey);
+    }
+
+    [TestMethod]
     public void TheDrillLimit_WireNameAndPre127Default()
     {
         // Contract 1.27 (ADR-0054 Amendment 2): a drill on a write-only set

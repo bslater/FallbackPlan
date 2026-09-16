@@ -310,10 +310,11 @@ public static class CliApplication
             var remote = ResolveRemote(parse, parse.GetValue(directOption));
             var gateway = remote is { } target
                 ? await OperationGateway.OpenForRemoteAsync(
-                    target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                    target.Host, target.Port, target.State, target.Fingerprint, cancellationToken,
+                    parse.GetValue(passphraseEnvOption)).ConfigureAwait(false)
                 : parse.GetValue(repoOption) is not { Length: > 0 } && !parse.GetValue(directOption)
                 ? await OperationGateway.OpenServiceOnlyAsync(
-                    parse.GetValue(stateOption), cancellationToken).ConfigureAwait(false)
+                    parse.GetValue(stateOption), cancellationToken, parse.GetValue(passphraseEnvOption)).ConfigureAwait(false)
                 : await OperationGateway.OpenForReadAsync(
                     Repo(parse),
                     PassphraseEnv(parse),

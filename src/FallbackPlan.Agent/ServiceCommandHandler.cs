@@ -2606,8 +2606,15 @@ public sealed partial class ServiceCommandHandler(
         _ => "not-supported",
     };
 
-    private ServiceDescriptionResult Describe() =>
-        new ServiceDescriptionResult(
+    private ServiceDescriptionResult Describe()
+    {
+        // The public half of the installation's derivation (contract 1.28):
+        // the same three facts every archive's descriptor records, plus the
+        // verifier, so a client holding the passphrase can derive a grant
+        // without holding an archive. Nothing here opens anything.
+        using var provisioning = runtime.InstallationCredential.TryLoad();
+
+        return new ServiceDescriptionResult(
             ContractVersion.Current.ToString(),
             "fallbackplan-agent/0.1",
             Environment.MachineName,
@@ -2622,7 +2629,15 @@ public sealed partial class ServiceCommandHandler(
                 ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
                 : null,
             runtime.KitConfirmation.Status,
-            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds);
+            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds,
+            KdfSalt: provisioning is null ? null : Convert.ToHexStringLower(provisioning.KdfSalt),
+            KdfMemoryKib: provisioning?.KdfParameters.MemoryKiB,
+            KdfIterations: provisioning?.KdfParameters.Iterations,
+            KdfParallelism: provisioning?.KdfParameters.Parallelism,
+            SealingPublicKey: provisioning is null
+                ? null
+                : Convert.ToHexStringLower(provisioning.Credential.SealingPublicKey));
+    }
 }
 
 /// <summary>

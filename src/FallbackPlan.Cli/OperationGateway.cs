@@ -10,6 +10,7 @@ using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
@@ -217,7 +218,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, LocalMode(address), client);
+                    return new ServiceGateway(client, LocalMode(address), client, passphraseEnvironmentVariable);
                 }
             }
 
@@ -287,7 +288,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, LocalMode(address), client);
+                    return new ServiceGateway(client, LocalMode(address), client, passphraseEnvironmentVariable);
                 }
             }
 
@@ -312,9 +313,13 @@ public static class OperationGateway
     /// </summary>
     /// <param name="stateDirectory">The state directory, or null for the shared default.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="passphraseEnvironmentVariable">
+    /// The variable naming the passphrase, when one was given: what a restore
+    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// </param>
     /// <returns>The gateway; dispose to close the connection.</returns>
     public static async ValueTask<IOperationGateway> OpenServiceOnlyAsync(
-        string? stateDirectory, CancellationToken cancellationToken)
+        string? stateDirectory, CancellationToken cancellationToken, string? passphraseEnvironmentVariable = null)
     {
         var state = stateDirectory is { Length: > 0 } ? stateDirectory : InstallationDefaults.StateDirectory;
 
@@ -334,7 +339,7 @@ public static class OperationGateway
         try
         {
             await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
-            return new ServiceGateway(client, LocalMode(state), client);
+            return new ServiceGateway(client, LocalMode(state), client, passphraseEnvironmentVariable);
         }
         catch
         {
@@ -353,6 +358,10 @@ public static class OperationGateway
     /// <param name="stateDirectory">The console's state directory (its peer identity and pairings).</param>
     /// <param name="fingerprint">The fingerprint of the pinned service to expect.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="passphraseEnvironmentVariable">
+    /// The variable naming the passphrase, when one was given: what a restore
+    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// </param>
     /// <returns>The gateway; dispose to close the session and release the device key.</returns>
     /// <remarks>
     /// There is no direct-mode fallback here, deliberately: a remote console does
@@ -365,12 +374,13 @@ public static class OperationGateway
         int port,
         string stateDirectory,
         string fingerprint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? passphraseEnvironmentVariable = null)
     {
         var connection = await RemotePeer.ConnectAsync(
             host, port, stateDirectory, fingerprint, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
 
-        return new ServiceGateway(connection.Client, RemoteMode(host, port), connection);
+        return new ServiceGateway(connection.Client, RemoteMode(host, port), connection, passphraseEnvironmentVariable);
     }
 
     private static string LocalMode(string stateDirectory) =>
@@ -389,8 +399,13 @@ public static class OperationGateway
 /// or cares which. <paramref name="owned"/> is what closing the gateway
 /// disposes: on the local binding that is the client itself; on the remote
 /// binding it is the connection holder that also releases the device key.
+/// <paramref name="passphraseEnvironmentVariable"/> names the passphrase when
+/// the verb was given one: a restore on a set-up installation derives its
+/// grant from it here, where the person typed (ADR-0042 §5).
 /// </remarks>
-internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IAsyncDisposable owned) : IOperationGateway
+internal sealed class ServiceGateway(
+    IFallbackPlanClient client, string mode, IAsyncDisposable owned, string? passphraseEnvironmentVariable = null)
+    : IOperationGateway
 {
     /// <summary>How often to ask the service whether the job has finished.</summary>
     /// <remarks>
@@ -490,17 +505,114 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     {
         ThrowHelper.ThrowIfNull(request);
 
-        var result = await SendAsync<RestoreResult>(
-            new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory),
-            "a restore",
-            cancellationToken).ConfigureAwait(false);
+        // A set-up installation holds no content key (ADR-0042 §7): a
+        // restore reads sealed content under a grant, and the grant is
+        // derived here — where the passphrase is — from the parameters the
+        // service publishes (contract 1.28), proved against its sealing
+        // public key before anything is sent, and handed over sealed to its
+        // recipient key. The console's ceremony, at the shell.
+        var source = await OpenGrantedSourceAsync(request.SnapshotId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var result = await SendAsync<RestoreResult>(
+                new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory, Source: source),
+                "a restore",
+                cancellationToken).ConfigureAwait(false);
 
-        return new OperationReport(
-            result.Failed == 0,
-            [
-                string.Create(CultureInfo.InvariantCulture,
-                    $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
-            ]);
+            return new OperationReport(
+                result.Failed == 0,
+                [
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
+                ]);
+        }
+        finally
+        {
+            if (source is not null)
+            {
+                await client.ExecuteAsync(new CloseRestoreSourceCommand(source), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens a restore source under a derived grant when the service is a
+    /// set-up installation; null when it holds its own keys, in which case
+    /// the restore runs against the set's archive as before.
+    /// </summary>
+    private async ValueTask<string?> OpenGrantedSourceAsync(string snapshotId, CancellationToken cancellationToken)
+    {
+        var description = await SendAsync<ServiceDescriptionResult>(
+            new DescribeServiceCommand(), "a description of the service", cancellationToken).ConfigureAwait(false);
+
+        if (description is not
+            {
+                RestoreGrantRecipient.Length: > 0,
+                KdfSalt.Length: > 0,
+                KdfMemoryKib: { } memoryKib,
+                KdfIterations: { } iterations,
+                KdfParallelism: { } parallelism,
+                SealingPublicKey.Length: > 0,
+            })
+        {
+            return null;
+        }
+
+        if (passphraseEnvironmentVariable is null)
+        {
+            throw new CliFailureException(
+                "this service is a set-up installation, and restoring reads sealed content: name "
+                + "--passphrase-env <VAR> so the restore grant can be derived here (ADR-0042).");
+        }
+
+        string envelope;
+        using (var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable))
+        using (var authority = WriteOnlyDerivation.Derive(
+            passphrase,
+            new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
+            Convert.FromHexString(description.KdfSalt),
+            KdfValidationMode.OpenRepository))
+        {
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(description.SealingPublicKey)))
+            {
+                throw new CliFailureException(
+                    "the passphrase does not reproduce this installation's credential — nothing was sent.");
+            }
+
+            envelope = Convert.ToHexStringLower(
+                WriteOnlyProvisioning.SealGrant(
+                    Convert.FromHexString(description.RestoreGrantRecipient), authority.SealingPrivateKey));
+        }
+
+        // A restore source is opened by set, and the snapshot names no set
+        // a client can rely on — a snapshot a direct-mode backup wrote
+        // carries the archive's own identity, not the configured set's — so
+        // the sets are tried in order and the first whose archive lists the
+        // snapshot is the one. Every other source opened on the way is
+        // closed again.
+        var sets = await SendAsync<BackupSetsResult>(
+            new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+        foreach (var set in sets.Sets)
+        {
+            if (await client.ExecuteAsync(
+                    new OpenRestoreSourceCommand(set.Name, Envelope: envelope), cancellationToken).ConfigureAwait(false)
+                is not RestoreSourceOpenedResult opened)
+            {
+                continue;
+            }
+
+            if (opened.Snapshots.Any(
+                candidate => string.Equals(candidate.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return opened.SourceId;
+            }
+
+            await client.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
+        throw new CliFailureException($"no configured set's archive holds snapshot '{snapshotId}'.");
     }
 
     /// <inheritdoc/>
