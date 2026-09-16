@@ -299,7 +299,7 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_SignedAndRoundTripped_VerifiesThroughTheTwoPassConstruction()
     {
-        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();
@@ -319,7 +319,7 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_AFieldIsTampered_FailsVerificationAsASecurityFinding()
     {
-        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();

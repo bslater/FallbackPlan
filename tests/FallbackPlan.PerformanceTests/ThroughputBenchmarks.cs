@@ -54,7 +54,7 @@ public static class ThroughputBenchmarks
             Array.Fill(data, (byte)'a', offset, 4096);
         }
 
-        using var keys = RepositoryKeySet.FromMasterKey([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var keys = RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
         var spool = Path.Combine(Path.GetTempPath(), "fbp-throughput", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(spool);
 
@@ -116,6 +116,7 @@ public static class ThroughputBenchmarks
     {
         var baseline = CapturePolicy.Default with
         {
+            DedupTrustDomain = DedupTrustDomain.Device,
             BlobWriteProfile = BlobWriteProfile.LocalDefault with
             {
                 TargetSizeBytes = 8 * 1024 * 1024,

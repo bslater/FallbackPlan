@@ -23,8 +23,6 @@ public sealed class IndexPlaneTests : IDisposable
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-index-tests", Guid.NewGuid().ToString("n"));
 
@@ -53,7 +51,7 @@ public sealed class IndexPlaneTests : IDisposable
     [TestMethod]
     public void IndexDelta_CoveredBlobDigests_RoundTripAndAreCoveredByTheSignature()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
 
         var digest = Enumerable.Repeat((byte)0x5A, 32).ToArray();
@@ -84,7 +82,7 @@ public sealed class IndexPlaneTests : IDisposable
     [TestMethod]
     public void IndexDelta_CoveredBlobDigests_AreParallelToTheCoveredBlobsOrAbsent()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
 
         var delta = new IndexDelta
@@ -120,7 +118,7 @@ public sealed class IndexPlaneTests : IDisposable
     [TestMethod]
     public void IndexDelta_SignedInTwoPasses_RoundTripsAndVerifies()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
 
         var delta = new IndexDelta
@@ -234,7 +232,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_PublishedThenLoaded_RoundTripsWithVerifiedSignatures()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         var sequence = CreateSequence();
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
@@ -261,7 +259,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_ACrashSkippedSequence_IsClosedByAVoidDelta()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
 
         // Run 1: allocate a number (a blob counter, say) and crash before
         // anything is published for it.
@@ -297,7 +295,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_AnUnaccountedGap_IsToleratedForAWhileThenReportedAsDamage()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         var sequence = CreateSequence();
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
@@ -336,7 +334,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_AnObjectIsTampered_IsExcludedAndReportedAsASecurityFinding()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         var sequence = CreateSequence();
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
@@ -380,7 +378,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_ACheckpointSubsumesEarlierDeltas_StillAppliesNewerOnes()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         var sequence = CreateSequence();
 
         using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))

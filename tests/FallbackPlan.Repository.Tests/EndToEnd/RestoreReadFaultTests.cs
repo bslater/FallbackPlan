@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreReadFaultTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task Restore_AReadFailsMidRun_FailsThatItemInTheReceiptAndTheRerunCompletes()
     {
@@ -34,7 +32,7 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xE1), CancellationToken.None);
@@ -72,7 +70,7 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
         // The fault clears; the rerun completes without repair or operator
         // action, and the bytes are right.
         faulting.Heal();
-        using var freshReader = new RepositoryReader(Repo, keys, store);
+        using var freshReader = new RepositoryReader(Repo, keys, store, Authority);
         await freshReader.LoadBlobsAsync(CancellationToken.None);
 
         var rerun = await new RestoreExecutor(freshReader, target).ExecuteAsync(

@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class LegacyImportTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>A legacy archive made of in-memory byte arrays — FR-CP-002's "arbitrary byte stream".</summary>
     private sealed class SyntheticLegacySource(params (string Name, byte[] Content, string LegacyId)[] versions)
         : ILegacyArchiveSource
@@ -62,7 +60,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var first = Content(seed: 1);
         var second = Content(seed: 2);
@@ -82,7 +80,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
 
         // Each imported version restores byte-identically through the
         // ordinary read path — no import-specific reader exists to diverge.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         foreach (var (expected, version) in new[] { (first, imported[0]), (second, imported[1]) })
@@ -107,7 +105,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var content = Content(seed: 7);
         var orchestrator = CreateOrchestrator(store, keys, hierarchy);
@@ -136,7 +134,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
                 ClientVersion: "tests/1.0"),
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var importedRead = await reader.ReadSegmentAsync(imported[0].Published.FileVersionObjectId, CancellationToken.None);

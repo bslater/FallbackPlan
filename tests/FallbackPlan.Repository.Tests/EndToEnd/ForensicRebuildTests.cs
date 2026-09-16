@@ -21,15 +21,13 @@ using FallbackPlan.Filesystem;
 [TestClass]
 public sealed class ForensicRebuildTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private async Task<(byte[] Data, PublishedSnapshot Published, RepositoryKeySet Keys, KeyHierarchy Hierarchy, Storage.Local.LocalFileSystemObjectStore Store)>
         PublishAsync(int regions = 6)
     {
         var data = BuildTestFile(regions: regions);
         var store = CreateStore();
         var keys = CreateKeys();
-        var hierarchy = new KeyHierarchy(MasterKey);
+        var hierarchy = CreateHierarchy();
 
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
@@ -97,7 +95,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         SequenceAssert.AreEqual(fingerprintBefore, StoreFingerprint());
 
         // Restore through the graph the rebuild located.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var snapshotBytes = await ReadSnapshotStandaloneAsync(store, keys);
@@ -247,7 +245,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         using var _keys = keys;
         using var _hierarchy = hierarchy;
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Build a manifest whose references SWAP the object ids of two
@@ -335,7 +333,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var hierarchy = CreateHierarchy();
 
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,

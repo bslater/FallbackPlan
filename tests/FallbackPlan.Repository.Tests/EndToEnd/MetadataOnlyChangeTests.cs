@@ -40,8 +40,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
@@ -87,7 +85,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -110,7 +108,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var file = Assert.ContainsSingle(second.Files);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         return (file, await ReadFileVersionAsync(reader, file.ObjectId));
     }
@@ -162,7 +160,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -188,7 +186,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         var file = Assert.ContainsSingle(second.Files);
         Assert.AreNotEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
 
@@ -214,7 +212,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -249,7 +247,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)

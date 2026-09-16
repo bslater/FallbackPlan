@@ -9,6 +9,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -33,13 +34,14 @@ public abstract class InterruptionHarness : IDisposable
     protected static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-interruption-tests", Guid.NewGuid().ToString("n"));
 
     protected static CapturePolicy SmallBlobPolicy { get; } = CapturePolicy.Default with
     {
+        // The device domain: the repository domain reads other writers'
+        // content to verify it, and a write-only holder cannot (ADR-0042 §7).
+        DedupTrustDomain = DedupTrustDomain.Device,
         SegmentSize = SegmentSize.Create(64 * 1024),
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
@@ -54,9 +56,13 @@ public abstract class InterruptionHarness : IDisposable
 
     protected LocalFileSystemObjectStore CreateStore() => new(StoreRoot);
 
-    protected static RepositoryKeySet CreateKeys() => RepositoryKeySet.FromMasterKey(MasterKey);
+    protected static RepositoryKeySet CreateKeys() =>
+        RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
 
-    protected static KeyHierarchy CreateHierarchy() => new(MasterKey);
+    protected static KeyHierarchy CreateHierarchy() => KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
+
+    /// <summary>The read authority sealed content opens under; shared, never disposed.</summary>
+    protected static RepositoryReadAuthority Authority => TestAuthority.Shared;
 
     /// <summary>A fresh "process life": new orchestrator, durable state shared through disk.</summary>
     protected PublicationOrchestrator CreateOrchestrator(
@@ -117,7 +123,7 @@ public abstract class InterruptionHarness : IDisposable
                 continue;
             }
 
-            using var reader = new RepositoryReader(Repo, keys, store);
+            using var reader = new RepositoryReader(Repo, keys, store, Authority);
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);

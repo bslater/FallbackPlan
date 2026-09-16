@@ -24,14 +24,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class StaleCatalogueTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task Publication_TheCatalogueClaimsSegmentsTheStoreLost_WritesThemAgainRatherThanDanglingThem()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("stale-ahead");
 
         var content = Deterministic(120_000, 17);
@@ -80,7 +78,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // review amendment records the reasoning.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("short-circuit");
 
         var content = Deterministic(120_000, 23);
@@ -116,7 +114,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-behind.db");
 
         var first = Deterministic(120_000, 31);
@@ -185,7 +183,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // rows would surface here as reused-but-wrong references.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-poison.db");
 
         var content = Deterministic(120_000, 41);
@@ -230,7 +228,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     private static async Task<(bool Success, byte[] Bytes, string? Detail)> TryRestoreFileAsync(
         Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, ObjectId fileVersionId)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(fileVersionId, CancellationToken.None);

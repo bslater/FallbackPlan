@@ -35,8 +35,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>
     /// Comfortably past SQLite's 999-parameter default and past the 128 the
     /// surveyed note names, while still running in a second or two.
@@ -83,7 +81,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var source = new FakeFileSystemSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -110,7 +108,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var source = new FakeFileSystemSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -139,7 +137,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -178,7 +176,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -220,7 +218,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)

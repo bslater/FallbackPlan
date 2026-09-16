@@ -49,7 +49,7 @@ public sealed class CdcSecondBackupTests : ArchiveTestHarness
             second.SegmentReferences.Select(reference => reference.ObjectId).Skip(1));
 
         // The restored second version is byte-identical to the inserted file.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         using var restored = new MemoryStream();

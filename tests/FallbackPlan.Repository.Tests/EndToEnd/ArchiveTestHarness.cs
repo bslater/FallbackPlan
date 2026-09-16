@@ -1,7 +1,10 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 using Microsoft.Data.Sqlite;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
@@ -12,6 +15,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a few-mebibyte file, and a seeded test file mixing compressible and
 /// incompressible regions.
 /// </summary>
+/// <remarks>
+/// The keys are a write-only bundle over <see cref="TestAuthority"/>'s pinned
+/// root, so every suite here archives sealed data blobs — which is the only
+/// shape the product writes. Reading content back therefore needs the
+/// derived scalar: readers take <see cref="Authority"/>, and a blob opened
+/// by hand takes <see cref="OpenContentKey"/>. The dedup trust domain is
+/// the device domain, because the repository domain verifies another
+/// writer's segments by reading their content and a write-only holder
+/// cannot (ADR-0042 §7).
+/// </remarks>
 public abstract class ArchiveTestHarness : IDisposable
 {
     protected static readonly RepositoryId Repo =
@@ -26,6 +39,7 @@ public abstract class ArchiveTestHarness : IDisposable
     /// <summary>64 KiB segments, tiny blob targets: a ~3 MiB file spans many blobs.</summary>
     protected static CapturePolicy SmallBlobPolicy { get; } = CapturePolicy.Default with
     {
+        DedupTrustDomain = DedupTrustDomain.Device,
         SegmentSize = SegmentSize.Create(64 * 1024),
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
@@ -41,6 +55,7 @@ public abstract class ArchiveTestHarness : IDisposable
     /// </summary>
     protected static CapturePolicy CdcPolicy { get; } = CapturePolicy.Default with
     {
+        DedupTrustDomain = DedupTrustDomain.Device,
         SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
         CdcParameters = CdcParameters.Create(64 * 1024, 8 * 1024, 512 * 1024),
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
@@ -58,8 +73,19 @@ public abstract class ArchiveTestHarness : IDisposable
 
     protected LocalFileSystemObjectStore CreateStore() => new(StoreRoot);
 
+    private static readonly byte[] SealingPrivateKey = TestAuthority.Shared.SealingPrivateKey.ToArray();
+
     protected static RepositoryKeySet CreateKeys() =>
-        RepositoryKeySet.FromMasterKey(Enumerable.Range(0, 32).Select(value => (byte)value).ToArray());
+        RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
+
+    protected static KeyHierarchy CreateHierarchy() => KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
+
+    /// <summary>The read authority a reader needs to open sealed content; shared, never disposed.</summary>
+    protected static RepositoryReadAuthority Authority => TestAuthority.Shared;
+
+    /// <summary>Opens a sealed data blob's content key — for a <see cref="BlobReader"/> opened by hand.</summary>
+    protected static byte[] OpenContentKey(BlobEnvelope envelope) =>
+        SealedContentKey.Open(SealingPrivateKey, envelope.SealedContentKey, Repo, envelope.BlobId);
 
     protected FileArchiver CreateArchiver(LocalFileSystemObjectStore store, RepositoryKeySet keys) =>
         CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 1);

@@ -21,6 +21,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <!-- TestAuthority derives the one shared key set every suite scaffolds on
+         from the conformance vectors' pinned root, so it needs the derivation
+         and nothing above it. -->
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
   </ItemGroup>
 
   <ItemGroup>

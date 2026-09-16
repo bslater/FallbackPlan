@@ -39,8 +39,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestorePlanTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue(string name = "catalogue.db") =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, name), Repo);
 
@@ -90,7 +88,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
         await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
@@ -131,7 +129,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("ads-plan.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
 
@@ -165,14 +163,14 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("ads-receipt.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xA8, 16).ToArray(), string.Empty, target);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "ads-out");
@@ -210,7 +208,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
         await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xB1), CancellationToken.None);
 
@@ -226,7 +224,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.WriteAllText(destination, "precious local edits");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -277,7 +275,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("posix-mode.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xB2), CancellationToken.None);
 
@@ -285,7 +283,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xB2, 16).ToArray(), string.Empty, target);
         var output = Path.Combine(SpoolDirectory, "restore-posix");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, output, new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 }, CancellationToken.None);
@@ -310,7 +308,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using (var live = OpenCatalogue())
         {
             await CreateOrchestrator(store, keys, hierarchy, live).PublishAsync(Job(source, 0xC1), CancellationToken.None);
@@ -332,7 +330,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(rebuilt, snapshotId, string.Empty, target);
         Assert.Contains(item => item.Path == "wanted/data.bin", plan.Items);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "partial-restore");
@@ -458,7 +456,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("skipped.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xD2), CancellationToken.None);
@@ -470,7 +468,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(
             catalogue, Enumerable.Repeat((byte)0xD2, 16).ToArray(), string.Empty, target);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -526,7 +524,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("one-fails.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, 0xD8), CancellationToken.None);
@@ -545,7 +543,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             Items = [good, doomed with { ObjectId = ObjectId.FromBytes(Enumerable.Repeat((byte)0xEE, ObjectId.Size).ToArray()) }],
         };
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "one-fails-out");
@@ -660,7 +658,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("catalogue-selectors.db");
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -684,7 +682,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.Contains(item => item.Path == "keep/nested/also.bin", plan.Items);
         Assert.DoesNotContain(item => item.Path.StartsWith("skip", StringComparison.Ordinal), plan.Items);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Destination selector: an alternate root, not the original location.
@@ -721,7 +719,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue($"catalogue-{seed:x2}.db");
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
             .PublishAsync(Job(source, seed), CancellationToken.None);
@@ -730,7 +728,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(
             catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, target);
 
-        var reader = new RepositoryReader(Repo, keys, store);
+        var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         return (plan, target, reader, keys);
     }

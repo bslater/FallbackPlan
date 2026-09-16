@@ -159,7 +159,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         // a rerun over the crash's leftovers, and then a restore of every
         // file is the whole journey, and "3 files, no failures" holds
         // without the restored bytes being right.
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             var engine = new RestoreEngine(reader);
@@ -257,7 +257,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
         // A cold reader restores the whole tree from the store alone: the
         // projection's absence is invisible to correctness (FR-ARCH-006).
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             var restoredRoot = await RestoreTreeFileAsync(reader, store, keys, 0xB2, "a.bin");
@@ -329,7 +329,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     private static async Task<byte[]> RestoreTreeFileFromColdReaderAsync(
         Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, byte snapshotSeed, string relativePath)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         return await RestoreTreeFileAsync(reader, store, keys, snapshotSeed, relativePath);
     }

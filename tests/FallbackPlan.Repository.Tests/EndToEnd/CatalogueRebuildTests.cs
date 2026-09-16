@@ -23,15 +23,13 @@ using FallbackPlan.TestSupport;
 [TestClass]
 public sealed class CatalogueRebuildTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task Catalogue_DeletedOutright_RebuildsFromTheIndexAndStillRestores()
     {
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         // Archive, then publish the real record locations as an index delta
         // — entries projected from the blobs' own footers, exactly the
@@ -42,7 +40,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         var archived = await archiver.ArchiveAsync(source, CancellationToken.None);
 
         var entries = new List<IndexEntry>();
-        using (var probe = new RepositoryReader(Repo, keys, store))
+        using (var probe = new RepositoryReader(Repo, keys, store, Authority))
         {
             await probe.LoadBlobsAsync(CancellationToken.None);
 
@@ -97,7 +95,8 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
 
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var blobReader = await BlobReader.OpenAsync(
-            store, blobStoreKey, blobLength, Repo, keys.DeriveClassKey, objectIdDeriver, CancellationToken.None);
+            store, blobStoreKey, blobLength, Repo, keys.DeriveClassKey, objectIdDeriver, CancellationToken.None,
+            OpenContentKey);
 
         var tableEntry = blobReader.RecordTable.Single(entry => entry.ObjectId == target.ObjectId);
         Assert.AreEqual(located.PhysicalOffset, tableEntry.PhysicalOffset);
@@ -109,7 +108,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
             read.Plaintext);
 
         // And the whole file still restores byte-identically.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(archived.SegmentReferences, restored, CancellationToken.None);

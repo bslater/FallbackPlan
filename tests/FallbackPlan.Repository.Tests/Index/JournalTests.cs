@@ -19,8 +19,6 @@ public sealed class JournalTests
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private static readonly byte[] BackupSet = [.. Enumerable.Repeat((byte)0x33, 16)];
 
     private static BlobId Blob(byte seed)
@@ -42,7 +40,7 @@ public sealed class JournalTests
     [DynamicData(nameof(EveryKind))]
     public void JournalRecord_EveryKind_RoundTripsThroughTheTwoPassSignature(JournalRecord record)
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         using var signer = RepositorySigner.Create(hierarchy, new KeyGeneration(1));
 
         var signedBytes = JournalRecordCodec.EncodeForSigning(record);
@@ -63,7 +61,7 @@ public sealed class JournalTests
     [TestMethod]
     public void JournalVerification_TheSigningGenerationIsOlder_DescendsGenerationsToFindIt()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
 
         var record = new JournalRecord(JournalRecordKind.WriteIntent, Writer, 1, 1000,
             new JournalPayload.WriteIntent(BackupSet, [], 60_000, 5, IntentPurpose.Backup));

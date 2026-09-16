@@ -74,6 +74,7 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     {
         var policy = CapturePolicy.Default with
         {
+            DedupTrustDomain = DedupTrustDomain.Device,
             SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
             CdcParameters = CdcParameters.Default,
         };

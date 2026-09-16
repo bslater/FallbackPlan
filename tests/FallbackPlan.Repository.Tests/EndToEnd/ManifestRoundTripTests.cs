@@ -48,7 +48,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
         }
 
         // Read it back through footers alone and decode.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(manifestId, CancellationToken.None);

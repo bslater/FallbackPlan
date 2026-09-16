@@ -22,8 +22,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const int Segment = 64 * 1024;
 
     /// <summary>
@@ -48,7 +46,7 @@ public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
         var (contents, plan, target, store, keys) = await PublishLadderAsync("ladder", 0xD1);
         using var _ = keys;
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "ladder-out");
@@ -97,7 +95,7 @@ public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
             new[] { "sizes/empty.bin", "sizes/many-blobs.bin" },
             [.. plan.Items.Select(item => item.Path)]);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "pick-out");
@@ -139,7 +137,7 @@ public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
         var spool = Path.Combine(SpoolDirectory, name);

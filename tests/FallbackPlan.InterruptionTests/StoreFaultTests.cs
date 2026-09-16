@@ -181,7 +181,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         // so the committed snapshot restores through the plain path — the
         // posture the recovery tool and the verify engine already held, now
         // converged on by the plain reader (SF-1).
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             var skipped = Assert.ContainsSingle(reader.SkippedBlobs);

@@ -23,8 +23,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const string LinkTargetText = "sibling.bin";
 
     [TestMethod]
@@ -219,7 +217,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         // manifest. The third read cancels and throws with the token — the
         // fault arrives mid-item, after alpha already landed.
         var cancelling = new CancellingObjectStore(store, cancellation, cancelOnRead: 3);
-        using var reader = new RepositoryReader(Repo, keys, cancelling);
+        using var reader = new RepositoryReader(Repo, keys, cancelling, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         cancelling.Arm();
 
@@ -250,7 +248,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("pathlimit");
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "pathlimit")
             .PublishAsync(Job(source, 0xCD), CancellationToken.None);
@@ -403,7 +401,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
     {
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue(name);
         await CreateOrchestrator(store, keys, hierarchy, catalogue, name)
             .PublishAsync(Job(source, seed), CancellationToken.None);
@@ -422,7 +420,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         ExistingDestinationPolicy policy,
         string runId)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         return await new RestoreExecutor(reader, target).ExecuteAsync(

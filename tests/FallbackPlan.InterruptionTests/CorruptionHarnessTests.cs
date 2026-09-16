@@ -55,7 +55,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         // bytes. Naming the damage exhaustively is verify's job.
         await FlipByteAsync(FirstDataBlobPath(), 20);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var skipped = Assert.ContainsSingle(reader.SkippedBlobs);
@@ -70,10 +70,11 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         using var _hierarchy = hierarchy;
 
         // Flip a byte in the first record's header (it sits right after the
-        // 88-byte envelope): the header disagrees with the footer's table.
-        await FlipByteAsync(FirstDataBlobPath(), BlobEnvelope.Length + 6);
+        // envelope, which on a data blob carries the sealed content key): the
+        // header disagrees with the footer's table.
+        await FlipByteAsync(FirstDataBlobPath(), BlobEnvelope.MaxLength + 6);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var failures = 0;
@@ -97,7 +98,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         using var _keys = keys;
         using var _hierarchy = hierarchy;
 
-        using var probe = new RepositoryReader(Repo, keys, store);
+        using var probe = new RepositoryReader(Repo, keys, store, Authority);
         await probe.LoadBlobsAsync(CancellationToken.None);
         var victim = probe.AllRecords.First();
         Assert.IsTrue(probe.TryLocateRecord(victim.ObjectId, out var storeKey, out var entry));
@@ -106,7 +107,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         var path = Path.Combine(StoreRoot, storeKey.Value.Replace('/', Path.DirectorySeparatorChar));
         await FlipByteAsync(path, (int)((long)entry.PhysicalOffset + RecordHeader.Length + entry.StoredLength));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(victim.ObjectId, CancellationToken.None);
 
@@ -129,7 +130,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         // (04 §7; NFR-REL-004).
         await FlipByteAsync(path, (int)(length - FooterLocator.Length - 4));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         Assert.ContainsSingle(reader.SkippedBlobs);
@@ -184,7 +185,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
 
         File.Delete(FirstDataBlobPath());
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // The snapshot's manifest still decodes (metadata blobs intact), but
@@ -215,7 +216,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
         var newBlob = Directory
             .EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
             .First(file => !blobsBefore.Contains(file));
-        await FlipByteAsync(newBlob, BlobEnvelope.Length + RecordHeader.Length + 10);
+        await FlipByteAsync(newBlob, BlobEnvelope.MaxLength + RecordHeader.Length + 10);
 
         // Corruption is local (04 §7): the first snapshot's objects were not
         // touched, and it restores byte-identically.

@@ -51,8 +51,6 @@ public sealed class IndexSizeTests : IDisposable
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-index-size-tests", Guid.NewGuid().ToString("n"));
 
@@ -105,7 +103,7 @@ public sealed class IndexSizeTests : IDisposable
     {
         var label = objects.ToString(CultureInfo.InvariantCulture);
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "store", label));
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
         var sequence = new WriterSequence(
             new FileSequenceStateStore(Path.Combine(_root, "state", label, "sequence.txt")));
 

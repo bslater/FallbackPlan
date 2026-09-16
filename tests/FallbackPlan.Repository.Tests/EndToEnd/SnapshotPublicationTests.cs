@@ -26,7 +26,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class SnapshotPublicationTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
     private static readonly byte[] DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)];
 
     private PublicationOrchestrator CreateOrchestrator(
@@ -109,7 +108,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
@@ -118,7 +117,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsNull(published.ErrorManifestObjectId);
 
         // Cold reader: footers only, no index, no catalogue.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (rootHead, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
@@ -160,7 +159,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         // Retention is the one wall-clock consumer and it reads capture
         // times (00-conventions §7), so a multi-hour capture stamped as
@@ -200,7 +199,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var job = Job(source) with { IncludeRules = ["**/*.bin"], ExcludeRules = ["skip"] };
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
@@ -247,7 +246,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         SequenceAssert.AreEqual(Enumerable.Repeat((byte)0x44, 16).ToArray(), parent.ToArray());
 
         // The policy manifest carries the rule strings verbatim (06 §7.1).
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
@@ -271,7 +270,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var job = Job(source) with { IncludeRules = ["photos/**"] };
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
@@ -283,7 +282,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         // The tree graph carries no skeleton for what was not captured: the
         // root names photos alone — no docs directory, no d.bin.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
         var rootNames = rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)).ToList();
@@ -309,7 +308,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var job = Job(source) with { IncludeRules = ["work/**"], ExcludeRules = ["work/secret.bin"] };
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
@@ -328,7 +327,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
@@ -336,7 +335,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsNotNull(published.ErrorManifestObjectId);
         Assert.ContainsSingle(published.Files); // good.bin captured
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var errorRead = await reader.ReadSegmentAsync(published.ErrorManifestObjectId!.Value, CancellationToken.None);
@@ -369,7 +368,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var job = Job(source) with { ExcludeRules = ["skip"] };
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
@@ -387,7 +386,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         source.AddFile("a.bin", [1, 2, 3]);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var job = Job(source) with { ExcludeRules = ["a**b"] };
 
@@ -413,11 +412,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -459,13 +458,13 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -498,11 +497,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var manifest = await ReadFileVersionAsync(
@@ -537,11 +536,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -576,11 +575,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -609,11 +608,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -642,7 +641,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
@@ -659,7 +658,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
 
         // Drive the chain writer directly at a tiny shard budget: the same
@@ -682,7 +681,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             await builder.FlushAsync(CancellationToken.None);
         }
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var chain = new List<TreeManifest>();
@@ -754,7 +753,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var logger = new RecordingLogger();
 
         var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
@@ -781,7 +780,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var logger = new RecordingLogger();
 
         var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
@@ -812,7 +811,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var reporter = new RecordingReporter();
 
         var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
@@ -852,7 +851,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var reporter = new RecordingReporter();
 
         var job = Job(source) with { IncludeRules = ["docs/**"] };
@@ -880,7 +879,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var reporter = new RecordingReporter();
 
         await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
@@ -904,7 +903,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var reporter = new RecordingReporter();
 
         var job = Job(source) with { ExcludeRules = ["*.tmp"] };

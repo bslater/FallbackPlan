@@ -29,8 +29,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class IncrementalBackupTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
@@ -88,7 +86,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -129,7 +127,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -161,7 +159,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // FR-SNP-002's load-bearing half: deleting a file deletes no older file
         // version and no segment record. Nothing proves that like restoring the
         // deleted file's content from the earlier snapshot, cold, afterwards.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(deleted!.ObjectId, CancellationToken.None);
@@ -187,7 +185,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -238,7 +236,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -264,7 +262,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.AreEqual(1, second.ContentBlobs.Sum(blob => blob.RecordCount));
 
         // And the second version still restores byte-identical.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(file.Archive.SegmentReferences, restored, CancellationToken.None);
@@ -278,7 +276,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         List<CatalogueSnapshot> liveSnapshots;
         List<string> liveListing;
@@ -300,7 +298,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         await new CatalogueRebuilder(loader).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var report = await CatalogueProjector.ProjectAsync(
             rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
@@ -350,7 +348,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -388,7 +386,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -465,7 +463,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         PublishedFileVersion original;
         using (var live = OpenCatalogue())
@@ -484,7 +482,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
@@ -523,7 +521,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         ObjectId original;
         using (var live = OpenCatalogue())
@@ -560,7 +558,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
@@ -592,7 +590,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         using (var live = OpenCatalogue())
         {
@@ -625,7 +623,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
@@ -665,7 +663,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -722,7 +720,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue();
 
         var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
@@ -779,7 +777,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
     private static async Task<FileVersionManifest> ReadManifestAsync(
         IObjectStore store, RepositoryKeySet keys, CatalogueDb catalogue, ObjectId objectId)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);

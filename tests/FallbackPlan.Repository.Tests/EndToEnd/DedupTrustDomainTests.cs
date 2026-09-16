@@ -25,6 +25,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class DedupTrustDomainTests : ArchiveTestHarness
 {
+    // A master key rather than the harness's write-only bundle, on purpose:
+    // the repository trust domain verifies another writer's segments by
+    // READING their content, which a write-only holder cannot do, and these
+    // are the tests that can tell the domains apart. What becomes of the
+    // repository domain once every repository is write-only is decided when
+    // format v1 goes, not quietly here.
     private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
 
     private static readonly WriterId SecondWriter =
@@ -34,7 +40,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     public async Task DedupReuse_ASingleWritersOwnSegments_AreReusedWithNoVerificationRead()
     {
         var store = new CountingObjectStore(CreateStore());
-        using var keys = CreateKeys();
+        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
         using var hierarchy = new KeyHierarchy(MasterKey);
         using var catalogue = OpenCatalogue("first");
 
@@ -102,7 +108,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         var unacknowledged = SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.RepositoryUnverified };
 
         var store = CreateStore();
-        using var keys = CreateKeys();
+        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
         using var hierarchy = new KeyHierarchy(MasterKey);
         var spool = Path.Combine(SpoolDirectory, "unacknowledged");
         Directory.CreateDirectory(spool);
@@ -189,7 +195,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     public async Task RepositoryDomain_ManySegmentsVerifiedConcurrently_ReusesThemAllWithoutRacing()
     {
         var store = new CountingObjectStore(CreateStore());
-        using var keys = CreateKeys();
+        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
         using var hierarchy = new KeyHierarchy(MasterKey);
         var source = ManyFileSource();
 
@@ -239,7 +245,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         DedupTrustDomain domain, bool corruptFirstWritersData = false)
     {
         var store = new CountingObjectStore(CreateStore());
-        var keys = CreateKeys();
+        var keys = RepositoryKeySet.FromMasterKey(MasterKey);
         var hierarchy = new KeyHierarchy(MasterKey);
         CatalogueDb? secondCatalogue = null;
 

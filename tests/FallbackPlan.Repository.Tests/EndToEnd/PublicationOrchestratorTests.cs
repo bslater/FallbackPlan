@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>Records every put's key in order — the ordering oracle.</summary>
     private sealed class RecordingStore(IObjectStore inner) : IObjectStore
     {
@@ -84,7 +82,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 6);
         var store = new RecordingStore(CreateStore());
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         using var source = new MemoryStream(data);
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
@@ -125,7 +123,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         using var source = new MemoryStream(data);
         var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
@@ -162,7 +160,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         Assert.AreEqual(published.RootTreeObjectId, decoded.Manifest.RootTree);
 
         // Follow root tree → file version → segments, all through footers.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
@@ -188,7 +186,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 4);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         using var source = new MemoryStream(data);
         await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
@@ -211,7 +209,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var steps = new List<PublicationStep>();
         var recorder = new StepRecorder(steps, killAfter: null);
@@ -235,7 +233,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         // A throwing observer is the F1 kill switch: publication stops
         // between steps, leaving exactly the interrupted state on the wire.

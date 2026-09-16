@@ -35,8 +35,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class LogPrivacyTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>
     /// A path segment distinctive enough that finding it in redacted output is
     /// unambiguous — no engine string could contain it by accident.
@@ -57,7 +55,7 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
         var orchestrator = new PublicationOrchestrator(
@@ -81,7 +79,7 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);

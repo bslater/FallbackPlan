@@ -19,8 +19,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class MultiRootPublicationTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue(string name) =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
@@ -80,7 +78,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("two-roots");
 
         // Deliberately given out of byte order — the publication must sort
@@ -111,7 +109,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("ruled");
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "ruled").PublishAsync(
@@ -138,7 +136,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("folded");
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "folded").PublishAsync(
@@ -163,7 +161,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("refused");
         var orchestrator = CreateOrchestrator(store, keys, hierarchy, catalogue, "refused");
 
@@ -184,7 +182,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("single");
 
         // One root, label present but ignored: the tree's root is the folder
@@ -205,7 +203,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("restored");
 
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "restored").PublishAsync(
@@ -217,7 +215,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
             catalogue, Enumerable.Repeat((byte)0xF6, 16).ToArray(), string.Empty, target);
 
         var output = Path.Combine(SpoolDirectory, "restored-out");
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, output,
@@ -243,7 +241,7 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("compared");
         IReadOnlyList<ScanRoot> roots = [new ScanRoot("alpha", "Documents"), new ScanRoot("bravo", "Photos")];
 

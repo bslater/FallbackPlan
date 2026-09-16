@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class LocalTreeBackupTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _sourceRoot =
         Path.Combine(Path.GetTempPath(), "fbp-tree-backup-tests", Guid.NewGuid().ToString("n"));
 
@@ -52,7 +50,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
@@ -77,7 +75,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         Assert.AreEqual(files.Count, published.Files.Count);
         Assert.IsEmpty(published.Failures);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Restore every file by walking the tree from the root, proving the

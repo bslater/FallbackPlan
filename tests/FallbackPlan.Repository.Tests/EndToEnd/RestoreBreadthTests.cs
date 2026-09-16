@@ -22,8 +22,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreBreadthTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task RestoreExecution_AnExistingFileUnderReplacePolicy_OverwritesItAndDisplacesNothing()
     {
@@ -36,7 +34,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.WriteAllText(destination, "local edits, knowingly forfeited");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -71,7 +69,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("breadth-fail");
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "breadth-fail")
             .PublishAsync(Job(source, 0xE2), CancellationToken.None);
@@ -84,7 +82,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Directory.CreateDirectory(Path.GetDirectoryName(occupied)!);
         File.WriteAllText(occupied, "precious local edits");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -131,7 +129,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var inner = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("breadth-budget");
         var published = await CreateOrchestrator(inner, keys, hierarchy, catalogue, "breadth-budget")
             .PublishAsync(Job(source, 0xE3), CancellationToken.None);
@@ -144,7 +142,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
             .Count();
 
         var counting = new CountingObjectStore(inner);
-        using var reader = new RepositoryReader(Repo, keys, counting);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // The load alone: three range reads per blob in the repository —
@@ -190,7 +188,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         var (plan, target, store, keys) = await PublishOneFileAsync("golden", content, 0xE4);
         using var _ = keys;
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -246,7 +244,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.WriteAllText(destination, "the live file, kept");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -287,7 +285,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.WriteAllText(destination, "the live file, kept");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var options = new RestoreExecutionOptions
@@ -327,7 +325,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("multi-prefix");
         await CreateOrchestrator(store, keys, hierarchy, catalogue, "multi-prefix")
             .PublishAsync(Job(source, 0xE7), CancellationToken.None);
@@ -353,7 +351,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Assert.AreEqual("gone/nowhere.bin", Assert.ContainsSingle(missing.Conflicts).Path);
 
         // The union restores in one run: both subtrees land, nothing else.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, Path.Combine(SpoolDirectory, "multi-prefix-out"),
@@ -383,13 +381,13 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         // The full load knows every blob; the targeted load is handed that
         // set and must restore identically without listing the namespace.
         List<ObjectKey> everyBlob;
-        using (var census = new RepositoryReader(Repo, keys, store))
+        using (var census = new RepositoryReader(Repo, keys, store, Authority))
         {
             await census.LoadBlobsAsync(CancellationToken.None);
             everyBlob = [.. census.Blobs.Select(blob => blob.StoreKey)];
         }
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         var opened = await reader.LoadBlobsAsync(everyBlob, CancellationToken.None);
         Assert.AreEqual(everyBlob.Count, opened);
         Assert.IsEmpty(reader.SkippedBlobs);
@@ -403,7 +401,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         // A named blob the store does not hold is a skip the caller can see,
         // and the records it would have carried read as missing downstream —
         // loudly, per item — never as a quietly narrower world.
-        using var partial = new RepositoryReader(Repo, keys, store);
+        using var partial = new RepositoryReader(Repo, keys, store, Authority);
         var absent = ObjectKey.Parse("blobs/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         await partial.LoadBlobsAsync([absent], CancellationToken.None);
         Assert.AreEqual(absent, Assert.ContainsSingle(partial.SkippedBlobs).Key);
@@ -417,7 +415,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue($"breadth-{name}");
         await CreateOrchestrator(store, keys, hierarchy, catalogue, $"breadth-{name}")
             .PublishAsync(Job(source, seed), CancellationToken.None);

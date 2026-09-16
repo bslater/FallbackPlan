@@ -20,8 +20,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreSpecialContentTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _sourceRoot =
         Path.Combine(Path.GetTempPath(), "fbp-special-content-tests", Guid.NewGuid().ToString("n"));
 
@@ -54,7 +52,7 @@ public sealed class RestoreSpecialContentTests : ArchiveTestHarness
         var plan = RestorePlanner.Plan(db, Enumerable.Repeat((byte)0xB1, 16).ToArray(), string.Empty, target);
         Assert.IsEmpty(plan.Conflicts);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "unicode-out");
@@ -91,7 +89,7 @@ public sealed class RestoreSpecialContentTests : ArchiveTestHarness
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(db, Enumerable.Repeat((byte)0xB2, 16).ToArray(), string.Empty, target);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var output = Path.Combine(SpoolDirectory, "emptydir-out");
@@ -121,7 +119,7 @@ public sealed class RestoreSpecialContentTests : ArchiveTestHarness
     {
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
         var spool = Path.Combine(SpoolDirectory, name);

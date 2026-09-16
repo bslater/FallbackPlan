@@ -55,7 +55,7 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
 
         // The second version restores byte-identical from the store, which
         // now holds both runs' blobs.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         using var restored = new MemoryStream();
@@ -107,7 +107,7 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
         Assert.AreEqual(first.SegmentReferences.Count + 1, second.SegmentReferences.Count);
         SequenceAssert.AreEqual(first.SegmentReferences, second.SegmentReferences.Take(first.SegmentReferences.Count));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         using var restored = new MemoryStream();

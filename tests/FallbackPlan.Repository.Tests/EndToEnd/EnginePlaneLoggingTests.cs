@@ -28,8 +28,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const int BlobSealed = 1610;
     private const int BlobOpened = 1611;
     private const int CatalogueOpened = 1800;
@@ -46,7 +44,7 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
         using var catalogue = CatalogueDb.Open(
             Path.Combine(SpoolDirectory, "catalogue.db"), Repo, log);
 
@@ -71,7 +69,7 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store, log);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority, log);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);
@@ -141,7 +139,7 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         store.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
 
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var hierarchy = CreateHierarchy();
 
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,

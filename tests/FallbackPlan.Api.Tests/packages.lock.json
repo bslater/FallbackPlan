@@ -178,6 +178,15 @@
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
+      "fallbackplan.repository.crypto": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
@@ -189,6 +198,7 @@
       "fallbackplan.testsupport": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "FsCheck": "[3.3.4, )",
           "MSTest": "[3.11.0, )",
@@ -200,6 +210,15 @@
         "requested": "[0.2.0, )",
         "resolved": "0.2.0",
         "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+      },
+      "Bodu.Security.Cryptography": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.0, )",
+        "resolved": "0.2.0",
+        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
+        "dependencies": {
+          "Bodu.Core": "0.2.0"
+        }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
