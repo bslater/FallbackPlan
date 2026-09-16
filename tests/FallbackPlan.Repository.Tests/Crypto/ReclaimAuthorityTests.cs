@@ -44,7 +44,7 @@ public sealed class ReclaimAuthorityTests
 
         // One root, two one-way domains. If these ever coincided the whole
         // decision would be a rename.
-        Assert.AreEqual(KeyHierarchy.DerivedKeyLength, reclaim.Length);
+        Assert.AreEqual(RepositoryWriteCredential.DerivedKeyLength, reclaim.Length);
         Assert.IsFalse(
             signing.AsSpan().SequenceEqual(reclaim),
             "the reclaim key must not be the signing key under another name");
@@ -83,15 +83,15 @@ public sealed class ReclaimAuthorityTests
         // since format 1 went, no hierarchy anywhere derives it: the member
         // does not exist to be called.
         using var authority = DeriveAuthority("one long passphrase to rule them");
-        using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
+        using var credential = authority.Credential.Clone();
 
-        Assert.IsNull(typeof(KeyHierarchy).GetMethod("DeriveReclaimKeySeed"));
+        Assert.IsNull(typeof(RepositoryWriteCredential).GetMethod("DeriveReclaimKeySeed"));
         Assert.IsNull(typeof(RepositoryWriteCredential).GetMethod("DeriveReclaimKeySeed"));
 
         // And the signing key is still there, or the service could not do its
         // job — which would make this a denial of service rather than a split.
         Assert.HasCount(
-            KeyHierarchy.DerivedKeyLength, hierarchy.DeriveSigningKeySeed(new KeyGeneration(1)));
+            RepositoryWriteCredential.DerivedKeyLength, credential.DeriveSigningKeySeed(new KeyGeneration(1)));
     }
 
     [TestMethod]
@@ -105,7 +105,7 @@ public sealed class ReclaimAuthorityTests
         try
         {
             var reclaim = authority.ReclaimKeySeed.ToArray();
-            Assert.HasCount(KeyHierarchy.DerivedKeyLength, reclaim);
+            Assert.HasCount(RepositoryWriteCredential.DerivedKeyLength, reclaim);
 
             for (var offset = 0; offset + reclaim.Length <= bundle.Length; offset++)
             {
@@ -156,8 +156,8 @@ public sealed class ReclaimAuthorityTests
         // round trip invented a 32-byte all-zero "published key" out of
         // nothing.
         //
-        // The round trip is not hypothetical: KeyHierarchy.ForWriteOnly does
-        // one on every open. The invented key would then ride every
+        // The round trip is not hypothetical: RepositoryWriteCredential.Clone
+        // does one on every open. The invented key would then ride every
         // ReplicationOffer, be recorded permanently at first attribution
         // (ADR-0055 §5, never replaceable), and leave the destination
         // demanding signatures under a key no one holds the private half of.
@@ -174,9 +174,9 @@ public sealed class ReclaimAuthorityTests
             reserialized.ReclaimPublicKey.IsEmpty,
             "a credential that published no reclaim key must not acquire an all-zero one by being re-read");
 
-        using var hierarchy = KeyHierarchy.ForWriteOnly(parsed);
+        using var credential = parsed.Clone();
         Assert.IsEmpty(
-            hierarchy.ReclaimPublicKey(KeyGeneration.Zero),
+            credential.ReclaimPublicKey.ToArray(),
             "publishing zeros to a peer is worse than publishing nothing — the peer keeps them for ever");
     }
 

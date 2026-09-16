@@ -35,7 +35,7 @@ public sealed class RecoveryContainmentTests : IDisposable
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "repo"));
 
         using var passphrase = Passphrase.Create(PassphraseText);
-        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Domain.Configuration.RepositoryCreationSettings.Default,
             createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
         using var _repository = repository;
@@ -59,7 +59,7 @@ public sealed class RecoveryContainmentTests : IDisposable
             Domain.Identifiers.WriterId.FromBytes(Enumerable.Repeat((byte)0xA0, 16).ToArray()),
             repository.CurrentDataGeneration,
             repository.Keys,
-            repository.Hierarchy,
+            repository.Credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool);

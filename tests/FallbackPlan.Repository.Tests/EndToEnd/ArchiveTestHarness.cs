@@ -78,7 +78,7 @@ public abstract class ArchiveTestHarness : IDisposable
     protected static RepositoryKeySet CreateKeys() =>
         RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
 
-    protected static KeyHierarchy CreateHierarchy() => KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
+    protected static RepositoryWriteCredential CreateCredential() => TestAuthority.Shared.Credential.Clone();
 
     /// <summary>The read authority a reader needs to open sealed content; shared, never disposed.</summary>
     protected static RepositoryReadAuthority Authority => TestAuthority.Shared;

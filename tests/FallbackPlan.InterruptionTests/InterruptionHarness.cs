@@ -59,7 +59,7 @@ public abstract class InterruptionHarness : IDisposable
     protected static RepositoryKeySet CreateKeys() =>
         RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
 
-    protected static KeyHierarchy CreateHierarchy() => KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
+    protected static RepositoryWriteCredential CreateCredential() => TestAuthority.Shared.Credential.Clone();
 
     /// <summary>The read authority sealed content opens under; shared, never disposed.</summary>
     protected static RepositoryReadAuthority Authority => TestAuthority.Shared;
@@ -68,7 +68,7 @@ public abstract class InterruptionHarness : IDisposable
     protected PublicationOrchestrator CreateOrchestrator(
         IObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         IPublicationObserver? observer = null,
         int concurrency = 1,
         string? spoolDirectory = null,
@@ -76,7 +76,7 @@ public abstract class InterruptionHarness : IDisposable
         WriterSequence? sequence = null) =>
         new(
             SmallBlobPolicy with { Concurrency = concurrency },
-            Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             sequence
                 ?? new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
             spoolDirectory ?? SpoolDirectory,
@@ -180,11 +180,11 @@ public abstract class InterruptionHarness : IDisposable
     /// </summary>
     protected static async Task<List<ObjectKey>> SimulateCollectorMarkAsync(
         LocalFileSystemObjectStore store,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         ulong currentGeneration,
         ulong nowMs)
     {
-        using var journalReader = new Repository.Index.Journal.JournalReader(store, Repo, hierarchy);
+        using var journalReader = new Repository.Index.Journal.JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync((uint)currentGeneration, CancellationToken.None);
         var survey = Repository.Index.Journal.IntentSurveyor.Survey(
             records, unparseable, currentGeneration, nowMs, skewMarginMs: 60_000);

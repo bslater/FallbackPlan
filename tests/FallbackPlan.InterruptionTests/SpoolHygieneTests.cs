@@ -21,7 +21,7 @@ public sealed class SpoolHygieneTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // The shape a kill between seal and upload leaves: sealed bytes on
         // disk, sidecar already deleted by the seal, nothing in the store.
@@ -31,7 +31,7 @@ public sealed class SpoolHygieneTests : InterruptionHarness
 
         using (var source = new MemoryStream(BuildFile(seed: 1)))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         Assert.IsFalse(File.Exists(orphan), "a spool no resume can reach must be reclaimed by the next run");
@@ -43,7 +43,7 @@ public sealed class SpoolHygieneTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // A resumable pair, made by the production path: a job killed with a
         // blob open leaves spool + sidecar (04 §5.1 row 3). The source dies
@@ -51,7 +51,7 @@ public sealed class SpoolHygieneTests : InterruptionHarness
         using (var interrupted = new FaultingSource(BuildFile(seed: 1), failAfterBytes: 300 * 1024))
         {
             await Assert.ThrowsExactlyAsync<IOException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(interrupted, snapshotSeed: 0xA1), CancellationToken.None));
+                await CreateOrchestrator(store, keys, credential).PublishAsync(Job(interrupted, snapshotSeed: 0xA1), CancellationToken.None));
         }
 
         var spools = Directory.GetFiles(SpoolDirectory, "blob-*.spool");
@@ -63,7 +63,7 @@ public sealed class SpoolHygieneTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xB2));

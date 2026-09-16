@@ -137,13 +137,13 @@ public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
         var spool = Path.Combine(SpoolDirectory, name);
         Directory.CreateDirectory(spool);
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool, observer: null, catalogue);
         await orchestrator.PublishAsync(Job(source, seed), CancellationToken.None);

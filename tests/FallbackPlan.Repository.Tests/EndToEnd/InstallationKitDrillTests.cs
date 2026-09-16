@@ -65,7 +65,7 @@ public sealed class InstallationKitDrillTests : IDisposable
             passphrase, RepositoryCreationSettings.Default.KdfParameters, _salt,
             KdfValidationMode.CreateRepository);
 
-        using var repository = await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+        using var repository = await RepositoryLifecycle.CreateAsync(
             store, authority.Credential, _salt, RepositoryCreationSettings.Default.KdfParameters,
             createdBy: "installation-kit-drill", 1_722_600_000_000, CancellationToken.None);
 
@@ -100,7 +100,7 @@ public sealed class InstallationKitDrillTests : IDisposable
             Domain.Identifiers.WriterId.FromBytes(Enumerable.Repeat((byte)0xA0, 16).ToArray()),
             repository.CurrentDataGeneration,
             repository.Keys,
-            repository.Hierarchy,
+            repository.Credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool);
@@ -217,7 +217,7 @@ public sealed class InstallationKitDrillTests : IDisposable
             strangerPassphrase, RepositoryCreationSettings.Default.KdfParameters, strangerSalt,
             KdfValidationMode.CreateRepository))
         {
-            (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            (await RepositoryLifecycle.CreateAsync(
                 strangerStore, strangerAuthority.Credential, strangerSalt,
                 RepositoryCreationSettings.Default.KdfParameters, "stranger",
                 1_722_600_000_000, CancellationToken.None)).Dispose();
@@ -267,7 +267,7 @@ public sealed class InstallationKitDrillTests : IDisposable
         // OpenAsync serves both kit shapes so one call site can hold both.
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "per-repository"));
         using var passphrase = Passphrase.Create(PassphraseText);
-        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None);
         repository.Dispose();
         authority.Dispose();

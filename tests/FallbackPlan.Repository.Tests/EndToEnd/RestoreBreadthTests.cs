@@ -69,9 +69,9 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("breadth-fail");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "breadth-fail")
+        await CreateOrchestrator(store, keys, credential, catalogue, "breadth-fail")
             .PublishAsync(Job(source, 0xE2), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -129,9 +129,9 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var inner = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("breadth-budget");
-        var published = await CreateOrchestrator(inner, keys, hierarchy, catalogue, "breadth-budget")
+        var published = await CreateOrchestrator(inner, keys, credential, catalogue, "breadth-budget")
             .PublishAsync(Job(source, 0xE3), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -325,9 +325,9 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("multi-prefix");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "multi-prefix")
+        await CreateOrchestrator(store, keys, credential, catalogue, "multi-prefix")
             .PublishAsync(Job(source, 0xE7), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -415,9 +415,9 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue($"breadth-{name}");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, $"breadth-{name}")
+        await CreateOrchestrator(store, keys, credential, catalogue, $"breadth-{name}")
             .PublishAsync(Job(source, seed), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -429,13 +429,13 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue, string spoolName)
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue, string spoolName)
     {
         var spool = Path.Combine(SpoolDirectory, spoolName);
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool, observer: null, catalogue);
     }

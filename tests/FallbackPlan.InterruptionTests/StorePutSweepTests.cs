@@ -37,7 +37,7 @@ public sealed class StorePutSweepTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var content = BuildFile(seed: 2);
         var faulting = new FaultInjectingObjectStore(store, putBudget);
@@ -45,13 +45,13 @@ public sealed class StorePutSweepTests : InterruptionHarness
         using (var source = new MemoryStream(content))
         {
             await Assert.ThrowsExactlyAsync<IOException>(async () =>
-                await CreateOrchestrator(faulting, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
+                await CreateOrchestrator(faulting, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
         }
 
         // Nothing durable is collectable: whatever subset of blobs made it,
         // each is covered by the live intent — or no blob made it at all
         // because its covering extension is what died (08 §3.1, C4).
-        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000));
+        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000));
 
         // No budget can leave a partial snapshot: the object either never
         // reached the store or is complete and restorable.
@@ -65,7 +65,7 @@ public sealed class StorePutSweepTests : InterruptionHarness
         var retried = BuildFile(seed: 3);
         using (var retry = new MemoryStream(retried))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(retried, await RestoreSnapshotAsync(store, keys, 0xC3));

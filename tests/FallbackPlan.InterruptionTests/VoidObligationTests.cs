@@ -25,7 +25,7 @@ public sealed class VoidObligationTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // The durable state a crashed run leaves: sequence 5 allocated,
         // nothing published for it.
@@ -37,7 +37,7 @@ public sealed class VoidObligationTests : InterruptionHarness
         // One orchestrator = one process life = one writer sequence, which
         // is the ServiceRuntime shape: the sequence lives as long as the
         // service, not as long as a job.
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy);
+        var orchestrator = CreateOrchestrator(store, keys, credential);
 
         using (var source = new MemoryStream(BuildFile(seed: 1)))
         {

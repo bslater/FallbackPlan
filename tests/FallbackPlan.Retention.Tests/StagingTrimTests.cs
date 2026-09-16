@@ -452,7 +452,7 @@ public sealed class StagingTrimTests : IDisposable
         IReadOnlyList<FallbackPlan.Repository.Index.Journal.JournalRecord> records;
         int unparseable;
         using (var journal = new FallbackPlan.Repository.Index.Journal.JournalReader(
-            store, repository.RepositoryId, repository.Hierarchy))
+            store, repository.RepositoryId, repository.Credential))
         {
             (records, unparseable, _) = await journal.LoadAsync(sealing, CancellationToken.None);
         }

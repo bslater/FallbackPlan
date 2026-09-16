@@ -24,7 +24,7 @@ public sealed class IndexPublisher : IDisposable
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
     private readonly WriterId _writerId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
@@ -34,21 +34,21 @@ public sealed class IndexPublisher : IDisposable
         IObjectStore store,
         RepositoryId repositoryId,
         WriterId writerId,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         WriterSequence sequence,
         ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(sequence);
 
         _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _writerId = writerId;
-        _hierarchy = hierarchy;
+        _credential = credential;
         _sequence = sequence;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
@@ -200,7 +200,7 @@ public sealed class IndexPublisher : IDisposable
 
     private byte[] SignAndEncode(byte[] signedBytes, Func<byte[], byte[]> encodeWithSignature, ulong generation)
     {
-        using var signer = RepositorySigner.Create(_hierarchy, ToKeyGeneration(generation));
+        using var signer = RepositorySigner.Create(_credential, ToKeyGeneration(generation));
         return encodeWithSignature(signer.Sign(signedBytes));
     }
 
@@ -214,7 +214,7 @@ public sealed class IndexPublisher : IDisposable
     {
         var keyGeneration = ToKeyGeneration(generation);
         var objectId = _objectIdDeriver.Derive(objectType, ContentHasher.Hash(encoded));
-        var metadataKey = _hierarchy.DeriveMetadataKey(keyGeneration);
+        var metadataKey = _credential.DeriveMetadataKey(keyGeneration);
 
         byte[] sealedObject;
         try

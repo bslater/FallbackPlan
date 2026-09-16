@@ -31,7 +31,7 @@ public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped
 public sealed class RecoverySession : IDisposable
 {
     private readonly IObjectStore _store;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly RepositoryReadAuthority? _authority;
     private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
@@ -39,12 +39,12 @@ public sealed class RecoverySession : IDisposable
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
     private RecoverySession(
-        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, RepositoryReadAuthority? authority = null)
+        IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential, RepositoryReadAuthority? authority = null)
     {
         _store = store;
         RepositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
         _authority = authority;
 
         if (authority is not null)
@@ -142,7 +142,7 @@ public sealed class RecoverySession : IDisposable
             }
 
             return new RecoverySession(
-                store, descriptor.RepositoryId, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+                store, descriptor.RepositoryId, authority.Credential.Clone(), authority);
         }
         catch
         {
@@ -233,7 +233,7 @@ public sealed class RecoverySession : IDisposable
             try
             {
                 return new RecoverySession(
-                    store, kit.RepositoryId!.Value, KeyHierarchy.ForWriteOnly(authority.Credential), authority);
+                    store, kit.RepositoryId!.Value, authority.Credential.Clone(), authority);
             }
             catch
             {
@@ -308,7 +308,7 @@ public sealed class RecoverySession : IDisposable
             }
 
             var record = StandaloneRecordFraming.Parse(bytes);
-            var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+            var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
             try
             {
                 if (!StandaloneRecordCipher.TryOpen(record, RepositoryId, metadataKey, out var plaintext))
@@ -319,7 +319,7 @@ public sealed class RecoverySession : IDisposable
                 var decoded = SnapshotManifestCodec.Decode(plaintext);
                 bool verified;
                 using (var signer = RepositorySigner.Create(
-                    _hierarchy, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
+                    _credential, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
                 {
                     verified = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span);
                 }
@@ -579,7 +579,7 @@ public sealed class RecoverySession : IDisposable
         }
 
         _objectIdDeriver.Dispose();
-        _hierarchy.Dispose();
+        _credential.Dispose();
         _authority?.Dispose();
     }
 
@@ -588,6 +588,6 @@ public sealed class RecoverySession : IDisposable
     // metadata key too (ADR-0042 §2). There is no data key to hand out.
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>
         blobClass == BlobClass.Metadata
-            ? _hierarchy.DeriveMetadataKey(generation)
+            ? _credential.DeriveMetadataKey(generation)
             : throw new InvalidOperationException("A repository holds no data class key (specification 03 §9.2).");
 }

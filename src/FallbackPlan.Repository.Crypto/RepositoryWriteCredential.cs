@@ -24,6 +24,9 @@ namespace FallbackPlan.Repository.Crypto;
 /// </remarks>
 public sealed class RepositoryWriteCredential : IDisposable
 {
+    /// <summary>Every derived key is 32 bytes.</summary>
+    public const int DerivedKeyLength = 32;
+
     /// <summary>The serialised length: magic plus seven 32-byte members.</summary>
     public const int SerializedLength = 8 + (7 * 32);
 
@@ -157,7 +160,7 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// Writing the shape this credential actually holds, rather than always
     /// the current one with the absent member left zero, is what makes an
     /// absence survive a round trip — and a round trip is not rare:
-    /// <see cref="KeyHierarchy.ForWriteOnly"/> performs one on every open. A
+    /// <see cref="Clone"/> performs one on every open. A
     /// zero-filled member reads back as a 32-byte key rather than as nothing,
     /// which would put all-zero bytes on every <c>ReplicationOffer</c>, where
     /// a destination records them permanently and can never be told otherwise
@@ -248,6 +251,24 @@ public sealed class RepositoryWriteCredential : IDisposable
     }
 
     /// <summary>Deliberately redacted.</summary>
+    /// <summary>
+    /// An independent copy — the caller keeps responsibility for its own.
+    /// A serialise-and-parse round trip rather than a field copy, so the
+    /// clone holds exactly the shape this one does (see <see cref="ToBytes"/>).
+    /// </summary>
+    public RepositoryWriteCredential Clone()
+    {
+        var serialized = ToBytes();
+        try
+        {
+            return FromBytes(serialized);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(serialized);
+        }
+    }
+
     public override string ToString() => "write-credential(redacted)";
 
     /// <summary>Zeroes every held member.</summary>
@@ -268,7 +289,7 @@ public sealed class RepositoryWriteCredential : IDisposable
         label.CopyTo(info);
         BinaryPrimitives.WriteUInt32BigEndian(info[label.Length..], generation);
 
-        var derived = new byte[KeyHierarchy.DerivedKeyLength];
+        var derived = new byte[DerivedKeyLength];
         HKDF.Expand(HashAlgorithmName.SHA256, prk, derived, info);
         return derived;
     }

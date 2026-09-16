@@ -43,9 +43,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, name), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory, observer: null, catalogue);
 
@@ -88,9 +88,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         var snapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray();
 
@@ -129,9 +129,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("ads-plan.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
 
         var plan = RestorePlanner.Plan(
             catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), string.Empty,
@@ -163,9 +163,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("ads-receipt.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xA8, 16).ToArray(), string.Empty, target);
@@ -208,9 +208,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xB1), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xB1), CancellationToken.None);
 
         var snapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray();
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -275,9 +275,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("posix-mode.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source, 0xB2), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xB2), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xB2, 16).ToArray(), string.Empty, target);
@@ -308,18 +308,18 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using (var live = OpenCatalogue())
         {
-            await CreateOrchestrator(store, keys, hierarchy, live).PublishAsync(Job(source, 0xC1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential, live).PublishAsync(Job(source, 0xC1), CancellationToken.None);
             source.AddFile("other/late.bin", Deterministic(90_000, 9));
-            await CreateOrchestrator(store, keys, hierarchy, live).PublishAsync(Job(source, 0xC2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential, live).PublishAsync(Job(source, 0xC2), CancellationToken.None);
         }
 
         // Fresh catalogue, targeted forensic rebuild — no index objects used.
         var snapshotId = Enumerable.Repeat((byte)0xC1, 16).ToArray();
         using var rebuilt = OpenCatalogue("forensic.db");
-        using (var rebuilder = new ForensicRebuilder(store, Repo, hierarchy))
+        using (var rebuilder = new ForensicRebuilder(store, Repo, credential))
         {
             var report = await rebuilder.RebuildAsync(
                 rebuilt, new ForensicTarget.Snapshot(snapshotId), CancellationToken.None);
@@ -456,9 +456,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("skipped.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xD2), CancellationToken.None);
 
         // A target that cannot materialise symlinks. The plan declares the
@@ -524,9 +524,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("one-fails.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xD8), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -658,17 +658,17 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("catalogue-selectors.db");
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xE7), CancellationToken.None);
 
         // A second snapshot the selector must not reach into: same paths,
         // different content, so choosing the wrong one restores wrong bytes
         // rather than merely failing.
         source.AddFile("keep/wanted.bin", Deterministic(3_000, 99));
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xE8), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -719,9 +719,9 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue($"catalogue-{seed:x2}.db");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, seed), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();

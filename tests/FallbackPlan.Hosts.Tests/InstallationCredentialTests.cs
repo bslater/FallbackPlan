@@ -203,7 +203,7 @@ public sealed class InstallationCredentialTests : IDisposable
             strangerSalt, KdfValidationMode.CreateRepository))
         {
             Directory.CreateDirectory(_harness.RepositoryPath);
-            (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            (await RepositoryLifecycle.CreateAsync(
                 new LocalFileSystemObjectStore(_harness.RepositoryPath), strangerAuthority.Credential,
                 strangerSalt, RepositoryCreationSettings.Default.KdfParameters, "stranger",
                 (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), _timeout.Token)).Dispose();

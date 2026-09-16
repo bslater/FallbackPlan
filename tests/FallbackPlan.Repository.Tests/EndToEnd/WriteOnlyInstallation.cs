@@ -73,7 +73,7 @@ internal static class WriteOnlyInstallation
         IObjectStore store, string passphraseText, CancellationToken cancellationToken)
     {
         using var passphrase = Passphrase.Create(passphraseText);
-        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
             store, passphrase, cancellationToken);
         return new OpenedArchive(repository, authority);
     }

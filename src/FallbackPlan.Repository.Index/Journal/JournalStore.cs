@@ -24,7 +24,7 @@ public sealed class JournalPublisher : IDisposable
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
     private readonly WriterId _writerId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
@@ -34,21 +34,21 @@ public sealed class JournalPublisher : IDisposable
         IObjectStore store,
         RepositoryId repositoryId,
         WriterId writerId,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         WriterSequence sequence,
         ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(sequence);
 
         _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _writerId = writerId;
-        _hierarchy = hierarchy;
+        _credential = credential;
         _sequence = sequence;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
@@ -66,14 +66,14 @@ public sealed class JournalPublisher : IDisposable
         var record = new JournalRecord(kind, _writerId, sequence, issuedAtMs, payload);
 
         byte[] stored;
-        using (var signer = RepositorySigner.Create(_hierarchy, new KeyGeneration(signingGeneration)))
+        using (var signer = RepositorySigner.Create(_credential, new KeyGeneration(signingGeneration)))
         {
             stored = JournalRecordCodec.Encode(record, signer.Sign(JournalRecordCodec.EncodeForSigning(record)));
         }
 
         var keyGeneration = new KeyGeneration(signingGeneration);
         var objectId = _objectIdDeriver.Derive(ObjectType.JournalRecord, ContentHasher.Hash(stored));
-        var metadataKey = _hierarchy.DeriveMetadataKey(keyGeneration);
+        var metadataKey = _credential.DeriveMetadataKey(keyGeneration);
 
         byte[] sealedObject;
         try
@@ -154,19 +154,19 @@ public sealed class JournalReader : IDisposable
 {
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
 
     /// <summary>Creates a reader.</summary>
-    public JournalReader(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    public JournalReader(IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         _store = store;
         _repositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>Loads every journal record, counting the unparseable separately.</summary>
@@ -205,7 +205,7 @@ public sealed class JournalReader : IDisposable
                     continue;
                 }
 
-                var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+                var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
                 byte[] plaintext;
                 try
                 {
@@ -236,7 +236,7 @@ public sealed class JournalReader : IDisposable
                 var decoded = JournalRecordCodec.Decode(plaintext);
 
                 if (JournalRecordCodec.VerifyByDescent(
-                    decoded.SignedBytes.Span, decoded.Signature.Span, _hierarchy, maxGeneration) is null)
+                    decoded.SignedBytes.Span, decoded.Signature.Span, _credential, maxGeneration) is null)
                 {
                     unparseable++;
                     findings.Add(new DamageFinding(

@@ -430,7 +430,7 @@ public sealed partial class ServiceCommandHandler
         {
             using (credential)
             {
-                return await RepositoryLifecycle.OpenWriteOnlyAsync(
+                return await RepositoryLifecycle.OpenAsync(
                         store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
                     .ConfigureAwait(false);
             }
@@ -478,7 +478,7 @@ public sealed partial class ServiceCommandHandler
                 // store per blob (FR-RST-003).
                 report = await new CatalogueRebuilder(
                     new IndexLoader(
-                        store, repository.RepositoryId, repository.Hierarchy, runtime.LoggerFor<IndexLoader>()),
+                        store, repository.RepositoryId, repository.Credential, runtime.LoggerFor<IndexLoader>()),
                     runtime.LoggerFor<CatalogueRebuilder>())
                     .RebuildAsync(
                         catalogue, generation, gapPatienceGenerations: 2,
@@ -498,7 +498,7 @@ public sealed partial class ServiceCommandHandler
                     await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
                     await CatalogueProjector.ProjectAsync(
                         catalogue, reader, store, repository.RepositoryId, repository.Keys,
-                        repository.Hierarchy, cancellationToken).ConfigureAwait(false);
+                        repository.Credential, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))

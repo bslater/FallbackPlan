@@ -157,7 +157,7 @@ public static class StagingSweep
         ThrowHelper.ThrowIfNull(freshPlan);
         ThrowHelper.ThrowIfNull(freshSurvey);
 
-        var deriver = new StoreBlobKeyDeriver(repository.Hierarchy.DeriveKeyIdKey());
+        var deriver = new StoreBlobKeyDeriver(repository.Credential.KeyIdKey.ToArray());
 
         var condemnedBlobs = freshPlan.DeletableBlobs.Select(blob => blob.BlobId).ToHashSet();
         var condemnedSnapshots = freshPlan.ExpiredSnapshotKeys.ToHashSet();
@@ -425,10 +425,10 @@ public static class StagingSweep
         if (!repository.Descriptor.RequiredFeatures.Contains(
             RepositoryDescriptorCodec.FeatureReclaimAuthority))
         {
-            return RepositorySigner.Create(repository.Hierarchy, generation);
+            return RepositorySigner.Create(repository.Credential, generation);
         }
 
-        // The grant is the only source of this key: a repository's hierarchy
+        // The grant is the only source of this key: a repository's credential
         // cannot derive it at all (ADR-0055 §2, §6). A collection reaching
         // here without one is a caller bug — the handler refuses an apply
         // without a grant by name before a sweep starts — and is refused
@@ -469,11 +469,11 @@ public static class StagingSweep
                 tombstone, signer.Sign(TombstoneCodec.EncodeForSigning(tombstone)));
         }
 
-        var contentIdKey = repository.Hierarchy.DeriveContentIdKey();
+        var contentIdKey = repository.Credential.ContentIdKey.ToArray();
         var objectId = new ObjectIdDeriver(contentIdKey).Derive(
             ObjectType.Tombstone, ContentHasher.Hash(encoded));
 
-        var metadataKey = repository.Hierarchy.DeriveMetadataKey(keyGeneration);
+        var metadataKey = repository.Credential.DeriveMetadataKey(keyGeneration);
         byte[] sealedObject;
         try
         {
@@ -519,7 +519,7 @@ public static class StagingSweep
         try
         {
             var record = StandaloneRecordFraming.Parse(bytes);
-            var metadataKey = repository.Hierarchy.DeriveMetadataKey(record.KeyGeneration);
+            var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
             try
             {
                 if (!StandaloneRecordCipher.TryOpen(record, repository.RepositoryId, metadataKey, out var plaintext))

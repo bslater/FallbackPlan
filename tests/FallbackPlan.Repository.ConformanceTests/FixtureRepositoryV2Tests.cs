@@ -87,7 +87,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // and refuses content honestly.
         using (var authority = FixtureRepositoryV2.DeriveAuthority())
         {
-            using var writeOnly = await RepositoryLifecycle.OpenWriteOnlyAsync(
+            using var writeOnly = await RepositoryLifecycle.OpenAsync(
                 store, authority.Credential, CancellationToken.None);
             using var structural = new RepositoryReader(writeOnly.RepositoryId, writeOnly.Keys, store);
             await structural.LoadBlobsAsync(CancellationToken.None);
@@ -108,13 +108,13 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
             // journal — the hub's bookkeeping never needed content.
             using var catalogue = Catalogue.Catalogue.Open(
                 Path.Combine(_scratch, "catalogue.db"), writeOnly.RepositoryId);
-            var report = await new CatalogueRebuilder(new IndexLoader(store, writeOnly.RepositoryId, writeOnly.Hierarchy))
+            var report = await new CatalogueRebuilder(new IndexLoader(store, writeOnly.RepositoryId, writeOnly.Credential))
                 .RebuildAsync(catalogue, currentGeneration: 0, gapPatienceGenerations: 2,
                     isSequenceAccountedAsync: null, CancellationToken.None);
             Assert.AreEqual(1, report.DeltasApplied);
             Assert.IsEmpty(report.Findings);
 
-            using var journalReader = new JournalReader(store, writeOnly.RepositoryId, writeOnly.Hierarchy);
+            using var journalReader = new JournalReader(store, writeOnly.RepositoryId, writeOnly.Credential);
             var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
             Assert.AreEqual(0, unparseable);
             Assert.AreEqual(2, records.Count);
@@ -124,7 +124,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // byte-identically — the whole promise of the format.
         using (var passphrase = FixtureRepositoryV2.CreatePassphrase())
         {
-            var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
                 store, passphrase, CancellationToken.None);
             using (repository)
             using (authority)

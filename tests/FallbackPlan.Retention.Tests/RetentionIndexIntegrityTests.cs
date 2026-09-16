@@ -317,7 +317,7 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
         IReadOnlyList<(ObjectId ObjectId, BlobId Winner)> Resolved)> RebuildAsync(
         LocalFileSystemObjectStore store, OpenedRepository repository, Func<BlobId, BlobState>? blobState)
     {
-        var loader = new IndexLoader(store, repository.RepositoryId, repository.Hierarchy);
+        var loader = new IndexLoader(store, repository.RepositoryId, repository.Credential);
         var state = await loader.LoadAsync(
             Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value),
             gapPatienceGenerations: 2,

@@ -109,9 +109,8 @@ public static class BackupRunner
                 await shipSink.BeginRunAsync(
                     set,
                     nowMs,
-                    archive.Repository.Hierarchy.ReclaimPublicKey(
-                        archive.Repository.CurrentMetadataGeneration),
-                    archive.Repository.Hierarchy.ClaimPublicKey(),
+                    archive.Repository.Credential.ReclaimPublicKey.ToArray(),
+                    archive.Repository.Credential.ClaimPublicKey.ToArray(),
                     cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -142,7 +141,7 @@ public static class BackupRunner
                 runtime.Writer,
                 generation,
                 archive.Repository.Keys,
-                archive.Repository.Hierarchy,
+                archive.Repository.Credential,
                 archive.Store,
                 archive.Sequence,
                 archive.SpoolDirectory,

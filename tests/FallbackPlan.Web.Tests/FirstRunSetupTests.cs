@@ -98,7 +98,7 @@ public sealed class FirstRunSetupTests
         var store = new LocalFileSystemObjectStore(path);
         using (var passphrase = Passphrase.Create(StrongPassphrase))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();

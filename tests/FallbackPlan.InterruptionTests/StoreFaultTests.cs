@@ -35,13 +35,13 @@ public sealed class StoreFaultTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // The committed baseline is durable — its directory entries flushed.
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var vanishing = new VanishingObjectStore(store);
@@ -57,7 +57,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         using (var source = new MemoryStream(second))
         {
             await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-                await CreateOrchestrator(vanishing, keys, hierarchy, new KillAfter(killAfter))
+                await CreateOrchestrator(vanishing, keys, credential, new KillAfter(killAfter))
                     .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
         }
 
@@ -71,7 +71,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         // run's, with nothing at the old journal keys to collide with.
         using (var retry = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
@@ -88,12 +88,12 @@ public sealed class StoreFaultTests : InterruptionHarness
         // happened: prior snapshot intact, rerun clean, no wedged state.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var vanishing = new VanishingObjectStore(store);
@@ -102,7 +102,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(vanishing, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(vanishing, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         await vanishing.LosePowerAsync();
@@ -112,7 +112,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         var third = BuildFile(seed: 3);
         using (var source = new MemoryStream(third))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(third, await RestoreSnapshotAsync(store, keys, 0xC3));
@@ -128,12 +128,12 @@ public sealed class StoreFaultTests : InterruptionHarness
         // bytes, and the undamaged one must be untouched (NFR-REL-004).
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var vanishing = new VanishingObjectStore(store);
@@ -142,7 +142,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(vanishing, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(vanishing, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         await vanishing.LosePowerAsync(key => key.StartsWith("blobs/", StringComparison.Ordinal));
@@ -156,12 +156,12 @@ public sealed class StoreFaultTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         // The first blob put of the second run tears: partial bytes become
@@ -171,7 +171,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         using (var source = new MemoryStream(second))
         {
             await Assert.ThrowsExactlyAsync<IOException>(async () =>
-                await CreateOrchestrator(tearing, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
+                await CreateOrchestrator(tearing, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
         }
 
         Assert.IsNotNull(tearing.TornKey, "the tear never happened — the test proved nothing");
@@ -194,7 +194,7 @@ public sealed class StoreFaultTests : InterruptionHarness
         // The forensic rebuilder is the path built for damaged stores: it
         // must scope the torn blob as a finding and still satisfy a rebuild
         // targeted at the committed snapshot.
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "torn-forensic.db"), Repo);
 
         var report = await rebuilder.RebuildAsync(

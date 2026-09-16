@@ -203,7 +203,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
-        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
             new LocalFileSystemObjectStore(_source.RepositoryPath), passphrase, Timeout);
         using var _repository = repository;
         using var _authority = authority;
@@ -254,11 +254,11 @@ public sealed class PeerRetentionReplayTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
-        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
             new LocalFileSystemObjectStore(_source.RepositoryPath), passphrase, Timeout);
         using var _repository = repository;
         using var _authority = authority;
-        var reclaimPublicKey = repository.Hierarchy.ReclaimPublicKey(repository.CurrentMetadataGeneration);
+        var reclaimPublicKey = repository.Credential.ReclaimPublicKey.ToArray();
 
         using var keypair = PeerKeypairStore.Open(_source.StateDirectory);
         var grants = PeerGrantStore.Open(_source.StateDirectory);

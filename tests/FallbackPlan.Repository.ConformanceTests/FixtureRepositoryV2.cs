@@ -86,9 +86,9 @@ public static class FixtureRepositoryV2
         var store = new LocalFileSystemObjectStore(rootDirectory);
         using var authority = DeriveAuthority();
         using var keys = RepositoryKeySet.FromWriteCredential(authority.Credential);
-        using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
-        using var objectIds = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
-        using var storeKeys = new StoreBlobKeyDeriver(hierarchy.DeriveKeyIdKey());
+        using var credential = authority.Credential.Clone();
+        using var objectIds = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
+        using var storeKeys = new StoreBlobKeyDeriver(credential.KeyIdKey.ToArray());
         var spool = Path.Combine(Path.GetTempPath(), "fbp-fixture-v2-spool", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(spool);
 
@@ -112,7 +112,7 @@ public static class FixtureRepositoryV2
             var dataBlobId = BlobId.FromWriterCounter(Writer, 2);
             var metaBlobId = BlobId.FromWriterCounter(Writer, 3);
 
-            await PublishJournalAsync(store, hierarchy, objectIds, sequence: 1,
+            await PublishJournalAsync(store, credential, objectIds, sequence: 1,
                 new JournalPayload.WriteIntent(BackupSetId, [dataBlobId, metaBlobId], 3_600_000, 5, IntentPurpose.Backup),
                 Salt(0xE5), cancellationToken).ConfigureAwait(false);
 
@@ -207,7 +207,7 @@ public static class FixtureRepositoryV2
                 ClientVersion = "fallbackplan-fixture/1.0",
             };
             byte[] encodedSnapshot;
-            using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+            using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
             {
                 encodedSnapshot = SnapshotManifestCodec.Encode(
                     snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));
@@ -237,7 +237,7 @@ public static class FixtureRepositoryV2
                 Entries = entries,
             };
             byte[] storedDelta;
-            using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+            using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
             {
                 storedDelta = IndexDeltaCodec.Encode(delta, signer.Sign(IndexDeltaCodec.EncodeForSigning(delta)));
             }
@@ -250,7 +250,7 @@ public static class FixtureRepositoryV2
                 cancellationToken).ConfigureAwait(false);
 
             // --- intent retirement (sequence 6) ---------------------------
-            await PublishJournalAsync(store, hierarchy, objectIds, sequence: 6,
+            await PublishJournalAsync(store, credential, objectIds, sequence: 6,
                 new JournalPayload.IntentRetirement(1, IntentOutcome.Completed),
                 Salt(0xE6), cancellationToken).ConfigureAwait(false);
         }
@@ -265,7 +265,7 @@ public static class FixtureRepositoryV2
 
     private static async Task PublishJournalAsync(
         LocalFileSystemObjectStore store,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         ObjectIdDeriver objectIds,
         ulong sequence,
         JournalPayload payload,
@@ -282,12 +282,12 @@ public static class FixtureRepositoryV2
         var record = new JournalRecord(kind, Writer, sequence, CreatedAt, payload);
 
         byte[] stored;
-        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
         {
             stored = JournalRecordCodec.Encode(record, signer.Sign(JournalRecordCodec.EncodeForSigning(record)));
         }
 
-        var metadataKey = hierarchy.DeriveMetadataKey(KeyGeneration.Zero);
+        var metadataKey = credential.DeriveMetadataKey(KeyGeneration.Zero);
         try
         {
             await PutAsync(store, MetadataStoreKeys.Journal(Writer, sequence),

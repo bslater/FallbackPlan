@@ -126,7 +126,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -182,7 +182,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -226,7 +226,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -259,7 +259,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(metadata);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();

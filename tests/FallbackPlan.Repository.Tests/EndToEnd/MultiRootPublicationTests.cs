@@ -23,13 +23,13 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue, string spoolName)
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue, string spoolName)
     {
         var spool = Path.Combine(SpoolDirectory, spoolName);
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool, observer: null, catalogue);
     }
@@ -78,12 +78,12 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("two-roots");
 
         // Deliberately given out of byte order — the publication must sort
         // by raw label bytes, or the tree codec's MUST throws at encode.
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "two-roots").PublishAsync(
+        await CreateOrchestrator(store, keys, credential, catalogue, "two-roots").PublishAsync(
             Job(source, [new ScanRoot("bravo", "Photos"), new ScanRoot("alpha", "Documents")], 0xA1),
             CancellationToken.None);
 
@@ -109,10 +109,10 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("ruled");
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "ruled").PublishAsync(
+        await CreateOrchestrator(store, keys, credential, catalogue, "ruled").PublishAsync(
             Job(
                 source,
                 [new ScanRoot("alpha", "Documents"), new ScanRoot("bravo", "Photos")],
@@ -136,10 +136,10 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("folded");
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "folded").PublishAsync(
+        await CreateOrchestrator(store, keys, credential, catalogue, "folded").PublishAsync(
             Job(
                 source,
                 [new ScanRoot("alpha", "Documents"), new ScanRoot("bravo", "Photos")],
@@ -161,9 +161,9 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("refused");
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy, catalogue, "refused");
+        var orchestrator = CreateOrchestrator(store, keys, credential, catalogue, "refused");
 
         await Assert.ThrowsExactlyAsync<ArgumentException>(async () => await orchestrator.PublishAsync(
             Job(source, [new ScanRoot("alpha", "Docs"), new ScanRoot("bravo")], 0xD4),
@@ -182,12 +182,12 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("single");
 
         // One root, label present but ignored: the tree's root is the folder
         // itself — no synthetic frame, no prefix, exactly the old coordinates.
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "single").PublishAsync(
+        await CreateOrchestrator(store, keys, credential, catalogue, "single").PublishAsync(
             Job(source, [new ScanRoot("alpha", "IgnoredLabel")], 0xE5),
             CancellationToken.None);
 
@@ -203,10 +203,10 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("restored");
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "restored").PublishAsync(
+        await CreateOrchestrator(store, keys, credential, catalogue, "restored").PublishAsync(
             Job(source, [new ScanRoot("alpha", "Documents"), new ScanRoot("bravo", "Photos")], 0xF6),
             CancellationToken.None);
 
@@ -241,11 +241,11 @@ public sealed class MultiRootPublicationTests : ArchiveTestHarness
         var source = TwoRootSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("compared");
         IReadOnlyList<ScanRoot> roots = [new ScanRoot("alpha", "Documents"), new ScanRoot("bravo", "Photos")];
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "compared")
+        await CreateOrchestrator(store, keys, credential, catalogue, "compared")
             .PublishAsync(Job(source, roots, 0xA7), CancellationToken.None);
         var baseline = Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId;
 

@@ -256,7 +256,7 @@ public sealed class PartialCaptureRetentionTests : IDisposable
         };
 
         byte[] encoded;
-        using (var signer = RepositorySigner.Create(repository.Hierarchy, generation))
+        using (var signer = RepositorySigner.Create(repository.Credential, generation))
         {
             encoded = SnapshotManifestCodec.Encode(
                 snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));

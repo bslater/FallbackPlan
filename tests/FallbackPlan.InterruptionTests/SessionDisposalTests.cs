@@ -20,7 +20,7 @@ public sealed class SessionDisposalTests : InterruptionHarness
     {
         var parking = new ParkingBlobStore(CreateStore());
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // Fails after ~700 KiB: enough for the first blob (target 256 KiB)
         // to seal and its upload to be in flight when the source dies.
@@ -30,7 +30,7 @@ public sealed class SessionDisposalTests : InterruptionHarness
         {
             using (source)
             {
-                await CreateOrchestrator(parking, keys, hierarchy)
+                await CreateOrchestrator(parking, keys, credential)
                     .PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
             }
         });

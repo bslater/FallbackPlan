@@ -273,8 +273,8 @@ public sealed partial class PublicationOrchestrator
         // (05 §6.3), and this writer owns the directory exclusively.
         BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
 
         // A previous run's leftovers — crash or cancellation alike — get
         // their void deltas on this publication, not on a restart
@@ -448,7 +448,7 @@ public sealed partial class PublicationOrchestrator
             };
 
             byte[] encodedSnapshot;
-            using (var signer = RepositorySigner.Create(_hierarchy, _generation))
+            using (var signer = RepositorySigner.Create(_credential, _generation))
             {
                 encodedSnapshot = SnapshotManifestCodec.Encode(
                     snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));

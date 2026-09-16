@@ -103,7 +103,7 @@ public sealed class IndexSizeTests : IDisposable
     {
         var label = objects.ToString(CultureInfo.InvariantCulture);
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "store", label));
-        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = new WriterSequence(
             new FileSequenceStateStore(Path.Combine(_root, "state", label, "sequence.txt")));
 
@@ -118,7 +118,7 @@ public sealed class IndexSizeTests : IDisposable
         Assert.AreEqual(objects, entries.Select(entry => entry.ObjectId).Distinct().Count());
 
         CheckpointId checkpointId;
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             var delta = await publisher.PublishDeltaAsync(generation, [], entries, CancellationToken.None);
             checkpointId = await publisher.PublishCheckpointAsync(

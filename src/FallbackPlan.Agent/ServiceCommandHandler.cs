@@ -1195,7 +1195,7 @@ public sealed partial class ServiceCommandHandler(
             }
 
             using (var journalReader = new JournalReader(
-                archive.Store, archive.Repository.RepositoryId, archive.Repository.Hierarchy))
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Credential))
             {
                 var generation = archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
                     ? archive.Repository.CurrentDataGeneration.Value

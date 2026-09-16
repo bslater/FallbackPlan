@@ -1047,7 +1047,7 @@ public sealed class DirectShipTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
-        var (opened, authority) = await Repository.RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (opened, authority) = await Repository.RepositoryLifecycle.OpenForReadAsync(
             new Storage.Local.LocalFileSystemObjectStore(replica), passphrase, Timeout);
         using (opened)
         using (authority)

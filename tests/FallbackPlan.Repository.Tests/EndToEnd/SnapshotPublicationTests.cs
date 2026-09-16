@@ -29,7 +29,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     private static readonly byte[] DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)];
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, ILogger? logger = null,
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, ILogger? logger = null,
         IJobProgressReporter? progress = null) =>
         new(
             SmallBlobPolicy,
@@ -37,7 +37,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
@@ -108,9 +108,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(3, published.Files.Count);
         Assert.IsEmpty(published.Failures);
@@ -159,14 +159,14 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // Retention is the one wall-clock consumer and it reads capture
         // times (00-conventions §7), so a multi-hour capture stamped as
         // zero-duration misstates the very field retention decides on. The
         // engine takes no clock of its own; the job carries one.
         var job = Job(source) with { Clock = () => 1_722_600_005_000 };
-        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         var snapshotKeys = new List<ObjectKey>();
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
@@ -199,10 +199,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["**/*.bin"], ExcludeRules = ["skip"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         // The discoverable snapshot, verified and decoded.
         var snapshotKeys = new List<ObjectKey>();
@@ -224,7 +224,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plain));
         var decoded = SnapshotManifestCodec.Decode(plain);
 
-        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
         {
             Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
         }
@@ -270,10 +270,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["photos/**"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         SequenceAssert.AreEqual(
             ["photos/a.bin", "photos/deep/b.bin"],
@@ -308,10 +308,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["work/**"], ExcludeRules = ["work/secret.bin"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         var file = Assert.ContainsSingle(published.Files);
         Assert.AreEqual("work/keep.bin", file.RelativePath);
@@ -327,9 +327,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(2, published.Failures.Count);
         Assert.IsNotNull(published.ErrorManifestObjectId);
@@ -368,10 +368,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var job = Job(source) with { ExcludeRules = ["skip"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         Assert.ContainsSingle(published.Files);
         Assert.IsEmpty(published.Failures);
@@ -386,12 +386,12 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         source.AddFile("a.bin", [1, 2, 3]);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var job = Job(source) with { ExcludeRules = ["a**b"] };
 
         await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None));
+            await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None));
 
         var blobs = 0;
         await foreach (var _ in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
@@ -412,9 +412,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -458,9 +458,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
 
@@ -497,9 +497,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -536,9 +536,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -575,9 +575,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -608,9 +608,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -641,9 +641,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(40, published.Files.Count);
         Assert.IsTrue(published.ContentBlobs.Count <= 2,
@@ -658,8 +658,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        using var credential = CreateCredential();
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         // Drive the chain writer directly at a tiny shard budget: the same
         // code path publication uses, forced to shard.
@@ -753,10 +753,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var logger = new RecordingLogger();
 
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
+        var orchestrator = CreateOrchestrator(store, keys, credential, logger);
         var job = Job(source) with
         {
             Source = new FaultInjectingSource(source, probeFailure: new IOException("the volume vanished before the probe")),
@@ -780,10 +780,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var logger = new RecordingLogger();
 
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy, logger);
+        var orchestrator = CreateOrchestrator(store, keys, credential, logger);
         var job = Job(source) with
         {
             Source = new FaultInjectingSource(source, midScanFailure: new IOException("the disk died mid-walk")),
@@ -811,10 +811,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var reporter = new RecordingReporter();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(Job(source), CancellationToken.None);
         Assert.HasCount(300, published.Files);
 
@@ -851,11 +851,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var reporter = new RecordingReporter();
 
         var job = Job(source) with { IncludeRules = ["docs/**"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(job, CancellationToken.None);
 
         Assert.ContainsSingle(published.Files);
@@ -879,10 +879,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var reporter = new RecordingReporter();
 
-        await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+        await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(Job(source), CancellationToken.None);
 
         Assert.Contains(
@@ -903,11 +903,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var reporter = new RecordingReporter();
 
         var job = Job(source) with { ExcludeRules = ["*.tmp"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy, progress: reporter)
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(job, CancellationToken.None);
 
         Assert.ContainsSingle(published.Files);

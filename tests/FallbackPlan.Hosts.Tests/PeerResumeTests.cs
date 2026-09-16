@@ -277,7 +277,7 @@ public sealed class PeerResumeTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
-        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
             new LocalFileSystemObjectStore(_source.RepositoryPath), passphrase, Timeout);
         using var _repository = repository;
         using var _authority = authority;

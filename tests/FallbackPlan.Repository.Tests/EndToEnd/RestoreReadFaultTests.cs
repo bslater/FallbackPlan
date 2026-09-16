@@ -32,9 +32,9 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xE1), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -87,9 +87,9 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "read-fault.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "read-fault-sequence.txt"))),
             SpoolDirectory, observer: null, catalogue);
 

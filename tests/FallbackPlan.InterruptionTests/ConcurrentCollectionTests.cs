@@ -18,7 +18,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // Interrupt after upload: blobs durable, nothing references them —
         // to a reachability walk they are indistinguishable from garbage,
@@ -26,13 +26,13 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
         using (var source = new MemoryStream(BuildFile(seed: 7)))
         {
             await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs))
+                await CreateOrchestrator(store, keys, credential, new KillAfter(PublicationStep.UploadBlobs))
                     .PublishAsync(Job(source, snapshotSeed: 0xE5), CancellationToken.None));
         }
 
         Assert.IsTrue(CountUnder("blobs") > 0);
 
-        var wouldDelete = await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000);
+        var wouldDelete = await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000);
 
         Assert.IsEmpty(wouldDelete);
     }
@@ -42,12 +42,12 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         using (var source = new MemoryStream(BuildFile(seed: 7)))
         {
             await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs))
+                await CreateOrchestrator(store, keys, credential, new KillAfter(PublicationStep.UploadBlobs))
                     .PublishAsync(Job(source, snapshotSeed: 0xE5), CancellationToken.None));
         }
 
@@ -62,7 +62,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
             await File.WriteAllBytesAsync(file, bytes);
         }
 
-        var wouldDelete = await SimulateCollectorMarkAsync(store, hierarchy, 0, 1_722_600_000_000);
+        var wouldDelete = await SimulateCollectorMarkAsync(store, credential, 0, 1_722_600_000_000);
 
         Assert.IsEmpty(wouldDelete);
     }
@@ -72,7 +72,7 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // A completed publication retires its intent — its blobs are now
         // reachable through the snapshot, which this simulated collector
@@ -81,11 +81,11 @@ public sealed class ConcurrentCollectionTests : InterruptionHarness
         // (after the snapshot became durable, 08 §5).
         using (var source = new MemoryStream(BuildFile(seed: 7)))
         {
-            await CreateOrchestrator(store, keys, hierarchy)
+            await CreateOrchestrator(store, keys, credential)
                 .PublishAsync(Job(source, snapshotSeed: 0xE6), CancellationToken.None);
         }
 
-        var candidates = await SimulateCollectorMarkAsync(store, hierarchy, 0, 1_722_600_000_000);
+        var candidates = await SimulateCollectorMarkAsync(store, credential, 0, 1_722_600_000_000);
 
         Assert.IsNotEmpty(candidates);
         Assert.AreEqual(1, CountUnder("snapshots"));

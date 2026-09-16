@@ -22,14 +22,14 @@ public sealed class OpenedRepository : IDisposable
     internal OpenedRepository(
         RepositoryDescriptor descriptor,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         KeyGeneration currentDataGeneration,
         KeyGeneration currentMetadataGeneration,
         bool kdfBelowCreationMinimums)
     {
         Descriptor = descriptor;
         Keys = keys;
-        Hierarchy = hierarchy;
+        Credential = credential;
         CurrentDataGeneration = currentDataGeneration;
         CurrentMetadataGeneration = currentMetadataGeneration;
         KdfBelowCreationMinimums = kdfBelowCreationMinimums;
@@ -44,8 +44,8 @@ public sealed class OpenedRepository : IDisposable
     /// <summary>The derived key set.</summary>
     public RepositoryKeySet Keys { get; }
 
-    /// <summary>The key hierarchy — what signers and per-generation keys derive from.</summary>
-    public KeyHierarchy Hierarchy { get; }
+    /// <summary>The write credential — what signers and per-generation keys derive from.</summary>
+    public RepositoryWriteCredential Credential { get; }
 
     /// <summary>The current data-plane generation (specification 03 §9).</summary>
     public KeyGeneration CurrentDataGeneration { get; }
@@ -72,7 +72,7 @@ public sealed class OpenedRepository : IDisposable
     public void Dispose()
     {
         Keys.Dispose();
-        Hierarchy.Dispose();
+        Credential.Dispose();
     }
 }
 
@@ -119,7 +119,7 @@ public static class RepositoryLifecycle
     /// </summary>
     /// <exception cref="ArgumentException">The settings are invalid, or KDF parameters fall below the creation minimums.</exception>
     /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
-    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateWriteOnlyAsync(
+    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateFromPassphraseAsync(
         IObjectStore store,
         Passphrase passphrase,
         RepositoryCreationSettings settings,
@@ -127,7 +127,7 @@ public static class RepositoryLifecycle
         CancellationToken cancellationToken,
         ILogger? logger = null)
     {
-        var created = await CreateWriteOnlyCoreAsync(
+        var created = await CreateFromPassphraseCoreAsync(
             store, passphrase, settings, createdAtUnixMilliseconds, cancellationToken).ConfigureAwait(false);
         Log.RepositoryCreated(
             logger ?? NullLogger.Instance, created.Repository.RepositoryId,
@@ -138,7 +138,7 @@ public static class RepositoryLifecycle
     // The public entry point above is the whole of this method's diagnostics:
     // one place that reports what was created or refused, rather than a log
     // call beside every throw.
-    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateWriteOnlyCoreAsync(
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> CreateFromPassphraseCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         RepositoryCreationSettings settings,
@@ -189,7 +189,7 @@ public static class RepositoryLifecycle
             var opened = new OpenedRepository(
                 descriptor,
                 RepositoryKeySet.FromWriteCredential(authority.Credential),
-                KeyHierarchy.ForWriteOnly(authority.Credential),
+                authority.Credential.Clone(),
                 KeyGeneration.Zero,
                 KeyGeneration.Zero,
                 kdfBelowCreationMinimums: false);
@@ -213,7 +213,7 @@ public static class RepositoryLifecycle
     /// </summary>
     /// <exception cref="ArgumentException">The salt is not exactly <see cref="KekDerivation.SaltLength"/> bytes.</exception>
     /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
-    public static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialAsync(
+    public static async ValueTask<OpenedRepository> CreateAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
         ReadOnlyMemory<byte> kdfSalt,
@@ -223,7 +223,7 @@ public static class RepositoryLifecycle
         CancellationToken cancellationToken,
         ILogger? logger = null)
     {
-        var created = await CreateWriteOnlyFromCredentialCoreAsync(
+        var created = await CreateCoreAsync(
             store, credential, kdfSalt, kdfParameters, createdBy, createdAtUnixMilliseconds, cancellationToken)
             .ConfigureAwait(false);
         Log.RepositoryCreated(
@@ -235,7 +235,7 @@ public static class RepositoryLifecycle
     // one place that reports what opened or was refused, rather than a log call
     // beside every throw. Every refusal here is a RepositoryOpenException or a
     // KeyUnwrapFailedException by design, which is what makes that possible.
-    private static async ValueTask<OpenedRepository> CreateWriteOnlyFromCredentialCoreAsync(
+    private static async ValueTask<OpenedRepository> CreateCoreAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
         ReadOnlyMemory<byte> kdfSalt,
@@ -280,7 +280,7 @@ public static class RepositoryLifecycle
         return new OpenedRepository(
             descriptor,
             RepositoryKeySet.FromWriteCredential(credential),
-            KeyHierarchy.ForWriteOnly(credential),
+            credential.Clone(),
             KeyGeneration.Zero,
             KeyGeneration.Zero,
             kdfBelowCreationMinimums: !kdfParameters.ValidateCreationMinimums().IsValid);
@@ -294,7 +294,7 @@ public static class RepositoryLifecycle
     /// wrong passphrase — is refused by name before anything is read.
     /// </summary>
     /// <exception cref="RepositoryOpenException">The store holds no verifiable write-only repository, or the credential does not belong to it.</exception>
-    public static async ValueTask<OpenedRepository> OpenWriteOnlyAsync(
+    public static async ValueTask<OpenedRepository> OpenAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
         CancellationToken cancellationToken,
@@ -303,7 +303,7 @@ public static class RepositoryLifecycle
         var log = logger ?? NullLogger.Instance;
         try
         {
-            var opened = await OpenWriteOnlyCoreAsync(store, credential, cancellationToken).ConfigureAwait(false);
+            var opened = await OpenCoreAsync(store, credential, cancellationToken).ConfigureAwait(false);
             Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion);
             return opened;
         }
@@ -318,7 +318,7 @@ public static class RepositoryLifecycle
     // one place that reports what opened or was refused, rather than a log call
     // beside every throw. Every refusal here is a RepositoryOpenException or a
     // KeyUnwrapFailedException by design, which is what makes that possible.
-    private static async ValueTask<OpenedRepository> OpenWriteOnlyCoreAsync(
+    private static async ValueTask<OpenedRepository> OpenCoreAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
         CancellationToken cancellationToken)
@@ -336,7 +336,7 @@ public static class RepositoryLifecycle
         return new OpenedRepository(
             descriptor,
             RepositoryKeySet.FromWriteCredential(credential),
-            KeyHierarchy.ForWriteOnly(credential),
+            credential.Clone(),
             KeyGeneration.Zero,
             KeyGeneration.Zero,
             kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);
@@ -351,7 +351,7 @@ public static class RepositoryLifecycle
     /// </summary>
     /// <exception cref="RepositoryOpenException">The store holds no verifiable write-only repository.</exception>
     /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this repository's keys.</exception>
-    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadAsync(
+    public static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenForReadAsync(
         IObjectStore store,
         Passphrase passphrase,
         CancellationToken cancellationToken,
@@ -360,7 +360,7 @@ public static class RepositoryLifecycle
         var log = logger ?? NullLogger.Instance;
         try
         {
-            var opened = await OpenWriteOnlyForReadCoreAsync(store, passphrase, cancellationToken)
+            var opened = await OpenForReadCoreAsync(store, passphrase, cancellationToken)
                 .ConfigureAwait(false);
             Log.RepositoryOpened(
                 log, opened.Repository.RepositoryId, opened.Repository.Descriptor.FormatVersion);
@@ -380,7 +380,7 @@ public static class RepositoryLifecycle
     // one place that reports what opened or was refused, rather than a log call
     // beside every throw. Every refusal here is a RepositoryOpenException or a
     // KeyUnwrapFailedException by design, which is what makes that possible.
-    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenWriteOnlyForReadCoreAsync(
+    private static async ValueTask<(OpenedRepository Repository, RepositoryReadAuthority Authority)> OpenForReadCoreAsync(
         IObjectStore store,
         Passphrase passphrase,
         CancellationToken cancellationToken)
@@ -400,7 +400,7 @@ public static class RepositoryLifecycle
             var opened = new OpenedRepository(
                 descriptor,
                 RepositoryKeySet.FromWriteCredential(authority!.Credential),
-                KeyHierarchy.ForWriteOnly(authority.Credential),
+                authority.Credential.Clone(),
                 KeyGeneration.Zero,
                 KeyGeneration.Zero,
                 kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);

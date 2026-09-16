@@ -364,7 +364,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
             repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
         IReadOnlyList<JournalRecord> records;
         int unparseable;
-        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Hierarchy))
+        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Credential))
         {
             (records, unparseable, _) = await journal.LoadAsync(sealingGeneration, CancellationToken.None);
         }

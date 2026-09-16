@@ -101,7 +101,7 @@ public sealed partial class ServiceCommandHandler
             }
             else
             {
-                var opened = await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+                var opened = await RepositoryLifecycle.CreateAsync(
                         store, credential, kdfSalt, kdfParameters, createdBy: Environment.MachineName,
                         (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
                     .ConfigureAwait(false);

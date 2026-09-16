@@ -119,13 +119,13 @@ public sealed class RestoreSpecialContentTests : ArchiveTestHarness
     {
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
         var spool = Path.Combine(SpoolDirectory, name);
         Directory.CreateDirectory(spool);
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool, observer: null, catalogue);
 

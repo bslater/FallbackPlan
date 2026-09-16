@@ -45,14 +45,14 @@ public sealed class RepositorySigner : IDisposable
     public ReadOnlySpan<byte> PublicKey => _publicKey;
 
     /// <summary>
-    /// Creates a signer for <paramref name="generation"/> from the hierarchy's
+    /// Creates a signer for <paramref name="generation"/> from the credential's
     /// derived seed.
     /// </summary>
-    public static RepositorySigner Create(KeyHierarchy hierarchy, KeyGeneration generation)
+    public static RepositorySigner Create(RepositoryWriteCredential credential, KeyGeneration generation)
     {
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
-        var seed = hierarchy.DeriveSigningKeySeed(generation);
+        var seed = credential.DeriveSigningKeySeed(generation);
 
         try
         {

@@ -677,7 +677,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // installation's salt, because the installation is what holds a
             // passphrase's authority — not because anybody remembered a
             // dialog (ADR-0044).
-            return await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            return await RepositoryLifecycle.CreateAsync(
                     store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
                     createdBy: Environment.MachineName,
                     (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
@@ -700,7 +700,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 + "this installation's — adopt the set with that passphrase (ADR-0042 §10).");
         }
 
-        return await RepositoryLifecycle.OpenWriteOnlyAsync(
+        return await RepositoryLifecycle.OpenAsync(
                 store, provisioning.Credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
             .ConfigureAwait(false);
     }
@@ -754,7 +754,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 using (credential)
                 {
                     repository = descriptorExists
-                        ? await RepositoryLifecycle.OpenWriteOnlyAsync(
+                        ? await RepositoryLifecycle.OpenAsync(
                                 store, credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                             .ConfigureAwait(false)
                         : throw new RepositoryOpenException(
@@ -854,7 +854,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         try
         {
             var loader = new IndexLoader(
-                archive.Store, archive.Repository.RepositoryId, archive.Repository.Hierarchy,
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Credential,
                 LoggerFor<IndexLoader>());
             var index = await loader.LoadAsync(
                 currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,

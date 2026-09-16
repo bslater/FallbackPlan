@@ -12,7 +12,7 @@ namespace FallbackPlan.TestSupport;
 /// <remarks>
 /// <see cref="Shared"/> is never disposed and is handed out by reference.
 /// Every consumer copies what it keeps — <c>RepositoryKeySet.FromWriteCredential</c>
-/// and <c>KeyHierarchy.ForWriteOnly</c> clone the credential, and
+/// and <c>RepositoryWriteCredential.Clone</c> clone the credential, and
 /// <c>RepositoryReader</c> copies the sealing scalar — so sharing costs
 /// nothing, and disposing it would zero the keys under every test still
 /// running. A suite that needs to own and dispose an authority calls

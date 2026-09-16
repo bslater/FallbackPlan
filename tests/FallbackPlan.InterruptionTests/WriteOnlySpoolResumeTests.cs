@@ -29,7 +29,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     public async Task WriteOnlySpool_JobKilledMidBlob_LeavesACheckpointCarryingTheContentKey()
     {
         var store = CreateStore();
-        var (opened, authority) = await CreateWriteOnlyAsync(store);
+        var (opened, authority) = await CreateFromPassphraseAsync(store);
         using (opened)
         using (authority)
         {
@@ -47,7 +47,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     public async Task WriteOnlySpool_ResumedAfterAKill_ReEmitsItsSealedBytesUnderTheCheckpointedContentKey()
     {
         var store = CreateStore();
-        var (opened, authority) = await CreateWriteOnlyAsync(store);
+        var (opened, authority) = await CreateFromPassphraseAsync(store);
         using (opened)
         using (authority)
         {
@@ -79,7 +79,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     public async Task WriteOnlySpool_TailIsTorn_RestartsWithAFreshSaltAndAFreshContentKey()
     {
         var store = CreateStore();
-        var (opened, authority) = await CreateWriteOnlyAsync(store);
+        var (opened, authority) = await CreateFromPassphraseAsync(store);
         using (opened)
         using (authority)
         {
@@ -120,7 +120,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     public async Task WriteOnlySpool_SidecarDeleted_RestartsRatherThanResuming()
     {
         var store = CreateStore();
-        var (opened, authority) = await CreateWriteOnlyAsync(store);
+        var (opened, authority) = await CreateFromPassphraseAsync(store);
         using (opened)
         using (authority)
         {
@@ -152,7 +152,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     public async Task WriteOnlyPublication_ABlobPutTears_RepublishVerifiesWithTornDamageDistinctFromSealedContent()
     {
         var store = CreateStore();
-        var (opened, authority) = await CreateWriteOnlyAsync(store);
+        var (opened, authority) = await CreateFromPassphraseAsync(store);
         using (opened)
         using (authority)
         {
@@ -209,11 +209,11 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
         }
     }
 
-    private static async Task<(OpenedRepository Opened, RepositoryReadAuthority Authority)> CreateWriteOnlyAsync(
+    private static async Task<(OpenedRepository Opened, RepositoryReadAuthority Authority)> CreateFromPassphraseAsync(
         LocalFileSystemObjectStore store)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        return await RepositoryLifecycle.CreateWriteOnlyAsync(
+        return await RepositoryLifecycle.CreateFromPassphraseAsync(
             store,
             passphrase,
             RepositoryCreationSettings.Default with { CreatedBy = "interruption-tests/1.0" },
@@ -230,7 +230,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
     private PublicationOrchestrator CreateWriteOnlyOrchestrator(IObjectStore store, OpenedRepository opened) =>
         new(
             SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.Device },
-            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
             observer: null,

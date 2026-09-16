@@ -108,7 +108,7 @@ public sealed class WriteOnlySetTests : IDisposable
         using (var authority = WriteOnlyDerivation.Derive(
             passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.CreateRepository))
         {
-            (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            (await RepositoryLifecycle.CreateAsync(
                 new LocalFileSystemObjectStore(metadata), authority.Credential, salt,
                 RepositoryCreationSettings.Default.KdfParameters, createdBy: "drill",
                 1_722_700_000_000UL, _timeout.Token)).Dispose();

@@ -45,9 +45,9 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory, observer: null, catalogue);
 
@@ -81,10 +81,10 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var source = new FakeFileSystemSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         Assert.IsEmpty(published.Files);
@@ -108,12 +108,12 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var source = new FakeFileSystemSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -137,15 +137,15 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         Assert.IsTrue(source.Remove("only.txt"));
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -176,10 +176,10 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         Assert.AreEqual(Many, published.Files.Count);
@@ -218,14 +218,14 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         source.OpenedPaths.Clear();
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {

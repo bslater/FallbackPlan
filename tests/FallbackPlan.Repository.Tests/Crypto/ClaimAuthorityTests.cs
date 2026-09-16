@@ -122,10 +122,10 @@ public sealed class ClaimAuthorityTests
         // nothing of any one repository's generations, and the claimant has
         // no repository to ask.
         using var authority = Derive("one long passphrase to rule them", Salt(0x57));
-        using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
+        using var credential = authority.Credential.Clone();
         using var reclaim = new ReclaimAuthority(authority.ReclaimKeySeed);
 
-        SequenceAssert.AreEqual(hierarchy.ClaimPublicKey(), hierarchy.ClaimPublicKey());
+        SequenceAssert.AreEqual(credential.ClaimPublicKey.ToArray(), credential.ClaimPublicKey.ToArray());
         Assert.IsFalse(
             reclaim.SeedFor(KeyGeneration.Zero).AsSpan().SequenceEqual(reclaim.SeedFor(new KeyGeneration(1))),
             "the contrast is the point: the reclaim seed does turn over, and can, because a grant names its generation");
@@ -158,9 +158,9 @@ public sealed class ClaimAuthorityTests
             CryptographicOperations.ZeroMemory(bundle);
         }
 
-        using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
-        Assert.IsNull(typeof(KeyHierarchy).GetMethod("DeriveClaimKeySeed"), "no hierarchy derives the claim seed");
-        SequenceAssert.AreEqual(authority.Credential.ClaimPublicKey.ToArray(), hierarchy.ClaimPublicKey());
+        using var credential = authority.Credential.Clone();
+        Assert.IsNull(typeof(RepositoryWriteCredential).GetMethod("DeriveClaimKeySeed"), "no hierarchy derives the claim seed");
+        SequenceAssert.AreEqual(authority.Credential.ClaimPublicKey.ToArray(), credential.ClaimPublicKey.ToArray());
     }
 
     [TestMethod]
@@ -192,7 +192,7 @@ public sealed class ClaimAuthorityTests
         Assert.IsTrue(parsed.ClaimPublicKey.IsEmpty);
         Assert.IsFalse(parsed.ReclaimPublicKey.IsEmpty, "the sixth member is still there and still read");
 
-        using var hierarchy = KeyHierarchy.ForWriteOnly(parsed);
-        Assert.IsEmpty(hierarchy.ClaimPublicKey());
+        using var credential = parsed.Clone();
+        Assert.IsEmpty(credential.ClaimPublicKey.ToArray());
     }
 }

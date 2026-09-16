@@ -127,26 +127,26 @@ public sealed class IndexLoader : IDisposable
 {
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
 
     /// <summary>Creates a loader.</summary>
     /// <param name="store">Where the index plane lives.</param>
     /// <param name="repositoryId">The repository being loaded.</param>
-    /// <param name="hierarchy">The key hierarchy the objects open under.</param>
+    /// <param name="credential">The write credential the objects open under.</param>
     /// <param name="logger">Where the load's shape is recorded.</param>
     public IndexLoader(
-        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, ILogger? logger = null)
+        IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
@@ -345,7 +345,7 @@ public sealed class IndexLoader : IDisposable
             return false;
         }
 
-        using var signer = RepositorySigner.Create(_hierarchy, new KeyGeneration((uint)generation));
+        using var signer = RepositorySigner.Create(_credential, new KeyGeneration((uint)generation));
 
         if (!signer.Verify(signedBytes, signature))
         {
@@ -399,7 +399,7 @@ public sealed class IndexLoader : IDisposable
             return null;
         }
 
-        var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+        var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
         try
         {
             if (!StandaloneRecordCipher.TryOpen(record, _repositoryId, metadataKey, out var plaintext))

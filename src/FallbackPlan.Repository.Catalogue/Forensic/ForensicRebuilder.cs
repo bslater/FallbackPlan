@@ -48,21 +48,21 @@ public sealed class ForensicRebuilder : IDisposable
 {
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
 
-    /// <summary>Creates a rebuilder over the key hierarchy — footers and keys are all a scan needs (FR-MAN-007).</summary>
-    public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    /// <summary>Creates a rebuilder over the write credential — footers and keys are all a scan needs (FR-MAN-007).</summary>
+    public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         _store = store;
         _repositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
-        _storeKeyDeriver = new StoreBlobKeyDeriver(hierarchy.DeriveKeyIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
+        _storeKeyDeriver = new StoreBlobKeyDeriver(credential.KeyIdKey.ToArray());
     }
 
     // The reader asks for a blob's STRUCTURE class, which is the metadata
@@ -70,7 +70,7 @@ public sealed class ForensicRebuilder : IDisposable
     // metadata key too (ADR-0042 §2). There is no data key to hand out.
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>
         blobClass == BlobClass.Metadata
-            ? _hierarchy.DeriveMetadataKey(generation)
+            ? _credential.DeriveMetadataKey(generation)
             : throw new InvalidOperationException("A repository holds no data class key (specification 03 §9.2).");
 
     /// <summary>Runs the scan into <paramref name="target"/>.</summary>
@@ -242,7 +242,7 @@ public sealed class ForensicRebuilder : IDisposable
             try
             {
                 var record = StandaloneRecordFraming.Parse(bytes);
-                var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+                var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
                 try
                 {
                     if (!StandaloneRecordCipher.TryOpen(record, _repositoryId, metadataKey, out var plaintext))
@@ -280,7 +280,7 @@ public sealed class ForensicRebuilder : IDisposable
             // the rebuilt catalogue answers `snapshots` (schema v2).
             int signatureState;
             using (var signer = RepositorySigner.Create(
-                _hierarchy, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
+                _credential, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
             {
                 signatureState = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? 1 : 2;
             }

@@ -14,18 +14,18 @@ namespace FallbackPlan.InterruptionTests;
 [TestClass]
 public sealed class CorruptionHarnessTests : InterruptionHarness
 {
-    private async Task<(byte[] Data, RepositoryKeySet Keys, Repository.Crypto.KeyHierarchy Hierarchy, Storage.Local.LocalFileSystemObjectStore Store)>
+    private async Task<(byte[] Data, RepositoryKeySet Keys, Repository.Crypto.RepositoryWriteCredential Credential, Storage.Local.LocalFileSystemObjectStore Store)>
         PublishAsync()
     {
         var store = CreateStore();
         var keys = CreateKeys();
-        var hierarchy = CreateHierarchy();
+        var credential = CreateCredential();
 
         var data = BuildFile(seed: 11);
         using var source = new MemoryStream(data);
-        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
 
-        return (data, keys, hierarchy, store);
+        return (data, keys, credential, store);
     }
 
     private string FirstDataBlobPath() =>
@@ -43,9 +43,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task BlobEnvelope_ABitIsFlipped_IsSkippedWithANamedFindingAndNoOther()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // Flip inside the envelope's salt: the derived blob key changes, so
         // the footer fails authentication at open — a scoped damage finding.
@@ -65,9 +65,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task RecordHeader_ABitIsFlipped_IsAFormatViolationScopedToThatRecord()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // Flip a byte in the first record's header (it sits right after the
         // envelope, which on a data blob carries the sealed content key): the
@@ -94,9 +94,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task RecordTag_ABitIsFlipped_IsAnAuthenticationFailureScopedToThatRecord()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         using var probe = new RepositoryReader(Repo, keys, store, Authority);
         await probe.LoadBlobsAsync(CancellationToken.None);
@@ -117,9 +117,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task RecoveryFooter_ABitIsFlipped_IsSkippedWithANamedFinding()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         var path = FirstDataBlobPath();
         var length = new FileInfo(path).Length;
@@ -139,9 +139,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task StandaloneSnapshot_Corrupted_FailsAuthenticationAndEmitsNothing()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         var snapshotPath = Directory
             .EnumerateFiles(Path.Combine(StoreRoot, "snapshots"), "*", SearchOption.AllDirectories)
@@ -158,9 +158,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task StandaloneSnapshot_SealedForAnotherRepository_IsRejectedOnReplay()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // Replay the snapshot object into a "sibling repository" reader: the
         // AAD binds the repository identity, so substitution fails closed.
@@ -179,9 +179,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task Restore_AReferencedBlobIsMissing_RefusesNamingTheSegment()
     {
-        var (_, keys, hierarchy, store) = await PublishAsync();
+        var (_, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         File.Delete(FirstDataBlobPath());
 
@@ -196,9 +196,9 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
     [TestMethod]
     public async Task Snapshot_ASecondBackupIsCorrupted_LeavesTheEarlierSnapshotRestorable()
     {
-        var (baseline, keys, hierarchy, store) = await PublishAsync();
+        var (baseline, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // Publish a second snapshot, then corrupt one of ITS new blobs.
         var second = BuildFile(seed: 12);
@@ -208,7 +208,7 @@ public sealed class CorruptionHarnessTests : InterruptionHarness
 
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         // Flip inside a record body (not the footer — a damaged footer is a

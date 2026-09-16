@@ -64,7 +64,7 @@ public sealed class PartialBackupHonestyTests : IDisposable
         WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
         Assert.IsNotNull(provisioning);
-        (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+        (await RepositoryLifecycle.CreateAsync(
             new LocalFileSystemObjectStore(RepoPath), provisioning.Credential,
             provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
             createdBy: "fallbackplan-tests/1.0",

@@ -466,7 +466,7 @@ public static class CliApplication
                         + "to accept this (ADR-0042).");
                 }
 
-                var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                var (created, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                     store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     cancellationToken).ConfigureAwait(false);
                 using (created)
@@ -514,7 +514,7 @@ public static class CliApplication
                     session.Writer,
                     session.CurrentGeneration,
                     session.Repository.Keys,
-                    session.Repository.Hierarchy,
+                    session.Repository.Credential,
                     session.Store,
                     session.CreateSequence(),
                     session.SpoolDirectory);
@@ -569,7 +569,7 @@ public static class CliApplication
                     throw new CliFailureException(Strings.FormatCliApplication_NoObjectExists(key.Value));
                 }
 
-                using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Hierarchy.DeriveContentIdKey());
+                using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Credential.ContentIdKey.ToArray());
                 using var reader = await BlobReader.OpenAsync(
                     session.Store, key, metadata.Metadata!.Length, session.Repository.RepositoryId,
                     session.Repository.Keys.DeriveClassKey, deriver, cancellationToken).ConfigureAwait(false);
@@ -712,7 +712,7 @@ public static class CliApplication
                         : new ForensicTarget.Everything();
 
                     using var rebuilder = new ForensicRebuilder(
-                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+                        session.Store, session.Repository.RepositoryId, session.Repository.Credential);
                     var report = await rebuilder.RebuildAsync(catalogue, target, cancellationToken).ConfigureAwait(false);
 
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -727,7 +727,7 @@ public static class CliApplication
                     }
 
                     var loader = new IndexLoader(
-                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy,
+                        session.Store, session.Repository.RepositoryId, session.Repository.Credential,
                         logging.Factory.CreateLogger<IndexLoader>());
 
                     // Precedence rule 3 (specification 07 §3) needs to know

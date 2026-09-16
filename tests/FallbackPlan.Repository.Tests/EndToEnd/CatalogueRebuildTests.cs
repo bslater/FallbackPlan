@@ -29,7 +29,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // Archive, then publish the real record locations as an index delta
         // — entries projected from the blobs' own footers, exactly the
@@ -56,7 +56,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         }
 
         var sequenceStore = new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"));
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, new WriterSequence(sequenceStore)))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, new WriterSequence(sequenceStore)))
         {
             await publisher.PublishDeltaAsync(
                 0, [.. archived.Blobs.Select(blob => blob.BlobId)], entries, CancellationToken.None);
@@ -73,7 +73,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         File.Delete(cataloguePath);
 
         // Rebuild from the store's index objects alone.
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
         using var rebuilt = Catalogue.Open(cataloguePath, Repo);
 
         var report = await new CatalogueRebuilder(loader).RebuildAsync(

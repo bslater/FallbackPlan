@@ -33,9 +33,9 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        await KillMidBlobAsync(store, keys, hierarchy);
+        await KillMidBlobAsync(store, keys, credential);
 
         // The spool is still there. The session's own disposal used to delete
         // it, which left resume reachable only after a true process kill.
@@ -53,14 +53,14 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var content = await KillMidBlobAsync(store, keys, hierarchy);
+        var content = await KillMidBlobAsync(store, keys, credential);
         var spooled = await ReadSpoolAsync();
 
         // A fresh process life over the same durable state.
         using var source = new MemoryStream(content);
-        await CreateOrchestrator(store, keys, hierarchy)
+        await CreateOrchestrator(store, keys, credential)
             .PublishAsync(Job(source, snapshotSeed: 0x71), CancellationToken.None);
 
         SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x71));
@@ -79,9 +79,9 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var content = await KillMidBlobAsync(store, keys, hierarchy);
+        var content = await KillMidBlobAsync(store, keys, credential);
         var abandonedSalt = SaltOf(await ReadSpoolAsync());
 
         // A torn write the crash left behind. Truncating back to the last
@@ -93,7 +93,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         }
 
         using var source = new MemoryStream(content);
-        await CreateOrchestrator(store, keys, hierarchy)
+        await CreateOrchestrator(store, keys, credential)
             .PublishAsync(Job(source, snapshotSeed: 0x72), CancellationToken.None);
 
         // A restart costs spooled work, never correctness: the job completes
@@ -107,9 +107,9 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var content = await KillMidBlobAsync(store, keys, hierarchy);
+        var content = await KillMidBlobAsync(store, keys, credential);
         var abandonedSalt = SaltOf(await ReadSpoolAsync());
 
         // Structurally perfect framing, a tag that no longer verifies. A walk
@@ -120,7 +120,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         await File.WriteAllBytesAsync(spoolPath, bytes, CancellationToken.None);
 
         using var source = new MemoryStream(content);
-        await CreateOrchestrator(store, keys, hierarchy)
+        await CreateOrchestrator(store, keys, credential)
             .PublishAsync(Job(source, snapshotSeed: 0x73), CancellationToken.None);
 
         SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0x73));
@@ -132,7 +132,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
     /// content it was archiving.
     /// </summary>
     private async Task<byte[]> KillMidBlobAsync(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy)
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential)
     {
         var content = BuildFile(seed: 17);
 
@@ -143,7 +143,7 @@ public sealed class BlobSpoolResumeTests : InterruptionHarness
         // there is nothing open left to resume.
         using var source = new FaultingStream(content, failAfterBytes: 600 * 1024);
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy)
+            await CreateOrchestrator(store, keys, credential)
                 .PublishAsync(Job(source, snapshotSeed: 0x70), CancellationToken.None));
 
         return content;

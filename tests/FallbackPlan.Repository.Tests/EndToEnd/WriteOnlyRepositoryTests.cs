@@ -65,7 +65,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         CreateAndBackUpAsync(LocalFileSystemObjectStore store)
     {
         using var passphrase = Right();
-        var (opened, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (opened, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
 
         var random = new Random(51);
@@ -87,7 +87,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         var catalogue = CatalogueDb.Open(Path.Combine(_root, "catalogue.db"), opened.RepositoryId);
 
         var orchestrator = new PublicationOrchestrator(
-            SmallPolicy, opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            SmallPolicy, opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool, observer: null, catalogue);
 
@@ -156,7 +156,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // the restore ceremony — and the same plan restores byte-identically
         // (FR-WOR-004).
         using var again = Right();
-        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
             store, again, CancellationToken.None);
         using (readOpened)
         using (readAuthority)
@@ -209,7 +209,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // hostile replica object cannot take reading everything else down
         // with it (ADR-0042 §7).
         using var passphrase = Right();
-        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
             store, passphrase, CancellationToken.None);
         using (readOpened)
         using (readAuthority)
@@ -243,7 +243,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // remedy named — never left to degrade silently (ADR-0042 §7).
         var refused = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
             SmallPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
-            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(_root, "refused-sequence.txt"))),
             Path.Combine(_root, "refused-spool")));
         Assert.Contains("device", refused.Message, StringComparison.Ordinal);
@@ -316,7 +316,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             Assert.Contains("no damage", unchecked_.Detail!, StringComparison.Ordinal);
 
             using var passphrase = Right();
-            var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
                 store, passphrase, CancellationToken.None);
             using (readOpened)
             using (readAuthority)
@@ -343,7 +343,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         using (var wrong = Passphrase.Create("not the passphrase at all!!"))
         {
             await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-                await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, wrong, CancellationToken.None));
+                await RepositoryLifecycle.OpenForReadAsync(store, wrong, CancellationToken.None));
         }
 
         // A credential from another repository (a wrong passphrase's shape)
@@ -354,7 +354,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             using var foreign = WriteOnlyDerivation.Derive(
                 other, Settings.KdfParameters, salt, KdfValidationMode.OpenRepository);
             await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.OpenWriteOnlyAsync(store, foreign.Credential, CancellationToken.None));
+                await RepositoryLifecycle.OpenAsync(store, foreign.Credential, CancellationToken.None));
         }
     }
 

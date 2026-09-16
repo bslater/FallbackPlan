@@ -161,7 +161,7 @@ public sealed class CliSession : IDisposable
             // Direct mode derives the full authority from the passphrase and
             // proves it against the descriptor (ADR-0042 §1): the person is
             // present, so the content plane opens here.
-            (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            (repository, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
                 store, passphrase, cancellationToken, log).ConfigureAwait(false);
         }
         catch (RepositoryOpenException exception)

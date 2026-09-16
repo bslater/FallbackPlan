@@ -143,7 +143,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
                 "a tombstone in a reclaim-authority repository must verify under the reclaim key");
         }
 
-        using var signing = RepositorySigner.Create(repository.Hierarchy, generation);
+        using var signing = RepositorySigner.Create(repository.Credential, generation);
         Assert.IsFalse(
             signing.Verify(signed, tombstone.Signature.Span),
             "and must NOT verify under the publication key — that is the whole separation");
@@ -211,7 +211,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
         // A repository that makes no claim gets the old key, so a tombstone
         // written by an older build reads exactly as it always did.
         var generation = new KeyGeneration(0);
-        using var signing = RepositorySigner.Create(repository.Hierarchy, generation);
+        using var signing = RepositorySigner.Create(repository.Credential, generation);
         using var reclaim = RepositorySigner.FromSeed(
             opened.Reclaim.SeedFor(generation), generation);
 
@@ -235,7 +235,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
             await read.Content!.CopyToAsync(memory, CancellationToken.None);
 
             var record = StandaloneRecordFraming.Parse(memory.ToArray());
-            var metadataKey = repository.Hierarchy.DeriveMetadataKey(record.KeyGeneration);
+            var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
             try
             {
                 Assert.IsTrue(StandaloneRecordCipher.TryOpen(
@@ -296,7 +296,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
             }
 
             var record = StandaloneRecordFraming.Parse(sealedBytes);
-            var metadataKey = repository.Hierarchy.DeriveMetadataKey(record.KeyGeneration);
+            var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
             byte[] resealed;
             try
             {
@@ -305,7 +305,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
                 var decoded = TombstoneCodec.Decode(plaintext!);
 
                 byte[] encoded;
-                using (var signer = RepositorySigner.Create(repository.Hierarchy, record.KeyGeneration))
+                using (var signer = RepositorySigner.Create(repository.Credential, record.KeyGeneration))
                 {
                     encoded = TombstoneCodec.Encode(
                         decoded.Value, signer.Sign(decoded.SignedBytes.Span));
@@ -314,7 +314,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
                 // Re-derived, because the identifier is content-derived and
                 // the content just changed: an attacker re-signing would have
                 // to do exactly this too.
-                var contentIdKey = repository.Hierarchy.DeriveContentIdKey();
+                var contentIdKey = repository.Credential.ContentIdKey.ToArray();
                 Domain.Identifiers.ObjectId objectId;
                 try
                 {

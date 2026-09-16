@@ -169,7 +169,7 @@ public static class WriteOnlyDerivation
                 nameof(reclaimRoot));
         }
 
-        var derived = new byte[KeyHierarchy.DerivedKeyLength];
+        var derived = new byte[RepositoryWriteCredential.DerivedKeyLength];
         Span<byte> info = stackalloc byte[26 + sizeof(uint)];
         "fbp/reclaim-generation/v2"u8.CopyTo(info);
         var labelLength = "fbp/reclaim-generation/v2"u8.Length;
@@ -181,7 +181,7 @@ public static class WriteOnlyDerivation
 
     private static byte[] Expand(ReadOnlySpan<byte> root, ReadOnlySpan<byte> info)
     {
-        var derived = new byte[KeyHierarchy.DerivedKeyLength];
+        var derived = new byte[RepositoryWriteCredential.DerivedKeyLength];
         HKDF.Expand(HashAlgorithmName.SHA256, root, derived, info);
         return derived;
     }

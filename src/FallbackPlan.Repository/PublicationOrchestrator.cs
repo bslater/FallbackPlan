@@ -125,7 +125,7 @@ public sealed partial class PublicationOrchestrator
     private readonly WriterId _writerId;
     private readonly KeyGeneration _generation;
     private readonly RepositoryKeySet _keys;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly IObjectStore _store;
     private readonly WriterSequence _sequence;
     private readonly string _spoolDirectory;
@@ -148,7 +148,7 @@ public sealed partial class PublicationOrchestrator
         WriterId writerId,
         KeyGeneration generation,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         IObjectStore store,
         WriterSequence sequence,
         string spoolDirectory,
@@ -160,7 +160,7 @@ public sealed partial class PublicationOrchestrator
         _catalogue = catalogue;
         ThrowHelper.ThrowIfNull(policy);
         ThrowHelper.ThrowIfNull(keys);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
@@ -198,7 +198,7 @@ public sealed partial class PublicationOrchestrator
         _writerId = writerId;
         _generation = generation;
         _keys = keys;
-        _hierarchy = hierarchy;
+        _credential = credential;
         _store = store;
         _sequence = sequence;
         _spoolDirectory = spoolDirectory;
@@ -248,8 +248,8 @@ public sealed partial class PublicationOrchestrator
         // (05 §6.3), and this writer owns the directory exclusively.
         BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
 
         // Leftovers first: numbers a previous run allocated and never
         // accounted for get their void deltas (07 §4) before new work — a
@@ -355,7 +355,7 @@ public sealed partial class PublicationOrchestrator
                 ClientVersion = job.ClientVersion,
             };
 
-            using (var signer = RepositorySigner.Create(_hierarchy, _generation))
+            using (var signer = RepositorySigner.Create(_credential, _generation))
             {
                 encodedSnapshot = SnapshotManifestCodec.Encode(
                     snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));

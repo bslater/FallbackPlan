@@ -41,12 +41,12 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     {
         var store = new CountingObjectStore(CreateStore());
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("first");
 
         var source = OneFileSource();
 
-        await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Device)
+        await Publish(store, keys, credential, catalogue, Writer, "first", DedupTrustDomain.Device)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         var readsBefore = store.Reads;
@@ -55,7 +55,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // are already in the index and they are its own, so they are reused —
         // and no fetch is issued for them, because FR-DED-002's acceptance
         // criterion says a fresh single-device repository performs none.
-        var second = await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Device)
+        var second = await Publish(store, keys, credential, catalogue, Writer, "first", DedupTrustDomain.Device)
             .PublishAsync(
                 Job(source, 0xA2, now: 1_722_600_000_001) with
                 {
@@ -81,13 +81,13 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // quietly re-archive; the message names the device domain.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var spool = Path.Combine(SpoolDirectory, "repository-domain");
         Directory.CreateDirectory(spool);
 
         var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
             SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
-            Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
         Assert.Contains("device", refusal.Message, StringComparison.Ordinal);
         Assert.AreEqual(DedupTrustDomain.Device, CapturePolicy.Default.DedupTrustDomain);
@@ -118,12 +118,12 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var spool = Path.Combine(SpoolDirectory, "unacknowledged");
         Directory.CreateDirectory(spool);
 
         var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
-            unacknowledged, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            unacknowledged, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
         Assert.Contains("acknowledge", refusal.Message, StringComparison.OrdinalIgnoreCase);
 
@@ -150,17 +150,17 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     {
         var store = new CountingObjectStore(CreateStore());
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var source = ManyFileSource();
 
         using (var first = OpenCatalogue("first"))
         {
-            await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Device)
+            await Publish(store, keys, credential, first, Writer, "first", DedupTrustDomain.Device)
                 .PublishAsync(Job(source, 0xC1), CancellationToken.None);
         }
 
         using var second = OpenCatalogue("second");
-        using (var loader = new IndexLoader(store, Repo, hierarchy))
+        using (var loader = new IndexLoader(store, Repo, credential))
         {
             await new CatalogueRebuilder(loader).RebuildAsync(
                 second, currentGeneration: 0, gapPatienceGenerations: 2,
@@ -175,7 +175,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // inside the blob cache. Twenty-four files across many blobs at eight
         // workers is wide enough.
         var published = await Publish(
-                store, keys, hierarchy, second, SecondWriter, "second", DedupTrustDomain.RepositoryUnverified,
+                store, keys, credential, second, SecondWriter, "second", DedupTrustDomain.RepositoryUnverified,
                 concurrency: 8)
             .PublishAsync(
                 Job(source, 0xC2, now: 1_722_600_000_002) with
@@ -201,7 +201,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     {
         var store = new CountingObjectStore(CreateStore());
         var keys = CreateKeys();
-        var hierarchy = CreateHierarchy();
+        var credential = CreateCredential();
         CatalogueDb? secondCatalogue = null;
 
         // Nothing here is owned by the caller until the record is returned, so
@@ -215,7 +215,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
             using (var first = OpenCatalogue("first"))
             {
-                await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Device)
+                await Publish(store, keys, credential, first, Writer, "first", DedupTrustDomain.Device)
                     .PublishAsync(Job(source, 0xB1), CancellationToken.None);
             }
 
@@ -228,14 +228,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             // writer's locations the only way a second device can: from the
             // repository's own index objects.
             secondCatalogue = OpenCatalogue("second");
-            using (var loader = new IndexLoader(store, Repo, hierarchy))
+            using (var loader = new IndexLoader(store, Repo, credential))
             {
                 await new CatalogueRebuilder(loader).RebuildAsync(
                     secondCatalogue, currentGeneration: 0, gapPatienceGenerations: 2,
                     isSequenceAccountedAsync: null, CancellationToken.None);
             }
 
-            var published = await Publish(store, keys, hierarchy, secondCatalogue, SecondWriter, "second", domain)
+            var published = await Publish(store, keys, credential, secondCatalogue, SecondWriter, "second", domain)
                 .PublishAsync(
                     Job(source, 0xB2, now: 1_722_600_000_002) with
                     {
@@ -243,12 +243,12 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
                     },
                     CancellationToken.None);
 
-            return new SecondWriterRun(store, keys, hierarchy, secondCatalogue, published);
+            return new SecondWriterRun(store, keys, credential, secondCatalogue, published);
         }
         catch
         {
             secondCatalogue?.Dispose();
-            hierarchy.Dispose();
+            credential.Dispose();
             keys.Dispose();
             throw;
         }
@@ -258,14 +258,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     private sealed record SecondWriterRun(
         CountingObjectStore Store,
         RepositoryKeySet Keys,
-        KeyHierarchy Hierarchy,
+        RepositoryWriteCredential Credential,
         CatalogueDb Catalogue,
         PublishedTreeSnapshot Published) : IDisposable
     {
         public void Dispose()
         {
             Catalogue.Dispose();
-            Hierarchy.Dispose();
+            Credential.Dispose();
             Keys.Dispose();
         }
     }
@@ -294,7 +294,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     private PublicationOrchestrator Publish(
         IObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         CatalogueDb catalogue,
         WriterId writer,
         string spoolName,
@@ -317,7 +317,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool,

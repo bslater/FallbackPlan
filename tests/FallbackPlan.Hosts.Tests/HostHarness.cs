@@ -142,7 +142,7 @@ public sealed class HostHarness : IDisposable
         Assert.IsNotNull(provisioning, "setup stored no installation credential");
 
         Directory.CreateDirectory(RepositoryPath);
-        (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+        (await RepositoryLifecycle.CreateAsync(
             new LocalFileSystemObjectStore(RepositoryPath), provisioning.Credential,
             provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
             createdBy: Environment.MachineName,

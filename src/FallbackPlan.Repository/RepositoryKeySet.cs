@@ -15,13 +15,13 @@ namespace FallbackPlan.Repository;
 /// </summary>
 public sealed class RepositoryKeySet : IDisposable
 {
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly byte[] _contentIdKey;
     private readonly byte[] _keyIdKey;
 
-    private RepositoryKeySet(KeyHierarchy hierarchy, byte[] contentIdKey, byte[] keyIdKey)
+    private RepositoryKeySet(RepositoryWriteCredential credential, byte[] contentIdKey, byte[] keyIdKey)
     {
-        _hierarchy = hierarchy;
+        _credential = credential;
         _contentIdKey = contentIdKey;
         _keyIdKey = keyIdKey;
     }
@@ -32,13 +32,13 @@ public sealed class RepositoryKeySet : IDisposable
     /// </summary>
     public static RepositoryKeySet FromWriteCredential(RepositoryWriteCredential credential)
     {
-        var hierarchy = KeyHierarchy.ForWriteOnly(credential);
+        var owned = credential.Clone();
 
-        return new RepositoryKeySet(hierarchy, hierarchy.DeriveContentIdKey(), hierarchy.DeriveKeyIdKey());
+        return new RepositoryKeySet(owned, owned.ContentIdKey.ToArray(), owned.KeyIdKey.ToArray());
     }
 
     /// <summary>The repository's sealing public key — what content seals to.</summary>
-    public ReadOnlySpan<byte> SealingPublicKey => _hierarchy.SealingPublicKey;
+    public ReadOnlySpan<byte> SealingPublicKey => _credential.SealingPublicKey;
 
     /// <summary>The repository-scoped content-ID key.</summary>
     public ReadOnlySpan<byte> ContentIdKey => _contentIdKey;
@@ -53,7 +53,7 @@ public sealed class RepositoryKeySet : IDisposable
     /// <exception cref="InvalidOperationException">The data class was asked for: a repository holds no data key (specification 03 §9.2).</exception>
     public byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) => blobClass switch
     {
-        BlobClass.Metadata => _hierarchy.DeriveMetadataKey(generation),
+        BlobClass.Metadata => _credential.DeriveMetadataKey(generation),
         BlobClass.Data => throw new InvalidOperationException(Strings.RepositoryKeySet_NoDataClassKey),
         _ => throw new ArgumentException(Strings.FormatRepositoryKeySet_BlobClassXNotDefined((ushort)blobClass), nameof(blobClass)),
     };
@@ -61,7 +61,7 @@ public sealed class RepositoryKeySet : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _hierarchy.Dispose();
+        _credential.Dispose();
         CryptographicOperations.ZeroMemory(_contentIdKey);
         CryptographicOperations.ZeroMemory(_keyIdKey);
     }

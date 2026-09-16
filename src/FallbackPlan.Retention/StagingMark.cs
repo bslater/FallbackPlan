@@ -51,7 +51,7 @@ public static class StagingMark
 
         var snapshots = new List<SurveyedSnapshot>();
         var undecodable = new List<string>();
-        var contentIdKey = repository.Hierarchy.DeriveContentIdKey();
+        var contentIdKey = repository.Credential.ContentIdKey.ToArray();
         var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(contentIdKey);
 
         await foreach (var entry in store.ListAsync(
@@ -74,7 +74,7 @@ public static class StagingMark
             {
                 var record = StandaloneRecordFraming.Parse(bytes);
                 var publicationSequence = record.Counter;
-                var metadataKey = repository.Hierarchy.DeriveMetadataKey(record.KeyGeneration);
+                var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
                 try
                 {
                     if (!StandaloneRecordCipher.TryOpen(record, repository.RepositoryId, metadataKey, out var plaintext))

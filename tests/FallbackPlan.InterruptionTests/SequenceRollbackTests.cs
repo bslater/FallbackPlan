@@ -33,12 +33,12 @@ public sealed class SequenceRollbackTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var first = BuildFile(seed: 1);
         using (var source = new MemoryStream(first))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         // The state a power loss preserves: the file as it was before the
@@ -48,7 +48,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         await File.WriteAllBytesAsync(SequencePath, preSecondRun);
@@ -61,7 +61,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         using (var source = new MemoryStream(third))
         {
             await Assert.ThrowsExactlyAsync<IOException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None));
+                await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None));
         }
 
         // The refusal must come before anything is published: no third
@@ -76,12 +76,12 @@ public sealed class SequenceRollbackTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var first = BuildFile(seed: 1);
         using (var source = new MemoryStream(first))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var preSecondRun = await File.ReadAllBytesAsync(SequencePath);
@@ -89,7 +89,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         await File.WriteAllBytesAsync(SequencePath, preSecondRun);
@@ -106,7 +106,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         using (var source = new MemoryStream(third))
         {
             await Assert.ThrowsExactlyAsync<IOException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None));
+                await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None));
         }
 
         Assert.AreEqual(2, CountUnder("snapshots"));
@@ -131,12 +131,12 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         // collision into an adoption (NFR-SEC-005).
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var first = BuildFile(seed: 1);
         using (var source = new MemoryStream(first))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var preSecondRun = await File.ReadAllBytesAsync(SequencePath);
@@ -144,7 +144,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         var second = BuildFile(seed: 2);
         using (var source = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         // The regression, and then the witness pass a caller makes before it
@@ -152,7 +152,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         await File.WriteAllBytesAsync(SequencePath, preSecondRun);
 
         var sequence = new WriterSequence(new FileSequenceStateStore(SequencePath));
-        var index = await new IndexLoader(store, Repo, hierarchy).LoadAsync(
+        var index = await new IndexLoader(store, Repo, credential).LoadAsync(
             currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,
             blobState: null, CancellationToken.None);
         var head = await ObservedHead.OfAsync(store, Writer, index, CancellationToken.None);
@@ -171,7 +171,7 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         var third = BuildFile(seed: 3);
         using (var source = new MemoryStream(third))
         {
-            await CreateOrchestrator(store, keys, hierarchy, sequence: sequence)
+            await CreateOrchestrator(store, keys, credential, sequence: sequence)
                 .PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
@@ -191,15 +191,15 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         // already in flight.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         using (var source = new MemoryStream(BuildFile(seed: 1)))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var sequence = new WriterSequence(new FileSequenceStateStore(SequencePath));
-        var index = await new IndexLoader(store, Repo, hierarchy).LoadAsync(
+        var index = await new IndexLoader(store, Repo, credential).LoadAsync(
             currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,
             blobState: null, CancellationToken.None);
 

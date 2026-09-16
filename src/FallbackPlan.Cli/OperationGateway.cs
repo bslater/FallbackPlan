@@ -824,7 +824,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             session.Writer,
             session.CurrentGeneration,
             session.Repository.Keys,
-            session.Repository.Hierarchy,
+            session.Repository.Credential,
             session.Store,
             session.CreateSequence(),
             session.SpoolDirectory,
@@ -960,7 +960,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         using (var journalReader = new JournalReader(
-            session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy))
+            session.Store, session.Repository.RepositoryId, session.Repository.Credential))
         {
             var (records, unparseable, journalFindings) = await journalReader
                 .LoadAsync(session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);

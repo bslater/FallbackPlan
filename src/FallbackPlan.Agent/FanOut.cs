@@ -469,14 +469,13 @@ public static class FanOut
             // the write credential, so a set whose service cannot derive the
             // private half at all still tells its peers which key to check
             // deletion instructions against.
-            var reclaimPublicKey = archive.Repository.Hierarchy.ReclaimPublicKey(
-                archive.Repository.CurrentMetadataGeneration);
+            var reclaimPublicKey = archive.Repository.Credential.ReclaimPublicKey.ToArray();
 
             // The claim public key rides the same offer (ADR-0053 §1) and
             // takes no generation: the destination records it once and never
             // replaces it, so a key that turned over would go stale with no
             // way to say so.
-            var claimPublicKey = archive.Repository.Hierarchy.ClaimPublicKey();
+            var claimPublicKey = archive.Repository.Credential.ClaimPublicKey.ToArray();
 
             // The binding rides only to a spoke that says it verifies over one
             // (peer-protocol 02 §6): a current commander talking to an older

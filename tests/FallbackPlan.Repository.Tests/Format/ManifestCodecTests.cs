@@ -299,8 +299,8 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_SignedAndRoundTripped_VerifiesThroughTheTwoPassConstruction()
     {
-        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();
         var signedBytes = SnapshotManifestCodec.EncodeForSigning(manifest);
@@ -319,8 +319,8 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_AFieldIsTampered_FailsVerificationAsASecurityFinding()
     {
-        using var hierarchy = KeyHierarchy.ForWriteOnly(TestAuthority.Shared.Credential);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();
         var stored = SnapshotManifestCodec.Encode(manifest, signer.Sign(SnapshotManifestCodec.EncodeForSigning(manifest)));

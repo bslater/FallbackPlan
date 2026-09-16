@@ -33,14 +33,14 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb? catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb? catalogue) =>
         new(
             SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
@@ -86,10 +86,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         var snapshot = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
@@ -127,10 +127,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xD1), CancellationToken.None);
 
         var blobsBefore = Directory.EnumerateFiles(
@@ -138,7 +138,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         Assert.IsTrue(source.Remove("docs/small.txt"));
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xD2, now: 1_722_600_060_000), CancellationToken.None);
 
         var before = Enumerable.Repeat((byte)0xD1, 16).ToArray();
@@ -185,10 +185,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // Change exactly one file; the others keep identity, size, mtime.
@@ -196,7 +196,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
         source.OpenedPaths.Clear();
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -236,16 +236,16 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         var changed = source.AddFile("data.bin", [.. head, .. Deterministic(64 * 1024, 17)]);
         changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -276,13 +276,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         List<CatalogueSnapshot> liveSnapshots;
         List<string> liveListing;
         using (var live = OpenCatalogue())
         {
-            await CreateOrchestrator(store, keys, hierarchy, live)
+            await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xA1), CancellationToken.None);
             liveSnapshots = [.. live.EnumerateSnapshots()];
             liveListing = [.. live.ListDirectory(liveSnapshots[0].SnapshotId.Span, "docs").Select(entry => entry.Path)];
@@ -294,14 +294,14 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
 
         using var rebuilt = OpenCatalogue();
-        var loader = new IndexLoader(store, Repo, hierarchy);
+        var loader = new IndexLoader(store, Repo, credential);
         await new CatalogueRebuilder(loader).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var report = await CatalogueProjector.ProjectAsync(
-            rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+            rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
 
         Assert.AreEqual(1, report.Snapshots);
 
@@ -323,7 +323,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.IsNull(entry.IdentityFileId);
 
         source.OpenedPaths.Clear();
-        var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+        var second = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -348,10 +348,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xC1), CancellationToken.None);
 
         var before = first.Files.Single(file => file.RelativePath == "readme.md").ObjectId;
@@ -360,7 +360,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var node = source.AddFile("readme.md", Deterministic(2_500, 9));
         node.Metadata = node.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xC2, now: 1_722_700_000_001) with
                 {
@@ -386,10 +386,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xD1), CancellationToken.None);
         var before = first.Files.Single(file => file.RelativePath == "docs/before.bin").ObjectId;
 
@@ -401,7 +401,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
         source.OpenedPaths.Clear();
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xD2, now: 1_722_700_000_001) with
                 {
@@ -444,7 +444,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // The catalogue keeps the version's real content facts, so the next
         // incremental can still short-circuit a file that has not changed
         // since before it moved.
-        var third = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var third = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xD3, now: 1_722_700_000_002) with
                 {
@@ -463,12 +463,12 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         PublishedFileVersion original;
         using (var live = OpenCatalogue())
         {
-            var first = await CreateOrchestrator(store, keys, hierarchy, live)
+            var first = await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xE1), CancellationToken.None);
             original = first.Files.Single(file => file.RelativePath == "docs/before.bin");
         }
@@ -478,7 +478,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
 
         using var rebuilt = OpenCatalogue();
-        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
@@ -486,7 +486,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
-                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+                rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
         }
 
         // The premise: a rebuild recovers paths but not identities, so the
@@ -498,7 +498,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.IsTrue(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+        var second = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(
                 Job(source, 0xE2, now: 1_722_700_000_001) with { PriorSnapshotId = priorSnapshotId },
                 CancellationToken.None);
@@ -521,12 +521,12 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         ObjectId original;
         using (var live = OpenCatalogue())
         {
-            var first = await CreateOrchestrator(store, keys, hierarchy, live)
+            var first = await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xC5), CancellationToken.None);
             original = first.Files.Single(file => file.RelativePath == "docs/quiet.bin").ObjectId;
 
@@ -540,7 +540,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
                 source.AddFile("docs/busy.bin", Deterministic(1_000, seed), fileId: 7_778)
                     .Metadata = EntryMetadata.Empty with { ModifiedAt = 1_722_600_000_000ul + seed };
 
-                await CreateOrchestrator(store, keys, hierarchy, live).PublishAsync(
+                await CreateOrchestrator(store, keys, credential, live).PublishAsync(
                     Job(source, seed, now: 1_722_600_000_000ul + seed) with
                     {
                         PriorSnapshotId = Enumerable.Repeat((byte)(seed - 1), 16).ToArray(),
@@ -554,7 +554,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
 
         using var rebuilt = OpenCatalogue();
-        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
@@ -562,13 +562,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
-                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+                rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
         }
 
         Assert.IsTrue(source.Remove("docs/quiet.bin"));
         source.AddFile("archive/moved.bin", Deterministic(3_000, 21), fileId: 7_777);
 
-        var final = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+        var final = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(
                 Job(source, 0xC9, now: 1_722_600_000_100) with
                 {
@@ -590,11 +590,11 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         using (var live = OpenCatalogue())
         {
-            await CreateOrchestrator(store, keys, hierarchy, live)
+            await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xF1), CancellationToken.None);
         }
 
@@ -619,7 +619,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
 
         using var rebuilt = OpenCatalogue();
-        await new CatalogueRebuilder(new IndexLoader(store, Repo, hierarchy)).RebuildAsync(
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
             rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
             CancellationToken.None);
 
@@ -627,13 +627,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             await CatalogueProjector.ProjectAsync(
-                rebuilt, reader, store, Repo, keys, hierarchy, CancellationToken.None);
+                rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
         }
 
         Assert.IsTrue(source.Remove("docs/before.bin"));
         source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, rebuilt)
+        var second = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(
                 Job(source, 0xF2, now: 1_722_700_000_001) with { PriorSnapshotId = priorSnapshotId },
                 CancellationToken.None);
@@ -663,10 +663,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xB1), CancellationToken.None);
 
         var afterFirst = Directory.EnumerateFiles(StoreRoot, "*", SearchOption.AllDirectories).Sum(p => new FileInfo(p).Length);
@@ -674,7 +674,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var changed = source.AddFile("d00/f00.bin", Deterministic(2_100, 99));
         changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -720,10 +720,10 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         var source = BuildSource();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xE1), CancellationToken.None);
 
         // Read the delta back out of the store rather than trusting the
@@ -744,7 +744,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         // The signature covers the digests, so what the receiving participant
         // checks against is what the writer asserted (07 §2, §2.2).
-        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
         {
             Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
         }

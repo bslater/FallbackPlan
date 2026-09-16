@@ -21,16 +21,16 @@ using FallbackPlan.Filesystem;
 [TestClass]
 public sealed class ForensicRebuildTests : ArchiveTestHarness
 {
-    private async Task<(byte[] Data, PublishedSnapshot Published, RepositoryKeySet Keys, KeyHierarchy Hierarchy, Storage.Local.LocalFileSystemObjectStore Store)>
+    private async Task<(byte[] Data, PublishedSnapshot Published, RepositoryKeySet Keys, RepositoryWriteCredential Credential, Storage.Local.LocalFileSystemObjectStore Store)>
         PublishAsync(int regions = 6)
     {
         var data = BuildTestFile(regions: regions);
         var store = CreateStore();
         var keys = CreateKeys();
-        var hierarchy = CreateHierarchy();
+        var credential = CreateCredential();
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new FallbackPlan.Repository.Index.WriterSequence(
                 new FallbackPlan.Repository.Index.FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory);
@@ -46,7 +46,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
                 1_722_600_000_000, 3_600_000, 5, "tests/1.0"),
             CancellationToken.None);
 
-        return (data, published, keys, hierarchy, store);
+        return (data, published, keys, credential, store);
     }
 
     private string[] AllStoreFiles() =>
@@ -69,9 +69,9 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task ForensicRebuild_EveryIndexObjectDeleted_StillRestoresTheSnapshot()
     {
-        var (data, _, keys, hierarchy, store) = await PublishAsync();
+        var (data, _, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // The E2 premise: EVERY index object is gone.
         foreach (var file in Directory.EnumerateFiles(Path.Combine(StoreRoot, "index"), "*", SearchOption.AllDirectories).ToList())
@@ -81,7 +81,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
         var fingerprintBefore = StoreFingerprint();
 
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "forensic.db"), Repo);
 
         var report = await rebuilder.RebuildAsync(
@@ -115,9 +115,9 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task ForensicRebuild_TargetedAtOneSnapshot_StopsBeforeScanningEveryDataBlob()
     {
-        var (_, published, keys, hierarchy, store) = await PublishAsync(regions: 16);
+        var (_, published, keys, credential, store) = await PublishAsync(regions: 16);
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         var totalDataBlobs = Directory
             .EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
@@ -138,7 +138,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         // which is the stronger statement NFR-PERF-015 actually wants.
         var target = await FirstSegmentInScanOrderAsync(store, keys);
 
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "targeted.db"), Repo);
 
         var report = await rebuilder.RebuildAsync(
@@ -190,16 +190,16 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task ForensicRebuild_ADataBlobIsDeleted_SurfacesAMissingBlobFinding()
     {
-        var (_, _, keys, hierarchy, store) = await PublishAsync();
+        var (_, _, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         foreach (var file in Directory.EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories).ToList())
         {
             File.Delete(file);
         }
 
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "missing.db"), Repo);
 
         var report = await rebuilder.RebuildAsync(
@@ -215,9 +215,9 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task ForensicRebuild_AFooterIsCorrupted_ScopesTheFindingAndContinuesScanning()
     {
-        var (_, _, keys, hierarchy, store) = await PublishAsync();
+        var (_, _, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         // Corrupt one data blob's footer region (truncate its locator).
         var victim = Directory
@@ -227,7 +227,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         var bytes = await File.ReadAllBytesAsync(victim);
         await File.WriteAllBytesAsync(victim, bytes[..^16]);
 
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "corrupt.db"), Repo);
 
         var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
@@ -241,9 +241,9 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task Restore_SegmentsAreAssembledWrongThoughEveryTagPasses_IsCaughtByTheWholeFileHash()
     {
-        var (data, published, keys, hierarchy, store) = await PublishAsync();
+        var (data, published, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -293,9 +293,9 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
     [TestMethod]
     public async Task Verify_AnIntactBlobAndASilentlyAlteredOne_PassesTheFirstAndCatchesTheSecondAtLevelTwo()
     {
-        var (_, published, keys, hierarchy, store) = await PublishAsync();
+        var (_, published, keys, credential, store) = await PublishAsync();
         using var _keys = keys;
-        using var _hierarchy = hierarchy;
+        using var _credential = credential;
 
         var blob = published.Archive.Blobs[0];
         using var verify = new VerifyEngine(Repo, keys, store);
@@ -333,10 +333,10 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new Repository.Index.WriterSequence(
                 new Repository.Index.FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence-tree.txt"))),
             SpoolDirectory);
@@ -356,7 +356,7 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "forensic-tree.db"), Repo);
         var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
 

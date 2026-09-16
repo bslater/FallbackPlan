@@ -31,7 +31,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
     private static async Task<Domain.Identifiers.RepositoryId> CreateAsync(
         LocalFileSystemObjectStore store, Passphrase passphrase, ulong createdAt = 1)
     {
-        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Settings, createdAt, CancellationToken.None);
         using (repository)
         using (authority)
@@ -47,7 +47,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
         Domain.Identifiers.RepositoryId created;
-        var (repository, createdAuthority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
         using (repository)
         using (createdAuthority)
@@ -56,7 +56,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
             Assert.IsTrue(repository.UnstableFormatWarning, "phase-0 repositories are unstable and must say so (01 §3.2)");
         }
 
-        var (reopened, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, passphrase, CancellationToken.None);
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
         using (reopened)
         using (authority)
         {
@@ -87,7 +87,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         // find out, and a wrong passphrase and an altered descriptor report
         // the same way.
         await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-            (await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, wrong, CancellationToken.None)).Repository.Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, wrong, CancellationToken.None)).Repository.Dispose());
     }
 
     [TestMethod]
@@ -105,7 +105,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
             passphrase, Settings.KdfParameters, otherSalt, KdfValidationMode.OpenRepository);
 
         var refusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenWriteOnlyAsync(store, other.Credential, CancellationToken.None)).Dispose());
+            (await RepositoryLifecycle.OpenAsync(store, other.Credential, CancellationToken.None)).Dispose());
         Assert.Contains("does not belong to this repository", refusal.Message, StringComparison.Ordinal);
     }
 
@@ -116,7 +116,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
         var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
 
         Assert.Contains("does not hold a FallbackPlan repository", exception.Message, StringComparison.Ordinal);
     }
@@ -146,7 +146,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         await File.WriteAllBytesAsync(descriptorPath, bytes);
 
         var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
 
         Assert.Contains("digest", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -183,7 +183,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         Assert.Contains("withdrawn", violation.Message, StringComparison.Ordinal);
 
         var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
         Assert.Contains("format 1", exception.Message, StringComparison.Ordinal);
         Assert.Contains("withdrawn", exception.Message, StringComparison.Ordinal);
     }
@@ -197,7 +197,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None);
         using var _repository = repository;
         using var _authority = authority;
