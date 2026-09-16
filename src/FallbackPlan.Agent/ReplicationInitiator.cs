@@ -96,6 +96,14 @@ internal static class ReplicationInitiator
     /// what it buys is a keyless destination that can tell a real deletion
     /// instruction from a forged one.
     /// </param>
+    /// <param name="claimPublicKey">
+    /// The installation's claim public key
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1),
+    /// published on the same offer and recorded by the same attribution;
+    /// empty when this source has none. What a machine rebuilt after total
+    /// loss proves the replica is its own with — so it has to be published
+    /// now, while there is still somebody to publish it.
+    /// </param>
     /// <param name="signer">
     /// Signs each retention page's canonical bytes under the repository's
     /// reclaim key (ADR-0055 §5), or null when this commander holds none —
@@ -124,7 +132,8 @@ internal static class ReplicationInitiator
         Func<byte[], byte[]>? signer = null,
         bool resumeNegotiated = false,
         ILogger? logger = null,
-        ReadOnlyMemory<byte> sessionBinding = default)
+        ReadOnlyMemory<byte> sessionBinding = default,
+        ReadOnlyMemory<byte> claimPublicKey = default)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -135,7 +144,8 @@ internal static class ReplicationInitiator
         {
             await PeerFrame.WriteAsync(
                 stream,
-                new ReplicationOffer(repositoryId, FormatCapability, "all", reclaimPublicKey),
+                new ReplicationOffer(
+                    repositoryId, FormatCapability, "all", reclaimPublicKey, claimPublicKey),
                 cancellationToken)
                 .ConfigureAwait(false);
 

@@ -135,6 +135,57 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
     }
 
     [TestMethod]
+    public void Attribute_TheClaimPublicKey_IsRecordedAndNeverReplaced()
+    {
+        // Same rule as the reclaim key's (ADR-0055 §5), and it matters more
+        // here: the claim key decides which device this peer will hand the
+        // replica back to. A key a later offer could overwrite would let
+        // whoever can reach the peer nominate themselves as the owner.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('e', 64)));
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('f', 64)));
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+    }
+
+    [TestMethod]
+    public void Attribute_AnAttributionThatRecordedNoClaimKey_MayStillLearnOne()
+    {
+        // The self-healing half, and the whole of what makes an existing
+        // peering claimable: one more offer from an updated source fills the
+        // absence. What it cannot help is a machine that died before that
+        // offer — ADR-0053 §3's operator path is the answer there, and is not
+        // built.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('g', 64)));
+        Assert.AreEqual(new string('g', 64), store.Find(RepoA)!.ClaimPublicKey);
+        Assert.AreEqual(
+            new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey, "filling one must not disturb the other");
+    }
+
+    [TestMethod]
+    public void Open_AFileRecordedBeforeTheClaimKey_ReadsBackWithNone()
+    {
+        // The JSON tolerates a missing property, so an attribution written
+        // before this field reads with it null and rewrites in the new shape
+        // on the next offer — the same lift the pre-reclaim shape gets.
+        File.WriteAllText(
+            Path.Combine(Directory.CreateDirectory(_stateDirectory).FullName, "replica-owners.json"),
+            $$"""{ "{{RepoA}}": { "Fingerprint": "peer-one", "ReclaimPublicKey": "{{new string('a', 64)}}" } }""");
+
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsFalse(File.Exists(Path.Combine(_stateDirectory, "replica-owners.json.corrupt")));
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
+    }
+
+    [TestMethod]
     public void Open_AFileInThePreReclaimShape_IsLiftedRatherThanSetAside()
     {
         // The old shape was a flat id-to-fingerprint map. Discarding it would
@@ -152,6 +203,7 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
             "a readable older file is not corruption");
         Assert.AreEqual("peer-one", store.Find(RepoA)!.Fingerprint);
         Assert.IsNull(store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
         Assert.ContainsSingle(store.OwnedBy("peer-one"));
     }
 

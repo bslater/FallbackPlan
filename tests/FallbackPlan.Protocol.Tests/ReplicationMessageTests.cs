@@ -44,11 +44,12 @@ public sealed class ReplicationMessageTests
         var read = RoundTrip(offer, ReplicationOffer.Read);
 
         Assert.IsTrue(read.ReclaimPublicKey.Span.SequenceEqual(published));
+        Assert.IsTrue(read.ClaimPublicKey.IsEmpty, "a source may publish one key and not the other");
         Assert.AreEqual(4, offer.BodyEntryCount);
     }
 
     [TestMethod]
-    public void Offer_WithoutOne_SaysThreeEntriesAndReadsEmpty()
+    public void Offer_WithNeitherPublishedKey_SaysThreeEntriesAndReadsEmpty()
     {
         // A source with no key to publish — an older build, or a write-only
         // set provisioned before the decision — writes the offer it always
@@ -57,7 +58,42 @@ public sealed class ReplicationMessageTests
         var offer = new ReplicationOffer(new byte[16], 5, "all");
 
         Assert.AreEqual(3, offer.BodyEntryCount);
-        Assert.IsTrue(RoundTrip(offer, ReplicationOffer.Read).ReclaimPublicKey.IsEmpty);
+        var read = RoundTrip(offer, ReplicationOffer.Read);
+        Assert.IsTrue(read.ReclaimPublicKey.IsEmpty);
+        Assert.IsTrue(read.ClaimPublicKey.IsEmpty);
+    }
+
+    [TestMethod]
+    public void Offer_WithAClaimPublicKey_RoundTripsItBesideTheReclaimOne()
+    {
+        // Key 5 (ADR-0053 §1): what a keyless destination checks a CLAIM
+        // against — a rebuilt machine proving the replica is its own. Carried
+        // on the same offer as key 4 and recorded by the same attribution,
+        // because both answer the same question for a party that holds no
+        // repository keys of its own.
+        var reclaim = new byte[ReplicationOffer.ReclaimPublicKeyLength];
+        reclaim.AsSpan().Fill(0xA7);
+        var claim = new byte[ReplicationOffer.ClaimPublicKeyLength];
+        claim.AsSpan().Fill(0xB3);
+
+        var offer = new ReplicationOffer(new byte[16], 5, "all", reclaim, claim);
+        var read = RoundTrip(offer, ReplicationOffer.Read);
+
+        Assert.IsTrue(read.ReclaimPublicKey.Span.SequenceEqual(reclaim));
+        Assert.IsTrue(read.ClaimPublicKey.Span.SequenceEqual(claim));
+        Assert.AreEqual(5, offer.BodyEntryCount);
+    }
+
+    [TestMethod]
+    public void Offer_AClaimKeyOfTheWrongWidth_IsMalformedRatherThanIgnored()
+    {
+        // Same rule as key 4's, for the same reason: a destination that
+        // dropped a malformed claim key would go on believing it had one to
+        // check against, and would then refuse the owner's own claim.
+        var reclaim = new byte[ReplicationOffer.ReclaimPublicKeyLength];
+        var offer = new ReplicationOffer(new byte[16], 5, "all", reclaim, new byte[16]);
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(offer, ReplicationOffer.Read));
     }
 
     [TestMethod]

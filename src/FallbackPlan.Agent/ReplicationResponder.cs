@@ -105,16 +105,20 @@ internal static class ReplicationResponder
             // total this peer stores here" — computable across sessions
             // (05 §2). A repository another peer owns here is refused rather
             // than counted against the wrong household's ledger.
-            // The reclaim public key rides the offer and is recorded here,
-            // at the moment the destination first admits the repository is
-            // this peer's (ADR-0055 §5). Recorded once and never replaced by
-            // a later offer: a key the sender can change is a check the
-            // sender controls.
+            // The reclaim and claim public keys ride the offer and are
+            // recorded here, at the moment the destination first admits the
+            // repository is this peer's (ADR-0055 §5; ADR-0053 §1). Recorded
+            // once and never replaced by a later offer: a key the sender can
+            // change is a check the sender controls.
             var publishedReclaimKey = offer.ReclaimPublicKey.IsEmpty
                 ? null
                 : Convert.ToHexStringLower(offer.ReclaimPublicKey.Span);
+            var publishedClaimKey = offer.ClaimPublicKey.IsEmpty
+                ? null
+                : Convert.ToHexStringLower(offer.ClaimPublicKey.Span);
 
-            if (!owners.TryAttribute(repositoryIdHex, peer.Identity.Fingerprint, publishedReclaimKey))
+            if (!owners.TryAttribute(
+                repositoryIdHex, peer.Identity.Fingerprint, publishedReclaimKey, publishedClaimKey))
             {
                 throw new PeerProtocolException(
                     PeerRefusalReason.TermsRefused,

@@ -448,6 +448,12 @@ public static class FanOut
             var reclaimPublicKey = archive.Repository.Hierarchy.ReclaimPublicKey(
                 archive.Repository.CurrentMetadataGeneration);
 
+            // The claim public key rides the same offer (ADR-0053 §1) and
+            // takes no generation: the destination records it once and never
+            // replaces it, so a key that turned over would go stale with no
+            // way to say so.
+            var claimPublicKey = archive.Repository.Hierarchy.ClaimPublicKey();
+
             // The commander signs each retention page under the reclaim key
             // (ADR-0055 §5) so the spoke can tell an authorised deletion from
             // one sent by whoever merely holds this session. A write-only set
@@ -488,7 +494,8 @@ public static class FanOut
                 reclaimPublicKey, reclaimSigner,
                 session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
                 runtime.LoggerFor(typeof(ReplicationInitiator)),
-                sessionBinding)
+                sessionBinding,
+                claimPublicKey)
                 .ConfigureAwait(false);
 
             ReportShortfall(

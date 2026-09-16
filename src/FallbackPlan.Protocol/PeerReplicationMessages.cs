@@ -19,11 +19,21 @@ namespace FallbackPlan.Protocol;
 /// first attribution and checks deletion instructions against it — it holds no
 /// repository keys of its own, so this is the only thing it can check.
 /// </param>
+/// <param name="ClaimPublicKey">
+/// The installation's claim public key
+/// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1),
+/// 32 bytes, or empty when the source has none to publish. Recorded at the
+/// same first attribution and checked when a machine rebuilt after total loss
+/// asks for the replica back. It has to travel on the ordinary offer, while
+/// the owner still exists, because afterwards there is nobody left to publish
+/// it.
+/// </param>
 public sealed record ReplicationOffer(
     ReadOnlyMemory<byte> RepositoryId,
     uint FormatCapability,
     string Scope,
-    ReadOnlyMemory<byte> ReclaimPublicKey = default) : IPeerMessage
+    ReadOnlyMemory<byte> ReclaimPublicKey = default,
+    ReadOnlyMemory<byte> ClaimPublicKey = default) : IPeerMessage
 {
     /// <summary>The repository identity's length in bytes.</summary>
     public const int RepositoryIdLength = 16;
@@ -34,11 +44,15 @@ public sealed record ReplicationOffer(
     /// <summary>An Ed25519 public key is 32 bytes.</summary>
     public const int ReclaimPublicKeyLength = 32;
 
+    /// <summary>An Ed25519 public key is 32 bytes.</summary>
+    public const int ClaimPublicKeyLength = 32;
+
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.ReplicationOffer;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => ReclaimPublicKey.IsEmpty ? 3 : 4;
+    public int BodyEntryCount =>
+        3 + (ReclaimPublicKey.IsEmpty ? 0 : 1) + (ClaimPublicKey.IsEmpty ? 0 : 1);
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
@@ -65,6 +79,16 @@ public sealed record ReplicationOffer(
             writer.WriteInt32(4);
             writer.WriteByteString(ReclaimPublicKey.Span);
         }
+
+        // Key 5, the claim public key (ADR-0053 §1). Written on every offer
+        // and, like key 4, recorded by the destination only at first
+        // attribution — a key a later offer could replace would let whoever
+        // can reach the peer nominate themselves the owner.
+        if (!ClaimPublicKey.IsEmpty)
+        {
+            writer.WriteInt32(5);
+            writer.WriteByteString(ClaimPublicKey.Span);
+        }
     }
 
     /// <summary>Reads an offer from a body positioned after the message type.</summary>
@@ -79,6 +103,7 @@ public sealed record ReplicationOffer(
         uint capability = 0;
         string? scope = null;
         byte[]? reclaimPublicKey = null;
+        byte[]? claimPublicKey = null;
 
         PeerCbor.ReadEntries(reader, key =>
         {
@@ -95,6 +120,9 @@ public sealed record ReplicationOffer(
                     break;
                 case 4:
                     reclaimPublicKey = reader.ReadByteString();
+                    break;
+                case 5:
+                    claimPublicKey = reader.ReadByteString();
                     break;
                 default:
                     reader.SkipValue();
@@ -120,8 +148,22 @@ public sealed record ReplicationOffer(
                 "An offer's reclaim public key is not 32 bytes (03 §3.1).");
         }
 
+        // And the same for the claim key: a destination that dropped a
+        // malformed one would believe it had a key to check claims against,
+        // and would then refuse the owner's own claim.
+        if (claimPublicKey is { } claimed && claimed.Length != ClaimPublicKeyLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "An offer's claim public key is not 32 bytes (03 §3.1).");
+        }
+
         return new ReplicationOffer(
-            repositoryId, capability, scope, reclaimPublicKey ?? ReadOnlyMemory<byte>.Empty);
+            repositoryId,
+            capability,
+            scope,
+            reclaimPublicKey ?? ReadOnlyMemory<byte>.Empty,
+            claimPublicKey ?? ReadOnlyMemory<byte>.Empty);
     }
 
     /// <inheritdoc/>

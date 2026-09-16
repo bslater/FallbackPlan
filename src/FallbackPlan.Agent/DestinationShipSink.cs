@@ -118,12 +118,18 @@ public sealed class DestinationShipSink : IObjectStore
     /// attribution; empty for a local path, which needs none, and for a
     /// repository that publishes none.
     /// </param>
+    /// <param name="claimPublicKey">
+    /// The installation's claim public key (ADR-0053 §1), published on the
+    /// same offer and recorded by the same attribution; empty for a local
+    /// path, and for an installation that publishes none.
+    /// </param>
     /// <param name="cancellationToken">Cancels the seeding.</param>
     /// <exception cref="IOException">No destination is reachable — there is nowhere to write a backup.</exception>
     public async ValueTask BeginRunAsync(
         BackupSetConfiguration set,
         ulong nowUnixMilliseconds,
         ReadOnlyMemory<byte> reclaimPublicKey,
+        ReadOnlyMemory<byte> claimPublicKey,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(set);
@@ -226,7 +232,8 @@ public sealed class DestinationShipSink : IObjectStore
             {
                 inScope.Add(new Shipment(
                     destination.Name,
-                    await StoreForAsync(destination, reclaimPublicKey, cancellationToken).ConfigureAwait(false),
+                    await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
+                        .ConfigureAwait(false),
                     SetDestinationReference.EffectivePriority(reference, destination)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -776,10 +783,12 @@ public sealed class DestinationShipSink : IObjectStore
     /// </summary>
     /// <param name="destination">The destination's declaration.</param>
     /// <param name="reclaimPublicKey">The repository's reclaim public key, for a peer's offer.</param>
+    /// <param name="claimPublicKey">The installation's claim public key, for the same offer.</param>
     /// <param name="cancellationToken">Cancels the dial.</param>
     private async ValueTask<IObjectStore> StoreForAsync(
         DestinationConfiguration destination,
         ReadOnlyMemory<byte> reclaimPublicKey,
+        ReadOnlyMemory<byte> claimPublicKey,
         CancellationToken cancellationToken)
     {
         if (destination.Kind != DestinationKind.Peer)
@@ -788,7 +797,8 @@ public sealed class DestinationShipSink : IObjectStore
         }
 
         var peer = await PeerShipStore.OpenAsync(
-            _runtime, destination, Convert.FromHexString(_repositoryIdHex), reclaimPublicKey, cancellationToken)
+            _runtime, destination, Convert.FromHexString(_repositoryIdHex), reclaimPublicKey, claimPublicKey,
+            cancellationToken)
             .ConfigureAwait(false);
 
         // Registered the moment it exists, not when the run admits it: seeding

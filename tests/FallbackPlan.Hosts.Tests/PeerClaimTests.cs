@@ -90,6 +90,32 @@ public sealed class PeerClaimTests : IDisposable
         Assert.Contains("retrievable under this pairing", refusal.Message, StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public async Task TheFirstOffer_PublishesTheClaimKey_SoTheDestinationHasSomethingToCheck()
+    {
+        // The carrier, on its own. A destination holds no repository keys, so
+        // the only thing it can ever check a claim against is a key the owner
+        // published while the owner still existed — which means it has to
+        // ride the ordinary offer, long before anyone needs it.
+        //
+        // The key recorded here is the installation's (ADR-0053 §1), so it is
+        // the same 32 bytes for every set this installation writes; the
+        // attribution is still per repository, because the quota and the
+        // retrieval gate are.
+        var repositoryId = await SeedAsync();
+
+        var owners = ReplicaOwnerStore.Open(_destinationState);
+        var owner = owners.Find(Convert.ToHexStringLower(repositoryId));
+
+        Assert.IsNotNull(owner);
+        Assert.IsNotNull(owner.ClaimPublicKey, "without this the owner can never prove the replica is theirs");
+        Assert.HasCount(64, owner.ClaimPublicKey);
+        Assert.AreNotEqual(
+            owner.ReclaimPublicKey,
+            owner.ClaimPublicKey,
+            "deleting and re-pointing an attribution are different powers and must be different keys");
+    }
+
     /// <summary>A backup to the peer, and the repository id it landed under.</summary>
     private async Task<byte[]> SeedAsync()
     {

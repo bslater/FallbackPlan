@@ -107,8 +107,12 @@ public static class BackupRunner
             {
                 sink = shipSink;
                 await shipSink.BeginRunAsync(
-                    set, nowMs, archive.Repository.Hierarchy.ReclaimPublicKey(
-                        archive.Repository.CurrentMetadataGeneration), cancellationToken)
+                    set,
+                    nowMs,
+                    archive.Repository.Hierarchy.ReclaimPublicKey(
+                        archive.Repository.CurrentMetadataGeneration),
+                    archive.Repository.Hierarchy.ClaimPublicKey(),
+                    cancellationToken)
                     .ConfigureAwait(false);
             }
 

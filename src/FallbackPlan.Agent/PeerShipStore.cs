@@ -100,6 +100,12 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     /// <param name="runtime">The service, for the state directory holding keys and grants.</param>
     /// <param name="destination">The peer destination's declaration.</param>
     /// <param name="repositoryId">The repository being shipped (16 bytes).</param>
+    /// <param name="claimPublicKey">
+    /// The installation's claim public key
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1),
+    /// recorded by the destination at the same first attribution; empty when
+    /// this source has none.
+    /// </param>
     /// <param name="reclaimPublicKey">
     /// The repository's reclaim public key (ADR-0055 §5), recorded by the
     /// destination at first attribution; empty when this source has none.
@@ -111,6 +117,7 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
         DestinationConfiguration destination,
         ReadOnlyMemory<byte> repositoryId,
         ReadOnlyMemory<byte> reclaimPublicKey,
+        ReadOnlyMemory<byte> claimPublicKey,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(runtime);
@@ -150,7 +157,8 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
             await PeerFrame.WriteAsync(
                 session.Stream,
                 new ReplicationOffer(
-                    repositoryId, ReplicationInitiator.FormatCapability, "all", reclaimPublicKey),
+                    repositoryId, ReplicationInitiator.FormatCapability, "all", reclaimPublicKey,
+                    claimPublicKey),
                 cancellationToken).ConfigureAwait(false);
 
             var held = await ReadInventoryAsync(session.Stream, cancellationToken).ConfigureAwait(false);
