@@ -97,6 +97,39 @@ public sealed class PeerClaimTests : IDisposable
     }
 
     [TestMethod]
+    public async Task TheClaimVerb_IsHowAPersonActuallyDoesThis()
+    {
+        // The ceremony is worth nothing if reaching it needs a test harness.
+        // This is the whole recovery as somebody would type it: pair with the
+        // friend, then point the verb at the kit and the passphrase. No
+        // --fingerprint, because exactly one peer is pinned to store for this
+        // machine and asking for it would be friction at the worst moment.
+        var repositoryId = await SeedAsync();
+        DestroyTheSourceMachine();
+        var rebuilt = PairRebuiltMachineAsync();
+        rebuilt.Dispose();
+
+        var output = new StringWriter();
+        var exit = await Cli.CliApplication.RunAsync(
+            [
+                "claim", $"{_endpoint!.Address}:{_endpoint.Port}",
+                "--state", _rebuiltState,
+                "--kit", Path.Combine(_harness.WorkPath, "kit.bin"),
+                "--passphrase-env", _harness.PassphraseVariable,
+            ],
+            new System.CommandLine.InvocationConfiguration { Output = output, Error = output });
+
+        Assert.AreEqual(0, exit, output.ToString());
+        Assert.Contains(Convert.ToHexStringLower(repositoryId), output.ToString(), StringComparison.Ordinal);
+
+        var owner = ReplicaOwnerStore.Open(_destinationState).Find(Convert.ToHexStringLower(repositoryId));
+        Assert.AreEqual(
+            PeerKeypairStore.Open(_rebuiltState).Identity.Fingerprint,
+            owner!.Fingerprint,
+            "the verb must move the attribution, not merely report that it could");
+    }
+
+    [TestMethod]
     public async Task AClaimForNothing_AndAClaimSignedByAStranger_RefuseIdentically()
     {
         // The no-reconnaissance rule (07 §4), applied where it matters most:

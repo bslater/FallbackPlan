@@ -175,4 +175,9 @@ internal static class Strings
     /// This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).
     /// </summary>
     internal static string RepositoryLifecycle_WriteOnlyNeedsDerivedOpen => Get(nameof(RepositoryLifecycle_WriteOnlyNeedsDerivedOpen));
+
+    /// <summary>
+    /// The passphrase does not open this recovery kit (ADR-0042): the derived public key disagrees with the kit's, so no claim could be made under it.
+    /// </summary>
+    internal static string RecoveryKitClaim_PassphraseDoesNotReproduce => Get(nameof(RecoveryKitClaim_PassphraseDoesNotReproduce));
 }

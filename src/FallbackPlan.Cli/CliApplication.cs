@@ -10,6 +10,8 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Catalogue.Forensic;
 using FallbackPlan.Repository.Format.Manifests;
@@ -363,6 +365,37 @@ public static class CliApplication
         }
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
+
+        // Which pinned peer to expect. A claimant that has just paired knows
+        // the fingerprint, but asking for it is friction at the worst moment —
+        // so a single peer pinned to store for this machine is taken as the
+        // answer, and anything else is named rather than guessed at.
+        static Protocol.PeerIdentity ResolveClaimPeer(PeerGrantStore grants, string? fingerprint)
+        {
+            if (fingerprint is { Length: > 0 })
+            {
+                return grants.Grants
+                    .FirstOrDefault(grant => string.Equals(
+                        grant.Identity.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+                    ?.Identity
+                    ?? throw new CliFailureException(
+                        $"no peer with fingerprint '{fingerprint}' is pinned in this state directory. "
+                        + "Pair with the peer first.");
+            }
+
+            var candidates = grants.Grants
+                .Where(grant => grant.Role is PeerRole.StoresForUs or PeerRole.Both)
+                .ToList();
+
+            return candidates.Count switch
+            {
+                1 => candidates[0].Identity,
+                0 => throw new CliFailureException(
+                    "no peer is pinned to store for this machine. Pair with the peer first, then claim."),
+                _ => throw new CliFailureException(
+                    $"{candidates.Count} peers are pinned to store for this machine; name one with --fingerprint."),
+            };
+        }
 
         static bool TryParseEndpoint(string target, out string host, out int port)
         {
@@ -1808,6 +1841,143 @@ public static class CliApplication
 
                 output.WriteLine($"pairing did not complete: {result.Refusal?.Text ?? "the peer went away"}.");
                 return 1;
+            }));
+        }
+
+        // ---------------------------------------------------------------- claim
+        {
+            // The morning the machine is gone
+            // ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
+            // A protocol verb like `pair`, not a gateway verb: the claimant
+            // has no service, no configuration and no repository — the two
+            // things it has are the kit and the passphrase, and everything
+            // here is derived from those.
+            var connectArgument = new Argument<string>("host:port")
+            {
+                Description = "The peer holding the replica, as host:port.",
+            };
+            var stateArgOption = new Option<string>("--state")
+            {
+                Description = "This machine's state directory (its peer identity and the pairing with the peer).",
+                Required = true,
+            };
+            var kitOption = new Option<string>("--kit")
+            {
+                Description = "Path of the recovery kit, framed or printed.",
+                Required = true,
+            };
+            var claimFingerprintOption = new Option<string?>("--fingerprint")
+            {
+                Description = "Fingerprint of the pinned peer to expect. Omit it when exactly one peer is pinned "
+                    + "to store for this machine.",
+            };
+
+            var command = new Command(
+                "claim",
+                "Prove a peer's replica is this installation's and have the attribution follow this machine "
+                + "(ADR-0053). Pair with the peer first.");
+            command.Arguments.Add(connectArgument);
+            command.Options.Add(stateArgOption);
+            command.Options.Add(kitOption);
+            command.Options.Add(passphraseEnvOption);
+            command.Options.Add(claimFingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var target = parse.GetValue(connectArgument)!;
+                if (!TryParseEndpoint(target, out var host, out var port))
+                {
+                    throw new CliFailureException($"'{target}' is not host:port.");
+                }
+
+                var state = parse.GetValue(stateArgOption)!;
+                using var keypair = PeerKeypairStore.Open(state);
+                var grants = PeerGrantStore.Open(state);
+                var expected = ResolveClaimPeer(grants, parse.GetValue(claimFingerprintOption));
+
+                // Argon2id runs here, before the dial, so a wrong passphrase
+                // is a local refusal rather than a refusal from the peer —
+                // which would have been "no replica here is claimable under
+                // that key", true and the wrong diagnosis entirely.
+                using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
+                var kitBytes = File.ReadAllBytes(parse.GetValue(kitOption)!);
+                var kit = RecoveryKitCodec.Parse(
+                    kitBytes.Length >= 8 && kitBytes.AsSpan(0, 8).SequenceEqual(RecoveryKitCodec.Magic)
+                        ? kitBytes
+                        : RecoveryKitText.ParseToFramed(System.Text.Encoding.UTF8.GetString(kitBytes)));
+
+                var seed = RecoveryKitClaim.SeedFrom(kit, passphrase);
+                ReplicationClaimAccepted accepted;
+                try
+                {
+                    accepted = await ClaimAsync(seed).ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Zeroed however the dial went. A seed left in a
+                    // recovering machine's memory after a failed attempt is a
+                    // seed somebody will retry around.
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+                }
+
+                if (accepted.RepositoryIds.Count == 0)
+                {
+                    output.WriteLine("the peer accepted the claim but named no replica.");
+                    return 1;
+                }
+
+                output.WriteLine(
+                    $"claimed {accepted.RepositoryIds.Count} replica(s) at {host}:{port} as peer "
+                    + $"{keypair.Identity.Fingerprint}:");
+                foreach (var id in accepted.RepositoryIds)
+                {
+                    output.WriteLine($"  {Convert.ToHexStringLower(id.Span)}");
+                }
+
+                return 0;
+
+                async Task<ReplicationClaimAccepted> ClaimAsync(byte[] claimSeed)
+                {
+                    await using var connection = await PeerTlsConnection.DialAsync(
+                        host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+                    var session = await PeerSessionDriver.DialAsync(
+                        connection, keypair, grants, expected, "fallbackplan-cli",
+                        terms: null, requiredFeatures: null, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    byte[] publicKey;
+                    byte[] signature;
+                    using (var signer = RepositorySigner.FromSeed(claimSeed, KeyGeneration.Zero))
+                    {
+                        publicKey = signer.PublicKey.ToArray();
+                        signature = signer.Sign(ReplicationClaim.EncodeForSigning(
+                            session.Binding.Span, keypair.Identity.Fingerprint));
+                    }
+
+                    await PeerFrame.WriteAsync(
+                        session.Stream, new ReplicationClaim(publicKey, signature), cancellationToken)
+                        .ConfigureAwait(false);
+                    var answer = await PeerFrame.ReadAsync(session.Stream, cancellationToken).ConfigureAwait(false)
+                        ?? throw new CliFailureException("the peer closed the connection without answering.");
+
+                    if (answer.Type == PeerMessageType.SessionRefuse)
+                    {
+                        // The refusal is the whole diagnosis, and it is the
+                        // peer's words rather than ours: "no replica here is
+                        // claimable under that key", or that this destination
+                        // is too old to offer the ceremony at all.
+                        throw new CliFailureException(
+                            $"the peer refused the claim: {SessionRefuse.Read(answer.Body).Text}");
+                    }
+
+                    if (answer.Type != PeerMessageType.ReplicationClaimAccepted)
+                    {
+                        throw new CliFailureException($"the peer answered a claim with a {answer.Type}.");
+                    }
+
+                    return ReplicationClaimAccepted.Read(answer.Body);
+                }
             }));
         }
 
