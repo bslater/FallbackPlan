@@ -62,6 +62,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
     public SharedRecordRetentionTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
 
         // The twins deduplicate against each other; steady.txt is never
@@ -257,12 +258,12 @@ public sealed class SharedRecordRetentionTests : IDisposable
         await BackUpThreeDaysAsync();
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         Assert.HasCount(3, survey.Snapshots);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Walk the oldest and the newest separately. steady.txt was never
@@ -293,8 +294,8 @@ public sealed class SharedRecordRetentionTests : IDisposable
     private static async Task<IReadOnlyList<ObjectId>> SharedSegmentsAsync(
         LocalFileSystemObjectStore store, RepositoryReader reader)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
 
         var root = await DecodeAsync(reader, survey.Snapshots[0].Manifest.RootTree, TreeManifestCodec.Decode);
@@ -335,8 +336,8 @@ public sealed class SharedRecordRetentionTests : IDisposable
     private static async Task<(CollectionPlan Plan, HashSet<ObjectId> Reachable, RepositoryReader Reader)> PlanAsync(
         LocalFileSystemObjectStore store, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         var selection = RetentionPlanner.Select(
@@ -351,7 +352,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
             .Concat(gate.Held.Select(held => held.Snapshot.SnapshotId))
             .ToHashSet(StringComparer.Ordinal);
 
-        var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(
@@ -385,8 +386,22 @@ public sealed class SharedRecordRetentionTests : IDisposable
             passphrase, CancellationToken.None);
 
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        // The service holds no content key of its own (ADR-0042 §7): a
+        // restore reads sealed content under a grant the passphrase derives,
+        // opened as a source for the run.
+        var description = (ServiceDescriptionResult)await handler.ExecuteAsync(
+            new DescribeServiceCommand(), CancellationToken.None);
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand(
+                "docs",
+                Envelope: WriteOnlyInstallation.RestoreGrant(
+                    StateDirectory, PassphraseText, description.RestoreGrantRecipient!)),
+            CancellationToken.None);
+        var source = opened as RestoreSourceOpenedResult
+            ?? throw new InvalidOperationException($"restore source refused: {(opened as ServiceError)?.Message ?? opened.ToString()}");
         var result = await handler.ExecuteAsync(
-            new RunRestoreCommand(snapshotId, null, outputDirectory), CancellationToken.None);
+            new RunRestoreCommand(snapshotId, null, outputDirectory, Source: source.SourceId), CancellationToken.None);
 
         return result as ApiRestoreResult
             ?? throw new InvalidOperationException($"restore refused: {result}");
@@ -394,8 +409,8 @@ public sealed class SharedRecordRetentionTests : IDisposable
 
     private static async Task<string> NewestSnapshotIdAsync(LocalFileSystemObjectStore store)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         return survey.Snapshots[0].Fact.SnapshotId;
     }
@@ -418,15 +433,15 @@ public sealed class SharedRecordRetentionTests : IDisposable
 
     private async Task<RetentionReport> RunAsync(LocalFileSystemObjectStore store, bool apply, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
             store, repository, Policy, [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply,
-            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None);
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
     }
 
     public void Dispose()

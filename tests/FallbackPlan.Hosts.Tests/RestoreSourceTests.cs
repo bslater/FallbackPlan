@@ -44,7 +44,7 @@ public sealed class RestoreSourceTests : IDisposable
             // The staging source: snapshots answered on open, the listing and
             // a multi-path run served through the handle.
             Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var staging);
+                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var staging);
             Assert.AreEqual("staging", staging.Location);
             var snapshot = Assert.ContainsSingle(staging.Snapshots);
             snapshotId = snapshot.SnapshotId;
@@ -98,7 +98,7 @@ public sealed class RestoreSourceTests : IDisposable
         await using (var runtime = await StartAsync())
         {
             var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token);
+            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token);
             if (opened is ServiceError openError)
             {
                 Assert.Fail($"replica open refused: {openError.Reason}: {openError.Message}");
@@ -136,7 +136,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         // The live file moved on; the rename policy keeps it and lands the
@@ -184,7 +184,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         Assert.IsInstanceOfType<ConfigurationChangeResult>(
@@ -251,7 +251,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var staging);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var staging);
         var snapshotId = Assert.ContainsSingle(staging.Snapshots).SnapshotId;
 
         var stagingOut = Path.Combine(_harness.WorkPath, "big-from-staging");
@@ -269,7 +269,7 @@ public sealed class RestoreSourceTests : IDisposable
         // The same bytes from the replica source — the targeted blob load
         // walking a multi-segment manifest against a second store.
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token),
             out var replica);
         var replicaOut = Path.Combine(_harness.WorkPath, "big-from-replica");
         Assert.IsInstanceOfType<RestoreResult>(
@@ -315,7 +315,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         // Both live files have moved on since the capture.
@@ -415,8 +415,7 @@ public sealed class RestoreSourceTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -428,7 +427,7 @@ public sealed class RestoreSourceTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 }

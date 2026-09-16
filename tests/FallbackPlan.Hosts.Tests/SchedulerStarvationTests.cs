@@ -151,8 +151,7 @@ public sealed class SchedulerStarvationTests : IDisposable
         _harness.WriteConfiguration("every 1h");
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -160,7 +159,7 @@ public sealed class SchedulerStarvationTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 }

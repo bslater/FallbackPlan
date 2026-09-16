@@ -64,6 +64,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
     public ReclaimAuthoritySweepTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "tombstone fodder");
 
@@ -112,8 +113,8 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
         await BackUpAsync(Day1);
 
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         // Required, not optional: an optional feature lets an older collector
         // proceed and accept signing-key tombstones, which is the downgrade
@@ -129,13 +130,13 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
         var generation = tombstone.Generation;
 
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var signed = tombstone.Decoded.SignedBytes.Span;
 
         using (var reclaim = RepositorySigner.FromSeed(
-            repository.Hierarchy.DeriveReclaimKeySeed(generation), generation))
+            opened.Reclaim.SeedFor(generation), generation))
         {
             Assert.IsTrue(
                 reclaim.Verify(signed, tombstone.Signature.Span),
@@ -202,8 +203,8 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
             RepositoryDescriptorCodec.Serialize(ok.Descriptor with { RequiredFeatures = [] }));
 
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         Assert.IsEmpty(repository.Descriptor.RequiredFeatures);
 
@@ -212,7 +213,7 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
         var generation = new KeyGeneration(0);
         using var signing = RepositorySigner.Create(repository.Hierarchy, generation);
         using var reclaim = RepositorySigner.FromSeed(
-            repository.Hierarchy.DeriveReclaimKeySeed(generation), generation);
+            opened.Reclaim.SeedFor(generation), generation);
 
         var payload = "an older build's tombstone"u8.ToArray();
         var signature = signing.Sign(payload);
@@ -265,16 +266,16 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
         var report = await RunRetentionAsync(store, apply: true, Day1.AddDays(2).AddHours(1));
         Assert.IsGreaterThanOrEqualTo(1, report.TombstonesWritten, "nothing was tombstoned, so this proves nothing");
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         return await ReadOneTombstoneAsync(store, repository);
     }
 
     private async Task<int> ReSignEveryTombstoneUnderTheSigningKeyAsync()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var keys = new List<ObjectKey>();
         await foreach (var entry in store.ListAsync(
@@ -356,13 +357,13 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
     private async Task<RetentionReport> RunRetentionAsync(
         IObjectStore store, bool apply, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
             store, repository, Policy, [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None, Writer, apply,
-            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None);
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
     }
 }

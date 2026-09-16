@@ -168,6 +168,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
     private async Task SeedAsync(bool spokeUnderstandsSessionBinding = true)
     {
         await StartDestinationAsync(spokeUnderstandsSessionBinding);
+        await _source.SetupAsync();
         _source.WriteSourceFile("notes.txt", "something worth keeping");
         WriteConfiguration();
 
@@ -202,12 +203,18 @@ public sealed class PeerRetentionReplayTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
-        using var repository = await RepositoryLifecycle.OpenAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
             new LocalFileSystemObjectStore(_source.RepositoryPath), passphrase, Timeout);
+        using var _repository = repository;
+        using var _authority = authority;
 
+        // The reclaim key is the passphrase's to derive and never the write
+        // credential's (ADR-0055 §2) — this test is the authority a console
+        // would be.
         var page = new RetentionOffer(repository.RepositoryId.ToArray(), keys, More: false);
         var generation = repository.CurrentMetadataGeneration;
-        var seed = repository.Hierarchy.DeriveReclaimKeySeed(generation);
+        using var reclaim = new ReclaimAuthority(authority.ReclaimKeySeed);
+        var seed = reclaim.SeedFor(generation);
         try
         {
             using var signer = RepositorySigner.FromSeed(seed, generation);
@@ -247,8 +254,10 @@ public sealed class PeerRetentionReplayTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_source.PassphraseVariable)!);
-        using var repository = await RepositoryLifecycle.OpenAsync(
+        var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
             new LocalFileSystemObjectStore(_source.RepositoryPath), passphrase, Timeout);
+        using var _repository = repository;
+        using var _authority = authority;
         var reclaimPublicKey = repository.Hierarchy.ReclaimPublicKey(repository.CurrentMetadataGeneration);
 
         using var keypair = PeerKeypairStore.Open(_source.StateDirectory);

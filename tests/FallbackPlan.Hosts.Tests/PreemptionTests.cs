@@ -138,8 +138,7 @@ public sealed class PreemptionTests : IDisposable
         Directory.CreateDirectory(Path.Combine(harness.StateDirectory, "vault"));
         await harness.CreateRepositoryAsync();
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+        await harness.SetupAsync();
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
@@ -147,7 +146,7 @@ public sealed class PreemptionTests : IDisposable
                 StateDirectory = harness.StateDirectory,
                 MaxConcurrentBackupsOverride = 1,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
 
         var set = runtime.Configuration.BackupSets.Single();

@@ -118,7 +118,7 @@ public sealed class DirectShipMigrationTests : IDisposable
             // The history restores from the destination alone.
             var output = Path.Combine(_harness.WorkPath, "restored");
             Assert.IsInstanceOfType<RestoreResult>(
-                await handler.ExecuteAsync(new RunRestoreCommand(historySnapshot, null, output), Timeout),
+                await handler.ExecuteAsync(new RunRestoreCommand(historySnapshot, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
                 out var restored);
             Assert.AreEqual("complete", restored.Outcome);
             var recovered = Assert.ContainsSingle(
@@ -194,7 +194,7 @@ public sealed class DirectShipMigrationTests : IDisposable
             var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
             var output = Path.Combine(_harness.WorkPath, "after-restart");
             Assert.IsInstanceOfType<RestoreResult>(
-                await handler.ExecuteAsync(new RunRestoreCommand(firstSnapshot, null, output), Timeout),
+                await handler.ExecuteAsync(new RunRestoreCommand(firstSnapshot, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
                 out var restored);
             Assert.AreEqual("complete", restored.Outcome);
             Assert.AreEqual(
@@ -421,8 +421,7 @@ public sealed class DirectShipMigrationTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -430,7 +429,7 @@ public sealed class DirectShipMigrationTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 }

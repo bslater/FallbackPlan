@@ -41,6 +41,14 @@ public sealed class PeerRetentionTests : IDisposable
 
     public PeerRetentionTests()
     {
+        // Deliberately NOT a set-up installation, for now. These are the
+        // tests of the signed instruction, and a write-only source cannot
+        // sign one: the fan-out holds no reclaim key and a spoke that
+        // recorded the key refuses an unsigned page whole (06 §3). Peer
+        // convergence for a write-only set has to happen under the same
+        // grant its local collection does, and until that lands this
+        // fixture stays on a format-1 archive, whose hierarchy derives the
+        // key.
         Directory.CreateDirectory(StateDirectory);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "peer retention fodder");

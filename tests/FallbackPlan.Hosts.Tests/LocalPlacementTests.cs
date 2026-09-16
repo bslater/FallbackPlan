@@ -160,8 +160,7 @@ public sealed class LocalPlacementTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(Func<ServiceOptions, ServiceOptions>? adjust = null)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         var options = new ServiceOptions
         {
@@ -169,6 +168,6 @@ public sealed class LocalPlacementTests : IDisposable
             StateDirectory = _harness.StateDirectory,
         };
 
-        return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, passphrase, Timeout);
+        return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, passphrase: null, Timeout);
     }
 }

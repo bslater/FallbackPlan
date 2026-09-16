@@ -324,6 +324,12 @@ public sealed class RecoveryDrillTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
+        // Deliberately a passphrase-holding service over a format-1 archive,
+        // for now: a scheduled drill restores content, and on a set-up
+        // installation the service holds no content key (ADR-0042 §7) —
+        // every sampled file reads as sealed. What a drill on a write-only
+        // set proves is a decision ADR-0054 has not taken, and this fixture
+        // moves when it has.
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
 

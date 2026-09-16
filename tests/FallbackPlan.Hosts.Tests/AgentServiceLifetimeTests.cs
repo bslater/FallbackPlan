@@ -74,12 +74,11 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         await using (var client = await Api.Transport.LocalServiceClient.ConnectAsync(
             _harness.StateDirectory, "lifetime-test", timeout.Token))
         {
-            // A fresh installation has no accounts: create the owner through
-            // the bootstrap window, sign in, and restart as the owner.
-            Assert.IsNotInstanceOfType<Api.ServiceError>(
-                await client.ExecuteAsync(new Api.CreateUserCommand("ben", "A-good-passw0rd9"), timeout.Token));
+            // Setup created the owner (FR-USR-001): sign in, and restart as
+            // the owner.
             Assert.IsInstanceOfType<Api.SessionResult>(
-                await client.ExecuteAsync(new Api.LoginCommand("ben", "A-good-passw0rd9"), timeout.Token));
+                await client.ExecuteAsync(
+                    new Api.LoginCommand(HostHarness.OwnerUser, HostHarness.OwnerPassword), timeout.Token));
             Assert.IsInstanceOfType<Api.AcknowledgedResult>(
                 await client.ExecuteAsync(new Api.RestartServiceCommand(), timeout.Token));
         }

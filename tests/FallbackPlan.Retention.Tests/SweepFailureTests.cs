@@ -54,6 +54,7 @@ public sealed class SweepFailureTests : IDisposable
     public SweepFailureTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "sweep fodder");
 
@@ -229,15 +230,14 @@ public sealed class SweepFailureTests : IDisposable
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            faulting.Store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(faulting.Store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
             await RetentionRunner.RunAsync(
                 faulting.Store, repository, Policy, [new SetDestinationReference { Ref = "vault" }],
                 _ => null, _ => TrimVerification.None, Writer, apply: true,
-                (ulong)Day1.AddDays(3).AddHours(1).ToUnixTimeMilliseconds(), cancellation.Token));
+                (ulong)Day1.AddDays(3).AddHours(1).ToUnixTimeMilliseconds(), cancellation.Token, reclaim: opened.Reclaim));
     }
 
     private static RetentionConfiguration Policy => new() { KeepDaily = 1, MinGenerations = 1 };
@@ -278,14 +278,14 @@ public sealed class SweepFailureTests : IDisposable
 
     private async Task<RetentionReport> RunAsync(IObjectStore store, bool apply, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
             store, repository, Policy, [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None, Writer, apply,
-            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None);
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
     }
 
     private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)

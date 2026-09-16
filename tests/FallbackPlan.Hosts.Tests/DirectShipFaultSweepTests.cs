@@ -45,8 +45,7 @@ public sealed class DirectShipFaultSweepTests
             harness.WriteSourceFile("docs/report.txt", new string('r', 200_000) + "the swept bytes");
 
             var faulting = new PutBudgetStore(budget);
-            using var passphrase = Passphrase.Create(
-                Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+            await harness.SetupAsync();
             await using var runtime = await ServiceRuntime.StartAsync(
                 new ServiceOptions
                 {
@@ -55,7 +54,7 @@ public sealed class DirectShipFaultSweepTests
                     ReplicaStoreDecorator = (name, store) =>
                         string.Equals(name, "vault-b", StringComparison.Ordinal) ? faulting.Wrap(store) : store,
                 },
-                passphrase,
+                passphrase: null,
                 timeout.Token);
             var set = runtime.Configuration.BackupSets.Single();
 
@@ -107,8 +106,7 @@ public sealed class DirectShipFaultSweepTests
         WriteConfiguration(harness, vaultA, vaultB);
         harness.WriteSourceFile("docs/report.txt", "small enough for any floor");
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+        await harness.SetupAsync();
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
@@ -117,7 +115,7 @@ public sealed class DirectShipFaultSweepTests
                 AvailableBytesProbe = root =>
                     root.StartsWith(vaultB, StringComparison.Ordinal) ? 1L : null,
             },
-            passphrase,
+            passphrase: null,
             timeout.Token);
         var set = runtime.Configuration.BackupSets.Single();
 

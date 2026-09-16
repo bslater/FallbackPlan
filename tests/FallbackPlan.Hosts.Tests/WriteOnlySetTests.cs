@@ -405,7 +405,7 @@ public sealed class WriteOnlySetTests : IDisposable
     [TestMethod]
     public async Task ProvisionWriteOnlySet_AgainstAnExistingV1Archive_IsRefusedByName()
     {
-        await _harness.CreateRepositoryAsync();
+        await _harness.CreateFormatOneRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "a v1 archive");
         _harness.WriteConfiguration("every 1h");
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
@@ -548,7 +548,7 @@ public sealed class WriteOnlySetTests : IDisposable
     {
         // A v1 archive with a service that holds its passphrase — the world
         // the grant machinery must leave completely alone.
-        await _harness.CreateRepositoryAsync();
+        await _harness.CreateFormatOneRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "v1 ignores grants");
         _harness.WriteConfiguration("every 1h");
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));

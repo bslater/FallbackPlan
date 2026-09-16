@@ -230,7 +230,7 @@ public sealed class InstallationCredentialTests : IDisposable
         // installation must not quietly change what an existing set is.
         _harness.WriteSourceFile("notes.txt", "made before setup");
         _harness.WriteConfiguration("every 1h");
-        await _harness.CreateRepositoryAsync();
+        await _harness.CreateFormatOneRepositoryAsync();
 
         using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
         await using var runtime = await ServiceRuntime.StartAsync(

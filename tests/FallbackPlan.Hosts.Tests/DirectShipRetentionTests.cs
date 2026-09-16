@@ -41,6 +41,7 @@ public sealed class DirectShipRetentionTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var setId = _harness.DocsSetId;
+        var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
 
         // Three snapshots, all shipped directly. In the service path a
         // snapshot's CapturedAt is the real clock, so all of these share one
@@ -62,15 +63,15 @@ public sealed class DirectShipRetentionTests : IDisposable
         // having already established every entitled holder dropped it
         // (FR-GC-010). Before that fan, destinations only ever grew.
         Assert.IsInstanceOfType<RetentionResult>(
-            await handler.ExecuteAsync(new RetentionCommand(Apply: true), Timeout));
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout));
         _harness.WriteSourceFile("docs/a.txt", "fourth content");
         await BackUpAsync(runtime);
         Assert.IsInstanceOfType<RetentionResult>(
-            await handler.ExecuteAsync(new RetentionCommand(Apply: true), Timeout));
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout));
         _harness.WriteSourceFile("docs/a.txt", "fifth content");
         await BackUpAsync(runtime);
         Assert.IsInstanceOfType<RetentionResult>(
-            await handler.ExecuteAsync(new RetentionCommand(Apply: true), Timeout));
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout));
 
         // Belt and braces: an explicit sync pass, so the assertion below is
         // about the converged steady state, not a race with the last apply.
@@ -95,7 +96,7 @@ public sealed class DirectShipRetentionTests : IDisposable
         var newest = listed.Snapshots.OrderByDescending(snapshot => snapshot.CapturedAt).First();
         var output = Path.Combine(_harness.WorkPath, "restored");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(new RunRestoreCommand(newest.SnapshotId, null, output), Timeout),
+            await handler.ExecuteAsync(new RunRestoreCommand(newest.SnapshotId, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
             out var restored);
         Assert.AreEqual("complete", restored.Outcome);
         var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "a.txt", SearchOption.AllDirectories));
@@ -150,8 +151,7 @@ public sealed class DirectShipRetentionTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -159,7 +159,7 @@ public sealed class DirectShipRetentionTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 

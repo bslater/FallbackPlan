@@ -468,15 +468,14 @@ public sealed class JobSchedulerPreemptionTests : IDisposable
                 StringComparison.Ordinal),
             Timeout);
 
-        using var passphrase = FallbackPlan.Repository.Crypto.Passphrase.Create(
-            Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+        await harness.SetupAsync();
         await using var runtime = await Agent.ServiceRuntime.StartAsync(
             new Agent.ServiceOptions
             {
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
         Assert.IsNotNull(runtime.Queue);
     }

@@ -445,7 +445,7 @@ public sealed class ServiceTests : IDisposable
         var destination = Path.Combine(_harness.WorkPath, "restored");
 
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var restored);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var restored);
 
         // ADR-0028 §6: the output directory is a path on the machine running the
         // service. A caller is told what happened and never sent the files, so
@@ -495,9 +495,9 @@ public sealed class ServiceTests : IDisposable
         var destination = Path.Combine(_harness.WorkPath, "twice");
 
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var first);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var first);
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var second);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var second);
 
         Assert.AreNotEqual(first.OutputDirectory, second.OutputDirectory,
             "two restores of one snapshot must land in distinct run directories");
@@ -688,8 +688,7 @@ public sealed class ServiceTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -701,7 +700,7 @@ public sealed class ServiceTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 

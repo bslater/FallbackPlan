@@ -77,8 +77,7 @@ public sealed class RestartServiceTests : IDisposable
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -86,7 +85,7 @@ public sealed class RestartServiceTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 }

@@ -47,9 +47,9 @@ public sealed class RemoteConsoleTests : IDisposable
     /// is false (the unpaired case). Returns what a CLI needs to reach it.
     /// </summary>
     private async Task<(IPEndPoint Endpoint, string ServiceFingerprint, string ConsoleState, IAsyncDisposable Stop)>
-        StartServiceAsync(bool pairConsole = true)
+        StartServiceAsync(bool pairConsole = true, bool formatOne = false)
     {
-        var runtime = await StartRuntimeAsync();
+        var runtime = await StartRuntimeAsync(formatOne);
         var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
         var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
 
@@ -87,12 +87,16 @@ public sealed class RemoteConsoleTests : IDisposable
     [TestMethod]
     public async Task Restore_CommandedByAPairedConsoleOverConnect_WritesOnTheServiceMachine()
     {
-        await _harness.CreateRepositoryAsync();
+        // A format-1 archive under a passphrase-holding service, for now: a
+        // restore commanded over the wire on a set-up installation needs a
+        // restore grant (ADR-0042 §5), and the CLI does not derive one yet —
+        // that lands with the CLI's own move off the passphrase service.
+        await _harness.CreateFormatOneRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello from the service");
         await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
 
-        var (endpoint, fingerprint, consoleState, stop) = await StartServiceAsync();
+        var (endpoint, fingerprint, consoleState, stop) = await StartServiceAsync(formatOne: true);
         await using var _ = stop;
 
         var address = $"{endpoint.Address}:{endpoint.Port}";
@@ -196,10 +200,15 @@ public sealed class RemoteConsoleTests : IDisposable
         Assert.Contains("could not reach the paired service", refused.Error, StringComparison.Ordinal);
     }
 
-    private async Task<ServiceRuntime> StartRuntimeAsync()
+    private async Task<ServiceRuntime> StartRuntimeAsync(bool formatOne = false)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        using var passphrase = formatOne
+            ? Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!)
+            : null;
+        if (!formatOne)
+        {
+            await _harness.SetupAsync();
+        }
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions

@@ -154,7 +154,11 @@ public sealed class RemoteBindingTests : IDisposable
         // exit criterion, over a real socket.
         var destination = Path.Combine(_harness.WorkPath, "service-side-restore");
         Assert.IsInstanceOfType<RestoreResult>(
-            await console.ExecuteAsync(new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token),
+            await console.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshot.SnapshotId, null, destination,
+                    Source: (await _harness.OpenGrantedSourceAsync(console.ExecuteAsync, "docs", null, _timeout.Token)).SourceId),
+                _timeout.Token),
             out var restored);
 
         Assert.AreEqual(1, restored.Restored);
@@ -243,8 +247,7 @@ public sealed class RemoteBindingTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -252,7 +255,7 @@ public sealed class RemoteBindingTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 

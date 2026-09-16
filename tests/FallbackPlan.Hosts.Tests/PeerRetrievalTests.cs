@@ -107,7 +107,10 @@ public sealed class PeerRetrievalTests : IDisposable
         await using var recovered = await StartAsync(_siteOne);
         var handler = new ServiceCommandHandler(recovered, RemoteBindingState.Off);
 
-        var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "site-b"), _timeout.Token);
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand(
+                "docs", "site-b", Envelope: await _siteOne.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)),
+            _timeout.Token);
         if (opened is ServiceError refusal)
         {
             Assert.Fail($"peer source refused: {refusal.Reason}: {refusal.Message}");
@@ -176,8 +179,7 @@ public sealed class PeerRetrievalTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(HostHarness site)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(site.PassphraseVariable)!);
+        await site.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -185,7 +187,7 @@ public sealed class PeerRetrievalTests : IDisposable
                 ArchivesRoot = site.ArchivesRoot,
                 StateDirectory = site.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 }

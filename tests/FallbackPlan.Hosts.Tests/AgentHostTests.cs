@@ -273,7 +273,7 @@ public sealed class AgentHostTests : IDisposable
     [TestMethod]
     public async Task AgentHost_PassphraseIsWrong_FailsTheSetWithoutAStackTrace()
     {
-        await _harness.CreateRepositoryAsync();
+        await _harness.CreateFormatOneRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "agent host");
         _harness.WriteConfiguration("every 4h");
 

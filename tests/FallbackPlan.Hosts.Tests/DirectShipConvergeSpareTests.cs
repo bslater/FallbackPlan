@@ -93,7 +93,7 @@ public sealed class DirectShipConvergeSpareTests : IDisposable
         var middle = listed.Snapshots.OrderBy(snapshot => snapshot.CapturedAt).ElementAt(1);
         var output = Path.Combine(_harness.WorkPath, "restored");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(new RunRestoreCommand(middle.SnapshotId, null, output), Timeout),
+            await handler.ExecuteAsync(new RunRestoreCommand(middle.SnapshotId, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
             out var restored);
         Assert.AreEqual("complete", restored.Outcome);
         var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "a.txt", SearchOption.AllDirectories));
@@ -174,8 +174,7 @@ public sealed class DirectShipConvergeSpareTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -183,7 +182,7 @@ public sealed class DirectShipConvergeSpareTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 

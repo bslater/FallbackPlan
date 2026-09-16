@@ -36,6 +36,7 @@ public sealed class DestinationConvergenceTests : IDisposable
     public DestinationConvergenceTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         Directory.CreateDirectory(WidePath);
         Directory.CreateDirectory(NarrowPath);
@@ -115,9 +116,8 @@ public sealed class DestinationConvergenceTests : IDisposable
         // Convergence is idempotent and never re-pushes what the policy
         // dropped: a second pass over the same state moves and removes
         // nothing (the watermark the plan asked for, by construction).
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var staging = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
         var convergence = await DestinationConvergence.ComputeKeepsAsync(
             new LocalFileSystemObjectStore(RepoPath), staging,
             new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
@@ -214,9 +214,9 @@ public sealed class DestinationConvergenceTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
         await BackUpAsync(day1.AddDays(2));
 
-        using var passphrase = Passphrase.Create(PassphraseText);
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var staging = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
         var oldestFirst = survey.Snapshots.OrderBy(entry => entry.Fact.PublicationSequence).ToList();
         Assert.HasCount(3, oldestFirst);
@@ -255,9 +255,9 @@ public sealed class DestinationConvergenceTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
         await BackUpAsync(day1.AddDays(1));
 
-        using var passphrase = Passphrase.Create(PassphraseText);
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var staging = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
         var newest = survey.Snapshots.Max(entry => entry.Fact.PublicationSequence);
 
@@ -304,14 +304,14 @@ public sealed class DestinationConvergenceTests : IDisposable
 
     private static async Task AssertWalksCleanAsync(LocalFileSystemObjectStore replica, int expectedSnapshots)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(replica, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(replica, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(replica, repository, CancellationToken.None);
         Assert.HasCount(expectedSnapshots, survey.Snapshots);
         Assert.IsEmpty(survey.Undecodable);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, unwalkable) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
         Assert.IsEmpty(unwalkable);
@@ -333,9 +333,8 @@ public sealed class DestinationConvergenceTests : IDisposable
             .First();
         await File.WriteAllBytesAsync(snapshot, new byte[64]);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var staging = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
 
         var convergence = await DestinationConvergence.ComputeKeepsAsync(
             new LocalFileSystemObjectStore(RepoPath), staging,

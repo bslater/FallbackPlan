@@ -41,8 +41,7 @@ public sealed class ConfigurationChangeLogTests : IDisposable
             RingCapacity = 256,
         });
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -51,7 +50,7 @@ public sealed class ConfigurationChangeLogTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 Logging = _logging,
             },
-            passphrase,
+            passphrase: null,
             _timeout.Token);
     }
 

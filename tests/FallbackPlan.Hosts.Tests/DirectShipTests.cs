@@ -190,7 +190,7 @@ public sealed class DirectShipTests : IDisposable
 
         var output = Path.Combine(_harness.WorkPath, "restored");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(new RunRestoreCommand(snapshotId, null, output), Timeout),
+            await handler.ExecuteAsync(new RunRestoreCommand(snapshotId, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
             out var restored);
         Assert.AreEqual("complete", restored.Outcome);
         Assert.AreEqual(0, restored.Failed);
@@ -510,7 +510,7 @@ public sealed class DirectShipTests : IDisposable
 
         var output = Path.Combine(_harness.WorkPath, "restored");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(new RunRestoreCommand(firstSnapshot, null, output), Timeout),
+            await handler.ExecuteAsync(new RunRestoreCommand(firstSnapshot, null, output, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId), Timeout),
             out var restored);
         Assert.AreEqual("complete", restored.Outcome);
         var recovered = Assert.ContainsSingle(
@@ -933,8 +933,7 @@ public sealed class DirectShipTests : IDisposable
         _harness.WriteSourceFile("pics/two.bin", new string('p', 120_000));
         WriteTwoSetConfiguration();
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
@@ -946,7 +945,7 @@ public sealed class DirectShipTests : IDisposable
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 MaxConcurrentBackupsOverride = 2,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
 
         var docs = runtime.Configuration.BackupSets.Single(set => set.Name == "docs");
@@ -1049,9 +1048,13 @@ public sealed class DirectShipTests : IDisposable
     {
         using var passphrase = Passphrase.Create(
             Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
-        using var opened = await Repository.RepositoryLifecycle.OpenAsync(
+        var (opened, authority) = await Repository.RepositoryLifecycle.OpenWriteOnlyForReadAsync(
             new Storage.Local.LocalFileSystemObjectStore(replica), passphrase, Timeout);
-        Assert.IsNotNull(opened.Descriptor);
+        using (opened)
+        using (authority)
+        {
+            Assert.IsNotNull(opened.Descriptor);
+        }
     }
 
     /// <summary>Two local destinations and one direct-ship set over them.</summary>
@@ -1105,8 +1108,7 @@ public sealed class DirectShipTests : IDisposable
             });
         }
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -1119,7 +1121,7 @@ public sealed class DirectShipTests : IDisposable
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 Logging = withLogging ? _logging : null,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 

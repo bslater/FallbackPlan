@@ -359,8 +359,7 @@ public sealed class DirectShipPeerTests : IDisposable
 
     private async Task RunOnceAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
@@ -368,7 +367,7 @@ public sealed class DirectShipPeerTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
 
         var set = runtime.Configuration.BackupSets.Single();

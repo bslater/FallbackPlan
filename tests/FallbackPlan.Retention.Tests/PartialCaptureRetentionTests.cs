@@ -52,6 +52,7 @@ public sealed class PartialCaptureRetentionTests : IDisposable
     public PartialCaptureRetentionTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "partial retention fodder");
 
@@ -152,8 +153,8 @@ public sealed class PartialCaptureRetentionTests : IDisposable
         var partialAt = await WritePartialSnapshotAsync();
 
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         var report = await RetentionRunner.RunAsync(
@@ -161,7 +162,7 @@ public sealed class PartialCaptureRetentionTests : IDisposable
             [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
-            (ulong)partialAt.AddHours(1).ToUnixTimeMilliseconds(), CancellationToken.None);
+            (ulong)partialAt.AddHours(1).ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
 
         Assert.Contains(
             line => line.StartsWith("would delete: 0 snapshot", StringComparison.Ordinal),
@@ -173,8 +174,8 @@ public sealed class PartialCaptureRetentionTests : IDisposable
     private async Task<IReadOnlyList<SurveyedSnapshot>> SurveyAsync()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         return (await StagingMark.SurveyAsync(store, repository, CancellationToken.None)).Snapshots;
     }
 
@@ -226,8 +227,8 @@ public sealed class PartialCaptureRetentionTests : IDisposable
     private async Task<DateTimeOffset> WritePartialSnapshotAsync(byte captureStatus = 2)
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var existing = (await StagingMark.SurveyAsync(store, repository, CancellationToken.None)).Snapshots[0];
         var capturedAt = DateTimeOffset

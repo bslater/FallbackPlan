@@ -185,8 +185,7 @@ public sealed class BackupConcurrencyTests : IDisposable
         _harness.WriteConfiguration("every 1h");
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -198,7 +197,7 @@ public sealed class BackupConcurrencyTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 }
