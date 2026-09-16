@@ -13,7 +13,8 @@ namespace FallbackPlan.Repository.Crypto;
 /// <c>"fbp/seal/v2"</c> for the X25519 sealing scalar, <c>"fbp/metadata/v2"</c>
 /// and <c>"fbp/signing/v2"</c> for the sub-roots the write credential expands
 /// per generation, <c>"fbp/content-id/v2"</c> and <c>"fbp/key-id/v2"</c> for
-/// the repository-scoped keys. Nothing is stored: the same passphrase and
+/// the repository-scoped keys, and <c>"fbp/claim/v2"</c> for the installation's
+/// claim key (ADR-0053 §1). Nothing is stored: the same passphrase and
 /// salt always reproduce the same bundle, which is the whole design — and
 /// why a v2 passphrase can never change.
 /// </summary>
@@ -24,6 +25,9 @@ public static class WriteOnlyDerivation
 
     /// <summary>The Ed25519 reclaim seed length: 32 bytes (ADR-0055 §1).</summary>
     public const int ReclaimKeyLength = 32;
+
+    /// <summary>The Ed25519 claim seed length: 32 bytes (ADR-0053 §1).</summary>
+    public const int ClaimKeyLength = 32;
 
     /// <summary>
     /// Derives the full read authority — the write credential plus the
@@ -84,6 +88,21 @@ public static class WriteOnlyDerivation
         // withholding the key in name only.
         var reclaimSeed = Expand(root, "fbp/reclaim/v2"u8);
 
+        // The claim key, on the same terms and for the same reason
+        // ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
+        // Derived from the INSTALLATION root rather than any repository's
+        // master key, because a machine claiming a replica has lost the
+        // repository: what it still holds is an installation kit, which names
+        // no repository and carries no key object, so a repository-derived
+        // claim key would be unreachable at exactly the moment it is needed.
+        //
+        // Not expanded per generation, unlike every other key here. A
+        // destination records the claim public key at first attribution and
+        // never replaces it, so a key that turned over would go stale with no
+        // way to say so — and an installation root knows nothing of any one
+        // repository's generations anyway.
+        var claimSeed = Expand(root, "fbp/claim/v2"u8);
+
         RepositoryWriteCredential credential;
         try
         {
@@ -99,22 +118,30 @@ public static class WriteOnlyDerivation
                 reclaimPublic = signer.PublicKey.ToArray();
             }
 
+            byte[] claimPublic;
+            using (var signer = RepositorySigner.FromSeed(claimSeed, KeyGeneration.Zero))
+            {
+                claimPublic = signer.PublicKey.ToArray();
+            }
+
             credential = new RepositoryWriteCredential(
                 sealingPublic,
                 Expand(root, "fbp/content-id/v2"u8),
                 Expand(root, "fbp/key-id/v2"u8),
                 Expand(root, "fbp/metadata/v2"u8),
                 Expand(root, "fbp/signing/v2"u8),
-                reclaimPublic);
+                reclaimPublic,
+                claimPublic);
         }
         catch
         {
             CryptographicOperations.ZeroMemory(sealingScalar);
             CryptographicOperations.ZeroMemory(reclaimSeed);
+            CryptographicOperations.ZeroMemory(claimSeed);
             throw;
         }
 
-        return new RepositoryReadAuthority(credential, sealingScalar, reclaimSeed);
+        return new RepositoryReadAuthority(credential, sealingScalar, reclaimSeed, claimSeed);
     }
 
     /// <summary>
@@ -161,30 +188,39 @@ public static class WriteOnlyDerivation
 }
 
 /// <summary>
-/// A write credential together with the two secrets it deliberately does not
-/// carry — the sealing private key that opens content (ADR-0042 §5) and the
+/// A write credential together with the three secrets it deliberately does
+/// not carry — the sealing private key that opens content (ADR-0042 §5), the
 /// reclaim seed that authorises deletion
-/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §2). The shape a
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §2), and the claim
+/// seed that re-points a replica's attribution
+/// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
+/// The shape a
 /// restore holds for exactly as long as its grant lives, and the shape setup
 /// holds for exactly as long as provisioning takes. Owns and disposes every
 /// part.
 /// </summary>
 /// <remarks>
-/// The two withheld secrets are different powers and are kept apart on
-/// purpose: one reads the backups, the other deletes them, and a grant for
-/// either must not silently confer the other.
+/// The withheld secrets are different powers and are kept apart on purpose:
+/// one reads the backups, one deletes them, and one decides which machine a
+/// peer will hand them back to. A grant for any of them must not silently
+/// confer another — and the claim seed is granted to nobody at all.
 /// </remarks>
 public sealed class RepositoryReadAuthority : IDisposable
 {
     private readonly byte[] _sealingPrivateKey;
     private readonly byte[] _reclaimKeySeed;
+    private readonly byte[] _claimKeySeed;
 
     internal RepositoryReadAuthority(
-        RepositoryWriteCredential credential, byte[] sealingPrivateKey, byte[] reclaimKeySeed)
+        RepositoryWriteCredential credential,
+        byte[] sealingPrivateKey,
+        byte[] reclaimKeySeed,
+        byte[]? claimKeySeed = null)
     {
         Credential = credential;
         _sealingPrivateKey = sealingPrivateKey;
         _reclaimKeySeed = reclaimKeySeed;
+        _claimKeySeed = claimKeySeed ?? [];
     }
 
     /// <summary>
@@ -245,6 +281,18 @@ public sealed class RepositoryReadAuthority : IDisposable
     /// </summary>
     public ReadOnlySpan<byte> ReclaimKeySeed => _reclaimKeySeed;
 
+    /// <summary>
+    /// The Ed25519 seed a claim signs under (ADR-0053 §1) — empty unless this
+    /// authority came from a passphrase, because no grant carries it.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not grantable. A claim re-points which device a peer will
+    /// serve a replica to, and the person who may decide that is the one
+    /// holding the passphrase and the installation kit — not a service, and
+    /// not a run.
+    /// </remarks>
+    public ReadOnlySpan<byte> ClaimKeySeed => _claimKeySeed;
+
     /// <summary>Deliberately redacted.</summary>
     public override string ToString() => "read-authority(redacted)";
 
@@ -253,6 +301,7 @@ public sealed class RepositoryReadAuthority : IDisposable
     {
         CryptographicOperations.ZeroMemory(_sealingPrivateKey);
         CryptographicOperations.ZeroMemory(_reclaimKeySeed);
+        CryptographicOperations.ZeroMemory(_claimKeySeed);
         Credential.Dispose();
     }
 }

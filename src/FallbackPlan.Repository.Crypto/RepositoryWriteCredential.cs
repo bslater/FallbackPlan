@@ -24,13 +24,27 @@ namespace FallbackPlan.Repository.Crypto;
 /// </remarks>
 public sealed class RepositoryWriteCredential : IDisposable
 {
-    /// <summary>The serialised length: magic plus six 32-byte members.</summary>
-    public const int SerializedLength = 8 + (6 * 32);
+    /// <summary>The serialised length: magic plus seven 32-byte members.</summary>
+    public const int SerializedLength = 8 + (7 * 32);
+
+    /// <summary>The length a credential written before the claim public key existed.</summary>
+    internal const int PreClaimSerializedLength = 8 + (6 * 32);
 
     /// <summary>The length a credential written before the reclaim public key existed.</summary>
     internal const int LegacySerializedLength = 8 + (5 * 32);
 
-    private static readonly byte[] Magic = "FBPWCRD2"u8.ToArray();
+    private static readonly byte[] Magic = "FBPWCRD3"u8.ToArray();
+
+    /// <summary>
+    /// The magic a credential written before the claim public key carries
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
+    /// </summary>
+    /// <remarks>
+    /// Read and written, on the same rule as <see cref="LegacyMagic"/>: a set
+    /// provisioned before the claim key publishes none, and its replica is
+    /// the case ADR-0053 §3 leaves to the destination's operator.
+    /// </remarks>
+    private static readonly byte[] PreClaimMagic = "FBPWCRD2"u8.ToArray();
 
     /// <summary>
     /// The magic a pre-reclaim credential carries
@@ -52,17 +66,30 @@ public sealed class RepositoryWriteCredential : IDisposable
     private readonly byte[] _structureRoot;
     private readonly byte[] _signingRoot;
     private readonly byte[] _reclaimPublicKey;
+    private readonly byte[] _claimPublicKey;
 
     internal RepositoryWriteCredential(
         byte[] sealingPublicKey, byte[] contentIdKey, byte[] keyIdKey, byte[] structureRoot, byte[] signingRoot,
-        byte[]? reclaimPublicKey = null)
+        byte[]? reclaimPublicKey = null, byte[]? claimPublicKey = null)
     {
+        // The serialised shapes are nested — each adds a trailing member to
+        // the one before — so a later member present while an earlier one is
+        // absent has no representation. Nothing derives one that way; the
+        // guard is here so that a future member added carelessly fails loudly
+        // rather than writing a zero-filled slot that reads back as a key.
+        if (claimPublicKey is { Length: > 0 } && reclaimPublicKey is not { Length: > 0 })
+        {
+            throw new ArgumentException(
+                Strings.RepositoryWriteCredential_ClaimNeedsReclaim, nameof(claimPublicKey));
+        }
+
         _sealingPublicKey = sealingPublicKey;
         _contentIdKey = contentIdKey;
         _keyIdKey = keyIdKey;
         _structureRoot = structureRoot;
         _signingRoot = signingRoot;
         _reclaimPublicKey = reclaimPublicKey ?? [];
+        _claimPublicKey = claimPublicKey ?? [];
     }
 
     /// <summary>The X25519 public key file contents are sealed to.</summary>
@@ -82,6 +109,22 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// only through a grant (§6).
     /// </remarks>
     public ReadOnlySpan<byte> ReclaimPublicKey => _reclaimPublicKey;
+
+    /// <summary>
+    /// The Ed25519 <b>public</b> half of the claim key
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1)
+    /// — empty on a credential written before the claim decision.
+    /// </summary>
+    /// <remarks>
+    /// Published to a destination at first attribution so that a machine
+    /// rebuilt after total loss can prove the replica is its own. The private
+    /// half is deliberately absent, exactly as the reclaim key's is: a
+    /// compromised service that could author a claim could re-point a
+    /// replica's attribution to a machine of its choosing, and the claimant —
+    /// who holds the passphrase and the kit — reaches the key by derivation
+    /// rather than from anything a service stores.
+    /// </remarks>
+    public ReadOnlySpan<byte> ClaimPublicKey => _claimPublicKey;
 
     /// <summary>The repository-scoped content-ID key.</summary>
     public ReadOnlySpan<byte> ContentIdKey => _contentIdKey;
@@ -123,18 +166,28 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// </remarks>
     public byte[] ToBytes()
     {
-        var withReclaim = _reclaimPublicKey.Length > 0;
-        var bytes = new byte[withReclaim ? SerializedLength : LegacySerializedLength];
-        (withReclaim ? Magic : LegacyMagic).CopyTo(bytes, 0);
+        var (magic, length) = _claimPublicKey.Length > 0
+            ? (Magic, SerializedLength)
+            : _reclaimPublicKey.Length > 0
+                ? (PreClaimMagic, PreClaimSerializedLength)
+                : (LegacyMagic, LegacySerializedLength);
+
+        var bytes = new byte[length];
+        magic.CopyTo(bytes, 0);
         _sealingPublicKey.CopyTo(bytes, 8);
         _contentIdKey.CopyTo(bytes, 40);
         _keyIdKey.CopyTo(bytes, 72);
         _structureRoot.CopyTo(bytes, 104);
         _signingRoot.CopyTo(bytes, 136);
 
-        if (withReclaim)
+        if (_reclaimPublicKey.Length > 0)
         {
             _reclaimPublicKey.CopyTo(bytes, 168);
+        }
+
+        if (_claimPublicKey.Length > 0)
+        {
+            _claimPublicKey.CopyTo(bytes, 200);
         }
 
         return bytes;
@@ -157,20 +210,28 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// <param name="bytes">A buffer beginning with a serialised credential.</param>
     public static int LengthOf(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length >= LegacySerializedLength && bytes[..8].SequenceEqual(LegacyMagic))
+        if (bytes.Length < 8)
         {
-            return LegacySerializedLength;
+            return -1;
         }
 
-        return bytes.Length >= SerializedLength && bytes[..8].SequenceEqual(Magic) ? SerializedLength : -1;
+        var length = bytes[..8] switch
+        {
+            var magic when magic.SequenceEqual(Magic) => SerializedLength,
+            var magic when magic.SequenceEqual(PreClaimMagic) => PreClaimSerializedLength,
+            var magic when magic.SequenceEqual(LegacyMagic) => LegacySerializedLength,
+            _ => -1,
+        };
+
+        return length >= 0 && bytes.Length >= length ? length : -1;
     }
 
     /// <summary>Parses a serialised credential.</summary>
     /// <exception cref="ArgumentException">The bytes are not a serialised write credential.</exception>
     public static RepositoryWriteCredential FromBytes(ReadOnlySpan<byte> bytes)
     {
-        var legacy = bytes.Length == LegacySerializedLength && bytes[..8].SequenceEqual(LegacyMagic);
-        if (!legacy && (bytes.Length != SerializedLength || !bytes[..8].SequenceEqual(Magic)))
+        var length = LengthOf(bytes);
+        if (length < 0 || bytes.Length != length)
         {
             throw new ArgumentException(
                 Strings.FormatRepositoryWriteCredential_SerialisedExactlyBytes(SerializedLength), nameof(bytes));
@@ -182,7 +243,8 @@ public sealed class RepositoryWriteCredential : IDisposable
             bytes[72..104].ToArray(),
             bytes[104..136].ToArray(),
             bytes[136..168].ToArray(),
-            legacy ? null : bytes[168..200].ToArray());
+            length >= PreClaimSerializedLength ? bytes[168..200].ToArray() : null,
+            length >= SerializedLength ? bytes[200..232].ToArray() : null);
     }
 
     /// <summary>Deliberately redacted.</summary>
@@ -197,6 +259,7 @@ public sealed class RepositoryWriteCredential : IDisposable
         CryptographicOperations.ZeroMemory(_structureRoot);
         CryptographicOperations.ZeroMemory(_signingRoot);
         CryptographicOperations.ZeroMemory(_reclaimPublicKey);
+        CryptographicOperations.ZeroMemory(_claimPublicKey);
     }
 
     private static byte[] Expand(byte[] prk, ReadOnlySpan<byte> label, uint generation)

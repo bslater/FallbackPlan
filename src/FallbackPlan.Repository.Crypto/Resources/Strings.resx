@@ -118,6 +118,12 @@
   <data name="KeyHierarchy_WriteOnlyHoldsNoReclaimKey" xml:space="preserve">
     <value>A write-only service holds no reclaim key: it may publish but not authorise a deletion, and a collection run takes its reclaim authority from a grant (ADR-0055).</value>
   </data>
+  <data name="RepositoryWriteCredential_ClaimNeedsReclaim" xml:space="preserve">
+    <value>A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.</value>
+  </data>
+  <data name="KeyHierarchy_WriteOnlyHoldsNoClaimKey" xml:space="preserve">
+    <value>A write-only service holds no claim key: it may publish the public half but not author a claim, which belongs to whoever holds the passphrase and the installation kit (ADR-0053).</value>
+  </data>
   <data name="WriteOnlyDerivation_ReclaimSeedExactlyBytes" xml:space="preserve">
     <value>A reclaim key seed is exactly {0} bytes.</value>
   </data>

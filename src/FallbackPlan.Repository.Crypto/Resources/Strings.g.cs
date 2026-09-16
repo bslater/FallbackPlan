@@ -182,6 +182,16 @@ internal static class Strings
     internal static string KeyHierarchy_WriteOnlyHoldsNoReclaimKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoReclaimKey));
 
     /// <summary>
+    /// A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.
+    /// </summary>
+    internal static string RepositoryWriteCredential_ClaimNeedsReclaim => Get(nameof(RepositoryWriteCredential_ClaimNeedsReclaim));
+
+    /// <summary>
+    /// A write-only service holds no claim key: it may publish the public half but not author a claim, which belongs to whoever holds the passphrase and the installation kit (ADR-0053).
+    /// </summary>
+    internal static string KeyHierarchy_WriteOnlyHoldsNoClaimKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoClaimKey));
+
+    /// <summary>
     /// A reclaim key seed is exactly {0} bytes.
     /// </summary>
     private static string WriteOnlyDerivation_ReclaimSeedExactlyBytes => Get(nameof(WriteOnlyDerivation_ReclaimSeedExactlyBytes));

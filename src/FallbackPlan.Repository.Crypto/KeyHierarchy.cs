@@ -135,6 +135,72 @@ public sealed class KeyHierarchy : IDisposable
             : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoReclaimKey);
 
     /// <summary>
+    /// Derives the claim-key seed (<c>"fbp/claim/v1"</c>) — the authority a
+    /// machine rebuilt after total loss proves a peer replica is its own with
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
+    /// The 32 bytes are an Ed25519 private-key seed per RFC 8032 §5.1.5,
+    /// exactly as <see cref="DeriveSigningKeySeed"/>'s are.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Takes no generation, alone among the derived keys. A destination
+    /// records the claim public key at first attribution and never replaces
+    /// it, so a key that turned over with the generation would go stale on
+    /// the first rotation with no way to tell the peer — and the claim would
+    /// stop verifying exactly when it was needed.
+    /// </para>
+    /// <para>
+    /// This is the <b>per-repository</b> root, which a claimant reaches only
+    /// while holding a format-v1 recovery kit. The provisioned default is an
+    /// installation kit, which names no repository; that claimant derives
+    /// <c>"fbp/claim/v2"</c> from the installation root instead
+    /// (<see cref="WriteOnlyDerivation.FromRoot"/>). The destination neither
+    /// knows nor cares which produced the public key it recorded.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The hierarchy is write-only, and deliberately so: a service that could
+    /// author a claim could re-point a replica's attribution to a machine of
+    /// its choosing. The claimant derives the key from the passphrase and the
+    /// kit, which is where the decision belongs.
+    /// </exception>
+    public byte[] DeriveClaimKeySeed() =>
+        _credential is null
+            ? Expand("fbp/claim/v1"u8, generation: null)
+            : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoClaimKey);
+
+    /// <summary>
+    /// The Ed25519 <b>public</b> half of the claim key, from wherever this
+    /// hierarchy can reach it — derived for a v1 repository, read off the
+    /// write credential for a v2 one (ADR-0053 §1).
+    /// </summary>
+    /// <remarks>
+    /// Uniform across both shapes, exactly as
+    /// <see cref="ReclaimPublicKey"/> is and for the same reason: publishing
+    /// the key to a keyless destination is the same act either way. Empty
+    /// only for a v2 credential written before the claim decision, whose
+    /// replica is the case ADR-0053 §3 leaves to the destination's operator.
+    /// </remarks>
+    public byte[] ClaimPublicKey()
+    {
+        if (_credential is { } credential)
+        {
+            return credential.ClaimPublicKey.ToArray();
+        }
+
+        var seed = Expand("fbp/claim/v1"u8, generation: null);
+        try
+        {
+            using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
+            return signer.PublicKey.ToArray();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(seed);
+        }
+    }
+
+    /// <summary>
     /// The Ed25519 <b>public</b> half of the reclaim key, from wherever this
     /// hierarchy can reach it — derived for a v1 repository, read off the
     /// write credential for a v2 one
