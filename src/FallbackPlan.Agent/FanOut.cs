@@ -322,7 +322,8 @@ public static class FanOut
     /// </summary>
     private static async ValueTask PushToPeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken)
+        ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
+        Func<byte[], byte[]>? grantedSigner = null)
     {
         var ledger = runtime.DestinationSync;
 
@@ -387,15 +388,39 @@ public static class FanOut
             var effective = set.Destinations
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
+
+            // The commander signs each retention page under the reclaim key
+            // (ADR-0055 §5) so the spoke can tell an authorised deletion from
+            // one sent by whoever merely holds this session. A v1 set derives
+            // the key; a write-only set cannot, and holds it only as the
+            // grant of a collection run (ADR-0055 §6) — so a pass without one
+            // instructs nothing rather than sending a page the spoke will
+            // refuse whole, and says why.
+            var reclaimSigner = grantedSigner ?? DerivedReclaimSigner(archive);
+            var awaitsGrantKey = $"convergence-awaits-grant:{set.Id}:{destination.Name}";
+
             Func<string, bool>? keeps = null;
             if (Retention.DestinationConvergence.HasRules(effective)
                 && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature))
             {
-                var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
-                    archive.Store, archive.Repository, effective!,
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
-                keeps = convergence.Keeps;
-                ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                if (reclaimSigner is null)
+                {
+                    runtime.Notices.Raise(
+                        awaitsGrantKey,
+                        $"destination '{destination.Name}' of set '{set.Name}' received a whole copy instead of its "
+                        + "retention keep-set: this set is write-only, and a deletion instruction needs the reclaim "
+                        + "grant a retention run carries (ADR-0055 §6). It converges on the next `retention --apply`.",
+                        nowMs);
+                }
+                else
+                {
+                    var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
+                        archive.Store, archive.Repository, effective!,
+                        DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                    keeps = convergence.Keeps;
+                    ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                    runtime.Notices.Resolve(awaitsGrantKey, nowMs);
+                }
             }
 
             // Samples are drawn from the pre-push listing under the set gate:
@@ -453,30 +478,6 @@ public static class FanOut
             // replaces it, so a key that turned over would go stale with no
             // way to say so.
             var claimPublicKey = archive.Repository.Hierarchy.ClaimPublicKey();
-
-            // The commander signs each retention page under the reclaim key
-            // (ADR-0055 §5) so the spoke can tell an authorised deletion from
-            // one sent by whoever merely holds this session. A write-only set
-            // cannot derive the key and signs nothing here; its peer retention
-            // waits on a grant, exactly as its local collection does.
-            Func<byte[], byte[]>? reclaimSigner = null;
-            if (!archive.Repository.Keys.WriteOnly)
-            {
-                reclaimSigner = signed =>
-                {
-                    var generation = archive.Repository.CurrentMetadataGeneration;
-                    var seed = archive.Repository.Hierarchy.DeriveReclaimKeySeed(generation);
-                    try
-                    {
-                        using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
-                        return signer.Sign(signed);
-                    }
-                    finally
-                    {
-                        System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
-                    }
-                };
-            }
 
             // The binding rides only to a spoke that says it verifies over one
             // (peer-protocol 02 §6): a current commander talking to an older
@@ -1117,6 +1118,97 @@ public static class FanOut
     /// condition that is true now, not one that once was (Z0c's rule).
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The reclaim signer a v1 archive derives from its own hierarchy; null
+    /// for a write-only archive, which holds the key only as a grant.
+    /// </summary>
+    private static Func<byte[], byte[]>? DerivedReclaimSigner(ArchiveHandle archive)
+    {
+        if (archive.Repository.Keys.WriteOnly)
+        {
+            return null;
+        }
+
+        return signed =>
+        {
+            var generation = archive.Repository.CurrentMetadataGeneration;
+            var seed = archive.Repository.Hierarchy.DeriveReclaimKeySeed(generation);
+            try
+            {
+                using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
+                return signer.Sign(signed);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+            }
+        };
+    }
+
+    /// <summary>
+    /// Converges a write-only set's peer destinations under the reclaim grant
+    /// of a collection run (ADR-0055 §6): each peer under retention rules is
+    /// pushed and instructed with pages signed by <paramref name="reclaim"/>,
+    /// inside the run, so the authority to delete outlives it by nothing. The
+    /// caller holds the set gate. Returns one report line per peer.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose peers converge.</param>
+    /// <param name="archive">The set's open archive.</param>
+    /// <param name="reclaim">The run's reclaim authority.</param>
+    /// <param name="nowMs">The clock, in Unix milliseconds.</param>
+    /// <param name="cancellationToken">Cancels the convergence.</param>
+    /// <returns>What happened at each peer, from the sync ledger.</returns>
+    public static async ValueTask<IReadOnlyList<string>> ConvergePeersAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive,
+        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(set);
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(reclaim);
+
+        byte[] Sign(byte[] signed)
+        {
+            var generation = archive.Repository.CurrentMetadataGeneration;
+            var seed = reclaim.SeedFor(generation);
+            try
+            {
+                using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
+                return signer.Sign(signed);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var reference in set.Destinations)
+        {
+            var destination = runtime.Configuration.FindDestination(reference.Ref);
+            if (destination is not { Kind: DestinationKind.Peer })
+            {
+                continue;
+            }
+
+            if (!Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
+            {
+                continue;
+            }
+
+            await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign)
+                .ConfigureAwait(false);
+
+            var row = runtime.DestinationSync.Find(set.Id, destination.Name);
+            lines.Add(row is { State: DestinationSyncState.InSync }
+                ? $"peer '{destination.Name}' converged under the grant"
+                : $"peer '{destination.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}");
+        }
+
+        return lines;
+    }
+
     private static void ReportConvergence(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
         Retention.ConvergenceRefusal? refusal, ulong nowMs)

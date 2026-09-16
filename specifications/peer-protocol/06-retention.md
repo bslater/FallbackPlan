@@ -20,7 +20,7 @@ The instruction follows a completed object exchange — after `ReplicationAck`, 
 2. The spoke validates every page (§3). A violation refuses the session; nothing is deleted from a refused instruction.
 3. The spoke deletes exactly the named keys — snapshots first, in the order given — and answers **`RetentionAck`** with the count removed.
 
-The commander computes the drop-list as *inventory minus keep-closure*: what the spoke declared, less everything the destination's effective policy keeps ([architecture 07 §2](../../docs/architecture/07-retention-and-gc.md#2-retention-policy)). The commander MUST order snapshot keys before the keys of objects they reference, so an interruption leaves the replica lagging-but-valid, exactly as the copy order guarantees in the other direction.
+The commander computes the drop-list as *inventory minus keep-closure*: what the spoke declared, less everything the destination's effective policy keeps ([architecture 07 §2](../../docs/architecture/07-retention-and-gc.md#2-retention-policy)). A commander that cannot sign the instruction (§3) — a write-only source outside a granted collection run ([ADR-0055 §6 and Amendment 2](../../docs/adr/0055-reclaim-authority.md#6-a-write-only-set-still-collects-under-a-grant-that-does-not-outlive-the-run)) — sends none: it pushes the whole copy and instructs on the run that carries the grant, rather than send a page the spoke will refuse whole. The commander MUST order snapshot keys before the keys of objects they reference, so an interruption leaves the replica lagging-but-valid, exactly as the copy order guarantees in the other direction.
 
 ## 3 What the spoke validates
 

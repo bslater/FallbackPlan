@@ -41,15 +41,8 @@ public sealed class PeerRetentionTests : IDisposable
 
     public PeerRetentionTests()
     {
-        // Deliberately NOT a set-up installation, for now. These are the
-        // tests of the signed instruction, and a write-only source cannot
-        // sign one: the fan-out holds no reclaim key and a spoke that
-        // recorded the key refuses an unsigned page whole (06 §3). Peer
-        // convergence for a write-only set has to happen under the same
-        // grant its local collection does, and until that lands this
-        // fixture stays on a format-1 archive, whose hierarchy derives the
-        // key.
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "peer retention fodder");
     }
@@ -70,19 +63,33 @@ public sealed class PeerRetentionTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
 
+        // A scheduled pass holds no authority to delete (ADR-0055 §6): the
+        // spoke received whole copies, the pass says why, and nothing was
+        // refused — an unsigned instruction was never sent.
         var replica = new LocalFileSystemObjectStore(
             Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        Assert.HasCount(3, await ListAsync(replica, "snapshots/"));
+        Assert.AreEqual(
+            DestinationSyncState.InSync, DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend")!.State);
+        Assert.Contains(
+            notice => notice.Message.Contains("reclaim grant", StringComparison.OrdinalIgnoreCase),
+            NoticeStore.Open(StateDirectory).Unacknowledged);
+
+        // The granted run is what instructs: the spoke ends holding exactly
+        // the keep-set — one snapshot — and the notice is resolved.
+        await ApplyRetentionAsync();
         Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        Assert.DoesNotContain(
+            notice => notice.Message.Contains("reclaim grant", StringComparison.OrdinalIgnoreCase),
+            NoticeStore.Open(StateDirectory).Unacknowledged);
 
         var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend");
         Assert.AreEqual(DestinationSyncState.InSync, record!.State);
 
         // The replica the spoke holds is a valid archive of exactly that
         // keep-set: it opens with the passphrase and walks clean.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var opened = await FallbackPlan.Repository.RepositoryLifecycle.OpenAsync(
-            replica, passphrase, CancellationToken.None);
-        var survey = await StagingMark.SurveyAsync(replica, opened, CancellationToken.None);
+        using var archive = await WriteOnlyInstallation.OpenAsync(replica, PassphraseText, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(replica, archive.Repository, CancellationToken.None);
         Assert.ContainsSingle(survey.Snapshots);
         Assert.IsEmpty(survey.Undecodable);
     }
@@ -103,6 +110,7 @@ public sealed class PeerRetentionTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
 
+        await ApplyRetentionAsync();
         var replica = new LocalFileSystemObjectStore(
             Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
 
@@ -134,6 +142,7 @@ public sealed class PeerRetentionTests : IDisposable
         await BackUpAsync(start);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
         await BackUpAsync(start.AddHours(5));
+        await ApplyRetentionAsync();
 
         var owner = ReplicaOwnerStore.Open(DestinationState).Find(RepositoryIdHex());
         Assert.IsNotNull(owner);
@@ -179,6 +188,7 @@ public sealed class PeerRetentionTests : IDisposable
 
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
         await BackUpAsync(start.AddHours(5));
+        await ApplyRetentionAsync();
 
         var replica = new LocalFileSystemObjectStore(
             Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
@@ -231,12 +241,14 @@ public sealed class PeerRetentionTests : IDisposable
             CancellationToken.None);
         Assert.AreEqual(PutOutcome.Created, put.Outcome);
 
-        // Two more passes, each pushing and instructing under the narrow
-        // policy; the spoke declares the planted key in every inventory.
+        // Two more passes pushing, then the granted run instructing under
+        // the narrow policy; the spoke declares the planted key in every
+        // inventory.
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
         await BackUpAsync(start.AddHours(5));
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
+        await ApplyRetentionAsync();
 
         Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
         var metadata = await replica.GetMetadataAsync(planted, CancellationToken.None);
@@ -299,6 +311,31 @@ public sealed class PeerRetentionTests : IDisposable
         _stop = new Stopper(listener, listenerKeypair);
 
         return destinationKeypair.Identity.Fingerprint;
+    }
+
+    /// <summary>
+    /// The granted collection run (ADR-0055 §6): the same command a console
+    /// sends, with the reclaim grant the passphrase derives — which is what
+    /// instructs the spoke, since a scheduled pass holds no authority to
+    /// delete.
+    /// </summary>
+    private async Task ApplyRetentionAsync()
+    {
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = ArchivesRoot, StateDirectory = StateDirectory },
+            passphrase: null, CancellationToken.None);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var description = (Api.ServiceDescriptionResult)await handler.ExecuteAsync(
+            new Api.DescribeServiceCommand(), CancellationToken.None);
+        var applied = await handler.ExecuteAsync(
+            new Api.RetentionCommand(
+                Apply: true,
+                ReclaimGrant: WriteOnlyInstallation.ReclaimGrant(
+                    StateDirectory, PassphraseText, description.RestoreGrantRecipient!)),
+            CancellationToken.None);
+        Assert.IsInstanceOfType<Api.RetentionResult>(
+            applied, (applied as Api.ServiceError)?.Message ?? applied.GetType().Name);
     }
 
     private async Task BackUpAsync(DateTimeOffset now)

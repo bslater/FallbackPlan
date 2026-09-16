@@ -51,6 +51,23 @@ internal static class WriteOnlyInstallation
             WriteOnlyProvisioning.SealGrant(Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
     }
 
+    /// <summary>
+    /// A reclaim grant for a service started on <paramref name="stateDirectory"/>:
+    /// the reclaim sub-root, re-derived from the passphrase under the
+    /// installation's own salt and sealed to the service's recipient key —
+    /// what a console sends with <c>retention --apply</c> (ADR-0055 §6).
+    /// </summary>
+    public static string ReclaimGrant(string stateDirectory, string passphraseText, string recipientHex)
+    {
+        using var provisioning = new InstallationCredentialStore(stateDirectory).TryLoad()
+            ?? throw new InvalidOperationException("the state directory is not set up");
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, provisioning.KdfParameters, provisioning.KdfSalt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealReclaimGrant(Convert.FromHexString(recipientHex), authority.ReclaimKeySeed));
+    }
+
     /// <summary>Opens the write-only archive at <paramref name="store"/> with the passphrase, authority and all.</summary>
     public static async Task<OpenedArchive> OpenAsync(
         IObjectStore store, string passphraseText, CancellationToken cancellationToken)

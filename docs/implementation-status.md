@@ -362,6 +362,8 @@ recipient key and sends it with the command (`Agent/AgentHost`,
 `Hosts.Tests/RetentionTrimVerbTests`). Without the passphrase, `--apply` is
 refused naming what it needs; a dry run needs nothing.
 
+The same run is where a write-only set's **peers** converge ([Amendment 2](adr/0055-reclaim-authority.md#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant)): the scheduled sync holds no authority to delete, so it pushes whole copies and raises a notice naming the grant, and the granted retention run pushes and instructs each peer under rules with pages signed by the grant — `Agent/FanOut` (`ConvergePeersAsync`), inside the run, before the grant is zeroed. Found when the peer retention fixtures moved onto a set-up installation: the scheduled sync had been sending the instruction unsigned, and the spoke refused it whole on every pass.
+
 Two compatibility rules carry the migration, and both are the load-bearing
 part rather than politeness. A repository written before the decision has
 tombstones signed under the publication key and keeps verifying them that way;

@@ -191,6 +191,53 @@ service taken between runs holds nothing that can author a deletion, and a
 service taken during one holds an authority that expires with the job it was
 granted for.
 
+> **Amended (2026-09): the grant also carries the peer instruction.** As
+> shipped, this section covered the local collection and §5 the wire, and
+> nothing said which run a write-only set's *peer* instruction rode. It rode
+> the scheduled sync, unsigned — and a spoke holding the recorded reclaim key
+> refuses that whole, on every pass, for ever. See
+> [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant).
+
+## Amendment 2 (2026-09) — a write-only set's peers converge under the grant
+
+Found by moving the peer retention fixtures onto a set-up installation
+(slice 12A). `FanOut`'s reclaim signer was null for a write-only set — §2
+says it cannot derive the key — so the scheduled sync sent its
+`RetentionOffer` unsigned, and the spoke, holding the reclaim public key
+every write-only offer publishes (§5), refused it whole under the gate
+[ADR-0059](0059-session-bound-deletion-authority.md) moved there. The pass
+recorded a terms refusal, the replica kept everything, and nothing on the
+status surface said why. The 12A note that called the fan-out's signer
+"always null" once format v1 went had read that as acceptable; it is not.
+
+**Decision.** Peer convergence is a deletion the destination performs on the
+source's instruction, so for a write-only set it happens under the same
+grant its local collection does — during a `retention --apply` run that
+carries one — and never during a scheduled sync, which holds no authority to
+delete:
+
+- A scheduled sync of a write-only set under retention rules sends **no**
+  instruction: it pushes the whole copy, records the pair `InSync`, and
+  raises a notice naming the grant it is waiting on. An unsigned page is
+  never sent to be refused.
+- The retention command's apply path, grant in hand, runs the peer
+  convergence for every peer destination of the set with rules —
+  `FanOut.ConvergePeersAsync`, pages signed by a signer closed over the
+  grant — inside the run, under the set gate, before the grant is zeroed.
+  The report names each peer's outcome, and the notice resolves.
+- An ordinary v1 set is unchanged: it derives the key and its scheduled
+  sync keeps instructing as before (§3).
+
+**Cost stated.** A write-only set's peers age only when someone applies
+retention with the passphrase — a console, or
+`fallbackplan-agent retention --apply --passphrase-env`. Between runs the
+replica grows by what the source publishes, bounded by the peer's quota.
+That is the shape §6 already accepted for the local plane, now said for the
+wire. `Retention.Tests/PeerRetentionTests` holds it: the scheduled passes
+leave the spoke holding everything and say so; the granted run converges it,
+is refused whole below the floor, and is refused whole under a recorded key
+that is not the repository's.
+
 ## Consequences
 
 **Positive**
@@ -216,6 +263,9 @@ granted for.
 - One more derived key in the hierarchy, and one more thing for a future
   rotation to carry.
 - Against a fully compromised v1 service the decision buys nothing (§3).
+- **[added 2026-09]** A write-only set's peer replicas converge only under a
+  granted run, never on the schedule — the local plane's cost, now on the
+  wire too ([Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant)).
 - **[added 2026-09]** The peer signature as this record shipped it covered one
   page and not the session, so an instruction captured inside an authenticated
   session could be replayed into a later one. It was stated in the
@@ -254,3 +304,4 @@ nothing about cloud IAM.
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R4, the last of its P0 findings. Narrows [ADR-0020 §3](0020-ed25519-signing-key-semantics.md) for keyless destinations and gives FR-GC-008 its first mechanism |
 | 2026-09 | Amended (gate and scope) | Amendment at §5: the peer half's requirement to sign was gated on the negotiated `signed-retention` feature, which the party it defends against decides whether to offer — so an unsigned, freshly composed drop-list was obeyed by a spoke that had simply been told not to ask. §4 of this record had already rejected exactly that shape of gate on the repository plane. [ADR-0059](0059-session-bound-deletion-authority.md) moves the gate to the reclaim public key the spoke recorded, extends the signature to cover the session identifier, and states the general rule in [02 §6](../../specifications/peer-protocol/02-session.md#6-feature-negotiation). `Hosts.Tests/PeerRetentionReplayTests` holds both |
+| 2026-09 | Amended (the peer instruction rides the grant) | [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant): a write-only set's scheduled sync sent its peer instruction unsigned and was refused whole on every pass. The instruction now rides the granted retention run, and the scheduled sync pushes whole copies and names the grant it waits on. `Retention.Tests/PeerRetentionTests` |
