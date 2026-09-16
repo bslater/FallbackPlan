@@ -206,6 +206,44 @@ public sealed class WriteOnlyDerivationTests
     }
 
     [TestMethod]
+    public void OpenProvision_AnEnvelopeCarryingAPreReclaimCredential_StillOpens()
+    {
+        // The envelope crosses a process boundary — a console seals it, a
+        // service opens it — so the two ends are not always the same build.
+        // The credential reads its own older shape; the payload around it
+        // must not insist on the newer length, or provisioning from an older
+        // console is refused as tampering.
+        var recipientPrivate = Enumerable.Repeat((byte)0x61, 32).ToArray();
+        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
+        var salt = Salt(0x44);
+        var credential = new byte[168];
+        "FBPWCRD1"u8.CopyTo(credential);
+        RandomNumberGenerator.Fill(credential.AsSpan(8));
+
+        var payload = new byte[8 + credential.Length + KekDerivation.SaltLength + 9];
+        "FBPPROV1"u8.CopyTo(payload);
+        credential.CopyTo(payload, 8);
+        salt.CopyTo(payload, 8 + credential.Length);
+        var kdf = 8 + credential.Length + KekDerivation.SaltLength;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(kdf), TinyParameters.MemoryKiB);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+            payload.AsSpan(kdf + 4), TinyParameters.Iterations);
+        payload[kdf + 8] = TinyParameters.Parallelism;
+
+        var sealedBytes = ContentSealing.SealPayload(recipientPublic, payload, "fbp/provision/v2"u8.ToArray());
+        var (opened, openedSalt, openedParameters) =
+            WriteOnlyProvisioning.OpenProvision(recipientPrivate, sealedBytes);
+        using (opened)
+        {
+            SequenceAssert.AreEqual(credential.AsSpan(8, 32).ToArray(), opened.SealingPublicKey.ToArray());
+            Assert.IsTrue(opened.ReclaimPublicKey.IsEmpty);
+        }
+
+        SequenceAssert.AreEqual(salt, openedSalt);
+        Assert.AreEqual(TinyParameters.MemoryKiB, openedParameters.MemoryKiB);
+    }
+
+    [TestMethod]
     public void OpenProvision_AWellSealedEnvelopeHidingGarbage_IsRefusedIndistinguishably()
     {
         // The outer envelope opens and its magic and length are right, but

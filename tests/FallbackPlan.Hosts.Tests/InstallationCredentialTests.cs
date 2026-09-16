@@ -97,6 +97,49 @@ public sealed class InstallationCredentialTests : IDisposable
     }
 
     [TestMethod]
+    public void Store_AFileInThePreReclaimShape_StillLoadsRatherThanReadingAsDamage()
+    {
+        // The write credential grew a sixth member when the reclaim key
+        // landed, and learned to read the five-member shape an older build
+        // wrote. Its CONTAINER did not: a stored provisioning is checked
+        // against one exact length, so an installation.bin from before that
+        // change is 201 bytes where 233 is demanded and is reported as
+        // damage. There is no way back from that — TrySave never overwrites,
+        // so the operator cannot re-provision, and re-running setup would
+        // mint a second salt that no existing archive was written under.
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+
+        var stored = new byte[8 + 168 + KekDerivation.SaltLength + 9];
+        "FBPINST1"u8.CopyTo(stored);
+        "FBPWCRD1"u8.CopyTo(stored.AsSpan(8));
+        RandomNumberGenerator.Fill(stored.AsSpan(16, 160));
+        salt.CopyTo(stored.AsSpan(8 + 168));
+        var kdf = 8 + 168 + KekDerivation.SaltLength;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            stored.AsSpan(kdf), parameters.MemoryKiB);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            stored.AsSpan(kdf + 4), parameters.Iterations);
+        stored[kdf + 8] = parameters.Parallelism;
+
+        var directory = Path.Combine(_harness.StateDirectory, "write-credentials");
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, "installation.bin"), stored);
+
+        var store = new InstallationCredentialStore(_harness.StateDirectory);
+        using var loaded = store.TryLoad();
+
+        Assert.IsNotNull(loaded, "an installation provisioned by an older build is still this installation");
+        SequenceAssert.AreEqual(salt, loaded.KdfSalt.ToArray());
+        Assert.AreEqual(parameters.MemoryKiB, loaded.KdfParameters.MemoryKiB);
+        Assert.AreEqual(parameters.Iterations, loaded.KdfParameters.Iterations);
+        Assert.AreEqual(parameters.Parallelism, loaded.KdfParameters.Parallelism);
+        Assert.IsTrue(
+            loaded.Credential.ReclaimPublicKey.IsEmpty,
+            "a credential written before the reclaim key publishes none until it is re-provisioned");
+    }
+
+    [TestMethod]
     public async Task Runtime_SetUpInstallation_CreatesANewSetsArchiveWriteOnlyRatherThanFormatOne()
     {
         // The heart of ADR-0044: a set created after setup is write-only

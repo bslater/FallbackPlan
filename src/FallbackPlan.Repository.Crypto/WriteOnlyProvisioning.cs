@@ -22,8 +22,16 @@ public static class WriteOnlyProvisioning
 
     private static ReadOnlySpan<byte> GrantAad => "fbp/restore-grant/v2"u8;
 
-    /// <summary>The provisioning payload: magic ‖ credential ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
-    private const int ProvisionPayloadLength = 8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
+    /// <summary>Everything in the provisioning payload except the credential: magic ‖ … ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
+    /// <remarks>
+    /// The credential's own length is asked of the credential
+    /// (<see cref="RepositoryWriteCredential.LengthOf"/>) rather than assumed,
+    /// because the two ends of this envelope are not always the same build: a
+    /// console seals it and a service opens it, and an envelope carrying the
+    /// shape an older console writes must not be refused as if it were
+    /// tampered with.
+    /// </remarks>
+    private const int ProvisionFramingLength = 8 + KekDerivation.SaltLength + 4 + 4 + 1;
 
     /// <summary>Seals a provisioning envelope for the service's recipient key.</summary>
     public static byte[] SealProvision(
@@ -42,14 +50,13 @@ public static class WriteOnlyProvisioning
                 nameof(kdfSalt));
         }
 
-        var payload = new byte[ProvisionPayloadLength];
+        var credential = authority.Credential.ToBytes();
+        var payload = new byte[ProvisionFramingLength + credential.Length];
         try
         {
             ProvisionMagic.CopyTo(payload);
-            var credential = authority.Credential.ToBytes();
             credential.CopyTo(payload, 8);
-            CryptographicOperations.ZeroMemory(credential);
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credential.Length;
             kdfSalt.CopyTo(payload.AsSpan(offset));
             offset += KekDerivation.SaltLength;
             BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(offset), kdfParameters.MemoryKiB);
@@ -60,6 +67,7 @@ public static class WriteOnlyProvisioning
         }
         finally
         {
+            CryptographicOperations.ZeroMemory(credential);
             CryptographicOperations.ZeroMemory(payload);
         }
     }
@@ -72,7 +80,10 @@ public static class WriteOnlyProvisioning
         var payload = ContentSealing.OpenPayload(recipientPrivateKey, sealedBytes, ProvisionAad);
         try
         {
-            if (payload.Length != ProvisionPayloadLength || !payload.AsSpan(0, 8).SequenceEqual(ProvisionMagic))
+            var credentialLength = payload.Length > 8 && payload.AsSpan(0, 8).SequenceEqual(ProvisionMagic)
+                ? RepositoryWriteCredential.LengthOf(payload.AsSpan(8))
+                : -1;
+            if (credentialLength < 0 || payload.Length != ProvisionFramingLength + credentialLength)
             {
                 throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
             }
@@ -80,8 +91,7 @@ public static class WriteOnlyProvisioning
             RepositoryWriteCredential credential;
             try
             {
-                credential = RepositoryWriteCredential.FromBytes(
-                    payload.AsSpan(8, RepositoryWriteCredential.SerializedLength));
+                credential = RepositoryWriteCredential.FromBytes(payload.AsSpan(8, credentialLength));
             }
             catch (ArgumentException)
             {
@@ -90,7 +100,7 @@ public static class WriteOnlyProvisioning
                 // gets one refusal shape, never a leaked parse detail.
                 throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
             }
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credentialLength;
             var salt = payload.AsSpan(offset, KekDerivation.SaltLength).ToArray();
             offset += KekDerivation.SaltLength;
             var parameters = new KdfParameters

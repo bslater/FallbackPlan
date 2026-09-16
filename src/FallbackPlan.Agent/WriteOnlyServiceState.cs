@@ -205,7 +205,15 @@ public sealed class WriteCredentialStore(string stateDirectory)
 /// </remarks>
 public sealed class InstallationProvisioning : IDisposable
 {
-    /// <summary>The serialised length: magic, credential, salt, and three KDF fields.</summary>
+    /// <summary>The serialised length of a currently-shaped provisioning: magic, credential, salt, and three KDF fields.</summary>
+    /// <remarks>
+    /// Not the only length that parses. The credential embedded here has more
+    /// than one shape (<see cref="RepositoryWriteCredential.LengthOf"/>), so
+    /// a bundle an older build wrote is shorter and is still this
+    /// installation's — refusing it would report the installation's own
+    /// credential as damage, with no way back, since saving deliberately
+    /// never overwrites.
+    /// </remarks>
     public const int SerializedLength =
         8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
 
@@ -250,13 +258,13 @@ public sealed class InstallationProvisioning : IDisposable
     /// <summary>The serialised form the store persists.</summary>
     public byte[] ToBytes()
     {
-        var bytes = new byte[SerializedLength];
         var credential = Credential.ToBytes();
+        var bytes = new byte[8 + credential.Length + KekDerivation.SaltLength + 4 + 4 + 1];
         try
         {
             Magic.CopyTo(bytes, 0);
             credential.CopyTo(bytes, 8);
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credential.Length;
             _kdfSalt.CopyTo(bytes, offset);
             offset += KekDerivation.SaltLength;
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), KdfParameters.MemoryKiB);
@@ -275,13 +283,22 @@ public sealed class InstallationProvisioning : IDisposable
     /// <exception cref="ArgumentException">The bytes are not an installation provisioning.</exception>
     public static InstallationProvisioning FromBytes(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length != SerializedLength || !bytes[..8].SequenceEqual(Magic))
+        // Sized from the credential the bytes carry rather than from the one
+        // this build writes, so a bundle from before a member was added still
+        // reads. The total is still exact — only the credential's share of it
+        // varies.
+        var credentialLength = bytes.Length > 8 && bytes[..8].SequenceEqual(Magic)
+            ? RepositoryWriteCredential.LengthOf(bytes[8..])
+            : -1;
+        if (credentialLength < 0
+            || bytes.Length != 8 + credentialLength + KekDerivation.SaltLength + 4 + 4 + 1)
         {
             throw new ArgumentException(
-                $"A serialised installation provisioning is exactly {SerializedLength} bytes.", nameof(bytes));
+                $"A serialised installation provisioning is a magic, a write credential, a "
+                + $"{KekDerivation.SaltLength}-byte salt and three KDF fields.", nameof(bytes));
         }
 
-        var offset = 8 + RepositoryWriteCredential.SerializedLength;
+        var offset = 8 + credentialLength;
         var credential = RepositoryWriteCredential.FromBytes(bytes[8..offset]);
         var salt = bytes.Slice(offset, KekDerivation.SaltLength);
         var kdf = offset + KekDerivation.SaltLength;

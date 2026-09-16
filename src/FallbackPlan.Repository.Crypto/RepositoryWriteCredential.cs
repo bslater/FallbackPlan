@@ -37,11 +37,12 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
     /// </summary>
     /// <remarks>
-    /// Read but never written. A service provisioned before this decision has
+    /// A service provisioned before this decision has
     /// a bundle on disk with five members, and refusing to open it would take
     /// the set offline over a field it does not yet need — the reclaim public
     /// key is empty for such a credential, and the set publishes none to its
-    /// peers until it is re-provisioned.
+    /// peers until it is re-provisioned. Written as well as read, so that
+    /// absence survives a round trip: see <see cref="ToBytes"/>.
     /// </remarks>
     private static readonly byte[] LegacyMagic = "FBPWCRD1"u8.ToArray();
 
@@ -104,23 +105,64 @@ public sealed class RepositoryWriteCredential : IDisposable
     public byte[] DeriveSigningKeySeed(KeyGeneration generation) =>
         Expand(_signingRoot, "fbp/signing-generation/v2"u8, generation.Value);
 
-    /// <summary>The serialised credential, for the store and the sealed envelope.</summary>
+    /// <summary>
+    /// The serialised credential, for the store and the sealed envelope —
+    /// <see cref="SerializedLength"/> bytes, or the shorter pre-reclaim shape
+    /// for a credential that carries no reclaim public key.
+    /// </summary>
+    /// <remarks>
+    /// Writing the shape this credential actually holds, rather than always
+    /// the current one with the absent member left zero, is what makes an
+    /// absence survive a round trip — and a round trip is not rare:
+    /// <see cref="KeyHierarchy.ForWriteOnly"/> performs one on every open. A
+    /// zero-filled member reads back as a 32-byte key rather than as nothing,
+    /// which would put all-zero bytes on every <c>ReplicationOffer</c>, where
+    /// a destination records them permanently and can never be told otherwise
+    /// (ADR-0055 §5). The set would then owe signatures under a key whose
+    /// private half does not exist.
+    /// </remarks>
     public byte[] ToBytes()
     {
-        var bytes = new byte[SerializedLength];
-        Magic.CopyTo(bytes, 0);
+        var withReclaim = _reclaimPublicKey.Length > 0;
+        var bytes = new byte[withReclaim ? SerializedLength : LegacySerializedLength];
+        (withReclaim ? Magic : LegacyMagic).CopyTo(bytes, 0);
         _sealingPublicKey.CopyTo(bytes, 8);
         _contentIdKey.CopyTo(bytes, 40);
         _keyIdKey.CopyTo(bytes, 72);
         _structureRoot.CopyTo(bytes, 104);
         _signingRoot.CopyTo(bytes, 136);
 
-        // A credential read from a pre-reclaim bundle round-trips into the
-        // current shape with this member left zero rather than refusing to
-        // serialise: the service that holds it still works, and publishes no
-        // reclaim public key until it is re-provisioned.
-        _reclaimPublicKey.CopyTo(bytes, 168);
+        if (withReclaim)
+        {
+            _reclaimPublicKey.CopyTo(bytes, 168);
+        }
+
         return bytes;
+    }
+
+    /// <summary>
+    /// The length of the serialised credential at the front of
+    /// <paramref name="bytes"/>, or <c>-1</c> when it is not one.
+    /// </summary>
+    /// <remarks>
+    /// For the containers that embed a credential in a longer payload — the
+    /// stored installation provisioning and the sealed provisioning envelope.
+    /// Each one used to pin its own total length against a single credential
+    /// length, so widening the credential silently made every bundle an older
+    /// build had written unreadable: an installation refused its own
+    /// credential as damage, and could not be re-provisioned, because saving
+    /// deliberately never overwrites. Asking the credential how long it is
+    /// keeps that from happening the next time a member is added.
+    /// </remarks>
+    /// <param name="bytes">A buffer beginning with a serialised credential.</param>
+    public static int LengthOf(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= LegacySerializedLength && bytes[..8].SequenceEqual(LegacyMagic))
+        {
+            return LegacySerializedLength;
+        }
+
+        return bytes.Length >= SerializedLength && bytes[..8].SequenceEqual(Magic) ? SerializedLength : -1;
     }
 
     /// <summary>Parses a serialised credential.</summary>

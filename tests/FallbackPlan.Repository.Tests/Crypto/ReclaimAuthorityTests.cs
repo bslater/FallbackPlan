@@ -157,6 +157,39 @@ public sealed class ReclaimAuthorityTests
     }
 
     [TestMethod]
+    public void Reclaim_APreReclaimCredentialRoundTripped_StillPublishesNoKeyAtAll()
+    {
+        // A credential written before the reclaim key carries five members
+        // and is read back with the sixth ABSENT. Serialising it again used
+        // to write the six-member shape with that slot left zero — so the
+        // round trip invented a 32-byte all-zero "published key" out of
+        // nothing.
+        //
+        // The round trip is not hypothetical: KeyHierarchy.ForWriteOnly does
+        // one on every open. The invented key would then ride every
+        // ReplicationOffer, be recorded permanently at first attribution
+        // (ADR-0055 §5, never replaceable), and leave the destination
+        // demanding signatures under a key no one holds the private half of.
+        // Retention for that set would stop, and there would be no way back.
+        var legacy = new byte[168];
+        "FBPWCRD1"u8.CopyTo(legacy);
+        RandomNumberGenerator.Fill(legacy.AsSpan(8));
+
+        using var parsed = RepositoryWriteCredential.FromBytes(legacy);
+        Assert.IsTrue(parsed.ReclaimPublicKey.IsEmpty, "the parse itself is not where this goes wrong");
+
+        using var reserialized = RepositoryWriteCredential.FromBytes(parsed.ToBytes());
+        Assert.IsTrue(
+            reserialized.ReclaimPublicKey.IsEmpty,
+            "a credential that published no reclaim key must not acquire an all-zero one by being re-read");
+
+        using var hierarchy = KeyHierarchy.ForWriteOnly(parsed);
+        Assert.IsEmpty(
+            hierarchy.ReclaimPublicKey(KeyGeneration.Zero),
+            "publishing zeros to a peer is worse than publishing nothing — the peer keeps them for ever");
+    }
+
+    [TestMethod]
     public void Grant_TheSeedItHandsOut_IsGenerational()
     {
         using var authority = DeriveAuthority("one long passphrase to rule them");
