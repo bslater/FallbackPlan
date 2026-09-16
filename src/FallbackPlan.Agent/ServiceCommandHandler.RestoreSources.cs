@@ -397,12 +397,16 @@ public sealed partial class ServiceCommandHandler
                     + "was derived from is not this repository's.");
             }
 
-            using var credential = runtime.WriteCredentials.TryLoad(handle.SetId);
+            // The credential the set opens with — its own, or the
+            // installation's for a set created after setup — never only the
+            // per-set store, which a set-up installation leaves empty.
+            using var credential = runtime.TryLoadCredentialFor(handle.SetId);
             if (credential is null)
             {
                 return new ServiceError(
                     ServiceErrorReason.Failed,
-                    $"Set '{handle.SetName}' holds no write credential on this service — provision it first (ADR-0042 §10).");
+                    $"Set '{handle.SetName}' holds no write credential on this service — run first-run setup, "
+                    + "or provision the set (ADR-0044, ADR-0042 §10).");
             }
 
             handle.ReadAuthority = RepositoryReadAuthority.FromParts(credential, scalar);
@@ -416,9 +420,10 @@ public sealed partial class ServiceCommandHandler
 
     /// <summary>
     /// Opens a candidate source repository the way its set opens: a
-    /// provisioned write-only set with its credential — a v2 replica carries
-    /// the same descriptor, so the same bundle proves and opens it
-    /// (ADR-0042 §5) — and a v1 set with the runtime's passphrase. A v1
+    /// write-only set with the credential it opens with — its own, or the
+    /// installation's — since a v2 replica carries the same descriptor, so
+    /// the same bundle proves and opens it (ADR-0042 §5); and a v1 set with
+    /// the runtime's passphrase. A v1
     /// candidate on a passphrase-free service is a stated refusal the
     /// probing loops surface as a warning like any other failed open.
     /// </summary>
@@ -427,7 +432,7 @@ public sealed partial class ServiceCommandHandler
         Storage.Abstractions.IObjectStore store,
         CancellationToken cancellationToken)
     {
-        if (runtime.WriteCredentials.TryLoad(set.Id) is { } credential)
+        if (runtime.TryLoadCredentialFor(set.Id) is { } credential)
         {
             using (credential)
             {

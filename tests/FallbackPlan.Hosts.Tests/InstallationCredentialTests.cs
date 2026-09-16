@@ -350,6 +350,94 @@ public sealed class InstallationCredentialTests : IDisposable
         Assert.AreEqual("kit_required", afterwards.SetupState);
     }
 
+    [TestMethod]
+    public async Task Runtime_SetUpInstallation_RestoresSealedContentUnderAGrant()
+    {
+        // The set was created from the installation credential, so no per-set
+        // credential exists — and the restore ceremony must find the one the
+        // set actually opens with rather than telling the owner of a set-up
+        // installation to provision a set that setup already provisioned.
+        var salt = Save(Store());
+        _harness.WriteSourceFile("notes.txt", "sealed until granted");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
+
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand("docs", Envelope: SealGrant(description.RestoreGrantRecipient!, salt)),
+            _timeout.Token);
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            opened, out var granted, (opened as ServiceError)?.Message ?? opened.GetType().Name);
+        var snapshotId = Assert.ContainsSingle(granted.Snapshots).SnapshotId;
+
+        var restoredOut = Path.Combine(_harness.WorkPath, "granted");
+        Assert.IsInstanceOfType<Api.RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, restoredOut, Source: granted.SourceId, InPlace: true),
+                _timeout.Token),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome, string.Join("; ", restored.FailedSample ?? []));
+        Assert.AreEqual("sealed until granted", File.ReadAllText(Path.Combine(restoredOut, "notes.txt")));
+    }
+
+    [TestMethod]
+    public async Task Runtime_SetUpInstallation_OpensTheDestinationsCopyAsARestoreSource()
+    {
+        // The same credential opens the destination's replica of the set —
+        // a v2 replica carries the same descriptor (ADR-0042 §5) — so the
+        // restore path that probes destinations must reach it for a set the
+        // installation created, not only for one provisioned per set.
+        Save(Store());
+        _harness.WriteSourceFile("notes.txt", "held at the vault too");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
+
+            // The fan-out rides the backup; the replica has to have LANDED,
+            // so the wait is on the ledger, which whichever pass finishes
+            // will stamp.
+            Assert.IsInstanceOfType<SyncResult>(
+                await handler.ExecuteAsync(new SyncCommand("docs", null), _timeout.Token));
+            while (runtime.DestinationSync.Find(_harness.DocsSetId, "vault")
+                is not { State: FallbackPlan.Application.DestinationSyncState.InSync })
+            {
+                _timeout.Token.ThrowIfCancellationRequested();
+                await Task.Delay(50, _timeout.Token);
+            }
+        }
+
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token);
+            Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+                opened, out var replica, (opened as ServiceError)?.Message ?? opened.GetType().Name);
+            Assert.AreEqual("vault", replica.Location);
+            Assert.ContainsSingle(replica.Snapshots);
+            Assert.IsEmpty(replica.Warnings, string.Join("; ", replica.Warnings));
+        }
+    }
+
+    /// <summary>The restore grant a console seals: the sealing scalar, re-derived under the installation's salt.</summary>
+    private static string SealGrant(string recipientHex, byte[] salt)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealGrant(Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
+    }
+
     /// <summary>Provisions the installation as setup would, returning the salt it used.</summary>
     private static byte[] Save(InstallationCredentialStore store)
     {
@@ -400,7 +488,14 @@ public sealed class InstallationCredentialTests : IDisposable
 
     private async Task<ServiceRuntime> StartWithoutPassphraseAsync() =>
         await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                // The fixture's paths share one real volume; the vault is
+                // told apart by name, the compliant shape ADR-0051 describes.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+            },
             passphrase: null,
             _timeout.Token);
 }

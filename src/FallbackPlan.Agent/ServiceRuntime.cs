@@ -651,6 +651,26 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// (ADR-0042).
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The write credential a set opens with, for a caller that needs the
+    /// credential itself rather than an open archive: the set's own where it
+    /// was provisioned per set (ADR-0042 §5), otherwise the installation's
+    /// (ADR-0044 §2), which is what every set created after setup was
+    /// written under. Null when the service holds neither. The caller owns
+    /// and disposes what it gets; the installation's is a copy, so the
+    /// stored provisioning is never handed out.
+    /// </summary>
+    internal RepositoryWriteCredential? TryLoadCredentialFor(string setId)
+    {
+        if (WriteCredentials.TryLoad(setId) is { } perSet)
+        {
+            return perSet;
+        }
+
+        using var provisioning = InstallationCredential.TryLoad();
+        return provisioning is null ? null : RepositoryWriteCredential.FromBytes(provisioning.Credential.ToBytes());
+    }
+
     private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
         string setId, LocalFileSystemObjectStore store, bool descriptorExists, bool createIfMissing,
         CancellationToken cancellationToken)
