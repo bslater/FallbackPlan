@@ -169,6 +169,62 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
     }
 
     [TestMethod]
+    public void ClaimedBy_FindsEveryRepositoryOneInstallationRecorded()
+    {
+        // The claim key is the installation's, so it selects several
+        // repositories at once — which is the whole reason a claimant need
+        // not name one. It names none because it holds none.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", null, new string('e', 64)));
+        Assert.IsTrue(store.TryAttribute(RepoB, "peer-one", null, new string('e', 64)));
+        Assert.IsTrue(store.TryAttribute(new string('9', 32), "peer-two", null, new string('f', 64)));
+
+        var claimed = store.ClaimedBy(new string('e', 64));
+
+        Assert.HasCount(2, claimed);
+        Assert.Contains(RepoA, claimed);
+        Assert.Contains(RepoB, claimed);
+        Assert.IsEmpty(store.ClaimedBy(new string('0', 64)));
+    }
+
+    [TestMethod]
+    public void Reattribute_PointsTheReplicaAtTheNewDevice_AndKeepsBothKeys()
+    {
+        // The only writer in this store that changes a fingerprint, and the
+        // one place the "already stored here for another peer" rule is
+        // deliberately set aside — on proof, which the store does not itself
+        // hold, because the store does no cryptography.
+        //
+        // The keys must survive: a rebuilt machine derives the same claim and
+        // reclaim keys from the same passphrase, so replacing them would be
+        // replacing them with themselves at best, and with an attacker's at
+        // worst.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('e', 64)));
+
+        Assert.IsTrue(store.Reattribute(RepoA, "peer-rebuilt"));
+
+        Assert.AreEqual("peer-rebuilt", store.Find(RepoA)!.Fingerprint);
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+        Assert.ContainsSingle(store.OwnedBy("peer-rebuilt"));
+        Assert.IsEmpty(store.OwnedBy("peer-one"));
+
+        // And it is durable, or the claim would have to be made again after
+        // every restart.
+        Assert.AreEqual("peer-rebuilt", ReplicaOwnerStore.Open(_stateDirectory).Find(RepoA)!.Fingerprint);
+    }
+
+    [TestMethod]
+    public void Reattribute_ARepositoryThisPeerDoesNotHold_ChangesNothing()
+    {
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsFalse(store.Reattribute(RepoA, "peer-rebuilt"));
+        Assert.IsNull(store.Find(RepoA));
+    }
+
+    [TestMethod]
     public void Open_AFileRecordedBeforeTheClaimKey_ReadsBackWithNone()
     {
         // The JSON tolerates a missing property, so an attribution written

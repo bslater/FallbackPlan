@@ -107,6 +107,98 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
+    public void Claim_RoundTripsTheKeyAndTheSignature()
+    {
+        // The claim names no repository, and that is the decision rather than
+        // an omission. A machine that has lost everything holds an
+        // installation kit, which carries no repository id at all — so it
+        // could not name one if the message asked. The claim public key IS
+        // the selector: the destination re-attributes whatever it recorded
+        // that key against, which for one installation may be several
+        // repositories at once.
+        var key = new byte[ReplicationClaim.ClaimPublicKeyLength];
+        key.AsSpan().Fill(0xC1);
+        var signature = new byte[ReplicationClaim.SignatureLength];
+        signature.AsSpan().Fill(0xD2);
+
+        var claim = new ReplicationClaim(key, signature);
+        var read = RoundTrip(claim, ReplicationClaim.Read);
+
+        Assert.IsTrue(read.ClaimPublicKey.Span.SequenceEqual(key));
+        Assert.IsTrue(read.Signature.Span.SequenceEqual(signature));
+        Assert.AreEqual(2, claim.BodyEntryCount);
+    }
+
+    [TestMethod]
+    public void Claim_AKeyOrSignatureOfTheWrongWidth_IsMalformed()
+    {
+        var key = new byte[ReplicationClaim.ClaimPublicKeyLength];
+        var signature = new byte[ReplicationClaim.SignatureLength];
+
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaim(new byte[16], signature), ReplicationClaim.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaim(key, new byte[16]), ReplicationClaim.Read));
+    }
+
+    [TestMethod]
+    public void ClaimAccepted_CarriesWhatWasReattributed()
+    {
+        // The answer is what the claimant could not have known to ask for.
+        // Having proved the key, it learns which repositories were re-pointed
+        // to it — which is also the list it then opens for retrieval.
+        var accepted = new ReplicationClaimAccepted([new byte[16], Enumerable.Repeat((byte)7, 16).ToArray()]);
+        var read = RoundTrip(accepted, ReplicationClaimAccepted.Read);
+
+        Assert.HasCount(2, read.RepositoryIds);
+        Assert.IsTrue(read.RepositoryIds[1].Span.SequenceEqual(Enumerable.Repeat((byte)7, 16).ToArray()));
+    }
+
+    [TestMethod]
+    public void ClaimAccepted_ARepositoryIdOfTheWrongWidth_IsMalformed()
+    {
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaimAccepted([new byte[8]]), ReplicationClaimAccepted.Read));
+    }
+
+    [TestMethod]
+    public void ClaimSignedBytes_AreDomainSeparatedAndBoundToTheSession()
+    {
+        // The session identifier (02 §3.5) is what makes a captured claim
+        // useless in a later connection — the same reason the retention
+        // instruction is bound to it. A claim is worth more than a retention
+        // page, because it re-points ownership rather than deleting one page.
+        var fingerprint = "aa".PadRight(64, 'b');
+        var session = Enumerable.Repeat((byte)0x30, SessionBinding.SessionIdLength).ToArray();
+        var other = Enumerable.Repeat((byte)0x31, SessionBinding.SessionIdLength).ToArray();
+
+        var bytes = ReplicationClaim.EncodeForSigning(session, fingerprint);
+
+        Assert.IsFalse(
+            bytes.AsSpan().SequenceEqual(ReplicationClaim.EncodeForSigning(other, fingerprint)),
+            "a claim made in one session must not verify in another");
+        Assert.IsFalse(
+            bytes.AsSpan().SequenceEqual(
+                ReplicationClaim.EncodeForSigning(session, "cc".PadRight(64, 'd'))),
+            "a claim names the device it is asking to be attributed to");
+        Assert.Contains(
+            "fbp-peer-v1:replica-claim",
+            System.Text.Encoding.UTF8.GetString(bytes.AsSpan(0, 25)),
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ClaimTypes_ArePermittedOnlyWhenOpen()
+    {
+        foreach (var type in new[] { PeerMessageType.ReplicationClaim, PeerMessageType.ReplicationClaimAccepted })
+        {
+            Assert.IsTrue(PeerAuthenticator.Permits(PeerSessionState.Open, type));
+            Assert.IsFalse(PeerAuthenticator.Permits(PeerSessionState.Authenticated, type));
+            Assert.IsFalse(PeerAuthenticator.Permits(PeerSessionState.Encrypted, type));
+        }
+    }
+
+    [TestMethod]
     public void Inventory_WithKeysAndEmpty_RoundTrips()
     {
         var page = new ReplicationInventory(["blobs/data/aaaa/one", "snapshots/x/y/z"], More: true);

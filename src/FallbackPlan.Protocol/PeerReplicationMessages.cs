@@ -1261,3 +1261,244 @@ public sealed record VerificationProof(bool Held, ReadOnlyMemory<byte> Proof) : 
     /// <inheritdoc/>
     public override int GetHashCode() => HashCode.Combine(Held, Proof.Length);
 }
+
+/// <summary>
+/// A machine rebuilt after total loss proving a replica is its own
+/// (specification peer-protocol 03 §6;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>It names no repository, and that is the decision.</b> ADR-0053 §2 had
+/// the claimant sign over a repository id, which a claimant cannot supply: a
+/// machine that lost everything holds an <em>installation</em> kit, and such
+/// a kit carries no repository id and no key object — every key re-derives
+/// from the passphrase and the kit's public salt. So the claim public key is
+/// the selector. The destination re-attributes whatever it recorded that key
+/// against, which for one installation may be several repositories at once,
+/// and says which in its answer.
+/// </para>
+/// <para>
+/// §2 also had the destination answer with a fresh random nonce for the
+/// claimant to sign, a round trip whose only purpose was freshness. The
+/// session identifier ([02 §3.5](../../specifications/peer-protocol/02-session.md))
+/// is already fresh per connection, already derived from both sides'
+/// contributions including both TLS keys, and already known to both ends
+/// before the claim — so the ceremony is one message and its answer.
+/// </para>
+/// </remarks>
+/// <param name="ClaimPublicKey">
+/// The claimant's Ed25519 claim public key — the same 32 bytes its
+/// predecessor published on every <see cref="ReplicationOffer"/>.
+/// </param>
+/// <param name="Signature">
+/// Ed25519 over <see cref="EncodeForSigning"/>, under the private half the
+/// claimant derived from the passphrase and its installation kit's salt.
+/// </param>
+public sealed record ReplicationClaim(
+    ReadOnlyMemory<byte> ClaimPublicKey, ReadOnlyMemory<byte> Signature) : IPeerMessage
+{
+    /// <summary>An Ed25519 public key is 32 bytes.</summary>
+    public const int ClaimPublicKeyLength = 32;
+
+    /// <summary>An Ed25519 signature is 64 bytes.</summary>
+    public const int SignatureLength = 64;
+
+    private static ReadOnlySpan<byte> SigningLabel => "fbp-peer-v1:replica-claim"u8;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationClaim;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 2;
+
+    /// <summary>
+    /// The bytes a claim is signed over:
+    /// <c>"fbp-peer-v1:replica-claim" ‖ session_id ‖ claimant_fingerprint</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The session identifier is what makes a captured claim useless in a
+    /// later connection, exactly as it does for a retention instruction
+    /// ([ADR-0059](../../docs/adr/0059-session-bound-deletion-authority.md)) —
+    /// and it matters more here, because a replayed claim re-points ownership
+    /// rather than deleting one page.
+    /// </para>
+    /// <para>
+    /// The fingerprint is redundant with that identifier today: the session
+    /// binding is a hash over both peer identities, so it already covers
+    /// which device is asking. It is written out anyway so that the signed
+    /// statement names its own subject — a reader can see <em>whom</em> the
+    /// attribution is being moved to without having to trust that a hash
+    /// covered it.
+    /// </para>
+    /// <para>
+    /// Both fields are fixed-length, so the concatenation is unambiguous
+    /// without a separator ([00 §4](../../specifications/peer-protocol/00-conventions.md)).
+    /// </para>
+    /// </remarks>
+    /// <param name="sessionId">This session's 32-byte identifier (02 §3.5).</param>
+    /// <param name="claimantFingerprint">The claimant's peer fingerprint, lower-hex.</param>
+    public static byte[] EncodeForSigning(ReadOnlySpan<byte> sessionId, string claimantFingerprint)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(claimantFingerprint);
+
+        var fingerprint = Encoding.UTF8.GetBytes(claimantFingerprint);
+        var bytes = new byte[SigningLabel.Length + sessionId.Length + fingerprint.Length];
+        SigningLabel.CopyTo(bytes);
+        sessionId.CopyTo(bytes.AsSpan(SigningLabel.Length));
+        fingerprint.CopyTo(bytes, SigningLabel.Length + sessionId.Length);
+        return bytes;
+    }
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(ClaimPublicKey.Span);
+        writer.WriteInt32(2);
+        writer.WriteByteString(Signature.Span);
+    }
+
+    /// <summary>Reads a claim.</summary>
+    /// <param name="reader">The body reader.</param>
+    /// <exception cref="PeerProtocolException">The body is not the shape 03 §6 defines.</exception>
+    public static ReplicationClaim Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        byte[]? key = null;
+        byte[]? signature = null;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            switch (entry)
+            {
+                case 1:
+                    key = reader.ReadByteString();
+                    break;
+                case 2:
+                    signature = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (key is not { Length: ClaimPublicKeyLength } || signature is not { Length: SignatureLength })
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A claim is not the shape 03 §6 defines.");
+        }
+
+        return new ReplicationClaim(key, signature);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationClaim? other) =>
+        other is not null
+        && ClaimPublicKey.Span.SequenceEqual(other.ClaimPublicKey.Span)
+        && Signature.Span.SequenceEqual(other.Signature.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(ClaimPublicKey.Length, Signature.Length);
+}
+
+/// <summary>
+/// What a claim re-attributed (specification peer-protocol 03 §6).
+/// </summary>
+/// <remarks>
+/// The claimant could not have known to ask for these: it named no repository
+/// because it holds no repository id. Having proved the key, it learns which
+/// replicas are now pointed at it, and that is the list it opens for
+/// retrieval.
+/// </remarks>
+/// <param name="RepositoryIds">The repositories now attributed to the claimant, 16 bytes each.</param>
+public sealed record ReplicationClaimAccepted(
+    IReadOnlyList<ReadOnlyMemory<byte>> RepositoryIds) : IPeerMessage
+{
+    /// <summary>The most repositories one claim may re-attribute.</summary>
+    /// <remarks>
+    /// One installation's sets, not one household's objects, so the bound is
+    /// generous rather than tight — but it is a bound, because a length a
+    /// peer chooses is a length a peer could choose badly.
+    /// </remarks>
+    public const int MaximumEntries = 1024;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationClaimAccepted;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        writer.WriteInt32(1);
+        writer.WriteStartArray(RepositoryIds.Count);
+        for (var index = 0; index < RepositoryIds.Count; index++)
+        {
+            writer.WriteByteString(RepositoryIds[index].Span);
+        }
+
+        writer.WriteEndArray();
+    }
+
+    /// <summary>Reads an acceptance.</summary>
+    /// <param name="reader">The body reader.</param>
+    /// <exception cref="PeerProtocolException">The body is not the shape 03 §6 defines.</exception>
+    public static ReplicationClaimAccepted Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        List<ReadOnlyMemory<byte>>? ids = null;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            if (entry != 1)
+            {
+                reader.SkipValue();
+                return;
+            }
+
+            var length = reader.ReadStartArray();
+            if (length is null || length > MaximumEntries)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"An acceptance carried more than the {MaximumEntries} entries this protocol permits.");
+            }
+
+            ids = new List<ReadOnlyMemory<byte>>(length.Value);
+            for (var index = 0; index < length.Value; index++)
+            {
+                var id = reader.ReadByteString();
+                if (id.Length != ReplicationOffer.RepositoryIdLength)
+                {
+                    throw new PeerProtocolException(
+                        PeerRefusalReason.Malformed, "An acceptance named a repository that is not 16 bytes.");
+                }
+
+                ids.Add(id);
+            }
+
+            reader.ReadEndArray();
+        });
+
+        return new ReplicationClaimAccepted(ids ?? []);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationClaimAccepted? other) =>
+        other is not null
+        && RepositoryIds.Count == other.RepositoryIds.Count
+        && RepositoryIds.Select((id, index) => id.Span.SequenceEqual(other.RepositoryIds[index].Span)).All(same => same);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => RepositoryIds.Count;
+}

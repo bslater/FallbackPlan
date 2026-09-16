@@ -257,6 +257,15 @@ internal static partial class Log
             + "This pass records the sync without a verification")]
     internal static partial void ReadBackUnavailable(ILogger logger, string destination, string reason);
 
+    // Information and not Warning, though it is a change of ownership: the
+    // claim is the recovery working, and an operator who sees this expected to
+    // see it. The peer's own ledger is the durable record of what moved.
+    [LoggerMessage(
+        EventId = 3770, Level = LogLevel.Information,
+        Message = "Peer {Fingerprint} claimed {Count} replica(s) here under its installation's claim key; "
+            + "the attribution now points at that device")]
+    internal static partial void ReplicaClaimed(ILogger logger, string fingerprint, int count);
+
     // Warning: the bytes were staged by this pair and no longer match, so
     // something between the two sessions damaged them. Re-sending is the right
     // answer and a silent one would hide a destination whose disk is rotting.

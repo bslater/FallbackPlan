@@ -2,8 +2,11 @@ using System.Net;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -53,19 +56,10 @@ public sealed class PeerClaimTests : IDisposable
     private PeerKeypair? _listenerKeypair;
     private PeerGrantStore? _destinationGrants;
     private Protocol.PeerIdentity? _destinationIdentity;
+    private bool _withoutClaimFeature;
 
-    /// <remarks>
-    /// <b>This pins a gap, not a guarantee.</b> The refusal is correct for the
-    /// rule it enforces and wrong for the person standing in front of it, and
-    /// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
-    /// decided the claim ceremony that would let a rebuilt machine prove it is
-    /// the same owner. Nothing implements that yet. When it does, this test
-    /// inverts: the same drill ends with the replica opened and the backup
-    /// restored, and the refusal below moves to the case it is really for — a
-    /// stranger asking for a repository by name.
-    /// </remarks>
     [TestMethod]
-    public async Task ARebuiltMachine_PairedAfresh_IsStillRefusedItsOwnReplica()
+    public async Task ARebuiltMachine_WithItsKitAndPassphrase_ClaimsItsReplicaBack()
     {
         var repositoryId = await SeedAsync();
 
@@ -73,21 +67,79 @@ public sealed class PeerClaimTests : IDisposable
         // survives is the kit and the passphrase, in a drawer somewhere.
         DestroyTheSourceMachine();
 
-        // A fresh install, paired with the friend as any new peer would be —
-        // ADR-0053 §2's first step, and the only step that works today.
-        var rebuilt = PairRebuiltMachineAsync();
-
-        // And it is refused its own repository, because the replica is
+        // A fresh install, paired with the friend as any new peer would be.
+        // Pairing alone is not enough and never was — the replica is
         // attributed to a device identity that no longer exists anywhere.
-        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+        var rebuilt = PairRebuiltMachineAsync();
+        var refusedFirst = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
             () => OpenReplicaAsync(rebuilt, repositoryId));
-
         Assert.AreNotEqual(
             PeerRefusalReason.NotPaired,
-            refusal.Reason,
+            refusedFirst.Reason,
             "the rebuilt machine IS paired — this must fail on attribution, or it proves nothing");
-        Assert.AreEqual(PeerRefusalReason.TermsRefused, refusal.Reason);
-        Assert.Contains("retrievable under this pairing", refusal.Message, StringComparison.Ordinal);
+
+        // The claim. Nothing but the printed kit and the passphrase produced
+        // the key it signs under, which is the whole proposition: the two
+        // things that survive a dead machine are enough.
+        var accepted = await ClaimAsync(rebuilt);
+
+        Assert.ContainsSingle(accepted.RepositoryIds);
+        Assert.IsTrue(accepted.RepositoryIds[0].Span.SequenceEqual(repositoryId));
+
+        // And now the replica opens, on the same request that was refused
+        // three lines ago. The attribution followed the owner rather than the
+        // hardware.
+        await OpenReplicaAsync(rebuilt, repositoryId);
+
+        var owner = ReplicaOwnerStore.Open(_destinationState).Find(Convert.ToHexStringLower(repositoryId));
+        Assert.AreEqual(rebuilt.Identity.Fingerprint, owner!.Fingerprint);
+        Assert.IsNotNull(owner.ClaimPublicKey, "the recorded key must survive the claim, or a second one is refused");
+    }
+
+    [TestMethod]
+    public async Task AClaimForNothing_AndAClaimSignedByAStranger_RefuseIdentically()
+    {
+        // The no-reconnaissance rule (07 §4), applied where it matters most:
+        // if "no such key here" and "that signature is wrong" were
+        // distinguishable, this would be a way to ask a stranger's peer
+        // whether it holds a given installation's replicas.
+        _ = await SeedAsync();
+        DestroyTheSourceMachine();
+        var rebuilt = PairRebuiltMachineAsync();
+
+        var stranger = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(stranger);
+        var unknownKey = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            () => ClaimAsync(rebuilt, stranger));
+
+        // The right key, a signature that is not over this session's bytes.
+        var wrongSignature = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            () => ClaimAsync(rebuilt, ClaimSeed(), forge: true));
+
+        Assert.AreEqual(PeerRefusalReason.TermsRefused, unknownKey.Reason);
+        Assert.AreEqual(unknownKey.Reason, wrongSignature.Reason);
+        Assert.AreEqual(unknownKey.Message, wrongSignature.Message);
+    }
+
+    [TestMethod]
+    public async Task ADestinationTooOldToClaim_RefusesRatherThanIgnoring()
+    {
+        // The compatibility rule, pinned in the direction that matters. A
+        // household where one machine updates first must get a refusal it can
+        // read, not a claim that appears to work and moves nothing — the
+        // owner would otherwise believe the replica was theirs again.
+        _withoutClaimFeature = true;
+        _ = await SeedAsync();
+        DestroyTheSourceMachine();
+        var rebuilt = PairRebuiltMachineAsync();
+
+        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(() => ClaimAsync(rebuilt));
+
+        Assert.AreNotEqual(
+            PeerRefusalReason.MessageUnknown,
+            refusal.Reason,
+            "the type is defined; it is the feature that is not offered");
+        Assert.Contains("replica-claim", refusal.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -121,6 +173,7 @@ public sealed class PeerClaimTests : IDisposable
     {
         await StartDestinationAsync();
         WriteConfiguration();
+        ProvisionInstallation();
         _harness.WriteSourceFile("docs/report.txt", "the only copy, once the machine is gone");
 
         var run = await HostHarness.RunAsync(
@@ -131,18 +184,85 @@ public sealed class PeerClaimTests : IDisposable
 
         var replica = await ReplicaPathAsync();
 
-        // The kit is exported while the machine still exists, which is the
-        // only time anybody can export one.
-        Directory.CreateDirectory(_harness.WorkPath);
-        var exit = await Cli.CliApplication.RunAsync(
-        [
-            "key-export", "--output", Path.Combine(_harness.WorkPath, "kit.bin"),
-            "--repo", Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId),
-            "--passphrase-env", _harness.PassphraseVariable, "--state", _harness.StateDirectory,
-        ]);
-        Assert.AreEqual(0, exit);
-
         return Convert.FromHexString(Path.GetFileName(replica));
+    }
+
+    /// <summary>First-run setup, as the console or the headless verb performs it.</summary>
+    private void ProvisionInstallation()
+    {
+        var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+
+        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, parameters, salt, KdfValidationMode.CreateRepository);
+        using var provisioning = new InstallationProvisioning(
+            RepositoryWriteCredential.FromBytes(authority.Credential.ToBytes()), salt, parameters);
+
+        Assert.IsTrue(new InstallationCredentialStore(_harness.StateDirectory).TrySave(provisioning));
+
+        // The kit is written while the machine still exists, which is the
+        // only time anybody can write one. It goes outside the state
+        // directory because the state directory is about to be destroyed —
+        // which is the point: a kit lives in a drawer, not on the machine.
+        Directory.CreateDirectory(_harness.WorkPath);
+        File.WriteAllBytes(
+            Path.Combine(_harness.WorkPath, "kit.bin"),
+            RecoveryKitCodec.Serialize(Repository.RecoveryKitFactory.BuildForInstallation(
+                authority.Credential, salt, parameters, new byte[16],
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())));
+    }
+
+    /// <summary>
+    /// The claim seed, from the kit and the passphrase and nothing else —
+    /// no archive, no state directory, no repository id (ADR-0053 §1).
+    /// </summary>
+    private byte[] ClaimSeed()
+    {
+        var kit = RecoveryKitCodec.Parse(File.ReadAllBytes(Path.Combine(_harness.WorkPath, "kit.bin")));
+        Assert.IsTrue(kit.IsInstallationKit, "a per-repository kit is a different claimant's case");
+
+        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase,
+            new Argon2Parameters
+            {
+                MemoryKiB = kit.KdfMemoryKiB,
+                Iterations = kit.KdfIterations,
+                Parallelism = kit.KdfParallelism,
+            },
+            kit.KdfSalt.Span,
+            KdfValidationMode.OpenRepository);
+
+        return authority.ClaimKeySeed.ToArray();
+    }
+
+    /// <summary>Makes the claim (peer-protocol 03 §6), or throws the peer's refusal.</summary>
+    private async Task<ReplicationClaimAccepted> ClaimAsync(
+        PeerKeypair keypair, byte[]? seed = null, bool forge = false)
+    {
+        using var signer = RepositorySigner.FromSeed(seed ?? ClaimSeed(), Domain.KeyGeneration.Zero);
+
+        var grants = PeerGrantStore.Open(_rebuiltState);
+        await using var connection = await PeerTlsConnection.DialAsync(
+            _endpoint!.Address.ToString(), _endpoint.Port, DateTimeOffset.UtcNow, Timeout);
+        var session = await PeerSessionDriver.DialAsync(
+            connection, keypair, grants, _destinationIdentity!, "fallbackplan-agent",
+            terms: null, requiredFeatures: null, cancellationToken: Timeout);
+
+        // Forging signs the right bytes for the WRONG session, which is what
+        // a captured claim replayed into a later connection would carry.
+        var signed = forge
+            ? ReplicationClaim.EncodeForSigning(new byte[SessionBinding.SessionIdLength], keypair.Identity.Fingerprint)
+            : ReplicationClaim.EncodeForSigning(session.Binding.Span, keypair.Identity.Fingerprint);
+
+        await PeerFrame.WriteAsync(
+            session.Stream,
+            new ReplicationClaim(signer.PublicKey.ToArray(), signer.Sign(signed)),
+            Timeout);
+
+        return await ReplicationWire.ReadAsync(
+            session.Stream, PeerMessageType.ReplicationClaimAccepted, ReplicationClaimAccepted.Read, Timeout);
     }
 
     private void DestroyTheSourceMachine()
@@ -245,7 +365,11 @@ public sealed class PeerClaimTests : IDisposable
         _listenerKeypair = PeerKeypairStore.Open(_destinationState);
         _listener = RemoteServiceListener.Start(
             _listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            log: null, replicationStateDirectory: _destinationState);
+            log: null, replicationStateDirectory: _destinationState,
+            offeredFeatures: _withoutClaimFeature
+                ? [.. PeerSessionNegotiation.SupportedFeatures.Where(feature => !string.Equals(
+                    feature, PeerSessionNegotiation.ReplicaClaimFeature, StringComparison.Ordinal))]
+                : null);
         _listener.Bind(new UnusedService());
         _endpoint = _listener.Endpoint;
 

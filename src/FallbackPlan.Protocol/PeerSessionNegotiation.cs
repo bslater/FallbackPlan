@@ -94,6 +94,22 @@ public static class PeerSessionNegotiation
     /// </remarks>
     public const string PartialObjectResumeFeature = "partial-object-resume";
 
+    /// <summary>
+    /// The claim ceremony (03 §6;
+    /// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)):
+    /// a machine rebuilt after total loss proves a replica is its own under
+    /// the claim key its predecessor published, and the attribution follows
+    /// it to the new device identity.
+    /// </summary>
+    /// <remarks>
+    /// Gating on a feature is safe here in a way it was not for
+    /// <see cref="SignedRetentionFeature"/>, because withholding it can only
+    /// make the destination refuse. A party that omits it is asking for less
+    /// authority, not more, so there is nothing for an attacker to gain by
+    /// declining to offer it.
+    /// </remarks>
+    public const string ReplicaClaimFeature = "replica-claim";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
     [
@@ -104,6 +120,7 @@ public static class PeerSessionNegotiation
         TerminationNoticeFeature,
         RetrievalFeature,
         PartialObjectResumeFeature,
+        ReplicaClaimFeature,
     ];
 
     /// <summary>Builds the hello this build sends.</summary>

@@ -367,6 +367,42 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     return;
                 }
 
+                // A claim comes before retrieval can succeed rather than
+                // instead of it: the claimant asks for the attribution to
+                // follow it to the device identity it now has (03 §6,
+                // ADR-0053), after which the ordinary retrieval gate lets it
+                // read. A rebuilt machine dials, claims, and dials again.
+                if (payload.Value.Type == PeerMessageType.ReplicationClaim)
+                {
+                    // Named rather than left to fall through to the offer
+                    // reader, which would refuse with "expected a replication
+                    // offer" — true, and no use at all to somebody whose
+                    // recovery has just stopped. The feature's name is what
+                    // tells them this destination is the half of the pair
+                    // that needs updating.
+                    if (!session.Supports(PeerSessionNegotiation.ReplicaClaimFeature))
+                    {
+                        // Refused on the wire before it is thrown: the catch
+                        // below assumes a responder already answered, and a
+                        // claimant that got silence instead of a reason would
+                        // be left guessing at the worst possible moment.
+                        var unsupported = new PeerProtocolException(
+                            PeerRefusalReason.FeatureUnsupported,
+                            "This destination does not offer the replica-claim feature, so a replica here cannot "
+                            + "be claimed by a rebuilt machine (03 §6). Update it, and the claim will be "
+                            + "accepted — the replica itself is untouched either way.");
+                        await ReplicationWire.TryRefuseAsync(session.Stream, unsupported).ConfigureAwait(false);
+                        throw unsupported;
+                    }
+
+                    var claimed = await ClaimResponder.ServeAsync(
+                        session.Stream, session.Peer, _owners!, session.Binding,
+                        ReplicationClaim.Read(payload.Value.Body), _stopping.Token)
+                        .ConfigureAwait(false);
+                    Log.ReplicaClaimed(_log, peer, claimed.Count);
+                    return;
+                }
+
                 if (payload.Value.Type == PeerMessageType.RetrieveOpen
                     && session.Supports(PeerSessionNegotiation.RetrievalFeature))
                 {

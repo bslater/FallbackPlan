@@ -213,4 +213,69 @@ public sealed class ReplicaOwnerStore
                 .Select(pair => pair.Key)];
         }
     }
+
+    /// <summary>
+    /// Every repository recorded against a claim public key
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
+    /// </summary>
+    /// <remarks>
+    /// The claim key is the <em>installation's</em>, so one key selects every
+    /// repository that installation stores here — which is what lets a
+    /// claimant that holds no repository id ask for its replicas by proving a
+    /// key instead of naming a repository.
+    /// </remarks>
+    /// <param name="claimPublicKey">The claim public key, lower-hex.</param>
+    /// <returns>The repository ids, lower-hex.</returns>
+    public IReadOnlyList<string> ClaimedBy(string claimPublicKey)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(claimPublicKey);
+
+        lock (_gate)
+        {
+            return [.. _owners
+                .Where(pair => string.Equals(pair.Value.ClaimPublicKey, claimPublicKey, StringComparison.Ordinal))
+                .Select(pair => pair.Key)];
+        }
+    }
+
+    /// <summary>
+    /// Points a replica at a new device identity, the claim ceremony having
+    /// proved the claimant is the same owner (ADR-0053 §2).
+    /// </summary>
+    /// <remarks>
+    /// The only writer here that changes a fingerprint, and the one place
+    /// <see cref="TryAttribute"/>'s "already stored here for another peer"
+    /// rule is deliberately set aside. It is set aside on <em>proof</em>, and
+    /// the proof is not this store's to check — the store holds no
+    /// cryptography and knows no keys, so a caller that skipped the signature
+    /// would be a caller that skipped the ceremony. The two recorded public
+    /// keys are kept exactly as they were: the same passphrase re-derives
+    /// them, so a claimant that could replace them could only replace them
+    /// with themselves, and anyone else must not.
+    /// </remarks>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    /// <param name="fingerprint">The claimant's fingerprint.</param>
+    /// <returns><see langword="false"/> when no such repository is attributed here.</returns>
+    public bool Reattribute(string repositoryIdHex, string fingerprint)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
+
+        lock (_gate)
+        {
+            if (!_owners.TryGetValue(repositoryIdHex, out var owner))
+            {
+                return false;
+            }
+
+            if (string.Equals(owner.Fingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            _owners[repositoryIdHex] = owner with { Fingerprint = fingerprint };
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
+            return true;
+        }
+    }
 }
