@@ -34,22 +34,22 @@
     {
       "name": "format_signing_seed_generation_0",
       "generation": 0,
-      "seed_derivation": "HKDF-Expand(master_key, 'fbp/signing/v1' || u32(generation), 32)",
-      "seed": "0e5814289709cb4fcccd9275ce0c9a1b3f8ccb8382323fea631ed39dcced6024",
-      "public_key": "053dc919fd416b7521317737d23d3c33c13050040bb968c5cf729c84de4f10ab",
+      "seed_derivation": "HKDF-Expand(signing_root, 'fbp/signing-generation/v2' || u32(generation), 32), signing_root = HKDF-Expand(root, 'fbp/signing/v2', 32)",
+      "seed": "8fad593cb94ba3e12ab97d1455fb1a42bdd0121a0192e9c6641ee17d6db8300c",
+      "public_key": "9cc6291926b6956b6bd43bc26eb29aae897916366ef9ebc221ffab42e73991d2",
       "message": "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a207265706f7369746f72792d73636f706564207369676e617475726520646f6d61696e",
       "message_comment": "plain ASCII bytes",
-      "signature": "47c08ba09f6e9e8163afefbcb38b8293f5f6422a688825e177932be3f91d5e98a636f4c4b249e5236b876def0221d10a7d889f32a25ed8d0ae4c7d585f90e20d"
+      "signature": "e9a77da4454b7871ca0de0297a3231ffe1cc050e755fee26f8f207cafad2f660cc0a7f862b90f5c303c420f8423ca6a40f02974857bdacd36ef220bc9a3f9b01"
     },
     {
       "name": "format_signing_seed_generation_1",
       "generation": 1,
-      "seed_derivation": "HKDF-Expand(master_key, 'fbp/signing/v1' || u32(generation), 32)",
-      "seed": "59e35649a3465ff89c0d68d557bc146724f87879fb6a8eb2d520063d06ab3a41",
-      "public_key": "eae25bcb9174515146d553d6e15acf514042a59881a3e846d17a5a44a9bf95fe",
+      "seed_derivation": "HKDF-Expand(signing_root, 'fbp/signing-generation/v2' || u32(generation), 32), signing_root = HKDF-Expand(root, 'fbp/signing/v2', 32)",
+      "seed": "3e67c854cf03bbae0fcc853d4ed0ac7c4f68ee53a5d3b6fe668547d99866c3ac",
+      "public_key": "771c89b35344e4f1926ea9a920413c0b8b7dbb835fe1e2c6fb77e79d25ed1f39",
       "message": "a301500102030405060708090a0b0c0d0e0f1002010363666270",
       "message_comment": "deterministic CBOR map {1: repository_id (bytes 16), 2: 1, 3: \"fbp\"}",
-      "signature": "ca5e50fbc7ef8ada87b7997aedc459ac02149d9fcfff31e8081ffb130c25df1af1d30e97f6c6cbdbc432e0961c756cc8d6bff74888eab5ee5082eb6886fea600"
+      "signature": "767160dba01dac7eaf89f215c1932fc4b59151ec4ec0bb0a5470a409678035eddf665f2d7027ec69bb62dfca952306962f23ba2cc14abc5bbbdc3a79e4cb8706"
     }
   ]
 }

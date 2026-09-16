@@ -9,7 +9,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 
 /// <summary>
 /// Drives the <c>aes-gcm.json</c> real-construction case through the actual
-/// record path: the blob key re-derived from <c>keys.json</c> inputs, the
+/// record path: the blob key re-derived from <c>write-only.json</c> inputs, the
 /// nonce and 55-byte AAD built by the real builders, sealed by
 /// <see cref="RecordCipher"/> — a regression vector for the exact
 /// construction records use (specification 04; FR-ARCH-009).
@@ -24,19 +24,23 @@ public sealed class RecordCipherConformanceTests
     public void RecordCipher_ThePinnedCase_IsReproducedByTheRealConstruction()
     {
         using var aesGcm = Load("aes-gcm.json");
-        using var keys = Load("keys.json");
+        using var keys = Load("write-only.json");
         using var records = Load("records.json");
 
         var vectorCase = aesGcm.RootElement.GetProperty("cases").EnumerateArray()
             .Single(c => c.GetProperty("name").GetString() == "record_ordinal_47_real_construction");
 
-        // Re-derive the vector's key from keys.json inputs through the real
-        // hierarchy, proving the case's key is the blob key it claims to be.
-        var keyInputs = keys.RootElement.GetProperty("inputs");
-        using var hierarchy = new KeyHierarchy(Convert.FromHexString(keyInputs.GetProperty("master_key").GetString()!));
+        // Re-derive the vector's key from write-only.json's root through the
+        // real derivation and the real key set, proving the case's key is the
+        // blob key it claims to be: the metadata class key of generation 0
+        // expanded over the envelope's salt, writer and counter.
+        var keyInputs = keys.RootElement.GetProperty("blob_key").GetProperty("inputs");
+        using var authority = WriteOnlyDerivation.FromRoot(
+            Convert.FromHexString(keys.RootElement.GetProperty("inputs").GetProperty("root").GetString()!));
+        using var keySet = RepositoryKeySet.FromWriteCredential(authority.Credential);
         var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(
-            hierarchy.DeriveDataKey(KeyGeneration.Zero),
+            keySet.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero),
             Convert.FromHexString(keyInputs.GetProperty("blob_salt").GetString()!),
             WriterId.FromBytes(Convert.FromHexString(keyInputs.GetProperty("writer_id").GetString()!)),
             keyInputs.GetProperty("blob_counter").GetUInt64(),

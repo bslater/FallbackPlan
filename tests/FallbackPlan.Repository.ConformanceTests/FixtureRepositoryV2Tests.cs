@@ -143,7 +143,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
                 using var restored = new MemoryStream();
                 var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
                 Assert.IsTrue(restore.Success, restore.FailureDetail);
-                SequenceAssert.AreEqual(FixtureRepository.FileContent(), restored.ToArray());
+                SequenceAssert.AreEqual(FixtureRepositoryV2.FileContent(), restored.ToArray());
             }
         }
     }

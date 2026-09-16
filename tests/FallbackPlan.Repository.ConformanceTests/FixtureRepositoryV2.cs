@@ -34,6 +34,24 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// </remarks>
 public static class FixtureRepositoryV2
 {
+    /// <summary>The 200 000-byte deterministic file: concatenated SHA-256(BE64(i)).</summary>
+    public static byte[] FileContent()
+    {
+        var content = new byte[200_000];
+        var counter = new byte[8];
+        var offset = 0;
+        for (ulong index = 0; offset < content.Length; index++)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(counter, index);
+            var digest = System.Security.Cryptography.SHA256.HashData(counter);
+            var take = Math.Min(digest.Length, content.Length - offset);
+            digest.AsSpan(0, take).CopyTo(content.AsSpan(offset));
+            offset += take;
+        }
+
+        return content;
+    }
+
     public const string Passphrase = "fallbackplan-fixture-v2-passphrase";
 
     public static readonly RepositoryId Repo =
@@ -101,7 +119,7 @@ public static class FixtureRepositoryV2
             // --- sealed data blob (counter 2): records under a fresh random
             // content key sealed to the repository public key; the footer —
             // the structure plane — under the METADATA class key (ADR-0042 §2).
-            var content = FixtureRepository.FileContent();
+            var content = FileContent();
             var references = new List<SegmentReference>();
             var entries = new List<IndexEntry>();
 

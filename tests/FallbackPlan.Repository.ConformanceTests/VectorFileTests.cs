@@ -31,7 +31,6 @@ public sealed class VectorFileTests
     /// </summary>
     private static readonly Dictionary<string, bool> ExpectedFiles = new()
     {
-        ["keys.json"] = true,
         ["write-only.json"] = true,
         ["identifiers.json"] = true,
         ["records.json"] = true,
@@ -97,11 +96,11 @@ public sealed class VectorFileTests
     [TestMethod]
     public void KeyDerivationVectors_DifferentWriters_ProveSeparation()
     {
-        using var document = Load("keys.json");
-        var derived = document.RootElement.GetProperty("derived");
-        var checks = document.RootElement.GetProperty("separation_checks");
+        using var document = Load("write-only.json");
+        var group = document.RootElement.GetProperty("blob_key");
+        var checks = group.GetProperty("separation_checks");
 
-        var blobKey = derived.GetProperty("blob_key").GetString();
+        var blobKey = group.GetProperty("blob_key").GetString();
         var otherWriter = checks.GetProperty("blob_key_other_writer").GetString();
         var otherCounter = checks.GetProperty("blob_key_other_counter").GetString();
 

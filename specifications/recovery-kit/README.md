@@ -136,7 +136,6 @@ A **stale** kit — issued before a destination change — still performs steps 
 ## 7 Conformance
 
 - Vector group [`repository-format/conformance/vectors/recovery-kit.json`](../repository-format/conformance/vectors/recovery-kit.json): framing and text-form cases (round-trip, per-line check answers, refusal cases — bad checksum, bad line check, unknown key, oversize body, version mismatch).
-- Fixture kit under [`repository-format/conformance/fixtures/`](../repository-format/conformance/fixtures/README.md): a committed kit for `fixture-repository-v1` that a conforming implementation parses and uses, with the fixture passphrase, to open and restore the fixture repository (FR-KIT-001).
-- A committed **v2 installation kit** beside it, generated from the same fixture passphrase and the v2 fixture's salt and parameters: it parses, its derivation reproduces the fixture's sealing public key, and it opens the v2 fixture repository whose identity it does not carry.
+- The write-only kit case in the same vector group: it parses empty-handed — no key material — with the sealing public key the restore ceremony compares against. A committed kit for the format-1 fixture repository lived under `repository-format/conformance/fixtures/` while format v1 did and was withdrawn with it.
 
 Like every fixture, the committed kit regenerates byte-identically from fixed inputs; a diff is a deliberate format change.

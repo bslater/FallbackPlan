@@ -384,19 +384,18 @@ def _x25519_self_test() -> None:
 # byte-identical output.
 # --------------------------------------------------------------------------
 
-MASTER_KEY = bytes(range(32))                      # 00 01 02 ... 1f
+# The root is Argon2id output and is PINNED here, exactly as argon2id.json
+# pins the KDF (no independent implementation exists in this generator).
+# Everything below it -- every group in this suite that needs a key -- derives
+# from this one root, so the files cannot drift from each other.
+ROOT = bytes(range(0xC0, 0xE0))                    # c0 c1 c2 ... df
 REPOSITORY_ID = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
 WRITER_ID = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
 BLOB_SALT = bytes([0x5A]) * 32
 BLOB_COUNTER = 42
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
-INFO_CONTENT_ID = b"fbp/content-id/v1"
-INFO_KEY_ID = b"fbp/key-id/v1"
-INFO_DATA = b"fbp/data/v1"
-INFO_METADATA = b"fbp/metadata/v1"
-INFO_SIGNING = b"fbp/signing/v1"
-INFO_BLOB = b"fbp/blob/v1"
+INFO_BLOB = b"fbp/blob/v1"      # the per-blob construction did not change between formats (03 section 5)
 
 OBJECT_TYPE_SEGMENT = 0x01
 OBJECT_TYPE_FILE_VERSION = 0x02
@@ -416,87 +415,77 @@ def u16(n: int) -> bytes:
     return n.to_bytes(2, "big")
 
 
+def write_only_tree() -> dict:
+    """The derivation tree off the root (specification 03 section 9.1): the
+    sealing keypair, the repository-scoped keys, and the generational keys
+    under their sub-roots. One derivation, every file -- no drift."""
+    sealing_scalar = hkdf_expand(ROOT, b"fbp/seal/v2", 32)
+    structure_root = hkdf_expand(ROOT, b"fbp/metadata/v2", 32)
+    content_id_key = hkdf_expand(ROOT, b"fbp/content-id/v2", 32)
+    key_id_key = hkdf_expand(ROOT, b"fbp/key-id/v2", 32)
+    signing_root = hkdf_expand(ROOT, b"fbp/signing/v2", 32)
+    return {
+        "sealing_scalar": sealing_scalar,
+        "sealing_public_key": x25519_public(sealing_scalar),
+        "structure_root": structure_root,
+        "content_id_key": content_id_key,
+        "key_id_key": key_id_key,
+        "signing_root": signing_root,
+        "metadata_key_generation_0": hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(0), 32),
+        "metadata_key_generation_1": hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(1), 32),
+        "signing_seed_generation_0": hkdf_expand(signing_root, b"fbp/signing-generation/v2" + u32(0), 32),
+    }
+
+
+def signing_seed(generation: int) -> bytes:
+    """The Ed25519 seed for a key generation (03 section 9.1, ADR-0020)."""
+    return hkdf_expand(write_only_tree()["signing_root"], b"fbp/signing-generation/v2" + u32(generation), 32)
+
+
 # --------------------------------------------------------------------------
 # Vector groups
 # --------------------------------------------------------------------------
 
 
-def keys_vectors() -> dict:
-    """Specification 03 -- key derivation."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
-    key_id_key = hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
-    data_key_0 = hkdf_expand(MASTER_KEY, INFO_DATA + u32(0), 32)
-    data_key_1 = hkdf_expand(MASTER_KEY, INFO_DATA + u32(1), 32)
-    metadata_key_0 = hkdf_expand(MASTER_KEY, INFO_METADATA + u32(0), 32)
-    signing_key_0 = hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32)
+def write_only_vectors() -> dict:
+    """Specification 03 -- the derivation tree, the per-blob key, and the
+    sealed-content-key key agreement."""
+    _x25519_self_test()
 
+    root = ROOT
+    tree = write_only_tree()
+    sealing_scalar = tree["sealing_scalar"]
+    structure_root = tree["structure_root"]
+    content_id_key = tree["content_id_key"]
+    key_id_key = tree["key_id_key"]
+    signing_root = tree["signing_root"]
+
+    metadata_key_0 = tree["metadata_key_generation_0"]
+    metadata_key_1 = tree["metadata_key_generation_1"]
+    signing_seed_0 = tree["signing_seed_generation_0"]
+
+    sealing_public = tree["sealing_public_key"]
+
+    # The per-blob key (03 section 5): the class key of the blob's
+    # generation expanded over the salt, writer and counter the envelope
+    # carries. For a metadata blob, and for a sealed data blob's footer,
+    # the class key is the metadata key; a sealed data blob's records derive
+    # the same way from the content key its sealed share opens to.
     blob_info = INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER)
-    blob_key = hkdf_expand(data_key_0, blob_info, 32)
+    blob_key = hkdf_expand(metadata_key_0, blob_info, 32)
 
     # Same salt, different writer -- must differ. This is the property that
     # makes key separation independent of CSPRNG quality (PT-13).
     other_writer = bytes([0xB0]) * 16
     blob_key_other_writer = hkdf_expand(
-        data_key_0, INFO_BLOB + BLOB_SALT + other_writer + u64(BLOB_COUNTER), 32
+        metadata_key_0, INFO_BLOB + BLOB_SALT + other_writer + u64(BLOB_COUNTER), 32
     )
     # Same salt and writer, different counter -- must also differ.
     blob_key_other_counter = hkdf_expand(
-        data_key_0, INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER + 1), 32
+        metadata_key_0, INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER + 1), 32
     )
-
     assert blob_key != blob_key_other_writer
     assert blob_key != blob_key_other_counter
-
-    return {
-        "description": "HKDF-Expand key derivation (specification 03).",
-        "independently_derived": True,
-        "inputs": {
-            "master_key": MASTER_KEY.hex(),
-            "writer_id": WRITER_ID.hex(),
-            "blob_salt": BLOB_SALT.hex(),
-            "blob_counter": BLOB_COUNTER,
-        },
-        "derived": {
-            "content_id_key": content_id_key.hex(),
-            "key_id_key": key_id_key.hex(),
-            "data_key_generation_0": data_key_0.hex(),
-            "data_key_generation_1": data_key_1.hex(),
-            "metadata_key_generation_0": metadata_key_0.hex(),
-            "signing_key_generation_0": signing_key_0.hex(),
-            "blob_key": blob_key.hex(),
-        },
-        "separation_checks": {
-            "comment": (
-                "Same blob_salt with a different writer_id or blob_counter must "
-                "produce a different blob key. This is what makes key separation "
-                "survive a cloned VM replaying CSPRNG state."
-            ),
-            "blob_key_other_writer": blob_key_other_writer.hex(),
-            "blob_key_other_counter": blob_key_other_counter.hex(),
-        },
-    }
-
-
-def write_only_vectors() -> dict:
-    """Specification 03 section 9 -- the write-only (format v2) derivation tree."""
-    _x25519_self_test()
-
-    # The root is Argon2id output and is PINNED here, exactly as
-    # argon2id.json pins the KDF (no independent implementation exists in
-    # this generator). Everything below it derives independently.
-    root = bytes(range(0xC0, 0xE0))
-
-    sealing_scalar = hkdf_expand(root, b"fbp/seal/v2", 32)
-    structure_root = hkdf_expand(root, b"fbp/metadata/v2", 32)
-    content_id_key = hkdf_expand(root, b"fbp/content-id/v2", 32)
-    key_id_key = hkdf_expand(root, b"fbp/key-id/v2", 32)
-    signing_root = hkdf_expand(root, b"fbp/signing/v2", 32)
-
-    metadata_key_0 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(0), 32)
-    metadata_key_1 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(1), 32)
-    signing_seed_0 = hkdf_expand(signing_root, b"fbp/signing-generation/v2" + u32(0), 32)
-
-    sealing_public = x25519_public(sealing_scalar)
 
     # The content-key sealing's key agreement (05 section 2.1): a pinned
     # ephemeral scalar stands in for the CSPRNG draw; the AEAD key is
@@ -525,9 +514,9 @@ def write_only_vectors() -> dict:
 
     return {
         "description": (
-            "Write-only repository derivation (specification 03 section 9, "
-            "ADR-0042): the root's one-way expansion into the sealing keypair "
-            "and the write bundle, and the sealed-content-key key agreement."
+            "Repository key derivation (specification 03, ADR-0042): the root's "
+            "one-way expansion into the sealing keypair and the write bundle, "
+            "the per-blob key, and the sealed-content-key key agreement."
         ),
         "independently_derived": True,
         "inputs": {
@@ -549,6 +538,34 @@ def write_only_vectors() -> dict:
             "metadata_key_generation_1": metadata_key_1.hex(),
             "signing_seed_generation_0": signing_seed_0.hex(),
         },
+        "blob_key": {
+            "comment": (
+                "blob_key = HKDF-Expand(class_key, 'fbp/blob/v1' || blob_salt || "
+                "writer_id || u64(blob_counter), 32) (specification 03 section 5). "
+                "The class key here is metadata_key_generation_0 -- what a "
+                "metadata blob, and a sealed data blob's footer, derive under; "
+                "a sealed data blob's records derive the same way from the "
+                "content key its sealed share opens to. The label keeps its v1 "
+                "spelling: the construction did not change between formats."
+            ),
+            "inputs": {
+                "class_key": metadata_key_0.hex(),
+                "class_key_is": "metadata_key_generation_0",
+                "writer_id": WRITER_ID.hex(),
+                "blob_salt": BLOB_SALT.hex(),
+                "blob_counter": BLOB_COUNTER,
+            },
+            "blob_key": blob_key.hex(),
+            "separation_checks": {
+                "comment": (
+                    "Same blob_salt with a different writer_id or blob_counter must "
+                    "produce a different blob key. This is what makes key separation "
+                    "survive a cloned VM replaying CSPRNG state."
+                ),
+                "blob_key_other_writer": blob_key_other_writer.hex(),
+                "blob_key_other_counter": blob_key_other_counter.hex(),
+            },
+        },
         "content_key_sealing": {
             "ephemeral_scalar": ephemeral_scalar.hex(),
             "ephemeral_public_key": ephemeral_public.hex(),
@@ -568,8 +585,9 @@ def write_only_vectors() -> dict:
 
 def identifier_vectors() -> dict:
     """Specification 02 -- content and object identifiers."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
-    key_id_key = hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
+    tree = write_only_tree()
+    content_id_key = tree["content_id_key"]
+    key_id_key = tree["key_id_key"]
 
     cases = []
     for name, plaintext in [
@@ -631,7 +649,7 @@ def identifier_vectors() -> dict:
 
 def aad_vectors() -> dict:
     """Specification 04 section 4 -- associated data construction."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
+    content_id_key = write_only_tree()["content_id_key"]
     content_id = hashlib.sha256(b"hello world").digest()
     object_id = hmac.new(
         content_id_key, bytes([OBJECT_TYPE_SEGMENT]) + content_id, hashlib.sha256
@@ -917,6 +935,17 @@ def compression_vectors() -> dict:
     }
 
 
+# Computed ONCE with System.Security.Cryptography.AesGcm over the inputs
+# case 2 below assembles from the other groups, and pinned. If those inputs
+# change, CryptographicPrimitiveTests fails until these are recomputed --
+# by running the platform over the new inputs, never from memory.
+AES_GCM_CASE_2_CIPHERTEXT = (
+    "b41f78c1c843a7769ad72605805380febf0ec1116454f7165986026e9461eacc"
+    "ceedb95d926f6d10d9ad38296aa326af54"
+)
+AES_GCM_CASE_2_TAG = "412ae7ebd757a4d4836bf14210248da1"
+
+
 def aes_gcm_vectors() -> dict:
     """
     AES-256-GCM known-answer tests.
@@ -941,7 +970,7 @@ def aes_gcm_vectors() -> dict:
 
     Case 2 exists because case 1 proves nothing about AAD absorption -- the
     one property the record format leans on (specification 04 section 4). It
-    uses the format's REAL construction: the blob key pinned in keys.json,
+    uses the format's REAL construction: the blob key pinned in write-only.json,
     ordinal 47's nonce, and ordinal 47's 55-byte AAD from records.json. It was
     computed ONCE with the platform implementation
     (System.Security.Cryptography.AesGcm) and pinned. It is a regression
@@ -979,25 +1008,21 @@ def aes_gcm_vectors() -> dict:
                 "provenance": (
                     "platform-derived: computed once with "
                     "System.Security.Cryptography.AesGcm and pinned. Regression "
-                    "vector, not conformance evidence. Key is keys.json blob_key; "
-                    "nonce and AAD are records.json ordinal 47."
+                    "vector, not conformance evidence. Key is write-only.json "
+                    "blob_key; nonce and AAD are records.json ordinal 47."
                 ),
                 "provenance_reverified": False,
-                "key": "d35875180e8f91a5044f4786c560624cd62ab51f82897b771b5bfbccd9ee313d",
+                "key": write_only_vectors()["blob_key"]["blob_key"],
                 "iv": "00000000000000000000002f",
                 "plaintext": (
                     "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a"
                     "207265636f7264206f7264696e616c203437"
                 ),
-                "aad": (
-                    "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfe"
-                    "ca501904d9a70aa87b2dd5857e15be14738fdde00000002f"
+                "aad": next(
+                    case["aad"] for case in aad_vectors()["cases"] if case["ordinal"] == 47
                 ),
-                "ciphertext": (
-                    "bb9690d382d7f70b6f00d12e22c54208a8c069455a621f254665e8c1f92ebd"
-                    "e56c53f9ea31fca86794953ff5f01cdf3fa6"
-                ),
-                "tag": "d5649651bd6452be41bd0b23f5fff22f",
+                "ciphertext": AES_GCM_CASE_2_CIPHERTEXT,
+                "tag": AES_GCM_CASE_2_TAG,
             },
         ],
     }
@@ -1049,7 +1074,7 @@ def ed25519_vectors() -> dict:
     above, which is itself gated by the RFC's published test vectors 1-3 on
     every run -- the same pattern as the HKDF RFC 5869 self-test. The
     format-real cases sign with seeds derived exactly as specification 03
-    section 4 derives them, proving the seed interpretation end to end: the
+    section 9.1 derives them, proving the seed interpretation end to end: the
     32 HKDF bytes are an RFC 8032 section 5.1.5 seed, never a pre-clamped
     scalar, and the public key is computed from it rather than distributed.
     """
@@ -1085,7 +1110,7 @@ def ed25519_vectors() -> dict:
             "deterministic CBOR map {1: repository_id (bytes 16), 2: 1, 3: \"fbp\"}",
         ),
     ]:
-        seed = hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(generation), 32)
+        seed = signing_seed(generation)
         public = ed25519_public_key(seed)
         signature = ed25519_sign(seed, message)
 
@@ -1093,7 +1118,10 @@ def ed25519_vectors() -> dict:
             {
                 "name": f"format_signing_seed_generation_{generation}",
                 "generation": generation,
-                "seed_derivation": "HKDF-Expand(master_key, 'fbp/signing/v1' || u32(generation), 32)",
+                "seed_derivation": (
+                    "HKDF-Expand(signing_root, 'fbp/signing-generation/v2' || u32(generation), 32), "
+                    "signing_root = HKDF-Expand(root, 'fbp/signing/v2', 32)"
+                ),
                 "seed": seed.hex(),
                 "public_key": public.hex(),
                 "message": message.hex(),
@@ -1102,9 +1130,9 @@ def ed25519_vectors() -> dict:
             }
         )
 
-    # Generation 0's seed must equal keys.json's signing_key_generation_0 --
-    # one derivation, two files, no drift.
-    assert format_cases[0]["seed"] == hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32).hex()
+    # Generation 0's seed must equal write-only.json's
+    # signing_seed_generation_0 -- one derivation, two files, no drift.
+    assert format_cases[0]["seed"] == write_only_tree()["signing_seed_generation_0"].hex()
 
     return {
         "description": "Ed25519 signatures over RFC 8032 vectors and the format's real signing seeds.",
@@ -1737,7 +1765,6 @@ def recovery_kit_vectors() -> dict:
 # --------------------------------------------------------------------------
 
 GROUPS = {
-    "keys.json": keys_vectors,
     "write-only.json": write_only_vectors,
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
