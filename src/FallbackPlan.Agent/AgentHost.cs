@@ -131,7 +131,10 @@ public static class AgentHost
                 (ADR-0034 §3): one pass per matching (set, destination) pair,
                 reported from the sync ledger. `retention` runs one pass per set
                 — the report either way, tombstones, sweep and staging trim only
-                with --apply (FR-GC-005).
+                with --apply (FR-GC-005). On a set-up installation --apply needs
+                --passphrase-env: the service holds the key that publishes, not
+                the key that authorises a deletion, and the passphrase derives
+                that authority for the one run (ADR-0055).
                 """);
             return 0;
         }
@@ -400,7 +403,8 @@ public static class AgentHost
         // rendered as errors here, exactly as the `run` verb renders them; an
         // unhandled stack trace is never the answer to a held lock.
         async Task<int> ServiceVerbAsync(
-            Api.ServiceCommand command, Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
+            Func<ServiceRuntime, Api.ServiceCommand?> commandFor,
+            Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
         {
             try
             {
@@ -413,6 +417,12 @@ public static class AgentHost
                         Logging = logging,
                     },
                     verbPassphrase, cancellationToken).ConfigureAwait(false);
+
+                // A null command is a refusal the factory already printed.
+                if (commandFor(verbRuntime) is not { } command)
+                {
+                    return 1;
+                }
 
                 var handler = new ServiceCommandHandler(verbRuntime, RemoteBindingState.Off);
                 var result = await handler.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -464,6 +474,57 @@ public static class AgentHost
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
+        }
+
+        // On a set-up installation the service holds the key that publishes
+        // and not the key that authorises a deletion (ADR-0055 §6), so
+        // `retention --apply` needs a grant the way a console sends one: the
+        // reclaim sub-root, re-derived from the passphrase under the
+        // installation's own salt and sealed to this service's recipient key.
+        // The passphrase is proved against the stored credential BEFORE the
+        // grant is built — a wrong one would otherwise author tombstones
+        // nothing can verify on an archive that has none yet to disagree
+        // with. A dry run authors nothing and needs nothing; an installation
+        // without a stored credential derives the key it already holds.
+        (string? Grant, bool Refused) ReclaimGrantFor(ServiceRuntime verbRuntime, bool apply)
+        {
+            if (!apply)
+            {
+                return (null, false);
+            }
+
+            using var provisioning = new InstallationCredentialStore(stateDirectory).TryLoad();
+            if (provisioning is null)
+            {
+                return (null, false);
+            }
+
+            if (passphraseValue is null)
+            {
+                error.WriteLine(
+                    "error: `retention --apply` on a set-up installation needs --passphrase-env <VAR>: applying "
+                    + "retention authors deletions, and this service holds the key that publishes, not the key "
+                    + "that authorises a deletion. The passphrase derives that authority for this run only "
+                    + "(ADR-0055).");
+                return (null, true);
+            }
+
+            using var passphrase = Passphrase.Create(passphraseValue);
+            using var authority = WriteOnlyDerivation.Derive(
+                passphrase, provisioning.KdfParameters, provisioning.KdfSalt,
+                Domain.Configuration.KdfValidationMode.OpenRepository);
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(provisioning.Credential.SealingPublicKey))
+            {
+                error.WriteLine(
+                    "error: the passphrase does not reproduce this installation's credential, so it cannot "
+                    + "authorise a deletion. Nothing was tombstoned.");
+                return (null, true);
+            }
+
+            return (Convert.ToHexStringLower(
+                WriteOnlyProvisioning.SealReclaimGrant(
+                    [.. verbRuntime.GrantRecipient.PublicKey], authority.ReclaimKeySeed)), false);
         }
 
         // Setup speaks the same one-shot shape as the other verbs here: its
@@ -732,8 +793,11 @@ public static class AgentHost
         // against anything else that writes (FR-GC-005/008).
         if (args[0] == "retention")
         {
+            var apply = args.Contains("--apply");
             return await ServiceVerbAsync(
-                new Api.RetentionCommand(args.Contains("--apply")),
+                verbRuntime => ReclaimGrantFor(verbRuntime, apply) is var (grant, refused) && !refused
+                    ? new Api.RetentionCommand(apply, grant)
+                    : null,
                 result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }
 
@@ -745,7 +809,7 @@ public static class AgentHost
         if (args[0] == "verify-destination")
         {
             return await ServiceVerbAsync(
-                new Api.VerifyDestinationCommand(
+                _ => new Api.VerifyDestinationCommand(
                     Get("--set"), Get("--destination"), args.Contains("--full"), args.Contains("--probe")),
                 result => (result as Api.VerifyDestinationResult)?.Lines).ConfigureAwait(false);
         }
@@ -757,7 +821,7 @@ public static class AgentHost
         if (args[0] == "sync")
         {
             return await ServiceVerbAsync(
-                new Api.SyncCommand(Get("--set"), Get("--destination")),
+                _ => new Api.SyncCommand(Get("--set"), Get("--destination")),
                 result => (result as Api.SyncResult)?.Lines).ConfigureAwait(false);
         }
 

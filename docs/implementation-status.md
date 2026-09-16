@@ -352,6 +352,16 @@ Three limits, stated because the alternative is a reader inferring more:
   it acknowledges. The signed audit record exists on the repository plane — the
   tombstone — and not on the spoke's side of the instruction.
 
+The headless operator has the same grant the console sends, without building
+it by hand: `fallbackplan-agent retention --apply --passphrase-env <VAR>` on a
+set-up installation re-derives the reclaim sub-root from the passphrase under
+the installation's own salt, proves the passphrase against the stored
+credential before anything is authored — a fresh archive holds no tombstone
+for the sweep's own proof to disagree with — seals it to the service's
+recipient key and sends it with the command (`Agent/AgentHost`,
+`Hosts.Tests/RetentionTrimVerbTests`). Without the passphrase, `--apply` is
+refused naming what it needs; a dry run needs nothing.
+
 Two compatibility rules carry the migration, and both are the load-bearing
 part rather than politeness. A repository written before the decision has
 tombstones signed under the publication key and keeps verifying them that way;

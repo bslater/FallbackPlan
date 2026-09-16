@@ -33,6 +33,7 @@ public sealed class RetentionTrimVerbTests : IDisposable
     public RetentionTrimVerbTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        InstallationFixture.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         Directory.CreateDirectory(VaultPath);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day one content");
@@ -185,6 +186,70 @@ public sealed class RetentionTrimVerbTests : IDisposable
         {
             Environment.SetEnvironmentVariable(variable, null);
         }
+    }
+
+    [TestMethod]
+    public async Task RetentionApplyVerb_APassphraseThatIsNotTheInstallations_IsRefusedBeforeItAuthorsAnything()
+    {
+        // The service holds the key that publishes and not the key that
+        // authorises a deletion (ADR-0055), so the verb re-derives that
+        // authority from the passphrase — and a wrong passphrase must be
+        // caught HERE, against the stored credential, not discovered later
+        // as tombstones nothing can verify. A fresh archive holds no
+        // tombstone to disagree with, which is exactly why the check cannot
+        // wait for the sweep's own proof.
+        var variable = "FBP_TRIM_VERB_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "not this installation's passphrase at all");
+        try
+        {
+            await BackUpAsync(Day1);
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+            await BackUpAsync(Day1.AddDays(1));
+
+            var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+            var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+            var exit = await AgentHost.RunAsync(
+                ["retention", "--archives", ArchivesRoot, "--state", StateDirectory,
+                    "--passphrase-env", variable, "--apply"],
+                output, error, CancellationToken.None);
+
+            Assert.AreEqual(1, exit, output.ToString());
+            Assert.Contains("does not reproduce this installation's credential", error.ToString(), StringComparison.Ordinal);
+
+            var staging = new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, SetId));
+            Assert.IsEmpty(await ListAsync(staging, "tombstones/"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [TestMethod]
+    public async Task RetentionApplyVerb_WithoutAPassphrase_IsRefusedNamingWhatItNeeds()
+    {
+        // A set-up installation runs with no passphrase at all, so the verb
+        // is easy to invoke without one — and a dry run needs none. Applying
+        // does, and the refusal says so rather than passing the question on
+        // to the service, whose answer is written for a console.
+        await BackUpAsync(Day1);
+
+        var dryOutput = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var dryError = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var dry = await AgentHost.RunAsync(
+            ["retention", "--archives", ArchivesRoot, "--state", StateDirectory],
+            dryOutput, dryError, CancellationToken.None);
+        Assert.AreEqual(0, dry, dryError.ToString());
+
+        var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        var exit = await AgentHost.RunAsync(
+            ["retention", "--archives", ArchivesRoot, "--state", StateDirectory, "--apply"],
+            output, error, CancellationToken.None);
+
+        Assert.AreEqual(1, exit, output.ToString());
+        Assert.Contains("--passphrase-env", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("authorises a deletion", error.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Rewrites the configuration with the peer excused from verification.</summary>
